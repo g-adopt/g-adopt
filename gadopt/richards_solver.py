@@ -71,7 +71,6 @@ G-ADOPT uses this preset by default in 2-D.
 iterative_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "ksp_type": "gmres",
-    "snes_linesearch_type": "bt",
     "ksp_rtol": 1e-5,
     "ksp_max_it": 200,
     "ksp_gmres_restart": 30,
@@ -161,12 +160,23 @@ class RichardsSolver(SolverConfigurationMixin):
         Default is 2.0; the theoretical coercivity floor is 1.0. Setting it
         below 1.0 will give a non-coercive bilinear form and Newton may fail.
       nullspace:
-        ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Relevant
-        for pure-Neumann problems (all fluxes specified, no Dirichlet on h),
-        where the constant is a true nullspace.
+        ``VectorSpaceBasis`` spanning the nullspace of the Jacobian. Never
+        built automatically, and normally not needed: the time derivative
+        contributes $(C + S_s S)/\Delta t$ times the mass matrix, which keeps
+        the constant out of the kernel even under pure Neumann conditions. The
+        exception is the degenerate steady case, where all three of the
+        following hold at once: the domain is fully saturated (so $C$ is
+        clamped to zero and $K$ to $K_s$, hence the gravity term is also
+        h-independent), $S_s = 0$ (so the storage term is dropped), and every
+        boundary carries a flux condition. That reduces to steady saturated
+        Darcy flow, for which the constant is a genuine kernel and the boundary
+        fluxes must sum to zero. Supply a nullspace only in that case; attaching
+        one to a non-singular Jacobian removes a legitimate constant component
+        of the solution at every iteration.
       transpose_nullspace:
-        Nullspace of the transposed Jacobian. Usually equal to ``nullspace``
-        for Richards because the advective part is small.
+        Nullspace of the transposed Jacobian. In the degenerate case above the
+        Jacobian is the symmetric SIPG diffusion operator, so this equals
+        ``nullspace``.
       near_nullspace:
         Near-nullspace basis forwarded to the preconditioner if supplied.
         Defaults to ``None`` and is not auto-built: BoomerAMG (the iterative
@@ -182,6 +192,11 @@ class RichardsSolver(SolverConfigurationMixin):
     | :---------- | :----- | :------------------------------------: |
     | h           | Strong | Pressure head (Dirichlet)              |
     | flux        | Weak   | Total flux (Neumann)                   |
+
+    ``flux`` prescribes the total flux $K \nabla (h + z) \cdot n$, which is minus
+    the outward Darcy flux, so a positive value drives water into the domain. A
+    boundary left out of ``bcs`` gets the natural zero-total-flux (no-flow)
+    condition.
 
     Examples:
         >>> # Dirichlet BC: fixed pressure head at top

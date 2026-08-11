@@ -184,8 +184,13 @@ def richards_gravity_term(
     # consistency term carries K grad(h).n only, so the K grad(z).n part is
     # added here to complete the total flux. K is taken from the interior
     # trace, which makes the pair a single Nitsche treatment of the potential
-    # h + z, and is identical to what setting `reference_for_diffusion = z`
-    # on the diffusion term would produce. Deliberately outside the DG branch
+    # h + z: the symmetry and penalty terms need no change, because
+    # (h + z) - (h_D + z) = h - h_D. For this boundary consistency term alone
+    # it matches what `reference_for_diffusion = z` would produce; setting that
+    # attribute globally is not equivalent, since it would also add
+    # K grad(z).grad(phi) to the volume integral, duplicating the term above,
+    # and would replace the upwinded interior-facet gravity flux with a centred
+    # average. Deliberately outside the DG branch
     # above: it applies wherever a weak Dirichlet head exists, though in
     # practice RichardsSolver only generates those for discontinuous spaces
     # (continuous ones get a strong DirichletBC instead).
