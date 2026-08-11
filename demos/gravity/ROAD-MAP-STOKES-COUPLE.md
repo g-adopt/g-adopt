@@ -1,5 +1,19 @@
 # Road map: monolithic Stokes–Poisson coupling with mean-free dynamic topography
 
+> **Status note, 2026-08-11. This plan is not started, and it is not the
+> coupling that exists.** A different monolithic coupling landed in the
+> meantime: `SelfGravitatingGIASolver` (`gadopt/gia_gravity.py`) solves
+> displacement, the internal variable, the potential and the rotation scalars
+> together for glacial isostatic adjustment. That solver answers the same
+> structural question this document asks — how to put Poisson and a momentum
+> balance in one system, and how to precondition the result — so read it before
+> you start here. Section 6 below, on why fieldsplit still works, is the part
+> that transferred; `DtNTwoBlockSchurPC` is its realisation. What remains
+> genuinely open is the *mantle-convection* application: viscous Stokes flow
+> with mean-free dynamic topography on each closed boundary.
+>
+> `NOTES/HANDOVER.md` carries the current state of the GIA coupling.
+
 ## 1. Who this document is for
 
 You are a software engineer who has just joined the G-ADOPT project. You know
