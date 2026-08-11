@@ -111,7 +111,7 @@ def mockedFieldConnector(mockedSource):
     conn_idw = ScalarFieldConnector(
         mockedSource, PassThroughOutput(), interpolation=cfg_idw
     )
-    conn_idw._interpolator.geometry = Mock(
+    conn_idw._interp_geometry = Mock(
         return_value={"idx": 0, "k1": True, "too_far": None}
     )
     return conn_idw
@@ -234,7 +234,7 @@ class TestGeometryCacheKey:
         assert len(mockedSource._interp_geometry_cache) == 1
 
         # Age change triggers geometry rebuild
-        assert mockedFieldConnector._interpolator.geometry.call_count == 2
+        assert mockedFieldConnector._interp_geometry.call_count == 2
 
         # Age change triggers source recompute
         assert mockedSource._compute_sources.call_count == 2
@@ -269,4 +269,4 @@ class TestGeometryCacheKey:
         mockedSource._compute_sources.assert_called_once()
 
         # Target change triggers geometry rebuild
-        assert mockedFieldConnector._interpolator.geometry.call_count == 2
+        assert mockedFieldConnector._interp_geometry.call_count == 2
