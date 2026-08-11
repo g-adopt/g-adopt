@@ -11,7 +11,6 @@ from firedrake import (
     FiniteElement,
     Function,
     FunctionSpace,
-    MixedFunctionSpace,
     PCBase,
     TensorProductElement,
     TrialFunction,
@@ -91,20 +90,23 @@ class SPDAssembledPC(fd.AssembledPC):
 class VerticallyLumpedPC(PCBase):
     """Two-level MG that collapses the vertical dimension on the coarse level.
 
-    A preconditioner specifically designed for high-aspect-ratio extruded
-    meshes, inspired by Kramer et al. (2010, doi:10.1016/j.ocemod.2010.08.001)
-    and the ocean modelling community. The idea:
+    This preconditioner targets extruded meshes of high aspect ratio. It
+    follows Kramer et al. (2010, doi:10.1016/j.ocemod.2010.08.001) and the
+    ocean modelling community. It uses two levels:
 
         Fine level   : V = V_horiz x V_vert  (full 3D tensor-product space)
-        Coarse level : V_c = V_horiz x R     (vertically constant)
+        Coarse level : V_lumped = V_horiz x R  (vertically constant)
 
-    The prolongation P is the natural injection from V_c into V (a coarse
-    DOF is replicated along its column). The coarse operator is formed by
-    Galerkin projection, A_c = P^T A P, collapsing the entire vertical
-    dimension onto a 2D-like problem solvable cheaply with MUMPS or GAMG.
+    The prolongation P is the natural injection from V_lumped into V, which
+    replicates a coarse DOF along its column. Galerkin projection then forms
+    the coarse operator A_c = P^T A P. That projection collapses the whole
+    vertical dimension onto a 2D-like problem, which MUMPS or GAMG solves
+    cheaply.
 
-    Solver options for the coarse level use the prefix ``lumped_mg_coarse_``
-    and the fine-level smoother uses ``lumped_mg_levels_``.
+    Solver options for the coarse level use the prefix ``lumped_mg_coarse_``.
+    The fine-level smoother uses ``lumped_mg_levels_``.
+
+    The fine space must be a scalar tensor-product space on an extruded mesh.
     """
 
     def initialize(self, pc):
@@ -112,34 +114,50 @@ class VerticallyLumpedPC(PCBase):
         A, P = pc.getOperators()
         V = get_function_space(pc.getDM())
 
-        # Handle both scalar and mixed spaces
-        if len(V) == 1:
-            V = FunctionSpace(V.mesh(), V.ufl_element())
-        else:
-            V = MixedFunctionSpace([V_ for V_ in V])
+        # A mixed space has no factor_elements, so the lumped space below cannot
+        # be built for one. Reject it here with a clear message.
+        if len(V) != 1:
+            raise RuntimeError(
+                "VerticallyLumpedPC needs a scalar function space. It received "
+                f"a mixed space with {len(V)} components. Apply the "
+                "preconditioner to a single field, through a fieldsplit."
+            )
 
-        # Build vertically constant function space (V_horiz x R)
         mesh = V.mesh()
-        _, vcell = mesh.ufl_cell().sub_cells
-        hele, _ = V.ufl_element().factor_elements
+
+        # An extruded mesh has a tensor-product cell, so its ufl_cell has
+        # sub_cells and its element has factor_elements. A non-extruded mesh has
+        # neither, and both lookups raise AttributeError.
+        try:
+            _, vcell = mesh.ufl_cell().sub_cells
+            hele, _ = V.ufl_element().factor_elements
+        except AttributeError as exc:
+            raise RuntimeError(
+                "VerticallyLumpedPC needs an extruded mesh and a "
+                "tensor-product element. It received a space on "
+                f"{mesh.ufl_cell()}. Build the mesh with ExtrudedMesh, or use "
+                "a different preconditioner."
+            ) from exc
+
+        # Vertically constant space V_lumped = V_horiz x R.
         vele = FiniteElement("R", vcell, 0)
         ele = TensorProductElement(hele, vele)
-        V_coarse = FunctionSpace(mesh, ele)
+        V_lumped = FunctionSpace(mesh, ele)
 
-        # Build prolongation: interpolation from V_coarse to V
-        trial = TrialFunction(V_coarse)
+        # Prolongation: interpolation from V_lumped to V.
+        trial = TrialFunction(V_lumped)
         Prol = assemble(interpolate(trial, V)).petscmat
 
-        # Set up 2-level multigrid
+        # Configure the 2-level multigrid.
         self.pc = PETSc.PC().create(comm=pc.comm)
         self.pc.setOptionsPrefix(options_prefix + "lumped_")
         self.pc.incrementTabLevel(1, parent=pc)
-        # Propagate the outer DM so level smoothers (e.g. ASMLinesmoothPC)
-        # can resolve the fine function space.
+        # Propagate the outer DM so that level smoothers, for example
+        # ASMLinesmoothPC, can resolve the fine function space.
         self.pc.setDM(pc.getDM())
 
-        # Enable Galerkin coarse operator: A_c = P^T A P.
-        # petsc4py has no setMGGalerkin() binding, so we go via the options DB.
+        # Enable the Galerkin coarse operator A_c = P^T A P. petsc4py has no
+        # setMGGalerkin() binding, so we use the options database instead.
         options = PETSc.Options()
         options[options_prefix + "lumped_pc_mg_galerkin"] = "both"
 
@@ -152,10 +170,10 @@ class VerticallyLumpedPC(PCBase):
         self.update(pc)
 
     def update(self, pc):
-        # Firedrake reassembles the Jacobian in-place every Newton iteration;
-        # the inner PCMG holds a reference to the same Mat but needs setUp()
-        # to recompute the Galerkin coarse operator A_c = P^T A P from the
-        # updated state.
+        # Firedrake reassembles the Jacobian in place on every Newton iteration.
+        # The inner PCMG holds a reference to the same Mat. It still needs
+        # setUp() to recompute the Galerkin coarse operator A_c = P^T A P from
+        # the updated state.
         self.pc.setUp()
 
     def apply(self, pc, X, Y):
@@ -176,8 +194,8 @@ class VerticallyLumpedPC(PCBase):
             return
         viewer.pushASCIITab()
         viewer.printfASCII(
-            "Vertically lumped MG: collapses vertical dimension on "
-            "coarse level (cf. Kramer et al. 2010)\n"
+            "Vertically lumped MG: collapses the vertical dimension on the "
+            "coarse level (see Kramer et al. 2010)\n"
         )
         self.pc.view(viewer)
 
@@ -185,24 +203,28 @@ class VerticallyLumpedPC(PCBase):
 class VerticallyLumpedHMGPC(PCBase):
     """Two-level MG with the coarse level on the fine mesh's 2D base.
 
-    Same idea as ``VerticallyLumpedPC``, but the coarse level is built on
-    the fine mesh's 2D base (via ``mesh._base_mesh``) rather than on the
-    extruded mesh with an R-element vertically. The coarse KSP descends
-    a full geometric multigrid on the 2D base ``MeshHierarchy``, giving
-    optimal complexity for very large horizontal problems.
+    This preconditioner uses the same two levels as ``VerticallyLumpedPC``.
+    It builds the coarse level on the 2D base of the fine mesh, through
+    ``mesh._base_mesh``, instead of on the extruded mesh with a vertical
+    R-element. The coarse KSP then descends a geometric multigrid on the 2D
+    base ``MeshHierarchy``, which gives optimal complexity for large
+    horizontal problems.
 
-    Fine space : V         = hele x vele     (full 3D tensor-product)
-    Coarse     : V_coarse  = hele on base_2d (same horizontal element)
+    Note that "coarse" here means coarse relative to the 3D fine space. The
+    base mesh ``V_base_2d`` sits at the *finest* level of the base hierarchy.
 
-    The prolongation V_coarse -> V is the same-mesh interpolation from the
-    vertically-constant 3D space ``V_R = hele x R`` into ``V``. No explicit
-    V_coarse -> V_R relabelling is needed: a ``hele x Real`` space and the
-    horizontal ``hele`` space on the base share an identical PETSc DOF layout,
-    so that interpolation matrix already has the right column space (see the
-    detailed note in ``initialize``).
+    Fine space : V          = hele x vele      (full 3D tensor-product)
+    Coarse     : V_base_2d  = hele on base_2d  (same horizontal element)
 
-    Requires the fine mesh's base mesh to live in a ``MeshHierarchy``; if
-    not, ``initialize`` raises ``RuntimeError``.
+    The prolongation from ``V_base_2d`` into ``V`` is the same-mesh
+    interpolation from the vertically constant 3D space ``V_R = hele x R``
+    into ``V``. That matrix needs no relabelling. A ``hele x Real`` space and
+    the horizontal ``hele`` space on the base share one PETSc DOF layout, so
+    the matrix already has the right column space. The note in ``initialize``
+    gives the reason.
+
+    The base mesh of the fine mesh must live in a ``MeshHierarchy``. If it
+    does not, ``initialize`` raises ``RuntimeError``.
     """
 
     def initialize(self, pc):
@@ -210,75 +232,82 @@ class VerticallyLumpedHMGPC(PCBase):
         A, P = pc.getOperators()
         V = get_function_space(pc.getDM())
 
-        # Handle both scalar and mixed spaces.
-        if len(V) == 1:
-            V = FunctionSpace(V.mesh(), V.ufl_element())
-        else:
-            V = MixedFunctionSpace([V_ for V_ in V])
+        # A mixed space has no factor_elements, so the spaces below cannot be
+        # built for one. Reject it here with a clear message.
+        if len(V) != 1:
+            raise RuntimeError(
+                "VerticallyLumpedHMGPC needs a scalar function space. It "
+                f"received a mixed space with {len(V)} components. Apply the "
+                "preconditioner to a single field, through a fieldsplit."
+            )
 
         mesh = V.mesh()
 
         base_mesh = getattr(mesh, "_base_mesh", None)
         if base_mesh is None:
             raise RuntimeError(
-                "VerticallyLumpedHMGPC requires an extruded fine mesh "
-                "(mesh._base_mesh not found). Use VerticallyLumpedPC for "
-                "non-extruded meshes."
+                "VerticallyLumpedHMGPC needs an extruded fine mesh. This mesh "
+                "has no _base_mesh. Use VerticallyLumpedPC for a non-extruded "
+                "mesh."
             )
 
         hierarchy, level = get_level(base_mesh)
         if hierarchy is None or level is None:
             raise RuntimeError(
-                "VerticallyLumpedHMGPC requires the fine mesh's base mesh "
-                "to be part of a MeshHierarchy so the coarse PCMG can "
-                "descend a geometric hierarchy. Build the mesh with "
-                "ExtrudedMeshHierarchy(MeshHierarchy(base, L), ...) with "
-                "L >= 1, or fall back to VerticallyLumpedPC."
+                "VerticallyLumpedHMGPC needs the 2D base mesh of the fine mesh "
+                "to be part of a MeshHierarchy. The coarse PCMG descends that "
+                "hierarchy. Build the mesh with "
+                "ExtrudedMeshHierarchy(MeshHierarchy(base, L), ...) and L >= 1, "
+                "or use VerticallyLumpedPC instead."
             )
 
         hele, _ = V.ufl_element().factor_elements
-        V_coarse = FunctionSpace(base_mesh, hele)
-        self.V_coarse = V_coarse
+        # V_base_2d is coarse relative to the 3D fine space V. Within the base
+        # hierarchy it is the finest level, at index `level`.
+        V_base_2d = FunctionSpace(base_mesh, hele)
+        self.V_base_2d = V_base_2d
 
-        # Prolongation V_coarse (hele on the 2D base) -> V (full 3D).
+        # Prolongation from V_base_2d (hele on the 2D base) into V (full 3D).
         #
-        # We build it as the same-mesh interpolation V_R -> V, where
-        # V_R = hele x Real is the vertically-constant 3D space. That matrix
-        # *is already* the prolongation we want: V_R and V_coarse share an
-        # identical PETSc layout (owned size, ownership range, and lgmap
-        # including ghost order), so no V_coarse -> V_R relabelling is needed.
+        # We build it as the same-mesh interpolation from V_R into V, where
+        # V_R = hele x Real is the vertically constant 3D space. That matrix is
+        # already the prolongation we want. V_R and V_base_2d share one PETSc
+        # layout: the same owned size, the same ownership range, and the same
+        # lgmap including ghost order. No relabelling is therefore needed.
         #
-        # This is structural, not coincidental. An ExtrudedMeshTopology reuses
-        # the base mesh's topology_dm, _dm_renumbering and _entity_classes, and
-        # for a hele x Real element the section and node-class computations
-        # collapse the vertical extent away (create_section on_base=True;
-        # node_classes real_tensorproduct=True; zero dof offset), so V_R's
-        # global numbering is the same computation over the same DM as
-        # V_coarse's. Note a base<->extruded relabelling cannot be expressed as
-        # cross-mesh interpolation anyway: that requires matching geometric
-        # dimension (2D base vs 3D extruded).
+        # This equality is structural, not coincidental. An ExtrudedMeshTopology
+        # reuses the base mesh's topology_dm, _dm_renumbering and
+        # _entity_classes. For a hele x Real element, the section and node-class
+        # computations then collapse the vertical extent away. create_section
+        # uses on_base=True, node_classes uses real_tensorproduct=True, and the
+        # dof offset is zero. As a result, V_R and V_base_2d take their global
+        # numbering from the same computation over the same DM.
+        #
+        # A base-to-extruded relabelling is not an alternative. Cross-mesh
+        # interpolation needs a matching geometric dimension, and the base is 2D
+        # while the extruded mesh is 3D.
         vcell = mesh.ufl_cell().sub_cells[1]
         vele_R = FiniteElement("R", vcell, 0)
         V_R = FunctionSpace(mesh, TensorProductElement(hele, vele_R))
         Prol = assemble(interpolate(TrialFunction(V_R), V)).petscmat
         self.Prol = Prol
 
-        # Guard the layout assumption. If V_R and V_coarse ever stop sharing a
-        # layout, a pure size mismatch would surface later as a cryptic PETSc
-        # MatMatMult error in the galerkin setup; a same-size reordering would
-        # be worse still (a silently wrong coarse operator). Fail fast here.
-        with Function(V_coarse).dat.vec_ro as cvec:
-            coarse_owned = cvec.getLocalSize()
+        # Guard the layout assumption, because a later failure is worse. A pure
+        # size mismatch surfaces as a cryptic PETSc MatMatMult error in the
+        # Galerkin setup. A same-size reordering is worse still, because it
+        # gives a silently wrong coarse operator. Raise here instead.
+        with Function(V_base_2d).dat.vec_ro as cvec:
+            base_owned = cvec.getLocalSize()
         prol_cols_owned = Prol.getLocalSize()[1]
-        if coarse_owned != prol_cols_owned:
+        if base_owned != prol_cols_owned:
             raise RuntimeError(
-                "VerticallyLumpedHMGPC: prolongation column layout "
-                f"({prol_cols_owned} owned) does not match the coarse space "
-                f"V_coarse ({coarse_owned} owned). The hele x Real "
-                "layout-collapse assumption has been violated."
+                "VerticallyLumpedHMGPC: the prolongation column layout "
+                f"({prol_cols_owned} owned) does not match V_base_2d "
+                f"({base_owned} owned). The hele x Real space no longer "
+                "collapses onto the base layout."
             )
 
-        # Set up the 2-level MG.
+        # Configure the 2-level MG.
         self.pc = PETSc.PC().create(comm=pc.comm)
         self.pc.setOptionsPrefix(options_prefix + "lumped_")
         self.pc.incrementTabLevel(1, parent=pc)
@@ -294,15 +323,15 @@ class VerticallyLumpedHMGPC(PCBase):
         self.pc.setMGInterpolation(1, Prol)
 
         # Build the chain of horizontal interpolations along the base
-        # MeshHierarchy (coarsest level is 0, V_coarse is at `level`).
+        # MeshHierarchy. Level 0 is the coarsest and V_base_2d is at `level`.
         base_interp_mats = self._build_base_hierarchy_interpolations(
             hierarchy, level, hele
         )
         self._base_interp_mats = base_interp_mats
 
-        # Explicit base-mesh interpolations + galerkin coarsening side-step
-        # the DM-based coarsen hook, which would require a coarsened UFL
-        # appctx we don't have.
+        # Explicit base-mesh interpolations plus Galerkin coarsening avoid the
+        # DM-based coarsen hook. That hook needs a coarsened UFL appctx, which
+        # is not available here.
         if base_interp_mats:
             coarse_ksp = self.pc.getMGCoarseSolve()
             coarse_pc = coarse_ksp.getPC()
@@ -325,14 +354,13 @@ class VerticallyLumpedHMGPC(PCBase):
     def _build_base_hierarchy_interpolations(hierarchy, fine_level, hele):
         """Assemble horizontal interpolation matrices for the base MG."""
         mats = []
+        V_c = FunctionSpace(hierarchy[0], hele)
         for k in range(1, fine_level + 1):
-            mesh_c = hierarchy[k - 1]
-            mesh_f = hierarchy[k]
-            V_c = FunctionSpace(mesh_c, hele)
-            V_f = FunctionSpace(mesh_f, hele)
+            V_f = FunctionSpace(hierarchy[k], hele)
             trial = TrialFunction(V_c)
             P_k = assemble(interpolate(trial, V_f)).petscmat
             mats.append(P_k)
+            V_c = V_f  # the fine space becomes the coarse space next round
         return mats
 
     def update(self, pc):
