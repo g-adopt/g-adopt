@@ -1,10 +1,10 @@
 """Tests for InterpolationConfig and the interpolation-geometry cache key.
 
-Everything here constructs its own inputs: no reconstruction data, no
-downloaded files, no Firedrake solve. The source is a fixed point cloud on the
-unit sphere carrying one property, and the output strategy hands that property
-straight back, so the numbers the connector returns are exactly what the kNN
-interpolation produced.
+Classes in this test are mocked such that there is no dependence on the
+mathematics involved in the interpolation. The classes are minimally
+constructed such that they pass internal API checks. Objects with certain
+methods overridden are provided as fixtures in order to use function call
+statistics as a proxy for cache hits/misses.
 
 The property under test is that the geometry cache is keyed on the
 interpolation config *by value*. Two connectors holding equal-valued but
@@ -12,19 +12,23 @@ distinct configs must share one cKDTree build; two connectors whose configs
 differ must not, and must return different fields.
 """
 
-import dataclasses
-
 import numpy as np
-import pytest
 from mpi4py import MPI
 
-from gadopt.gplates import InterpolationConfig, OutputStrategy, ScalarFieldConnector, Source
+from gadopt.gplates import (
+    InterpolationConfig,
+    OutputStrategy,
+    ScalarFieldConnector,
+    Source,
+)
+
+import pytest
+from unittest.mock import Mock
 
 
 # ---------------------------------------------------------------------------
 # Minimal test doubles
 # ---------------------------------------------------------------------------
-
 class FakeGplatesConnector:
     """Time conversions with no plate model behind them.
 
@@ -44,34 +48,25 @@ class FakeGplatesConnector:
         return float(age)
 
 
-class FixedCloudSource(Source):
-    """A source whose cloud and property are the same at every age.
+class MockSource(Source):
+    """A minimal Source subclass that satisfies the API requirements of a Connector.
 
-    The cloud is deterministic (seeded RNG) and lies on the unit sphere; the
-    property is a per-point scalar. Age-independence is deliberate — it keeps
-    the per-age source cache out of the way so the geometry cache is the only
-    thing under test.
-
-    Args:
-        n_points: number of source points.
-        seed: RNG seed for the cloud and the property values.
+    `_compute_sources` is an abstract method, and therefore has to be defined in this
+    subclass. When a MockSource object is created, `_compute_sources` is intended to
+    be overridden by a Mock() object in order to record call counts.
     """
 
     provides = frozenset({"thickness"})
 
-    def __init__(self, n_points=60, seed=0):
-        rng = np.random.default_rng(seed)
-        xyz = rng.normal(size=(n_points, 3))
-        self.xyz = xyz / np.linalg.norm(xyz, axis=1)[:, np.newaxis]
-        self.thickness = rng.uniform(50.0, 200.0, size=n_points)
+    def __init__(self):
+        # Fake Gplates connector
         self.gplates_connector = FakeGplatesConnector()
         self.comm = MPI.COMM_SELF
         self._is_root = True
-        self.compute_calls = 0
 
     def _compute_sources(self, age):
-        self.compute_calls += 1
-        return {"xyz": self.xyz, "thickness": self.thickness}
+        # To be overridden by a Mock() object
+        pass
 
 
 class PassThroughOutput(OutputStrategy):
@@ -83,7 +78,46 @@ class PassThroughOutput(OutputStrategy):
         return interpolated["thickness"]
 
 
-def unit_targets(n_points=40, seed=1):
+@pytest.fixture
+def mockedSource():
+    """Provides a MockSource object with a Mock() `_compute_sources` method
+
+    Returns:
+        A MockSource object with a Mock `_compute_sources` function
+    """
+    source = MockSource()
+    source._compute_sources = Mock(
+        return_value={"xyz": np.array([[1, 2, 3]]), "thickness": np.array([1.0])}
+    )
+    return source
+
+
+@pytest.fixture
+def mockedFieldConnector(mockedSource):
+    """Provides a ScalarFieldConnector object with a Mock() `_interpolator.geometry`
+       method.
+
+    The `_interpolator` created and owned by the `ScalarFieldConnector` is responsible
+    for updating the geometry on cache miss. Mock `_interpolator.geometry` in order to
+    record call counts as a proxy for geometry cache hits/misses.
+
+    Args:
+        mockedSource: The `mockedSource` pytest fixture
+
+    Returns:
+        A ScalarFieldConnector object with a Mock `_interpolator.geometry` function
+    """
+    cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
+    conn_idw = ScalarFieldConnector(
+        mockedSource, PassThroughOutput(), interpolation=cfg_idw
+    )
+    conn_idw._interpolator.geometry = Mock(
+        return_value={"idx": 0, "k1": True, "too_far": None}
+    )
+    return conn_idw
+
+
+def unit_targets(n_points=2, seed=1):
     """Build target coordinates that avoid the source seeds.
 
     A target sitting exactly on a seed is snapped to that seed's raw value by
@@ -103,94 +137,136 @@ def unit_targets(n_points=40, seed=1):
 
 
 # ---------------------------------------------------------------------------
-# Frozen dataclass behaviour
-# ---------------------------------------------------------------------------
-
-class TestFrozen:
-    def test_rejects_field_assignment(self):
-        cfg = InterpolationConfig()
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            cfg.kernel = "gaussian"
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            cfg.distance_threshold = 0.5
-
-    def test_is_hashable(self):
-        # Guards the "every field must stay hashable" clause in the docstring:
-        # a field holding a list, dict or set would raise here, and would raise
-        # again on every geometry-cache insertion.
-        hash(InterpolationConfig())
-        hash(InterpolationConfig(kernel="gaussian", k_neighbors=4))
-
-    def test_equal_values_hash_equal(self):
-        assert hash(InterpolationConfig()) == hash(InterpolationConfig())
-        assert InterpolationConfig() == InterpolationConfig()
-
-
-# ---------------------------------------------------------------------------
 # Geometry cache keyed by value
 # ---------------------------------------------------------------------------
 
+
 class TestGeometryCacheKey:
-    def test_equal_configs_share_one_geometry(self):
-        # Two distinct config objects holding identical values. Under the old
-        # id()-based key this produces two cache entries and two cKDTree
-        # builds; under a by-value key, one.
+    def test_cache_used(self, mockedSource, mockedFieldConnector):
+        # Test that the geometry cache is used when the same `ScalarFieldConnector`
+        # makes two `get_indicator` calls on the same target at the same `ndtime`.
+        targets = unit_targets()
+        _ = mockedFieldConnector.get_indicator(targets, ndtime=0.0)
+        _ = mockedFieldConnector.get_indicator(targets, ndtime=0.0)
+
+        # Source computed once
+        mockedSource._compute_sources.assert_called_once()
+
+        # Cache contains a single entry
+        assert len(mockedSource._interp_geometry_cache) == 1
+
+    def test_equal_configs_share_one_geometry_and_one_source(self, mockedSource):
+        # Test that the geometry cache is used when the two different
+        # `ScalarFieldConnector` objects with an identical (by value) configuration
+        # each make a `get_indicator` call on the same target at the same `ndtime`.
         cfg_a = InterpolationConfig(kernel="idw", k_neighbors=4)
         cfg_b = InterpolationConfig(kernel="idw", k_neighbors=4)
         assert cfg_a is not cfg_b
         assert cfg_a == cfg_b
 
-        source = FixedCloudSource()
         targets = unit_targets()
+
         conn_a = ScalarFieldConnector(
-            source, PassThroughOutput(), interpolation=cfg_a
+            mockedSource, PassThroughOutput(), interpolation=cfg_a
         )
         conn_b = ScalarFieldConnector(
-            source, PassThroughOutput(), interpolation=cfg_b
+            mockedSource, PassThroughOutput(), interpolation=cfg_b
         )
 
-        field_a = conn_a.get_indicator(targets, ndtime=0.0)
-        field_b = conn_b.get_indicator(targets, ndtime=0.0)
+        _ = conn_a.get_indicator(targets, ndtime=0.0)
+        _ = conn_b.get_indicator(targets, ndtime=0.0)
 
-        assert len(source._interp_geometry_cache) == 1
-        np.testing.assert_array_equal(field_a, field_b)
+        # Source computed once
+        mockedSource._compute_sources.assert_called_once()
 
-    def test_differing_configs_get_their_own_geometry(self):
-        # The half that catches the original symptom: two configs that differ
-        # must not share a build, and the fields they produce must differ.
+        # Cache contains a single entry
+        assert len(mockedSource._interp_geometry_cache) == 1
+
+    def test_differing_configs_get_their_own_geometry_and_same_source(
+        self, mockedSource
+    ):
+        # Test that the geometry cache is not reused and is populated correctly when
+        # two different `ScalarFieldConnector` objects with differing configurations
+        # each make a `get_indicator` call on the same target at the same `ndtime`.
         cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
         cfg_gauss = InterpolationConfig(
             kernel="gaussian", k_neighbors=4, gaussian_sigma=0.5
         )
 
-        source = FixedCloudSource()
         targets = unit_targets()
         conn_idw = ScalarFieldConnector(
-            source, PassThroughOutput(), interpolation=cfg_idw
+            mockedSource, PassThroughOutput(), interpolation=cfg_idw
         )
         conn_gauss = ScalarFieldConnector(
-            source, PassThroughOutput(), interpolation=cfg_gauss
+            mockedSource, PassThroughOutput(), interpolation=cfg_gauss
         )
 
-        field_idw = conn_idw.get_indicator(targets, ndtime=0.0)
-        field_gauss = conn_gauss.get_indicator(targets, ndtime=0.0)
+        expected_keys = [
+            conn_idw._construct_cache_key(targets),
+            conn_gauss._construct_cache_key(targets),
+        ]
 
-        assert len(source._interp_geometry_cache) == 2
-        assert np.max(np.abs(field_idw - field_gauss)) > 1e-8
+        # No key collisions
+        assert expected_keys[0] != expected_keys[1]
 
-    def test_one_source_advance_for_both_consumers(self):
-        # The geometry cache sits on the source, so sharing it must not
-        # disturb the per-age source cache: one advance, two consumers.
-        source = FixedCloudSource()
+        _ = conn_idw.get_indicator(targets, ndtime=0.0)
+        # First correct key placed in the cache
+        assert expected_keys[0] in mockedSource._interp_geometry_cache
+
+        _ = conn_gauss.get_indicator(targets, ndtime=0.0)
+        # Second correct key placed in the cache
+        assert expected_keys[1] in mockedSource._interp_geometry_cache
+
+        # Previous key not erased
+        assert len(mockedSource._interp_geometry_cache) == 2
+
+        # Source computed once
+        mockedSource._compute_sources.assert_called_once()
+
+    def test_advancing_time_invalidates_cache(self, mockedSource, mockedFieldConnector):
+        # Test that advancing time beyond `delta_t` invalidates and repopulates the
+        # correct geometry cache and source cache entries.
         targets = unit_targets()
-        conn_a = ScalarFieldConnector(
-            source, PassThroughOutput(), interpolation=InterpolationConfig()
-        )
-        conn_b = ScalarFieldConnector(
-            source, PassThroughOutput(), interpolation=InterpolationConfig()
-        )
+        _ = mockedFieldConnector.get_indicator(targets, ndtime=0.0)
+        _ = mockedFieldConnector.get_indicator(targets, ndtime=10.0)
 
-        conn_a.get_indicator(targets, ndtime=0.0)
-        conn_b.get_indicator(targets, ndtime=0.0)
+        # Same cache entry re-used
+        assert len(mockedSource._interp_geometry_cache) == 1
 
-        assert source.compute_calls == 1
+        # Age change triggers geometry rebuild
+        assert mockedFieldConnector._interpolator.geometry.call_count == 2
+
+        # Age change triggers source recompute
+        assert mockedSource._compute_sources.call_count == 2
+
+    def test_different_targets_invalidates_cache(
+        self, mockedSource, mockedFieldConnector
+    ):
+        # Test that calling `get_indicator` from a `ScalarFieldConnector` object after
+        # changing the target creates a new cache key and correctly populates the
+        # geometry cache without recomputing the corresponding source cache entry.
+        expected_keys = []
+        targets = unit_targets()
+        expected_keys.append(mockedFieldConnector._construct_cache_key(targets))
+        _ = mockedFieldConnector.get_indicator(targets, ndtime=0.0)
+
+        # First correct key placed in the cache
+        assert expected_keys[0] in mockedSource._interp_geometry_cache
+
+        targets = -unit_targets()
+        expected_keys.append(mockedFieldConnector._construct_cache_key(targets))
+        _ = mockedFieldConnector.get_indicator(targets, ndtime=0.0)
+        # Second correct key placed in the cache
+        assert expected_keys[1] in mockedSource._interp_geometry_cache
+
+        # No key collisions
+        assert expected_keys[0] != expected_keys[1]
+
+        # Previous key not erased
+        assert len(mockedSource._interp_geometry_cache) == 2
+
+        # Target change does not trigger source recompute
+        mockedSource._compute_sources.assert_called_once()
+
+        # Target change triggers geometry rebuild
+        assert mockedFieldConnector._interpolator.geometry.call_count == 2

@@ -242,6 +242,9 @@ class ScalarFieldConnector:
         self._cached_result = result
         self._cached_coords_ref = weakref.ref(target_coords)
 
+    def _construct_cache_key(self, target_coords: np.ndarray):
+        return (hash(target_coords.tobytes()), self.interpolation)
+
     # Computation
     def _compute(
         self,
@@ -258,9 +261,11 @@ class ScalarFieldConnector:
         # (source cloud, target coords, cfg) — not on the gathered property —
         # so it is identical across every output sharing this source at a given
         # age. Build it once and cache it on the source; siblings reuse it.
-        # The config half of the key is the config itself, by value:
-        # InterpolationConfig is frozen, so it hashes on its fields.
-        key = (hash(target_coords.tobytes()), self.interpolation)
+        # The key is (coords content hash, config by value); the config is
+        # frozen and hashable, so two configs holding the same numbers share one
+        # build. The coords hash is collidable in principle (2^-64), unlike the
+        # by-value config half.
+        key = self._construct_cache_key(target_coords)
         bundle = self.source.get_or_build_geometry(
             key, lambda: self._interp_geometry(source_xyz, target_coords)
         )
