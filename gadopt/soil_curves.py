@@ -81,20 +81,17 @@ class SoilCurve(ABC):
         self.reg_eps = ensure_constant(reg_eps)
 
         # Build parameters dictionary from positional and keyword arguments.
-        # Route Ss through ensure_constant so a bare float/int becomes a Constant
-        # while a Function or Function(R) (e.g. a spatially varying storage or an
-        # inversion control) passes through untouched and is never float()'d.
         params = {
             'theta_r': theta_r,
             'theta_s': theta_s,
             'Ks': Ks,
-            'Ss': ensure_constant(Ss)
+            'Ss': Ss
         }
         params.update(kwargs)
 
-        # Wrap scalar values in fd.Constant for UFL compatibility;
-        # pass through values that are already UFL expressions (e.g.
-        # spatially varying fields for heterogeneous soil properties).
+        # Wrap scalars in fd.Constant. Anything already a ufl Expr (a Function or
+        # Function(R), e.g. heterogeneous soil or an inversion control) passes
+        # through untouched.
         self.parameters = {
             key: value if isinstance(value, ufl.core.expr.Expr) else fd.Constant(value)
             for key, value in params.items()
@@ -122,19 +119,15 @@ class SoilCurve(ABC):
         return self.parameters['Ss']
 
     def _reg_abs(self, x, scale=1):
-        r"""Smoothly regularised magnitude $\sqrt{x^2 + (\epsilon\,\text{scale})^2}$.
+        r"""Regularised magnitude $\sqrt{x^2 + (\epsilon\,\text{scale})^2}$.
 
-        This replaces ``abs(x)`` where ``x`` is raised to a non-integer power so
-        that the branch-wise UFL derivative stays bounded at ``x = 0`` (no
-        ``pow(0, negative) = Inf`` and no ``sign(0)`` factor). ``scale`` carries
-        the natural magnitude of ``x`` so the dimensionless ``reg_eps`` produces
-        an offset consistent with the units of ``x`` (e.g. a head scale ``1/alpha``
-        when ``x`` is a head). When ``reg_eps`` is exactly zero this collapses back
-        to the exact ``abs(x)``, letting users opt out of the regularisation.
+        Replaces ``abs(x)`` where ``x`` carries a non-integer power, so the UFL
+        derivative stays bounded at ``x = 0`` (see the class docstring).
+        ``scale`` is the natural magnitude of ``x``, which turns the
+        dimensionless ``reg_eps`` into an offset in the units of ``x``.
+        ``reg_eps = 0`` recovers the exact ``abs(x)``.
         """
-        # float() here only ever sees the default/opt-out Constant or number, so
-        # it does not preclude reg_eps being a control: the regularised branch
-        # below keeps reg_eps symbolic in the form.
+        # Only the opt-out test needs a value; reg_eps stays symbolic in the form.
         if float(self.reg_eps) == 0.0:
             return abs(x)
         eps = self.reg_eps * scale
