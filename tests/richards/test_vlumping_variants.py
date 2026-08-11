@@ -192,14 +192,14 @@ def test_prol_preserves_constants(hierarchy_mesh):
     pc.setUp()
 
     py_ctx = pc.getPythonContext()
-    ones_c = Function(py_ctx.V_coarse).assign(1.0)
+    ones_c = Function(py_ctx.V_base_2d).assign(1.0)
     with ones_c.dat.vec_ro as xc:
         yf = py_ctx.Prol.createVecLeft()
         py_ctx.Prol.mult(xc, yf)
         arr = yf.getArray()
 
     assert np.allclose(arr, 1.0, atol=1e-10), (
-        f"Prol @ ones(V_coarse) deviates from ones(V): "
+        f"Prol @ ones(V_base_2d) deviates from ones(V): "
         f"min={arr.min():.3e}, max={arr.max():.3e}"
     )
 
