@@ -1,15 +1,14 @@
 """Tests for InterpolationConfig and the interpolation-geometry cache key.
 
-Classes in this test are mocked such that there is no dependence on the
-mathematics involved in the interpolation. The classes are minimally
-constructed such that they pass internal API checks. Objects with certain
-methods overridden are provided as fixtures in order to use function call
-statistics as a proxy for cache hits/misses.
+The tests mock the classes, so they do not depend on the interpolation
+mathematics. Each class is minimal and only passes the internal API checks.
+Some fixtures override a method with a Mock. The call count of that Mock is a
+proxy for cache misses.
 
 The property under test is that the geometry cache is keyed on the
-interpolation config *by value*. Two connectors holding equal-valued but
-distinct configs must share one cKDTree build; two connectors whose configs
-differ must not, and must return different fields.
+interpolation config *by value*. Two connectors that hold equal-valued but
+distinct configs must share one cKDTree build. Two connectors whose configs
+differ must not, and each must get a separate cache entry.
 """
 
 import numpy as np
@@ -49,11 +48,10 @@ class FakeGplatesConnector:
 
 
 class MockSource(Source):
-    """A minimal Source subclass that satisfies the API requirements of a Connector.
+    """A minimal Source subclass that satisfies the API of a Connector.
 
-    `_compute_sources` is an abstract method, and therefore has to be defined in this
-    subclass. When a MockSource object is created, `_compute_sources` is intended to
-    be overridden by a Mock() object in order to record call counts.
+    `_compute_sources` is an abstract method, so the subclass must define it. A
+    fixture replaces `_compute_sources` with a Mock to record the call count.
     """
 
     provides = frozenset({"thickness"})
@@ -94,18 +92,17 @@ def mockedSource():
 
 @pytest.fixture
 def mockedFieldConnector(mockedSource):
-    """Provides a ScalarFieldConnector object with a Mock() `_interpolator.geometry`
-       method.
+    """Provides a ScalarFieldConnector whose `_interp_geometry` method is a Mock().
 
-    The `_interpolator` created and owned by the `ScalarFieldConnector` is responsible
-    for updating the geometry on cache miss. Mock `_interpolator.geometry` in order to
-    record call counts as a proxy for geometry cache hits/misses.
+    The connector's `_interp_geometry` method builds the interpolation geometry on a
+    cache miss. The Mock replaces this method and counts the calls. The call count is
+    a proxy for the number of cache misses.
 
     Args:
         mockedSource: The `mockedSource` pytest fixture
 
     Returns:
-        A ScalarFieldConnector object with a Mock `_interpolator.geometry` function
+        A ScalarFieldConnector object with a Mock `_interp_geometry` method
     """
     cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
     conn_idw = ScalarFieldConnector(
@@ -118,15 +115,16 @@ def mockedFieldConnector(mockedSource):
 
 
 def unit_targets(n_points=2, seed=1):
-    """Build target coordinates that avoid the source seeds.
+    """Build target coordinates on the unit sphere.
 
-    A target sitting exactly on a seed is snapped to that seed's raw value by
-    the exact-match branch, which reports a perfect answer independent of the
-    kernel, so such points would hide any kernel difference.
+    The tests mock the geometry, so the code does not interpolate these targets.
+    The targets only need to be a reproducible and valid coordinate array. The
+    cache key is a hash of the array bytes. This key must be stable across a run.
+    When the targets change, the key must change too.
 
     Args:
         n_points: number of target nodes.
-        seed: RNG seed, chosen distinct from the source cloud's.
+        seed: RNG seed, for reproducibility.
 
     Returns:
         An ``(n_points, 3)`` array of points on the unit sphere.
