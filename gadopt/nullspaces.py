@@ -14,6 +14,7 @@ which the six rigid-body modes do not span.
 import itertools
 
 import firedrake as fd
+from pyadjoint.tape import stop_annotating
 from .approximations import AnelasticLiquidApproximation
 from .utility import upward_normal
 
@@ -177,29 +178,45 @@ def _rigid_body_functions(
     `near_incompressible_modes` share, kept in one place so the two cannot
     drift. Returns an empty list when neither rotations nor translations are
     requested; the caller decides what an empty basis means.
+
+    Annotation is off throughout. A mode is auxiliary -- it is handed to PETSc
+    as a (near-)nullspace and never enters a residual or a functional -- so it
+    carries no derivative, but Firedrake lowers `interpolate` to an assembly and
+    would otherwise leave one `AssembleBlock` per mode on a live tape. Those
+    blocks are dead ends that cannot corrupt a gradient; they grow the tape and
+    are re-run on every replay, which is what a time loop rebuilding modes per
+    step pays for. The suppression stays correct even where the modes *do* have
+    a differentiable dependency -- the coordinate field under a shape control --
+    because PETSc consumes them outside anything pyadjoint differentiates.
+
+    Callers inside a solve are already safe without this: Firedrake wraps the
+    solve in `stop_annotating`, and PETSc sets a PC up only from within
+    `KSPSolve`. The guard is here for driver code, which builds modes to pass as
+    `nullspace=`/`near_nullspace=` with the tape live.
     """
     X = fd.SpatialCoordinate(V.mesh())
     dim = V.mesh().geometric_dimension
 
-    if rotational:
-        if dim == 2:
-            basis = [fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))]
-        elif dim == 3:
-            basis = [
-                fd.Function(V).interpolate(fd.as_vector((0, -X[2], X[1]))),
-                fd.Function(V).interpolate(fd.as_vector((X[2], 0, -X[0]))),
-                fd.Function(V).interpolate(fd.as_vector((-X[1], X[0], 0))),
-            ]
+    with stop_annotating():
+        if rotational:
+            if dim == 2:
+                basis = [fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))]
+            elif dim == 3:
+                basis = [
+                    fd.Function(V).interpolate(fd.as_vector((0, -X[2], X[1]))),
+                    fd.Function(V).interpolate(fd.as_vector((X[2], 0, -X[0]))),
+                    fd.Function(V).interpolate(fd.as_vector((-X[1], X[0], 0))),
+                ]
+            else:
+                raise ValueError("Can only handle 2 or 3 dimensional spaces")
         else:
-            raise ValueError("Can only handle 2 or 3 dimensional spaces")
-    else:
-        basis = []
+            basis = []
 
-    if translations:
-        for tdim in translations:
-            vec = [0] * dim
-            vec[tdim] = 1
-            basis.append(fd.Function(V).interpolate(fd.as_vector(vec)))
+        if translations:
+            for tdim in translations:
+                vec = [0] * dim
+                vec[tdim] = 1
+                basis.append(fd.Function(V).interpolate(fd.as_vector(vec)))
 
     return basis
 
@@ -222,6 +239,11 @@ def rigid_body_modes(
     Returns:
       A Firedrake vector space basis incorporating the null space components
 
+    Note:
+      Building the modes adds nothing to the pyadjoint tape, whether or not
+      annotation is live -- see `_rigid_body_functions` for why that is both
+      safe and wanted. The orthonormalisation below is PETSc `Vec` work and was
+      never annotated.
     """
     basis = _rigid_body_functions(V, rotational, translations)
 
@@ -328,16 +350,29 @@ def solenoidal_modes(
     # Drop identically-zero fields (in 3-D many single-component potentials have
     # a vanishing curl, e.g. curl(x^2 e_x) = 0) and, if asked, fields whose
     # interpolation is no longer solenoidal on this mesh.
+    #
+    # `stop_annotating` because these modes are auxiliary: they seed GAMG's
+    # coarse space and never enter a residual, so they carry no derivative. The
+    # interpolation and the two filter norms would otherwise each add an
+    # `AssembleBlock` per candidate (measured: 9 blocks for the 2-D degree-1
+    # set), all dead ends depending on locally-created Functions rather than on
+    # any control. They cannot corrupt a gradient, but they grow the tape and
+    # are re-run on every replay. Guarding here rather than at the call site
+    # keeps this true however the function is reached; the path that matters in
+    # production -- `NearlyIncompressibleAssembledPC.initialize` -- is already
+    # covered, because Firedrake runs the whole solve inside `stop_annotating`
+    # and PETSc only sets a PC up lazily from within `KSPSolve`.
     kept = []
-    for m in [fd.Function(V).interpolate(v) for v in fields]:
-        m_norm = fd.sqrt(fd.assemble(fd.inner(m, m) * fd.dx))
-        if m_norm == 0.0:
-            continue
-        if divfree_tol is not None:
-            div_norm = fd.sqrt(fd.assemble(fd.inner(fd.div(m), fd.div(m)) * fd.dx))
-            if div_norm / m_norm > divfree_tol:
+    with stop_annotating():
+        for m in [fd.Function(V).interpolate(v) for v in fields]:
+            m_norm = fd.sqrt(fd.assemble(fd.inner(m, m) * fd.dx))
+            if m_norm == 0.0:
                 continue
-        kept.append(m)
+            if divfree_tol is not None:
+                div_norm = fd.sqrt(fd.assemble(fd.inner(fd.div(m), fd.div(m)) * fd.dx))
+                if div_norm / m_norm > divfree_tol:
+                    continue
+            kept.append(m)
 
     return kept
 
@@ -421,6 +456,10 @@ def near_incompressible_modes(
     Returns:
       An orthonormal `VectorSpaceBasis` of the combined modes.
     """
+    # No `stop_annotating` here: both halves suppress it at their own source
+    # (`_rigid_body_functions`, `solenoidal_modes`), which is where it belongs
+    # so that every caller of either is covered, not only this one.
+    # `_orthonormalised_survivors` is PETSc `Vec` work and never annotated.
     rigid = _rigid_body_functions(
         V, rotational=True, translations=list(range(V.value_size))
     )

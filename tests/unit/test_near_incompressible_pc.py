@@ -83,6 +83,43 @@ def test_divfree_filter_drops_nonsolenoidal_modes_on_curved_mesh():
     assert all(_rel_div(m) < 1e-8 for m in filtered)     # survivors are clean
 
 
+@pytest.mark.parametrize("build", [
+    pytest.param(lambda V: rigid_body_modes(V, rotational=True,
+                                            translations=[0, 1]),
+                 id="rigid_body_modes"),
+    pytest.param(lambda V: solenoidal_modes(V, max_degree=1, divfree_tol=1e-8),
+                 id="solenoidal_modes"),
+    pytest.param(lambda V: near_incompressible_modes(V, max_degree=1),
+                 id="near_incompressible_modes"),
+])
+def test_mode_builders_leave_the_tape_alone(build):
+    # Every mode is auxiliary -- handed to PETSc as a (near-)nullspace, never
+    # part of a residual or a functional -- so building one must add nothing to
+    # the tape. Unguarded, each of the 2-D degree-1 set left dead-end
+    # `AssembleBlock`s behind: 3 from the rigid interpolations (Firedrake lowers
+    # `interpolate` to an assembly, so `rigid_body_modes` leaked this way long
+    # before the solenoidal work), 3 more from the solenoidal ones, and 6 from
+    # the divergence filter's norms. They cannot corrupt a gradient, but they
+    # grow the tape and are re-run on every replay.
+    #
+    # The production path is safe regardless (Firedrake wraps the whole solve in
+    # `stop_annotating`, and PETSc only sets a PC up from inside `KSPSolve`), so
+    # what this pins is the *driver* path: user code that builds a basis itself
+    # while a tape is live, which is how every `nullspace=` argument is made.
+    from firedrake.adjoint import (continue_annotation, get_working_tape,
+                                   pause_annotation)
+
+    V = fd.VectorFunctionSpace(_box(2), "CG", 2)
+    continue_annotation()
+    try:
+        tape = get_working_tape()
+        before = len(tape.get_blocks())
+        build(V)
+        assert len(tape.get_blocks()) == before
+    finally:
+        pause_annotation()
+
+
 @pytest.mark.parametrize("dim", [2, 3])
 def test_near_incompressible_modes_orthonormal_and_superset(dim):
     V = fd.VectorFunctionSpace(_box(dim), "CG", 2)
