@@ -37,8 +37,6 @@ capacity listed above but never appears explicitly in the residual.
 
 """
 
-import numbers
-
 from firedrake import *
 from irksome import Dt
 from ufl.indexed import Indexed
@@ -50,21 +48,6 @@ __all__ = [
     "richards_mass_term",
     "richards_gravity_term",
 ]
-
-
-def _is_scalar_zero(value) -> bool:
-    """Return True only when ``value`` is provably the scalar zero.
-
-    A plain Python number or a scalar ``Constant`` can be safely evaluated to a
-    float and compared against zero. Anything else (most importantly a ``Function``
-    or ``Function(R)``, which must never be float()'d) is treated as non-zero so
-    that a spatially varying coefficient or an inversion control is never dropped.
-    """
-    if isinstance(value, numbers.Real):
-        return float(value) == 0.0
-    if isinstance(value, Constant):
-        return float(value) == 0.0
-    return False
 
 
 def richards_mass_term(
@@ -102,14 +85,14 @@ def richards_mass_term(
     # Specific storage: Ss * S * dh/dt (standard Dt, linear in h for given S).
     # We skip this term when Ss is identically zero, to avoid polluting the form
     # with a zero-coefficient TimeDerivative that can confuse the nonlinear solver.
-    # That skip is only safe for values we can provably evaluate to the scalar
-    # zero: a plain Python number or a scalar Constant. A Function or Function(R)
-    # (e.g. a spatially varying storage, or an inversion control) must never be
-    # float()'d, so we always include the term for those and never silently drop it.
-    if not _is_scalar_zero(soil_curve.Ss):
+    # SoilCurve always wraps Ss, so it is either a Constant we can evaluate, or a
+    # Function (a spatially varying storage, or an inversion control) that must
+    # never be float()'d and so always keeps the term.
+    Ss = soil_curve.Ss
+    if not (isinstance(Ss, Constant) and float(Ss) == 0.0):
         theta = soil_curve.moisture_content(trial)
         S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
-        F += inner(eq.test, soil_curve.Ss * S * Dt(trial)) * eq.dx
+        F += inner(eq.test, Ss * S * Dt(trial)) * eq.dx
 
     return F
 
