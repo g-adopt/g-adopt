@@ -316,6 +316,21 @@ class TaperedAmplitude:
         return np.clip(self.g(m), 0.0, 1.0)
 
 
+class SurfaceAmplitude:
+    """Lateral part: a per-node amplitude published by the source, read straight
+    from its own channel rather than derived here. The source owns the physics
+    (e.g. an oceanic-only fade that weakens thin/young seafloor while continents
+    stay at 1.0); this class only interpolates and clips it. ``too_far`` nodes,
+    with no seed nearby, read 1.0 (full strength)."""
+
+    requires = frozenset({"surface_amplitude"})
+
+    def amplitude(self, interpolated, too_far):
+        a = interpolated["surface_amplitude"].copy()
+        a[too_far] = 1.0
+        return np.clip(a, 0.0, 1.0)
+
+
 class IndicatorOutput(OutputStrategy):
     """A composable indicator: ``radial`` profile x ``base`` depth x ``lateral``
     amplitude. ``requires`` is the union of the three parts', so a source need
@@ -372,9 +387,15 @@ class QuinticOutput(IndicatorOutput):
     nodes — 100 for lithosphere-style sources, meaning "no seed nearby, assume
     a 100 km plate". It has no effect when ``base_depth_km`` is set.
 
+    ``faded`` (default ``False``): keep the uniform ``NoAmplitude`` lateral
+    term. ``True`` swaps in ``SurfaceAmplitude``, which reads a source-published
+    ``surface_amplitude`` channel (e.g. an oceanic-only fade) and adds it to
+    ``requires``. The base/depth is untouched; only the lateral strength varies.
+
     A thin preset: ``QuinticStep`` radial x (``FixedBase`` or ``DataBase``) x
-    ``NoAmplitude``. ``requires`` stays ``{"thickness"}`` even with a fixed base
-    (the contract is unchanged), so a source must still provide it.
+    (``NoAmplitude`` or, when ``faded``, ``SurfaceAmplitude``). ``requires``
+    stays ``{"thickness"}`` even with a fixed base (the contract is unchanged),
+    so a source must still provide it.
     """
 
     def __init__(
@@ -383,6 +404,7 @@ class QuinticOutput(IndicatorOutput):
         *,
         base_depth_km: float | None = None,
         default_thickness_km: float = 0.0,
+        faded: bool = False,
     ):
         # Validate here so the messages and their order match the historical
         # contract, including validating default_thickness_km even when a fixed
@@ -398,13 +420,19 @@ class QuinticOutput(IndicatorOutput):
             )
         base = (FixedBase(base_depth_km) if base_depth_km is not None
                 else DataBase(default_thickness_km))
-        super().__init__(QuinticStep(width_km), base, NoAmplitude())
-        # Fixed contract: thickness is required even with a fixed base, where the
-        # channel is not consumed (a source must still provide it).
-        self.requires = frozenset({"thickness"})
+        # ``faded`` reads a source-published ``surface_amplitude`` channel (e.g.
+        # an oceanic-only fade); None/False keeps the uniform-amplitude step.
+        lateral = SurfaceAmplitude() if faded else NoAmplitude()
+        super().__init__(QuinticStep(width_km), base, lateral)
+        # Fixed contract: thickness is always required (even with a fixed base,
+        # where the channel is not consumed); the fade adds surface_amplitude.
+        self.requires = frozenset({"thickness"}) | (
+            {"surface_amplitude"} if faded else set()
+        )
         self.width_km = width_km
         self.base_depth_km = base_depth_km
         self.default_thickness_km = default_thickness_km
+        self.faded = faded
 
 
 class MaskedQuinticOutput(IndicatorOutput):

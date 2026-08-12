@@ -352,6 +352,7 @@ class LithosphereConnectorFactory(ConnectorFactory):
         *,
         base_depth_km: float | None = None,
         default_thickness_km: float = 100.0,
+        faded: bool = False,
     ):
         """Overloaded construct_output
 
@@ -363,11 +364,17 @@ class LithosphereConnectorFactory(ConnectorFactory):
         never vanishes laterally (``default_thickness_km`` fills uncovered
         nodes), so the plain one-sided step is the right indicator here: every
         column is inside the region and only its base depth varies.
+
+        ``faded`` (optional) reads the source-published ``surface_amplitude``
+        channel so thin young oceanic lithosphere at ridges reads weak instead
+        of full strength, while continents stay at 1.0; the fade physics lives
+        in the source (see `SurfaceAmplitude`).
         """
         super().construct_output(
             width_km=width_km,
             base_depth_km=base_depth_km,
             default_thickness_km=default_thickness_km,
+            faded=faded,
         )
 
     def construct_geotherm(
