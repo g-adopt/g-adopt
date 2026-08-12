@@ -25,6 +25,7 @@ from gadopt.gplates import (
     NoAmplitude,
     QuinticOutput,
     QuinticStep,
+    SurfaceAmplitude,
     TaperedAmplitude,
     continental_linear,
     ocean_erf_normalized,
@@ -390,6 +391,61 @@ class TestQuinticOutputVariableBase:
         interp = {"thickness": thickness.copy()}
         out.compute(interp, np.full(2, mesh.r_outer), np.array([True, False]), mesh)
         np.testing.assert_array_equal(interp["thickness"], thickness)
+
+
+# ---------------------------------------------------------------------------
+# The oceanic-only surface_amplitude fade
+# ---------------------------------------------------------------------------
+
+class TestSurfaceAmplitude:
+    """The lateral part reads a source-published ``surface_amplitude`` channel
+    verbatim (clipped), and ``too_far`` nodes fall back to full strength."""
+
+    def test_reads_the_channel_clipped(self):
+        lat = SurfaceAmplitude()
+        interp = {"surface_amplitude": np.array([0.0, 0.3, 1.0, 1.5, -0.2])}
+        too_far = np.zeros(5, dtype=bool)
+        np.testing.assert_array_equal(
+            lat.amplitude(interp, too_far), [0.0, 0.3, 1.0, 1.0, 0.0]
+        )
+
+    def test_too_far_reads_full_strength(self):
+        lat = SurfaceAmplitude()
+        interp = {"surface_amplitude": np.array([0.1, 0.2])}
+        np.testing.assert_array_equal(
+            lat.amplitude(interp, np.array([False, True])), [0.1, 1.0]
+        )
+
+    def test_does_not_mutate_input(self):
+        lat = SurfaceAmplitude()
+        a = np.array([0.2, 0.4])
+        interp = {"surface_amplitude": a.copy()}
+        lat.amplitude(interp, np.array([True, False]))
+        np.testing.assert_array_equal(interp["surface_amplitude"], a)
+
+
+class TestQuinticOutputFaded:
+    """``faded=True`` multiplies the depth step by the published amplitude and
+    adds ``surface_amplitude`` to the contract; ``faded=False`` is unchanged."""
+
+    def test_requires_only_thickness_unfaded(self):
+        assert QuinticOutput(width_km=10.0).requires == frozenset({"thickness"})
+
+    def test_requires_adds_surface_amplitude_when_faded(self):
+        out = QuinticOutput(width_km=10.0, faded=True)
+        assert out.requires == frozenset({"thickness", "surface_amplitude"})
+
+    def test_amplitude_scales_the_surface_step(self):
+        # At the surface skin the step reads 1, so the field equals the fade.
+        mesh = MeshConfig()
+        out = QuinticOutput(width_km=10.0, faded=True)
+        r_target = np.full(3, mesh.r_outer - 5.0 / mesh.depth_scale)
+        interp = {
+            "thickness": np.full(3, 100.0),
+            "surface_amplitude": np.array([0.05, 0.5, 1.0]),
+        }
+        result = out.compute(interp, r_target, np.zeros(3, dtype=bool), mesh)
+        np.testing.assert_allclose(result, [0.05, 0.5, 1.0])
 
 
 # ---------------------------------------------------------------------------
