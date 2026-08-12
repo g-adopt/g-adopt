@@ -425,6 +425,7 @@ def test_cg_gap_does_not_grow_with_refinement():
 # ---------------------------------------------------------------------------
 # Parallel
 # ---------------------------------------------------------------------------
+@pytest.mark.parallel(nprocs=2)
 def test_parallel_parity(annulus):
     """Same comparison on more than one rank.
 
@@ -442,6 +443,7 @@ def test_parallel_parity(annulus):
     compare(annulus, results, label=f"parallel np={fd.COMM_WORLD.size}")
 
 
+@pytest.mark.parallel(nprocs=2)
 def test_parallel_coefficients_are_rank_consistent(annulus):
     """Every rank must report the same trace spectrum.
 

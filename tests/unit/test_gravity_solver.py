@@ -619,6 +619,21 @@ class TestCylindrical:
         assert relative_l2_error(psi, reference, mesh) < 1e-6
         assert abs(fd.assemble(psi * solver.ds("top")) / perimeter) < 1e-10
 
+    # NOT marked `@pytest.mark.parallel(nprocs=2)`, and the reason is a
+    # limitation of `mpi-pytest`, not a choice. The plugin re-launches a
+    # marked test by node id and DROPS THE CLASS from it, so a method inside
+    # a test class is re-invoked as `<file>::<method>` and pytest answers
+    # `ERROR: not found ... (no match in any of [<Module ...>])`, exit 4.
+    # Measured 2026-08-12: marking the three parallel methods in this file
+    # turned three green skips into four red failures that never ran a line
+    # of solver code. The module-level tests in test_dtn_lowrank_parity.py
+    # carry the mark and run correctly, which is what identifies the class as
+    # the cause.
+    #
+    # CONSEQUENCE FOR NEW WORK: a test that must run in parallel has to be a
+    # MODULE-LEVEL FUNCTION. Until these are moved out of their classes they
+    # keep the `COMM_WORLD.size < 2` skip, which passes green under CI's
+    # plain `pytest` and only runs under an explicit mpiexec.
     @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
     def test_parallel_repeated_monopole_solves_are_stable(self, representation):
         """The enclosed mass must not drift when a solver is re-used in parallel.

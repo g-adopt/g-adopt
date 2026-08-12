@@ -92,6 +92,7 @@ import numpy as np
 from firedrake import (
     Function, FunctionSpace, SpatialCoordinate, TestFunction,
     VectorFunctionSpace, assemble)
+from mpi4py import MPI
 from ufl.cell import TensorProductCell
 
 from .dtn_tabulate import (
@@ -326,18 +327,54 @@ def _assert_against_reference(rows, keys, descriptor, side, radius, v, measure,
     sampled = descriptor.modes_by_key(
         validation_keys(descriptor), side, radius, SpatialCoordinate(mesh))
     if not sampled:
+        # Uniform across ranks: it depends on the descriptor alone.
         return
     indices = [keys.index(mode.key) for mode in sampled]
-    scale = max(np.max(np.abs(rows[i])) for i in indices)
+
+    # **`scale` and `worst` are reduced across ranks, and that is a deadlock
+    # fix rather than tidiness.**
+    #
+    # `rows` is rank local. A rank that owns no degree of freedom on this
+    # boundary has all-zero `rows`, so a rank-local `scale` is 0 there and
+    # nowhere else. The early return below then skips the `assemble` calls in
+    # the loop, which are collective, and that rank races on to the next
+    # boundary's `assemble(1 * measure)` while every other rank waits in the
+    # reference assemblies. The job hangs with no output and no error.
+    #
+    # Measured 2026-08-12, 2 ranks, a gmsh annulus: rank 0 parked in
+    # `_assert_against_reference`'s assemble and rank 1 in the next boundary's
+    # `area` reduction, killed after 120 s. The same script with
+    # `dtn_representation="multiplier"` finishes in one second.
+    #
+    # It survived a 64-rank Gadi campaign because that mesh is an extruded
+    # cubed sphere, where every rank owns part of both the top and the bottom
+    # boundary, so no rank ever reaches the early return. Partitioning decides
+    # whether this fires, not the mesh family and not the truncation - and a
+    # rank owning nothing on one boundary is ordinary on an unstructured mesh.
+    #
+    # `worst` needs the same treatment for the same reason: a rank-local
+    # comparison against `rtol` raises on the ranks that exceed it and returns
+    # normally on the others, which leaves the survivors in a collective the
+    # raising ranks have left.
+    comm = mesh.comm
+    local_scale = max((np.max(np.abs(rows[i]), initial=0.0) for i in indices),
+                      default=0.0)
+    scale = comm.allreduce(local_scale, op=MPI.MAX)
     if scale == 0.0:
+        # Now a global statement: no rank found anything on this boundary, so
+        # there is genuinely nothing to check and every rank returns together.
         return
     worst, worst_key = 0.0, None
     for mode, i in zip(sampled, indices):
         reference = np.asarray(
             assemble(mode.expr * v * measure).dat.data_ro, dtype=float)
-        deviation = np.max(np.abs(rows[i] - reference)) / scale
+        deviation = np.max(np.abs(rows[i] - reference), initial=0.0) / scale
         if deviation > worst:
             worst, worst_key = deviation, mode.key
+    # The pair travels together, so every rank raises with the same mode named
+    # rather than with whichever mode happened to be worst locally.
+    worst, worst_key = max(comm.allgather((worst, worst_key)),
+                           key=lambda pair: pair[0])
     if worst > rtol:
         raise RuntimeError(
             f"The tabulated DtN boundary build disagrees with the symbolic one "
