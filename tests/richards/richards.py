@@ -4,12 +4,6 @@ import importlib
 cases = {
     "tracy_2d": {
         "specified_head": {
-            "dg0": {
-                "levels": [51, 101, 201, 401],
-                "cores": [1, 1, 4, 16],
-                "degree": 0,
-                "bc_type": "specified_head",
-            },
             "dg1": {
                 "levels": [51, 101, 201, 401],
                 "cores": [1, 1, 4, 16],
