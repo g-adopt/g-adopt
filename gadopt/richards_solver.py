@@ -340,6 +340,19 @@ class RichardsSolver(SolverConfigurationMixin):
             # degree == 0: interior_penalty_factor short-circuits to sigma=1.0
             # and ignores alpha entirely; pass alpha through unchanged.
             eq_attrs['interior_penalty'] = alpha
+            # The element-wise gradient of a degree-0 function vanishes, so three
+            # of the four SIPG terms drop out and only the penalty term survives.
+            # With sigma=1.0 that is exactly the classical two-point-flux (TPFA)
+            # finite-volume Laplacian, whose transmissibility is the arithmetic
+            # mean of 1/h rather than the correct harmonic mean.
+            warn(
+                "RichardsSolver is running at degree 0, where the interior "
+                "penalty form reduces to a two-point-flux finite-volume scheme. "
+                "This is accurate only on orthogonal, locally uniform "
+                "quadrilateral or hexahedral cells. On simplicial, "
+                "non-orthogonal or graded meshes it may not converge.",
+                stacklevel=2,
+            )
 
         self.equation = Equation(
             self.test,
