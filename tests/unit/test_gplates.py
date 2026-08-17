@@ -12,8 +12,9 @@ from gadopt.gplates import (
     ConnectorFactory,
     LithosphereConnectorFactory,
     PointCloudSource,
-    QuinticOutput,
-    GeothermERFOutput,
+    GlobalLayerIndicator,
+    HalfSpaceCoolingGeotherm,
+    SourceLateralWeight,
 )
 from gtrack.age_sources import AgeCloudSource
 
@@ -98,7 +99,7 @@ def test_velocity_reconstruction_regression(write_pvd=False):
         radial_component = assemble(inner(gplates_function, FacetNormal(mesh)) * ds_t)
 
         # Assert that radial component is essentially zero
-        assert abs(radial_component) < 5e-9, f"Radial component at time {t} Ma is {radial_component}, should be 0"
+        assert abs(radial_component) < 5e-9, f"Radial component at time {t} Ma is {radial_component}; expected 0"
 
         surface_rms.append(sqrt(assemble(inner(gplates_function, gplates_function) * ds_t)))
 
@@ -133,8 +134,8 @@ class _FakeProducer:
     """Minimal gtrack ``AgeCloudSource`` for the factory tests: satisfies the
     protocol (provides / monotonic_backward / at_age / validate_age) so
     PointCloudSource accepts it, with no reconstruction data. ``provides``
-    carries both ``thickness`` and ``age`` so a QuinticOutput indicator and a
-    GeothermERFOutput geotherm both pass the connector's requires<=provides
+    carries both ``thickness`` and ``age`` so a GlobalLayerIndicator indicator and a
+    HalfSpaceCoolingGeotherm geotherm both pass the connector's requires<=provides
     check. ``at_age`` raises: the factory-mechanics tests must never drive it."""
 
     provides = frozenset({"thickness", "age"})
@@ -166,92 +167,94 @@ class TestConnectorFactory:
         # If this fails, every factory test that wraps it is testing nothing.
         assert isinstance(_FakeProducer(), AgeCloudSource)
 
-    def test_cannot_construct_source_without_class(self):
+    def test_cannot_create_source_without_class(self):
         factory = ConnectorFactory()
         with pytest.raises(
-            TypeError, match="Do not know what kind of Source to construct!"
+            TypeError, match="The source class is not configured."
         ):
-            factory.construct_source()
+            factory.create_source()
 
     def test_cannot_construct_indicator_without_source_class(self):
         factory = ConnectorFactory()
         with pytest.raises(
             RuntimeError,
-            match="A source must be either constructed or connected in order to construct the indicator",
-        ):
-            _ = factory.indicator
-
-    def test_indicator_raises_when_source_class_set_but_source_not_constructed(self):
-        factory = ConnectorFactory(source_class=PointCloudSource)
-        with pytest.raises(
-            RuntimeError,
-            match="A source must be either constructed or connected in order to construct the indicator",
+            match="A source must be created or assigned before you access the indicator",
         ):
             _ = factory.indicator
 
     def test_constructed_source(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_FakeProducer(), _DummyGplates())
 
         assert isinstance(factory.source, PointCloudSource)
 
     def test_inherited_source(self):
         factory1 = ConnectorFactory(source_class=PointCloudSource)
         factory2 = ConnectorFactory()
-        factory1.construct_source(_FakeProducer(), _DummyGplates())
+        factory1.create_source(_FakeProducer(), _DummyGplates())
         factory2.source = factory1.source
         assert factory1.source is factory2.source
 
     def test_strictly_single_source(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_FakeProducer(), _DummyGplates())
         source = PointCloudSource(_FakeProducer(), _DummyGplates())
-        with pytest.raises(RuntimeError, match="This factory already has a Source!"):
+        with pytest.raises(RuntimeError, match=r"This factory already has a source\."):
             factory.source = source
 
     def test_constructed_output(self):
-        factory = ConnectorFactory(output_class=QuinticOutput)
-        factory.construct_output()
+        factory = ConnectorFactory(output_class=GlobalLayerIndicator)
+        factory.create_indicator()
 
-        assert isinstance(factory.output, QuinticOutput)
+        assert isinstance(factory.output, GlobalLayerIndicator)
+
+    def test_lithosphere_factory_forwards_lateral_weight_strategy(self):
+        factory = LithosphereConnectorFactory()
+        lateral_weight = SourceLateralWeight()
+        factory.create_indicator(lateral_weight=lateral_weight)
+
+        assert factory.output.lateral_weight is lateral_weight
+        assert factory.output.requires == frozenset(
+            {"thickness", "lateral_weight"}
+        )
 
     def test_inherited_output(self):
-        factory1 = ConnectorFactory(output_class=QuinticOutput)
+        factory1 = ConnectorFactory(output_class=GlobalLayerIndicator)
         factory2 = ConnectorFactory()
-        factory1.construct_output()
+        factory1.create_indicator()
         factory2.output = factory1.output
         assert factory1.output is factory2.output
 
     def test_strictly_single_output(self):
-        factory = ConnectorFactory(output_class=QuinticOutput)
-        factory.construct_output()
-        output = QuinticOutput()
+        factory = ConnectorFactory(output_class=GlobalLayerIndicator)
+        factory.create_indicator()
+        output = GlobalLayerIndicator()
         with pytest.raises(
-            RuntimeError, match="This factory already has an indicator Output!"
+            RuntimeError, match=r"This factory already has an indicator output\."
         ):
             factory.output = output
 
     def test_strictly_single_geotherm_output(self):
-        factory = ConnectorFactory(geotherm_output_class=GeothermERFOutput)
-        factory.construct_geotherm()
+        factory = ConnectorFactory(geotherm_output_class=HalfSpaceCoolingGeotherm)
+        factory.create_geotherm()
         with pytest.raises(
-            RuntimeError, match="This factory already has a geotherm Output!"
+            RuntimeError, match=r"This factory already has a geotherm output\."
         ):
-            factory.geotherm_output = GeothermERFOutput()
+            factory.geotherm_output = HalfSpaceCoolingGeotherm()
 
     def test_constructed_geotherm_output(self):
-        factory = ConnectorFactory(geotherm_output_class=GeothermERFOutput)
-        factory.construct_geotherm(kappa=2e-6)
+        factory = ConnectorFactory(geotherm_output_class=HalfSpaceCoolingGeotherm)
+        factory.create_geotherm(thermal_diffusivity_m2_per_s=2e-6)
 
-        assert isinstance(factory.geotherm_output, GeothermERFOutput)
-        assert factory.geotherm_output.kappa == 2e-6
+        assert isinstance(factory.geotherm_output, HalfSpaceCoolingGeotherm)
+        assert factory.geotherm_output.thermal_diffusivity_m2_per_s == 2e-6
 
     def test_geotherm_requires_geotherm_output(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_FakeProducer(), _DummyGplates())
         with pytest.raises(
             RuntimeError,
-            match="A geotherm_output must be either constructed or connected in order to construct the geotherm",
+            match="A geotherm output must be created or assigned before you access the geotherm",
         ):
             _ = factory.geotherm
 
@@ -260,14 +263,14 @@ class TestConnectorFactory:
         Source instance, so the forward-only ocean tracker advances once per
         age no matter which connector updates first."""
         factory = LithosphereConnectorFactory()
-        factory.construct_source(_FakeProducer(), _DummyGplates())
-        factory.construct_output()
-        factory.construct_geotherm()
+        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_indicator()
+        factory.create_geotherm()
 
         assert factory.indicator.source is factory.geotherm.source
         assert factory.indicator is not factory.geotherm
-        assert isinstance(factory.indicator.output, QuinticOutput)
-        assert isinstance(factory.geotherm.output, GeothermERFOutput)
+        assert isinstance(factory.indicator.output, GlobalLayerIndicator)
+        assert isinstance(factory.geotherm.output, HalfSpaceCoolingGeotherm)
 
     def test_connector_params_forwarded(self):
         """Typed connector-level parameters reach every connector the
@@ -275,13 +278,13 @@ class TestConnectorFactory:
         from gadopt.gplates import MeshConfig, InterpolationConfig
 
         mesh_cfg = MeshConfig(r_outer=2.22, depth_scale=2890.0)
-        interp_cfg = InterpolationConfig(k_neighbors=8)
+        interp_cfg = InterpolationConfig(neighbor_count=8)
         factory = LithosphereConnectorFactory(
             mesh=mesh_cfg, interpolation=interp_cfg, gc_collect_frequency=3
         )
-        factory.construct_source(_FakeProducer(), _DummyGplates())
-        factory.construct_output()
-        factory.construct_geotherm()
+        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_indicator()
+        factory.create_geotherm()
 
         assert factory.indicator.gc_collect_frequency == 3
         assert factory.geotherm.gc_collect_frequency == 3
@@ -292,9 +295,9 @@ class TestConnectorFactory:
 
     def test_indicator_raises_when_output_not_constructed(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.construct_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_FakeProducer(), _DummyGplates())
         with pytest.raises(
             RuntimeError,
-            match="An output must be either constructed or connected in order to construct the indicator",
+            match="An output must be created or assigned before you access the indicator",
         ):
             _ = factory.indicator

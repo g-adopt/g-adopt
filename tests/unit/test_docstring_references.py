@@ -15,7 +15,7 @@ Scope is deliberately one module. Widened to the whole package the same rule
 produces five false positives, all of them names that legitimately exist
 without being attributes of anything importable:
 
-    connectors.InterpolationConfig    ``too_far``               a bundle key
+    connectors.InterpolationConfig    ``outside_source_range``               a bundle key
     connectors.ScalarFieldConnector   ``gc_collect_frequency``  a constructor argument
     connectors.ScalarFieldConnector   ``None``                  a keyword
     connectors.ScalarFieldConnector   ``step_to``               a gtrack method

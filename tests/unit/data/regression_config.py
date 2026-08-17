@@ -9,8 +9,9 @@ different configuration. One definition, read by both, removes that hazard.
 
 # Plate-model oldest age, and the cloud point counts for the two producers.
 OLDEST_AGE = 120
-LITH_N_POINTS = 2000
-POLYGON_N_POINTS = 3000
+LITH_TRACKER_POINT_COUNT = 2000
+POLYGON_BACKGROUND_POINT_COUNT = 3000
+POLYGON_SCALAR_INPUT_POINT_COUNT = 3000
 
 # Ages (Ma) at which the reference quantities are recorded and compared.
 TEST_AGES = (100, 50, 0)
