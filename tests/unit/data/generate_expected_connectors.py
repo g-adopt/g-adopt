@@ -39,8 +39,9 @@ from gtrack.config import TracerConfig
 # directory is on sys.path when it is run directly).
 from regression_config import (
     OLDEST_AGE,
-    LITH_N_POINTS,
-    POLYGON_N_POINTS,
+    LITH_TRACKER_POINT_COUNT,
+    POLYGON_BACKGROUND_POINT_COUNT,
+    POLYGON_SCALAR_INPUT_POINT_COUNT,
     TEST_AGES,
     REGRESSION_LAYER_HEIGHTS,
 )
@@ -142,10 +143,10 @@ def main():
         continental_polygons=plate_files.continental_polygons,
         static_polygons=plate_files.static_polygons,
         continental_data=load_continental_data(),
-        age_to_property=half_space_cooling,
-        oldest_age=OLDEST_AGE,
+        oceanic_thickness_from_age=half_space_cooling,
+        plate_model_max_age_ma=OLDEST_AGE,
         config=LithosphereCloudConfig(
-            tracer=TracerConfig(default_mesh_points=LITH_N_POINTS),
+            tracer=TracerConfig(tracker_point_count=LITH_TRACKER_POINT_COUNT),
         ),
     )
     lith_src = PointCloudSource(lith_producer, plate_model)
@@ -153,10 +154,10 @@ def main():
     lith_factory = LithosphereConnectorFactory()
     lith_factory.source = lith_src
     # Age sensitivity comes from REGRESSION_LAYER_HEIGHTS, not from an
-    # amplitude term: the graded mesh puts nodes inside the lithosphere so a
+    # lateral-weight term: the graded mesh puts nodes inside the lithosphere so a
     # moving base depth actually moves the reduced integrals.
-    lith_factory.construct_output()
-    lith_factory.construct_geotherm()
+    lith_factory.create_indicator()
+    lith_factory.create_geotherm()
     lith_result = walk_connectors({
         "lith_indicator": lith_factory.indicator,
         "lith_geotherm": lith_factory.geotherm,
@@ -170,17 +171,18 @@ def main():
         polygons=str(CRATON_SHAPEFILE),
         static_polygons=plate_files.static_polygons,
         thickness_data=200.0,
-        # thickness_data=200.0 is a SCALAR, so seed_fallback_n sizes the seed
+        # thickness_data=200.0 is a SCALAR, so scalar_input_point_count sizes the seed
         # Fibonacci mesh; the old single n_points did both jobs, so pin both.
         config=PolygonIndicatorConfig(
-            background_n=POLYGON_N_POINTS, seed_fallback_n=POLYGON_N_POINTS
+            background_point_count=POLYGON_BACKGROUND_POINT_COUNT,
+            scalar_input_point_count=POLYGON_SCALAR_INPUT_POINT_COUNT,
         ),
     )
     poly_src = PointCloudSource(poly_producer, plate_model)
     poly_factory = PolygonConnectorFactory()
     poly_factory.source = poly_src
-    poly_factory.construct_output()
-    poly_factory.construct_geotherm()
+    poly_factory.create_indicator()
+    poly_factory.create_geotherm()
     poly_result = walk_connectors({
         "polygon_indicator": poly_factory.indicator,
         "polygon_geotherm": poly_factory.geotherm,

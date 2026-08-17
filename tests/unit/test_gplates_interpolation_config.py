@@ -72,7 +72,7 @@ class PassThroughOutput(OutputStrategy):
 
     requires = frozenset({"thickness"})
 
-    def compute(self, interpolated, r_target, too_far, mesh):
+    def compute(self, interpolated, r_target, outside_source_range, mesh):
         return interpolated["thickness"]
 
 
@@ -104,12 +104,12 @@ def mockedFieldConnector(mockedSource):
     Returns:
         A ScalarFieldConnector object with a Mock `_interpolator.geometry` method
     """
-    cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
+    cfg_idw = InterpolationConfig(kernel="idw", neighbor_count=4)
     conn_idw = ScalarFieldConnector(
         mockedSource, PassThroughOutput(), interpolation=cfg_idw
     )
     conn_idw._interpolator.geometry = Mock(
-        return_value={"idx": 0, "k1": True, "too_far": None}
+        return_value={"idx": 0, "k1": True, "outside_source_range": None}
     )
     return conn_idw
 
@@ -157,8 +157,8 @@ class TestGeometryCacheKey:
         # Test that the geometry cache is used when the two different
         # `ScalarFieldConnector` objects with an identical (by value) configuration
         # each make a `get_indicator` call on the same target at the same `ndtime`.
-        cfg_a = InterpolationConfig(kernel="idw", k_neighbors=4)
-        cfg_b = InterpolationConfig(kernel="idw", k_neighbors=4)
+        cfg_a = InterpolationConfig(kernel="idw", neighbor_count=4)
+        cfg_b = InterpolationConfig(kernel="idw", neighbor_count=4)
         assert cfg_a is not cfg_b
         assert cfg_a == cfg_b
 
@@ -186,9 +186,9 @@ class TestGeometryCacheKey:
         # Test that the geometry cache is not reused and is populated correctly when
         # two different `ScalarFieldConnector` objects with differing configurations
         # each make a `get_indicator` call on the same target at the same `ndtime`.
-        cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
+        cfg_idw = InterpolationConfig(kernel="idw", neighbor_count=4)
         cfg_gauss = InterpolationConfig(
-            kernel="gaussian", k_neighbors=4, gaussian_sigma=0.5
+            kernel="gaussian", neighbor_count=4, gaussian_width_rad=0.5
         )
 
         targets = unit_targets()

@@ -60,7 +60,7 @@ class _FakeProducer:
         self.provides = frozenset(provides)
         self.monotonic_backward = monotonic_backward
         # Stands in for a producer-side limit only rank 0 can see (a declared
-        # walk_start_age, or a producer oldest_age tighter than the connector's).
+        # oldest_requested_age_ma, or a producer oldest_age tighter than the connector's).
         self.reject_above = reject_above
         self.at_age_calls = 0
         rng = np.random.default_rng(0)
@@ -183,7 +183,7 @@ class TestValidateAge:
         src.validate_age(70.0)
 
     def test_producer_limit_is_surfaced_before_the_collective(self):
-        # A producer-side limit (a declared walk_start_age, or a producer
+        # A producer-side limit (a declared oldest_requested_age_ma, or a producer
         # oldest_age tighter than the connector's) is enforced only inside the
         # producer, which runs on rank 0. PointCloudSource.validate_age must
         # surface it — evaluate on root, broadcast the verdict — so every rank
