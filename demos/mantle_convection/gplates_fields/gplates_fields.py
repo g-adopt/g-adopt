@@ -77,18 +77,18 @@ from pathlib import Path
 
 from gadopt import *
 from gadopt.gplates import (
+    BoundedLayerIndicator,
+    BoundedLinearGeotherm,
     GplatesScalarFunction,
-    ScalarFieldConnector,
+    GlobalLayerIndicator,
+    HalfSpaceCoolingGeotherm,
     InterpolationConfig,
-    MaskedGeothermLinearOutput,
-    MaskedQuinticOutput,
     MeshConfig,
     PlateModelFiles,
     PointCloudSource,
-    QuinticOutput,
-    GeothermERFOutput,
-    ensure_reconstruction,
     PolygonConnectorFactory,
+    ScalarFieldConnector,
+    ensure_reconstruction,
     pyGplatesConnector,
 )
 from gtrack import (
@@ -97,8 +97,8 @@ from gtrack import (
     LithosphereCloudSource,
     PolygonIndicatorConfig,
     PolygonIndicatorSource,
+    TracerConfig,
 )
-from gtrack.config import TracerConfig
 
 rmin, rmax, ref_level, nlayers = 1.208, 2.208, 5, 32
 # -
@@ -250,11 +250,11 @@ continental_data = (latlon, thickness_values)
 #   and exposes a single `prepare(age)` call returning a dict of
 #   source-point arrays;
 # * an **OutputStrategy** turns interpolated source values at target
-#   mesh nodes into a scalar field (a tanh indicator, an erf geotherm,
-#   a linear geotherm);
-# * an **ScalarFieldConnector** wires the two together, handles the
+#   mesh nodes into a scalar field (a quintic indicator, an erf geotherm,
+#   or a linear geotherm);
+# * a **ScalarFieldConnector** wires the two together, handles the
 #   kNN interpolation between source points and mesh DoFs, and caches
-#   results by `(age, coords_hash)`.
+#   results by geological age and target coordinate array.
 #
 # The key benefit of this split: two connectors that share the *same*
 # `PointCloudSource` instance see a single coherent advance of the
@@ -279,16 +279,15 @@ continental_data = (latlon, thickness_values)
 #   Every tracker knob lives on the nested `TracerConfig`, so there is
 #   exactly one home for each (no pass-through dict that can silently
 #   override a field): ridge sampling, collision thresholds, the seed
-#   count `default_mesh_points`, and the internal `time_step`.  How
-#   often to reinitialise the tracer mesh and where to checkpoint are
-#   the config's own fields.
+#   count `tracker_point_count`, and the internal `tracker_step_myr`.
+#   The config also sets the rebuild interval and checkpoint policy.
 # * `PolygonIndicatorConfig` (from gtrack) -- much simpler since polygon
-#   sources have no time-stepping state; `background_n` sizes the fresh
-#   uniform grid unioned with the rotated seeds at each age.
+#   sources have no time-stepping state. `background_point_count` sets
+#   the size of the new uniform grid for each age.
 #
 # **Ocean tracker checkpointing.**  When the lithosphere producer first
 # steps the `SeafloorAgeTracker`, rank 0 must initialise it at
-# `oldest_age` and step forward to the requested reconstruction age
+# the plate-model maximum age and step forward to the requested age
 # -- a sequential process during which every other MPI rank sits
 # idle at the broadcast.  A `CheckpointPolicy` tells the producer to
 # periodically save the tracker state (tracer positions and material
@@ -303,8 +302,8 @@ continental_data = (latlon, thickness_values)
 mesh_cfg = MeshConfig(r_outer=rmax)
 interp_cfg = InterpolationConfig(
     kernel="idw",
-    k_neighbors=20,           # source seeds averaged per target node; higher is smoother but costlier
-    distance_threshold=0.02,  # max angular reach on the unit sphere, in RADIANS (0.02 rad ~ 127 km); a target with no seed inside this reads as "outside"
+    neighbor_count=20,                  # Maximum source points for each target node.
+    max_source_separation_rad=0.02,     # Maximum source separation in radians (about 127 km).
 )
 
 checkpoint_dir = Path("./ocean_checkpoints")
@@ -313,28 +312,28 @@ if mesh.comm.rank == 0:
 
 lith_source_cfg = LithosphereCloudConfig(
     tracer=TracerConfig(
-        time_step=2.0,                            # internal gtrack timestep (Myr)
-        earth_radius=6.3781e6,                    # Earth radius (m)
-        velocity_delta_threshold=7.0,             # collision velocity threshold (km/Myr)
-        distance_threshold_per_myr=10.0,          # collision distance threshold (km/Myr)
-        default_mesh_points=5000,                 # initial Fibonacci sphere mesh points
-        initial_ocean_mean_spreading_rate=75.0,   # spreading rate at initial age (mm/yr)
-        ridge_sampling_degrees=2.0,               # ridge tessellation resolution (degrees)
-        spreading_offset_degrees=0.01,            # offset from ridge for new seeds (degrees)
-        reinit_k_neighbors=5,                     # kNN during reinitialisation
-        reinit_max_distance=500e3,                # max interpolation distance (m)
+        tracker_step_myr=2.0,
+        earth_radius_m=6.3781e6,
+        collision_velocity_difference_km_per_myr=7.0,
+        collision_distance_rate_km_per_myr=10.0,
+        tracker_point_count=5000,
+        initial_spreading_rate_mm_per_yr=75.0,
+        ridge_sampling_angle_deg=2.0,
+        ridge_offset_angle_deg=0.01,
+        tracker_rebuild_neighbor_count=5,
+        tracker_rebuild_max_distance_m=500e3,
     ),
-    reinit_interval_myr=10.0,
+    tracker_rebuild_interval_myr=10.0,
     checkpoint=CheckpointPolicy(directory=checkpoint_dir, interval_myr=10.0),
 )
 
-# background_n sizes the fresh grid; seed_fallback_n sizes the Fibonacci
-# mesh a SCALAR thickness is broadcast onto (the continental crust below,
-# thickness_data=50.0). The old single n_points=5000 did both jobs, so we
-# set both to 5000 to keep the crust seeding unchanged; the grid-backed
-# continental and craton sources bring their own points and ignore
-# seed_fallback_n.
-poly_source_cfg = PolygonIndicatorConfig(background_n=5000, seed_fallback_n=5000)
+# `background_point_count` sets the new background grid size.
+# `scalar_input_point_count` sets the grid size for a scalar thickness.
+# The gridded continental and craton data supply their own source points.
+poly_source_cfg = PolygonIndicatorConfig(
+    background_point_count=5000,
+    scalar_input_point_count=5000,
+)
 # -
 
 # ## Part 1: Lithosphere indicator + geotherm
@@ -343,14 +342,14 @@ poly_source_cfg = PolygonIndicatorConfig(background_n=5000, seed_fallback_n=5000
 # `LithosphereCloudSource` producer wrapped in a gadopt
 # `PointCloudSource` -- and then hand it to two separate
 # `ScalarFieldConnector` instances -- one with a
-# `QuinticOutput` (the smooth indicator field: exactly 1 from the
+# `GlobalLayerIndicator` (the smooth indicator field: exactly 1 from the
 # surface down to the lithospheric base, decaying to exactly 0 over a
 # one-sided quintic transition below it) and one with a
-# `GeothermERFOutput` (the half-space cooling temperature profile).
+# `HalfSpaceCoolingGeotherm` (the half-space cooling temperature profile).
 # The lithosphere covers the whole sphere, so the indicator has no
 # lateral term at all: every column is inside the region and only its
 # base depth varies.  The thickness channel never vanishes -- nodes
-# with no nearby seed are filled with `default_thickness_km` -- so the
+# with no nearby seed are filled with `fallback_thickness_km` -- so the
 # surface legitimately reads 1 everywhere.  Part 2 covers what changes
 # when the region is bounded instead.
 #
@@ -366,21 +365,27 @@ lith_producer = LithosphereCloudSource(
     continental_polygons=plate_files.continental_polygons,
     static_polygons=plate_files.static_polygons,
     continental_data=continental_data,
-    age_to_property=half_space_cooling,
-    oldest_age=plate_model.oldest_age,
+    oceanic_thickness_from_age=half_space_cooling,
+    plate_model_max_age_ma=plate_model.oldest_age,
     config=lith_source_cfg,
 )
 lith_source = PointCloudSource(lith_producer, plate_model, comm=mesh.comm)
 
 I_lith = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     lith_source,
-    QuinticOutput(width_km=10.0, default_thickness_km=100.0),
+    GlobalLayerIndicator(
+        base_transition_width_km=10.0,
+        fallback_thickness_km=100.0,
+    ),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="I_lith")
 
 T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     lith_source,
-    GeothermERFOutput(kappa=1e-6, too_far_age_myr=500.0),
+    HalfSpaceCoolingGeotherm(
+        thermal_diffusivity_m2_per_s=1e-6,
+        fallback_age_myr=500.0,
+    ),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="T_erf")
 # -
@@ -390,10 +395,9 @@ T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # Same idiom for the continental polygon-bounded fields: one polygon
 # source -- a gtrack `PolygonIndicatorSource` wrapped in a
 # `PointCloudSource` -- shared between an indicator and a linear
-# geotherm.  The indicator is `MaskedQuinticOutput` rather than the
-# `QuinticOutput` used for the lithosphere, and the reason is worth
-# spelling out because it is the whole difference between a global
-# field and a bounded one.
+# geotherm. The indicator is `BoundedLayerIndicator` rather than the
+# `GlobalLayerIndicator` used for the lithosphere. This difference is
+# important because the continental region has a lateral boundary.
 #
 # A bounded region is two independent facts: *where* it is, and *how
 # deep* it goes there.  A polygon source stores its depth data on
@@ -409,15 +413,15 @@ T_erf = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # A polygon source therefore publishes `membership` as its own channel
 # -- 1 on the seeds, 0 on the background -- alongside the depth channel,
 # which it names `masked_thickness` precisely because it is a masked
-# product and not a plain depth.  `MaskedQuinticOutput` consumes both:
+# product and not a plain depth. `BoundedLayerIndicator` consumes both:
 # `membership` gives the lateral extent, and dividing it back out of the
 # blended `masked_thickness` gives the depth the data actually holds,
 # right up to the boundary.  There is no reference thickness to choose.
 # And because the channel is not called `thickness`, a plain
-# `QuinticOutput` -- which requires `thickness` -- simply fails the
+# `GlobalLayerIndicator` -- which requires `thickness` -- fails the
 # connector's `requires <= provides` check against a polygon source,
-# rather than being allowed to paint the oceans as continent.  The
-# geotherm is `MaskedGeothermLinearOutput` for the same reason: it
+# rather than painting the oceans as continent. The geotherm is
+# `BoundedLinearGeotherm` for the same reason. It
 # deblends `masked_thickness` too, and reads mantle temperature outside
 # the region instead of the surface value a plain linear geotherm would
 # give there.
@@ -435,13 +439,13 @@ cont_source = PointCloudSource(cont_producer, plate_model, comm=mesh.comm)
 
 I_cont = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     cont_source,
-    MaskedQuinticOutput(width_km=10.0),
+    BoundedLayerIndicator(base_transition_width_km=10.0),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="I_cont")
 
 T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
     cont_source,
-    MaskedGeothermLinearOutput(),
+    BoundedLinearGeotherm(),
     mesh=mesh_cfg, interpolation=interp_cfg,
 ), name="T_lin")
 # -
@@ -451,8 +455,8 @@ T_lin = GplatesScalarFunction(Q, indicator_connector=ScalarFieldConnector(
 # The continental crust and craton fields are indicator-only -- they
 # don't have a paired geotherm.  When you only need one field per
 # source, a `PolygonConnectorFactory` keeps the call site short without
-# losing any of the underlying machinery: construct the source and the
-# output on the factory and pull the connector off `.indicator`.
+# losing the source and output details. Create the source and indicator
+# on the factory, then get the connector from `.indicator`.
 
 # ### Continental crust
 #
@@ -472,15 +476,15 @@ crust_producer = PolygonIndicatorSource(
     thickness_data=50.0,
     config=poly_source_cfg,
 )
-crust_factory.construct_source(crust_producer, plate_model, comm=mesh.comm)
+crust_factory.create_source(crust_producer, plate_model, comm=mesh.comm)
 # A constant 50 km everywhere inside the polygons: `thickness_data` is
 # a scalar, so every seed carries the same depth and only the lateral
 # extent varies.  Nothing extra to configure -- the factory builds a
-# `MaskedQuinticOutput`, which reads the depth from the data and the
+# `BoundedLayerIndicator`, which reads the depth from the data and the
 # extent from the membership channel whether the depth is constant or
 # not.  A constant-thickness region is not a special case here, it is
 # just a varying-thickness one whose variation happens to be zero.
-crust_factory.construct_output(width_km=10.0)
+crust_factory.create_indicator(base_transition_width_km=10.0)
 
 I_crust = GplatesScalarFunction(
     Q, indicator_connector=crust_factory.indicator, name="I_crust"
@@ -512,7 +516,7 @@ craton_producer = PolygonIndicatorSource(
     thickness_data=continental_data,
     config=poly_source_cfg,
 )
-craton_factory.construct_source(craton_producer, plate_model, comm=mesh.comm)
+craton_factory.create_source(craton_producer, plate_model, comm=mesh.comm)
 # Cratonic roots run thick and, unlike the crust above, genuinely
 # varying: roughly 150-300 km across the set.  That range is why this
 # field needs the membership channel rather than a single reference
@@ -523,7 +527,7 @@ craton_factory.construct_source(craton_producer, plate_model, comm=mesh.comm)
 # from any edge.  Reading extent and depth from separate channels
 # needs no such compromise, and the craton outlines stop depending on
 # how deep the keels happen to be.
-craton_factory.construct_output(width_km=10.0)
+craton_factory.create_indicator(base_transition_width_km=10.0)
 
 I_craton = GplatesScalarFunction(
     Q, indicator_connector=craton_factory.indicator, name="I_craton"
@@ -590,7 +594,7 @@ log("Written output for 200 Ma")
 #
 # One feature of that isosurface is worth expecting rather than
 # discovering.  The one-sided quintic puts its 0.5 crossing half a
-# transition width below the base, so with `width_km=10` a column of
+# transition width below the base, so with `base_transition_width_km=10` a column of
 # zero thickness still crosses 0.5 about 5 km down.  Newly formed
 # lithosphere at a ridge axis has essentially zero thickness, so the
 # "base" isosurface picks up a thin sheet hugging the entire ridge
@@ -823,7 +827,7 @@ plog.close()
 # `LithosphereCloudSource` given a `CheckpointPolicy` pointed at the
 # same directory will automatically load the nearest checkpoint
 # instead of stepping all
-# the way from `oldest_age`, skipping the long serial spin-up.
+# the way from the plate-model maximum age, which skips the long serial spin-up.
 #
 # See the [GPlates global demo](../gplates_global) for the full
 # simulation setup including boundary conditions, nullspaces, and
