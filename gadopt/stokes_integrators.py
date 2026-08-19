@@ -13,6 +13,7 @@ a relevant set of arguments and then call the `solve` method to request a solver
 import abc
 from collections import defaultdict
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 from warnings import warn
 
@@ -474,7 +475,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         if device_type is None:
             return in_config
         else:
-            offload_conf: ConfigType = in_config
+            # in_config can be one of the predefined config dicts, make sure it is not
+            # modified
+            offload_conf: ConfigType = deepcopy(in_config)
             if gpu_telescope_factor > 1:
                 ksp_params = in_config["assembled"]["offload"]
                 offload_conf["assembled"]["offload"] = {
@@ -605,11 +608,15 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             else:
                 self.add_to_solver_config(newton_stokes_solver_parameters)
 
-        # Set the PETSc error handler so that Firedrake can correctly
-        # intercept the exception from PETSc - add this to Firedrake
+        # Set the PETSc error handler so that Firedrake can correctly intercept the
+        # exception from PETSc if a GPU-enabled build calls this on a non-GPU enabled
+        # system - add this to Firedrake. This function returns None for a GPU-enabled
+        # build or HOST on a non-GPU enabled build when GPUs are not available.
         fd.PETSc.Sys.pushErrorHandler("python")
         device_type = fd.utils.get_device_type()
         fd.PETSc.Sys.popErrorHandler()
+        if device_type == "HOST":
+            device_type = None
         if iterative_solve:
             if self.solver_parameters.get("pc_type") == "fieldsplit":
                 if "fieldsplit_0" not in self.solver_parameters:
@@ -632,7 +639,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     self.add_to_solver_config(gia_iterative_cpu_assembled_parameters)
                 else:
                     gpu_params = self._handle_gpu_settings(
-                        gpu_extras, gia_iterative_gpu_assembled_parameters
+                        gpu_extras,
+                        device_type,
+                        gia_iterative_gpu_assembled_parameters,
                     )
                     self.add_to_solver_config(gpu_params)
 
