@@ -1,5 +1,4 @@
 import firedrake as fd
-import numpy as np
 import pytest
 
 from copy import deepcopy
@@ -16,7 +15,6 @@ from gadopt.stokes_integrators import (
     gia_iterative_cpu_assembled_parameters,
 )
 from gadopt.solver_options_manager import DeleteParam
-from gadopt.utility import initialise_background_field
 
 test_cases = [
     "unspecified",
@@ -134,8 +132,6 @@ def test_gia_solver_parameters_argument(test_case):
     u = fd.Function(V, name="displacement")  # field to hold our displacement solution
     m = fd.Function(S, name="Internal variable")  # Lagged internal variable at previous timestep
 
-    X = fd.SpatialCoordinate(mesh)
-
     base_linear_params_with_log = {"snes_type": "ksponly", "snes_monitor": None}
     example_solver_params = {"mat_type": "aij", "ksp_type": "cg", "pc_type": "sor"}
 
@@ -190,47 +186,13 @@ def test_gia_solver_parameters_argument(test_case):
             expected_value["ksp_rtol"] = 1e-4
             expected_value["ksp_converged_reason"] = None
 
-    domain_depth = 2891e3
-    density_scale = 4500
-    shear_modulus_scale = 1e11
-    viscosity_scale = 1e21
-    gravity_scale = 9.81
-    B_mu = fd.Constant(density_scale * domain_depth * gravity_scale / shear_modulus_scale)
-
-    radius_values_nondim = np.array([6371e3, 6301e3, 5951e3, 5701e3, 3480e3])/domain_depth
-    density_values_nondim = np.array([3037, 3438, 3871, 4978])/density_scale
-    shear_modulus_values_nondim = np.array([0.50605e11, 0.70363e11, 1.05490e11, 2.28340e11])/shear_modulus_scale
-    viscosity_values_nondim = np.array([1e40, 1e21, 1e21, 2e21])/viscosity_scale
-    bulk_shear_ratio = 2
-    bulk_modulus_values_nondim = shear_modulus_values_nondim
-
-    density = fd.Function(DQ0, name="density")
-    initialise_background_field(
-        density, density_values_nondim, X, radius_values_nondim,
-        shift=radius_values_nondim[-1])
-
-    shear_modulus = fd.Function(DQ0, name="shear modulus")
-    initialise_background_field(
-        shear_modulus, shear_modulus_values_nondim, X, radius_values_nondim,
-        shift=radius_values_nondim[-1])
-
-    bulk_modulus = fd.Function(DQ0, name="bulk modulus")
-    initialise_background_field(
-        bulk_modulus, bulk_modulus_values_nondim, X, radius_values_nondim,
-        shift=radius_values_nondim[-1])
-
-    viscosity = fd.Function(DQ0, name="viscosity")
-    initialise_background_field(
-        viscosity, viscosity_values_nondim, X, radius_values_nondim,
-        shift=radius_values_nondim[-1])
-
+    density = fd.Function(DQ0).assign(1)
     approximation = MaxwellApproximation(
-        bulk_modulus=bulk_modulus,
-        density=density,
-        shear_modulus=shear_modulus,
-        viscosity=viscosity,
-        B_mu=B_mu,
-        bulk_shear_ratio=bulk_shear_ratio)
+        bulk_modulus=1,
+        viscosity=1,
+        shear_modulus=1,
+        B_mu=1.27,
+        density=density)
 
     stokes_solver = InternalVariableSolver(
         u,

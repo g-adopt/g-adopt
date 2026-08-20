@@ -36,6 +36,7 @@ from .utility import (
     log_level,
     upward_normal,
     vertical_component,
+    get_device_type
 )
 
 iterative_fieldsplit_0_cpu_params: dict[str, dict[str, str | int | float]] = {
@@ -455,6 +456,21 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         )
 
     def _use_iterative_solve(self, solver_preset: str | None) -> bool:
+        """Determine whether a short-hand solver preset is iterative or not
+
+        If a user has not provided a dict of custom solver options (handled by the
+        caller), this function determines whether G-ADOPT will use an iterative or
+        direct solver either by user input (if provided) or the mesh dimension.
+
+        Args:
+            solver_preset: The string `solver_preset` or `None` as passed to the caller
+
+        Raises:
+            ValueError: The solver_preset was not one of `None`, `iterative` or `direct`
+
+        Returns:
+            A boolean to indicate whether an iterative solver is being used
+        """
         if solver_preset is not None:
             match solver_preset:
                 case "direct":
@@ -466,8 +482,33 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         return self.mesh.topological_dimension == 3
 
     def _handle_gpu_settings(
-        self, gpu_extras: ConfigType | None, device_type: str | None, in_config: ConfigType
+        self,
+        gpu_extras: ConfigType | None,
+        device_type: str | None,
+        in_config: ConfigType,
     ) -> ConfigType:
+        """Insert GPU settings into G-ADOPT preconfigured solver settings
+
+        Apply GPU solver settings to preconfigured G-ADOPT iterative solver settings.
+        Applying these settings is complicated by the change in nesting levels required
+        for the `OffloadPC` (and potentially `PCTelescope`). Also apply any
+        device-specific workarounds to both the solver settings and directly to the
+        PETSc options database if necessary.
+
+        Args:
+            gpu_extras: GPU-specific settings. Indicates whether to apply `PCTelescope`
+            wrapping.
+            device_type: Target GPU device type (e.g., `CUDA`).
+            in_config: The iterative solver configuration containing the `OffloadPC`
+            settings. This can be a full solver dict as in the case of
+            `gia_iterative_gpu_assembled_parameters`, or can be a subset as in the case
+            of `iterative_fieldsplit_0_gpu_parameters`. Must contain an 'assembled' key
+            with a sub-dictionary containing the 'offload' key.
+
+        Returns:
+            Solver settings for the requested device configuration. Deepcopy is used to
+            avoid mutating the input.
+        """
         # Are we running an iterative solver on a GPU-enabled system?
         gpu_telescope_factor = (
             1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
@@ -509,6 +550,19 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         gpu_extras: ConfigType | None,
         iterative_solve: bool,
     ):
+        """Handle solver monitoring configuration
+
+        Applies GPU solver configurations to G-ADOPT iterative solver settings. Handles
+        the increased nesting depth required for `OffloadPC` and optional `PCTelescope`
+        wrapping. Also applies device-specific workarounds to both the solver
+        configuration dictionary and the PETSc options database when necessary.
+
+        Args:
+            device_type: Target GPU device type (e.g., `CUDA`).
+            gpu_extras: GPU-specific settings. Used to determine whether to add
+            telescope configuration.
+            iterative_solve: Whether an iterative solver is being used.
+        """
         if INFO >= log_level:
             self.add_to_solver_config({"snes_monitor": None})
 
@@ -608,15 +662,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             else:
                 self.add_to_solver_config(newton_stokes_solver_parameters)
 
-        # Set the PETSc error handler so that Firedrake can correctly intercept the
-        # exception from PETSc if a GPU-enabled build calls this on a non-GPU enabled
-        # system - add this to Firedrake. This function returns None for a GPU-enabled
-        # build or HOST on a non-GPU enabled build when GPUs are not available.
-        fd.PETSc.Sys.pushErrorHandler("python")
-        device_type = fd.utils.get_device_type()
-        fd.PETSc.Sys.popErrorHandler()
-        if device_type == "HOST":
-            device_type = None
+        device_type = get_device_type(gpu_extras)
         if iterative_solve:
             if self.solver_parameters.get("pc_type") == "fieldsplit":
                 if "fieldsplit_0" not in self.solver_parameters:
