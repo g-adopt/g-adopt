@@ -65,6 +65,7 @@ iterative_fieldsplit_0_gpu_parameters: ConfigType = {
             "pc_type": "python",
             "pc_python_type": "firedrake.OffloadPC",
             "offload": {
+                "ksp_type": "preonly",
                 "pc_type": "ksp",
                 "ksp": {
                     "ksp_type": "cg",
@@ -83,12 +84,10 @@ iterative_fieldsplit_0_gpu_parameters: ConfigType = {
     }
 }
 
-iterative_cuda_workarounds_inner: dict[str, dict[str, bool]] = {
-    "ksp": {
-        "pc_gamg_square_0_mat_product_algorithm_backend_cpu": True,
-        "pc_gamg_square_1_mat_product_algorithm_backend_cpu": True,
-        "pc_gamg_square_2_mat_product_algorithm_backend_cpu": True,
-    }
+iterative_cuda_ksp_workarounds_inner: dict[str, bool] = {
+    "pc_gamg_square_0_mat_product_algorithm_backend_cpu": True,
+    "pc_gamg_square_1_mat_product_algorithm_backend_cpu": True,
+    "pc_gamg_square_2_mat_product_algorithm_backend_cpu": True,
 }
 
 # Missing parameter: "fieldsplit_0"
@@ -197,11 +196,13 @@ gia_iterative_cpu_assembled_parameters: dict[str, str | float | int | bool] = {
 }
 
 gia_iterative_gpu_assembled_parameters: ConfigType = {
+    "ksp_type": "preonly",
     "assembled": {
         "ksp_type": "preonly",
         "pc_type": "python",
         "pc_python_type": "firedrake.OffloadPC",
         "offload": {
+            "ksp_type": "preonly",
             "pc_type": "ksp",
             "ksp": {
                 "pc_type": "gamg",
@@ -532,16 +533,14 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 odb = fd.PETSc.Options()
                 odb["matmatmult_backend_cpu"] = None
                 odb["matptap_backend_cpu"] = None
+                odb["inner_C_loc_mat_product_algorithm_backend_cpu"] = None
+                odb["inner_C_oth_mat_product_algorithm_backend_cpu"] = None
                 if gpu_telescope_factor == 1:
-                    for k, v in iterative_cuda_workarounds_inner:
-                        offload_conf["assembled"]["offload"][k] = v
-                    odb["inner_C_loc_mat_product_algorithm_backend_cpu"] = None
-                    odb["inner_C_oth_mat_product_algorithm_backend_cpu"] = None
+                    for k, v in iterative_cuda_ksp_workarounds_inner.items():
+                        offload_conf["assembled"]["offload"]["ksp"][k] = v
                 else:
-                    for k, v in iterative_cuda_workarounds_inner:
-                        offload_conf["fieldsplit_0"]["assembled"]["offload"][
-                            "telescope"
-                        ][k] = v
+                    for k, v in iterative_cuda_ksp_workarounds_inner.items():
+                        offload_conf["assembled"]["offload"]["telescope"]["ksp"][k] = v
             return offload_conf
 
     def _set_monitoring_config(
