@@ -148,17 +148,24 @@ class _AutoRichardsonMixin:
     fires before the iteration count degrades, which the second cannot.
 
     The second is a rise in the linear iteration count. The reference is the
-    median over the first few Newton steps after a measurement, not a single
-    step, because the first Newton step of a timestep is systematically
-    cheaper than the rest and a single sample makes the threshold trip on
-    ordinary variation. Under a lag this condition is checked only on the
-    steps where the snapshot refreshes: between refreshes a rise in the
-    iteration count comes from the staleness of the snapshot, and
-    re-measuring an operator that has not changed cannot help.
+    upper median over the first few checked steps after a measurement, not a
+    single step, because the first Newton step of a timestep is
+    systematically cheaper than the rest and one sample makes the threshold
+    trip on ordinary variation. The reference is only as good as the steps
+    that establish it: a window that fills during a genuine degradation
+    raises the threshold and blinds the condition until the next measurement.
 
     The third is a plain interval. It exists because the first two conditions
     detect a change in one quantity each, and neither is guaranteed to notice
     a slow drift in something else. It is a backstop, so its default is long.
+
+    When a lag is in use, all three are checked only on the steps where the
+    snapshot refreshes. Between refreshes the operator the smoother reads is
+    identical, so a measurement returns what it returned last time. One
+    consequence is that both the reference and the value tested against it
+    are then the iteration counts of the steps with the stalest snapshot.
+    That is self-consistent, but it means the condition responds to staleness
+    and to spectral drift together rather than to drift alone.
 
     Options, all with the outer preconditioner's prefix:
 
@@ -297,6 +304,19 @@ class _AutoRichardsonMixin:
             for e in eigenvalues
             if e.real > 0.0 and abs(e) > 0.0
         ]
+        # An eigenvalue with a non-positive real part cannot be contracted by
+        # any positive damping factor, because |1 - omega*lambda| > 1 for
+        # every omega > 0. Dropping it from the bound is all this rule can
+        # do, so say so: the smoother amplifies that mode and the only
+        # symptom is a rise in the outer iteration count.
+        dropped = int((real <= 0.0).sum())
+        if dropped:
+            PETSc.Sys.Print(
+                f"VLumping omega: {dropped} of {eigenvalues.size} measured "
+                "eigenvalues have a non-positive real part. No damping factor "
+                "contracts those modes, and the outer Krylov method must "
+                "resolve them."
+            )
         limit = self.omega_margin * min(bounds) if bounds else optimum
         omega = self.omega_safety * min(optimum, limit)
         binding = "stability" if limit < optimum else "optimum"
@@ -396,9 +416,12 @@ class _AutoRichardsonMixin:
                         f"{self._omega_iter_reference} to {iterations}"
                     )
 
-        if (reason is None and self.omega_interval > 0
-                and self._omega_since_estimate >= self.omega_interval):
-            reason = f"{self._omega_since_estimate} Newton steps since the last measurement"
+            if (reason is None and self.omega_interval > 0
+                    and self._omega_since_estimate >= self.omega_interval):
+                reason = (
+                    f"{self._omega_since_estimate} Newton steps since the "
+                    f"last measurement"
+                )
 
         if reason is not None:
             self._omega_estimate(pc, reason)
