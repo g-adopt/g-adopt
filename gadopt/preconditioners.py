@@ -108,32 +108,57 @@ class _AutoRichardsonMixin:
     becomes Richardson, whatever the preset asked for, and ``omega`` follows
     the measured spectrum.
 
-    The rule is the classical optimum of a stationary iteration over the
-    measured interval, ``omega = 2/(lmin + lmax)``. It matters that this
-    tracks both ends. The spectrum of ``B^-1 A`` is a tight cluster when the
-    mass term dominates and spreads by more than a factor of ten when the
-    stiffness term does, and the best damping factor moves by about a factor
-    of two between those regimes. ``vlumping_omega_safety`` scales the result
-    for a coarser or a more aggressive setting. The value is clamped so that
-    the iteration contracts on every measured eigenvalue, including the
-    complex ones that the gravity-advection term produces.
+    The damping factor
+    -----------------
 
-    Two conditions re-measure the spectrum. Both must be cheap to test,
-    because the test itself runs on every Newton step.
+    Two quantities bound it. The first is the classical optimum of a
+    stationary iteration over the measured interval, ``2/(lmin + lmax)``. The
+    second is the stability bound: Richardson contracts while
+    ``|1 - omega*lambda| < 1``, which for one eigenvalue means
+    ``omega < 2 Re(lambda)/|lambda|^2``. The damping factor is the smaller of
+    the two, times ``vlumping_omega_margin`` for headroom, times
+    ``vlumping_omega_safety``.
 
-    The first condition is a change in the balance of the operator. The
-    Jacobian is about ``(C(h)/dt) M + K(h)``, so the spectrum of ``B^-1 A``
-    depends on how much of the operator lies off the diagonal. The mixin
-    tracks ``||A||_F / ||diag A||_2``, which is invariant under a rescaling
-    of the whole operator and moves when the mass term and the stiffness term
-    change their relative weight. An adaptive time step is the usual cause: a
-    ramp from 60 s to 43200 s moves lmax from 1.04 to 1.42 on the Cockett
-    box. A sharp wetting front is the other cause.
+    Which of the two binds depends on the shape of the spectrum, and the
+    difference is not academic. On a clustered spectrum, which is what a
+    serial run on a near-isotropic mesh produces, the classical optimum
+    binds. On a spread spectrum, which is what a real decomposition produces
+    once block-Jacobi ILU drops the coupling at the rank boundaries, the
+    stability bound binds and the rule reduces to ``margin * 2/lmax``. Every
+    measurement in the 832-rank basin runs took the second branch.
 
-    The second condition is a rise in the linear iteration count. The mixin
-    counts its own applications, which equal the outer Krylov iterations, and
-    compares the last Newton step against the count that followed the last
-    measurement. This catches a drift that the operator balance does not see.
+    The margin matters because the bound is not conservative. At the default
+    of 0.9 the damping factor is ``1.8/lmax`` and the spectrum can grow by
+    11% before the smoother amplifies its top mode. PETSc's Chebyshev carries
+    a comparable margin in its transform, ``emax = 1.1 lmax``, and re-measures
+    on every Newton step, so it recovers from drift that this scheme has to
+    detect first.
+
+    When to measure again
+    ---------------------
+
+    Three conditions, checked once per Newton step. All three are cheap,
+    because the check itself runs far more often than the measurement.
+
+    The first is a change in the diagonal of the operator. The Jacobian is
+    about ``(C(h)/dt) M + K(h)``, so the mass term contributes to the
+    diagonal in inverse proportion to the timestep. An adaptive timestep that
+    ramps by a factor of 720 therefore moves the diagonal, and with it the
+    balance between the two terms that sets the spectrum. This condition
+    fires before the iteration count degrades, which the second cannot.
+
+    The second is a rise in the linear iteration count. The reference is the
+    median over the first few Newton steps after a measurement, not a single
+    step, because the first Newton step of a timestep is systematically
+    cheaper than the rest and a single sample makes the threshold trip on
+    ordinary variation. Under a lag this condition is checked only on the
+    steps where the snapshot refreshes: between refreshes a rise in the
+    iteration count comes from the staleness of the snapshot, and
+    re-measuring an operator that has not changed cannot help.
+
+    The third is a plain interval. It exists because the first two conditions
+    detect a change in one quantity each, and neither is guaranteed to notice
+    a slow drift in something else. It is a backstop, so its default is long.
 
     Options, all with the outer preconditioner's prefix:
 
@@ -141,15 +166,21 @@ class _AutoRichardsonMixin:
         Boolean. Off by default.
     ``vlumping_omega_safety``
         Scale factor on the derived damping factor. Default 1.0.
+    ``vlumping_omega_margin``
+        Fraction of the stability bound to keep. Default 0.9.
     ``vlumping_omega_esteig_steps``
         GMRES iterations for one measurement. Default 20.
-    ``vlumping_omega_balance_ratio``
-        Re-measure when the operator balance moves by this factor in either
-        direction. Default 1.1. This condition is the early one: it fires
-        when the operator changes, before the iteration count degrades.
+    ``vlumping_omega_diagonal_ratio``
+        Re-measure when the norm of the diagonal moves by this factor in
+        either direction. Default 2.0.
     ``vlumping_omega_iter_growth``
         Re-measure when the linear iteration count of one Newton step exceeds
         the reference count by this factor. Default 1.5.
+    ``vlumping_omega_iter_window``
+        Number of Newton steps that establish the reference. Default 4.
+    ``vlumping_omega_interval``
+        Re-measure unconditionally after this many Newton steps. Default 200.
+        Set 0 to disable the backstop.
     """
 
     def _omega_initialize(self, pc):
@@ -160,37 +191,49 @@ class _AutoRichardsonMixin:
         self.omega = None
         self._omega_applies = 0
         self._omega_applies_seen = 0
+        self._omega_iter_samples = []
         self._omega_iter_reference = None
-        self._omega_balance = None
+        self._omega_diagonal = None
         self._omega_estimates = 0
+        self._omega_since_estimate = 0
         if not self.omega_auto:
             return
         self.omega_safety = opts.getReal(prefix + "vlumping_omega_safety", 1.0)
+        self.omega_margin = opts.getReal(prefix + "vlumping_omega_margin", 0.9)
         self.omega_esteig_steps = opts.getInt(
             prefix + "vlumping_omega_esteig_steps", 20
         )
-        self.omega_balance_ratio = opts.getReal(
-            prefix + "vlumping_omega_balance_ratio", 1.1
+        self.omega_diagonal_ratio = opts.getReal(
+            prefix + "vlumping_omega_diagonal_ratio", 2.0
         )
         self.omega_iter_growth = opts.getReal(
             prefix + "vlumping_omega_iter_growth", 1.5
         )
+        self.omega_iter_window = opts.getInt(
+            prefix + "vlumping_omega_iter_window", 4
+        )
+        self.omega_interval = opts.getInt(prefix + "vlumping_omega_interval", 200)
         self._omega_estimate(pc, "startup")
+        if self.omega is None:
+            raise RuntimeError(
+                "vlumping_omega_auto is set, but the first measurement of the "
+                "spectrum gave no usable damping factor. The smoother would "
+                "silently keep the preset's own type. Check that the level "
+                "preconditioner is non-singular, or unset the option."
+            )
 
     def _omega_smoother(self):
         """The fine-level smoother of the two-level cycle."""
         return self.pc.getMGSmoother(1)
 
     @staticmethod
-    def _omega_operator_balance(A):
-        """Weight of the off-diagonal part, invariant under a rescaling."""
+    def _omega_diagonal_norm(A):
+        """Norm of the diagonal, which the mass term scales as 1/dt."""
         diag = A.createVecLeft()
         A.getDiagonal(diag)
-        diag_norm = diag.norm()
+        value = diag.norm()
         diag.destroy()
-        if diag_norm == 0.0:
-            return None
-        return A.norm(PETSc.NormType.FROBENIUS) / diag_norm
+        return value
 
     def _omega_estimate(self, pc, reason):
         """Measure the spectrum once and set the damping factor from it."""
@@ -216,13 +259,15 @@ class _AutoRichardsonMixin:
         x.destroy()
 
         self._omega_estimates += 1
-        self._omega_balance = self._omega_operator_balance(A)
+        self._omega_since_estimate = 0
+        self._omega_diagonal = self._omega_diagonal_norm(A)
+        self._omega_iter_samples = []
         self._omega_iter_reference = None
 
         if eigenvalues.size == 0:
             PETSc.Sys.Print(
                 "VLumping omega: the estimator returned no eigenvalues, "
-                "keeping the previous damping factor"
+                f"keeping omega = {self.omega}"
             )
             return
 
@@ -231,39 +276,38 @@ class _AutoRichardsonMixin:
         if lmax <= 0.0:
             PETSc.Sys.Print(
                 "VLumping omega: the measured spectrum has no positive real "
-                "part, keeping the previous damping factor"
+                f"part, keeping omega = {self.omega}"
             )
             return
 
-        # Classical optimum of a stationary iteration over the measured
-        # interval. A short Arnoldi run resolves the top of the spectrum well
-        # and the bottom badly, so fall back to PETSc's own assumption,
-        # lmin = 0.1 lmax, when the measured lower end is not positive.
+        # Classical optimum over the measured interval. A short Arnoldi run
+        # resolves the top of the spectrum well and the bottom badly, so fall
+        # back to PETSc's own assumption, lmin = 0.1 lmax, when the measured
+        # lower end is not positive.
         lmin = float(real.min())
         if lmin <= 0.0:
             lmin = 0.1 * lmax
-        omega = self.omega_safety * 2.0 / (lmin + lmax)
+        optimum = 2.0 / (lmin + lmax)
 
-        # Richardson contracts while |1 - omega * lambda| < 1, which is a disk
-        # rather than an interval. For one eigenvalue that bounds omega by
-        # 2 Re(lambda) / |lambda|^2. Take the tightest bound over the measured
-        # spectrum and keep a margin, which matters only when the
-        # gravity-advection term makes the spectrum complex.
+        # Stability bound. Richardson contracts inside a disk, not an
+        # interval, which matters because the gravity-advection term makes
+        # the Jacobian non-symmetric and the spectrum complex.
         bounds = [
             2.0 * e.real / abs(e) ** 2
             for e in eigenvalues
             if e.real > 0.0 and abs(e) > 0.0
         ]
-        if bounds:
-            omega = min(omega, 0.95 * min(bounds))
+        limit = self.omega_margin * min(bounds) if bounds else optimum
+        omega = self.omega_safety * min(optimum, limit)
+        binding = "stability" if limit < optimum else "optimum"
 
         self.omega = omega
         self._omega_apply(smoother, omega)
 
         PETSc.Sys.Print(
             f"VLumping omega: measurement {self._omega_estimates} ({reason}), "
-            f"spectrum = [{lmin:.4f}, {lmax:.4f}], omega = {omega:.4f}, "
-            f"balance = {self._omega_balance:.4f}"
+            f"spectrum = [{lmin:.4f}, {lmax:.4f}], omega = {omega:.4f} "
+            f"({binding} bound), diagonal = {self._omega_diagonal:.6e}"
         )
 
     @staticmethod
@@ -311,28 +355,50 @@ class _AutoRichardsonMixin:
                 options[key] = value
 
     def _omega_update(self, pc):
-        """Re-measure when the operator balance or the iteration count moves."""
+        """Re-measure when any of the three conditions is met."""
         if not self.omega_auto:
             return
 
         iterations = self._omega_applies - self._omega_applies_seen
         self._omega_applies_seen = self._omega_applies
+        self._omega_since_estimate += 1
+
+        # Under a lag the smoother reads a snapshot that changes only on a
+        # refresh step. Between refreshes the operator is identical, so a
+        # measurement would return what it returned last time. Check only on
+        # the steps where the snapshot moves.
+        lagged = getattr(self, "_Alag", None) is not None
+        refreshed = (not lagged) or self._nupdate % self.lag == 0
 
         reason = None
-        balance = self._omega_operator_balance(self._omega_smoother().getOperators()[0])
-        if balance is not None and self._omega_balance:
-            ratio = balance / self._omega_balance
-            if ratio > self.omega_balance_ratio or ratio < 1.0 / self.omega_balance_ratio:
-                reason = f"operator balance moved by {ratio:.2f}"
+        if refreshed:
+            diagonal = self._omega_diagonal_norm(
+                self._omega_smoother().getOperators()[0]
+            )
+            if self._omega_diagonal:
+                ratio = diagonal / self._omega_diagonal
+                if (ratio > self.omega_diagonal_ratio
+                        or ratio < 1.0 / self.omega_diagonal_ratio):
+                    reason = f"the diagonal moved by {ratio:.2f}"
 
-        if reason is None and iterations > 0:
-            if self._omega_iter_reference is None:
-                self._omega_iter_reference = iterations
-            elif iterations > self.omega_iter_growth * self._omega_iter_reference:
-                reason = (
-                    f"linear iterations rose from {self._omega_iter_reference} "
-                    f"to {iterations}"
-                )
+            if reason is None and iterations > 0:
+                if len(self._omega_iter_samples) < self.omega_iter_window:
+                    # Establish the reference over several Newton steps. The
+                    # first step of a timestep is systematically cheaper than
+                    # the rest, so one sample makes the threshold trip on
+                    # ordinary variation.
+                    self._omega_iter_samples.append(iterations)
+                    ordered = sorted(self._omega_iter_samples)
+                    self._omega_iter_reference = ordered[len(ordered) // 2]
+                elif iterations > self.omega_iter_growth * self._omega_iter_reference:
+                    reason = (
+                        f"linear iterations rose from a reference of "
+                        f"{self._omega_iter_reference} to {iterations}"
+                    )
+
+        if (reason is None and self.omega_interval > 0
+                and self._omega_since_estimate >= self.omega_interval):
+            reason = f"{self._omega_since_estimate} Newton steps since the last measurement"
 
         if reason is not None:
             self._omega_estimate(pc, reason)
