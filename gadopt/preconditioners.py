@@ -6,6 +6,8 @@ Includes preconditioners for:
 
 """
 
+import re
+
 import firedrake as fd
 from firedrake import (
     FiniteElement,
@@ -87,6 +89,253 @@ class SPDAssembledPC(fd.AssembledPC):
 # =========================================================================
 
 
+class _AutoRichardsonMixin:
+    """Derive the Richardson damping factor from the measured spectrum.
+
+    A Chebyshev smoother makes PETSc estimate the extreme eigenvalues of
+    ``B^-1 A`` on every Newton step, because Firedrake reassembles the
+    Jacobian in place and the operator state changes each time. Each estimate
+    costs ten preconditioned GMRES iterations and ten global reductions, and
+    on an extruded basin problem that is the largest single item in the setup
+    budget.
+
+    A Richardson smoother needs one number instead, the damping factor
+    ``omega``. This mixin measures it the same way PETSc does, with a short
+    GMRES run over the level smoother's own preconditioner, but it does the
+    measurement rarely instead of every Newton step.
+
+    Set ``vlumping_omega_auto`` to enable it. The fine-level smoother then
+    becomes Richardson, whatever the preset asked for, and ``omega`` follows
+    the measured spectrum.
+
+    The rule is the classical optimum of a stationary iteration over the
+    measured interval, ``omega = 2/(lmin + lmax)``. It matters that this
+    tracks both ends. The spectrum of ``B^-1 A`` is a tight cluster when the
+    mass term dominates and spreads by more than a factor of ten when the
+    stiffness term does, and the best damping factor moves by about a factor
+    of two between those regimes. ``vlumping_omega_safety`` scales the result
+    for a coarser or a more aggressive setting. The value is clamped so that
+    the iteration contracts on every measured eigenvalue, including the
+    complex ones that the gravity-advection term produces.
+
+    Two conditions re-measure the spectrum. Both must be cheap to test,
+    because the test itself runs on every Newton step.
+
+    The first condition is a change in the balance of the operator. The
+    Jacobian is about ``(C(h)/dt) M + K(h)``, so the spectrum of ``B^-1 A``
+    depends on how much of the operator lies off the diagonal. The mixin
+    tracks ``||A||_F / ||diag A||_2``, which is invariant under a rescaling
+    of the whole operator and moves when the mass term and the stiffness term
+    change their relative weight. An adaptive time step is the usual cause: a
+    ramp from 60 s to 43200 s moves lmax from 1.04 to 1.42 on the Cockett
+    box. A sharp wetting front is the other cause.
+
+    The second condition is a rise in the linear iteration count. The mixin
+    counts its own applications, which equal the outer Krylov iterations, and
+    compares the last Newton step against the count that followed the last
+    measurement. This catches a drift that the operator balance does not see.
+
+    Options, all with the outer preconditioner's prefix:
+
+    ``vlumping_omega_auto``
+        Boolean. Off by default.
+    ``vlumping_omega_safety``
+        Scale factor on the derived damping factor. Default 1.0.
+    ``vlumping_omega_esteig_steps``
+        GMRES iterations for one measurement. Default 20.
+    ``vlumping_omega_balance_ratio``
+        Re-measure when the operator balance moves by this factor in either
+        direction. Default 1.1. This condition is the early one: it fires
+        when the operator changes, before the iteration count degrades.
+    ``vlumping_omega_iter_growth``
+        Re-measure when the linear iteration count of one Newton step exceeds
+        the reference count by this factor. Default 1.5.
+    """
+
+    def _omega_initialize(self, pc):
+        """Read the options and take the first measurement."""
+        opts = PETSc.Options()
+        prefix = pc.getOptionsPrefix() or ""
+        self.omega_auto = opts.getBool(prefix + "vlumping_omega_auto", False)
+        self.omega = None
+        self._omega_applies = 0
+        self._omega_applies_seen = 0
+        self._omega_iter_reference = None
+        self._omega_balance = None
+        self._omega_estimates = 0
+        if not self.omega_auto:
+            return
+        self.omega_safety = opts.getReal(prefix + "vlumping_omega_safety", 1.0)
+        self.omega_esteig_steps = opts.getInt(
+            prefix + "vlumping_omega_esteig_steps", 20
+        )
+        self.omega_balance_ratio = opts.getReal(
+            prefix + "vlumping_omega_balance_ratio", 1.1
+        )
+        self.omega_iter_growth = opts.getReal(
+            prefix + "vlumping_omega_iter_growth", 1.5
+        )
+        self._omega_estimate(pc, "startup")
+
+    def _omega_smoother(self):
+        """The fine-level smoother of the two-level cycle."""
+        return self.pc.getMGSmoother(1)
+
+    @staticmethod
+    def _omega_operator_balance(A):
+        """Weight of the off-diagonal part, invariant under a rescaling."""
+        diag = A.createVecLeft()
+        A.getDiagonal(diag)
+        diag_norm = diag.norm()
+        diag.destroy()
+        if diag_norm == 0.0:
+            return None
+        return A.norm(PETSc.NormType.FROBENIUS) / diag_norm
+
+    def _omega_estimate(self, pc, reason):
+        """Measure the spectrum once and set the damping factor from it."""
+        smoother = self._omega_smoother()
+        A, _ = smoother.getOperators()
+
+        # Mirror KSPSetUp_Chebyshev: a short GMRES run over the smoother's own
+        # preconditioner, with a random right-hand side. The estimator borrows
+        # the preconditioner and never owns it, so it must not set operators
+        # of its own. A KSP reads its operators from its PC.
+        est = PETSc.KSP().create(comm=pc.comm)
+        est.setType(PETSc.KSP.Type.GMRES)
+        est.setComputeEigenvalues(True)
+        est.setTolerances(rtol=1e-12, max_it=self.omega_esteig_steps)
+        est.setPC(smoother.getPC())
+        b = A.createVecLeft()
+        x = A.createVecLeft()
+        b.setRandom()
+        est.solve(b, x)
+        eigenvalues = est.computeEigenvalues()
+        est.destroy()
+        b.destroy()
+        x.destroy()
+
+        self._omega_estimates += 1
+        self._omega_balance = self._omega_operator_balance(A)
+        self._omega_iter_reference = None
+
+        if eigenvalues.size == 0:
+            PETSc.Sys.Print(
+                "VLumping omega: the estimator returned no eigenvalues, "
+                "keeping the previous damping factor"
+            )
+            return
+
+        real = eigenvalues.real
+        lmax = float(real.max())
+        if lmax <= 0.0:
+            PETSc.Sys.Print(
+                "VLumping omega: the measured spectrum has no positive real "
+                "part, keeping the previous damping factor"
+            )
+            return
+
+        # Classical optimum of a stationary iteration over the measured
+        # interval. A short Arnoldi run resolves the top of the spectrum well
+        # and the bottom badly, so fall back to PETSc's own assumption,
+        # lmin = 0.1 lmax, when the measured lower end is not positive.
+        lmin = float(real.min())
+        if lmin <= 0.0:
+            lmin = 0.1 * lmax
+        omega = self.omega_safety * 2.0 / (lmin + lmax)
+
+        # Richardson contracts while |1 - omega * lambda| < 1, which is a disk
+        # rather than an interval. For one eigenvalue that bounds omega by
+        # 2 Re(lambda) / |lambda|^2. Take the tightest bound over the measured
+        # spectrum and keep a margin, which matters only when the
+        # gravity-advection term makes the spectrum complex.
+        bounds = [
+            2.0 * e.real / abs(e) ** 2
+            for e in eigenvalues
+            if e.real > 0.0 and abs(e) > 0.0
+        ]
+        if bounds:
+            omega = min(omega, 0.95 * min(bounds))
+
+        self.omega = omega
+        self._omega_apply(smoother, omega)
+
+        PETSc.Sys.Print(
+            f"VLumping omega: measurement {self._omega_estimates} ({reason}), "
+            f"spectrum = [{lmin:.4f}, {lmax:.4f}], omega = {omega:.4f}, "
+            f"balance = {self._omega_balance:.4f}"
+        )
+
+    @staticmethod
+    def _omega_apply(smoother, omega):
+        """Make the smoother a Richardson iteration with this damping factor.
+
+        The options database is the only route. petsc4py has no binding for
+        KSPRichardsonSetScale. The type must go through the database as well,
+        because the preset already holds an entry for the smoother's ksp_type
+        and setFromOptions would otherwise restore it.
+        """
+        options = PETSc.Options()
+        prefix = smoother.getOptionsPrefix() or ""
+        options[prefix + "ksp_type"] = "richardson"
+        options[prefix + "ksp_richardson_scale"] = omega
+
+        # KSPSetFromOptions also runs PCSetFromOptions. For a Python
+        # preconditioner that re-reads -pc_python_type and builds a new
+        # object, which discards everything initialize() set up. The HMG
+        # preset uses ASMLinesmoothPC on this level, so hide the key while
+        # the smoother reads its own options.
+        # PCMG gives a level its own prefix, "mg_levels_1_", while a preset
+        # usually writes the option against the generic "mg_levels_" prefix.
+        # Both must be hidden.
+        candidates = {prefix, re.sub(r"\d+_$", "", prefix)}
+        # getAll() rather than hasName(), because hasName() follows PETSc's
+        # "mg_levels_" alias and answers yes for a level-specific key that
+        # does not exist. Restoring such a key would create it.
+        present = options.getAll()
+        saved = {}
+        for candidate in candidates:
+            key = candidate + "pc_python_type"
+            if key in present:
+                saved[key] = present[key]
+                options.delValue(key)
+        try:
+            smoother.setFromOptions()
+        finally:
+            for key, value in saved.items():
+                options[key] = value
+
+    def _omega_update(self, pc):
+        """Re-measure when the operator balance or the iteration count moves."""
+        if not self.omega_auto:
+            return
+
+        iterations = self._omega_applies - self._omega_applies_seen
+        self._omega_applies_seen = self._omega_applies
+
+        reason = None
+        balance = self._omega_operator_balance(self._omega_smoother().getOperators()[0])
+        if balance is not None and self._omega_balance:
+            ratio = balance / self._omega_balance
+            if ratio > self.omega_balance_ratio or ratio < 1.0 / self.omega_balance_ratio:
+                reason = f"operator balance moved by {ratio:.2f}"
+
+        if reason is None and iterations > 0:
+            if self._omega_iter_reference is None:
+                self._omega_iter_reference = iterations
+            elif iterations > self.omega_iter_growth * self._omega_iter_reference:
+                reason = (
+                    f"linear iterations rose from {self._omega_iter_reference} "
+                    f"to {iterations}"
+                )
+
+        if reason is not None:
+            self._omega_estimate(pc, reason)
+
+    def _omega_count_apply(self):
+        self._omega_applies += 1
+
+
 class _LaggedOperatorMixin:
     """Hold a private snapshot of the operator for the inner multigrid.
 
@@ -114,12 +363,24 @@ class _LaggedOperatorMixin:
     Set the lag with the integer option ``<prefix>vlumping_lag``. The default
     is 1, which refreshes on every Newton step and reproduces the unlagged
     behaviour exactly. The snapshot costs one extra copy of the Jacobian.
+
+    The boolean option ``<prefix>vlumping_lag_smoother`` decides whether the
+    fine smoother reads the snapshot as well. The default is on, which is the
+    coherent setting described above. Turn it off and the smoother keeps the
+    live Jacobian, so the multigrid cycle approximates the inverse of the
+    current operator with a stale smoother. On the cases measured so far that
+    is faster, about 17% against 9%, and it costs no extra iterations. It is
+    not the default because it evaluates ``B_old^-1 A_live``, which has no
+    guarantee of contraction once a front moves the spectrum.
     """
 
     def _lag_initialize(self, pc, P):
         """Read the lag option and bind the inner PC to the snapshot."""
         prefix = pc.getOptionsPrefix() or ""
         self.lag = PETSc.Options().getInt(prefix + "vlumping_lag", 1)
+        self.lag_smoother = PETSc.Options().getBool(
+            prefix + "vlumping_lag_smoother", True
+        )
         self._nupdate = 0
         if self.lag <= 1:
             self._Alag = None
@@ -131,6 +392,22 @@ class _LaggedOperatorMixin:
         # state of Amat and of Pmat, so a live Amat re-triggers the estimate
         # and defeats the lag.
         self.pc.setOperators(self._Alag, self._Alag)
+
+        # The fine smoother needs the snapshot as well, and it needs it
+        # explicitly. PCSetUp_MG binds the operators of the finest smoother
+        # only while they still match the operators of the PC
+        # (src/ksp/pc/impls/mg/mg.c:888-892). The first setup bound them to
+        # the live Jacobian, so the guard is now false and the smoother would
+        # keep the live operator for the whole run. It would then evaluate
+        # B_old^-1 A_live, which is the combination that loses the guarantee
+        # of contraction during a sharp front.
+        #
+        # The multigrid residual callback cannot be corrected the same way.
+        # PCMGSetResidual takes a permanent reference on the first setup
+        # (mgfunc.c:151-156) and petsc4py has no binding for it, so the
+        # mid-cycle residual keeps the live operator.
+        if self.lag_smoother:
+            self.pc.getMGSmoother(1).setOperators(self._Alag, self._Alag)
 
     def _lag_update(self, pc):
         """Refresh the snapshot when the lag interval is complete."""
@@ -149,7 +426,7 @@ class _LaggedOperatorMixin:
             self._Alag = None
 
 
-class VerticallyLumpedPC(_LaggedOperatorMixin, PCBase):
+class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
     """Two-level MG that collapses the vertical dimension on the coarse level.
 
     This preconditioner targets extruded meshes of high aspect ratio. It
@@ -237,6 +514,9 @@ class VerticallyLumpedPC(_LaggedOperatorMixin, PCBase):
         # This runs after the first setUp, so the multigrid residual callback
         # keeps the live operator. See _LaggedOperatorMixin.
         self._lag_initialize(pc, P)
+        # Derive the Richardson damping factor when the user asks for it. The
+        # first measurement needs a preconditioner that is already set up.
+        self._omega_initialize(pc)
         self.update(pc)
 
     def update(self, pc):
@@ -245,9 +525,11 @@ class VerticallyLumpedPC(_LaggedOperatorMixin, PCBase):
         # setUp() to recompute the Galerkin coarse operator A_c = P^T A P from
         # the updated state.
         self._lag_update(pc)
+        self._omega_update(pc)
         self.pc.setUp()
 
     def apply(self, pc, X, Y):
+        self._omega_count_apply()
         self.pc.apply(X, Y)
 
     def applyTranspose(self, pc, X, Y):
@@ -272,7 +554,7 @@ class VerticallyLumpedPC(_LaggedOperatorMixin, PCBase):
         self.pc.view(viewer)
 
 
-class VerticallyLumpedHMGPC(_LaggedOperatorMixin, PCBase):
+class VerticallyLumpedHMGPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
     """Two-level MG with the coarse level on the fine mesh's 2D base.
 
     This preconditioner uses the same two levels as ``VerticallyLumpedPC``.
@@ -424,6 +706,7 @@ class VerticallyLumpedHMGPC(_LaggedOperatorMixin, PCBase):
         self.pc.setFromOptions()
         self.pc.setUp()
         self._lag_initialize(pc, P)
+        self._omega_initialize(pc)
         self.update(pc)
 
     @staticmethod
@@ -441,9 +724,11 @@ class VerticallyLumpedHMGPC(_LaggedOperatorMixin, PCBase):
 
     def update(self, pc):
         self._lag_update(pc)
+        self._omega_update(pc)
         self.pc.setUp()
 
     def apply(self, pc, X, Y):
+        self._omega_count_apply()
         self.pc.apply(X, Y)
 
     def applyTranspose(self, pc, X, Y):
