@@ -467,16 +467,14 @@ def test_omega_auto_does_not_change_the_solution(flat_mesh):
     assert diff / ref_norm < 1e-3
 
 
-def test_omega_auto_remeasures_when_the_operator_balance_moves(flat_mesh):
-    """A shift changes the diagonal alone, so the balance metric moves."""
+def test_omega_auto_remeasures_when_the_diagonal_moves(flat_mesh):
+    """A shift changes the diagonal, which is what an adaptive dt does."""
     _, solver = _run_short(flat_mesh, _auto_preset())
     pc = solver.solver.snes.getKSP().getPC()
     ctx = pc.getPythonContext()
     before = ctx._omega_estimates
 
-    # A uniform rescaling leaves the metric alone by construction, so shift
-    # the diagonal instead. This corrupts the operator; the solver is not
-    # used again after this call.
+    # This corrupts the operator; the solver is not used again after it.
     A, _ = ctx.pc.getMGSmoother(1).getOperators()
     A.shift(10.0 * A.norm(PETSc.NormType.FROBENIUS))
     ctx.update(pc)
@@ -490,9 +488,9 @@ def test_omega_auto_remeasures_when_iterations_rise(flat_mesh):
     pc = solver.solver.snes.getKSP().getPC()
     ctx = pc.getPythonContext()
 
-    # Establish a reference of one iteration, then present a step that took
-    # far more. The balance is untouched, so only the second condition can
-    # fire.
+    # Fill the reference window with a cheap count, then present a step that
+    # took far more. The diagonal is untouched, so only this condition fires.
+    ctx._omega_iter_samples = [1] * ctx.omega_iter_window
     ctx._omega_iter_reference = 1
     ctx._omega_applies = ctx._omega_applies_seen + 20
     before = ctx._omega_estimates
@@ -534,3 +532,63 @@ def test_omega_auto_works_for_hmg(hierarchy_mesh):
     ctx = solver.solver.snes.getKSP().getPC().getPythonContext()
     assert ctx.omega is not None
     assert ctx.pc.getMGSmoother(1).getType() == "richardson"
+
+
+def test_omega_auto_reference_needs_several_samples(flat_mesh):
+    """The reference is a middle sample of the window, not a single step."""
+    _, solver = _run_short(flat_mesh, _auto_preset())
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+    ctx._omega_iter_samples = []
+    before = ctx._omega_estimates
+
+    # A cheap first step of a timestep, two ordinary ones, and one outlier.
+    # Nothing may trigger while the window is still filling.
+    for count in (2, 3, 4, 40):
+        ctx._omega_applies = ctx._omega_applies_seen + count
+        ctx.update(pc)
+
+    assert ctx._omega_estimates == before
+    assert len(ctx._omega_iter_samples) == ctx.omega_iter_window
+    # Neither the cheap first step nor the outlier sets the threshold.
+    assert 2 < ctx._omega_iter_reference < 40
+
+
+def test_omega_auto_interval_is_a_backstop(flat_mesh):
+    """The interval re-measures even when nothing else moves."""
+    _, solver = _run_short(flat_mesh, _auto_preset(vlumping_omega_interval=3))
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+    before = ctx._omega_estimates
+
+    for _ in range(3):
+        ctx.update(pc)
+
+    assert ctx._omega_estimates == before + 1
+
+
+def test_omega_auto_checks_only_on_refresh_steps_under_lag(flat_mesh):
+    """Between refreshes the snapshot is identical, so nothing is checked."""
+    _, solver = _run_short(
+        flat_mesh, _auto_preset(vlumping_lag=3, vlumping_omega_interval=0)
+    )
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+    ctx._omega_iter_samples = [1] * ctx.omega_iter_window
+    ctx._omega_iter_reference = 1
+
+    # _lag_update increments the counter before _omega_update reads it, so
+    # this lands the expensive step on an update that does not refresh.
+    ctx._nupdate = 0
+    ctx._omega_applies = ctx._omega_applies_seen + 40
+    before = ctx._omega_estimates
+    ctx.update(pc)
+    assert ctx._omega_estimates == before
+
+    # The same step on a refresh does trigger.
+    ctx._omega_iter_samples = [1] * ctx.omega_iter_window
+    ctx._omega_iter_reference = 1
+    ctx._nupdate = ctx.lag - 1
+    ctx._omega_applies = ctx._omega_applies_seen + 40
+    ctx.update(pc)
+    assert ctx._omega_estimates == before + 1
