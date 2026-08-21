@@ -87,7 +87,69 @@ class SPDAssembledPC(fd.AssembledPC):
 # =========================================================================
 
 
-class VerticallyLumpedPC(PCBase):
+class _LaggedOperatorMixin:
+    """Hold a private snapshot of the operator for the inner multigrid.
+
+    Firedrake reassembles the Jacobian in place on every Newton step, so the
+    PETSc object state of the operator changes every time. The inner PCMG
+    reacts to that change with a full setup: the Galerkin product P^T A P, the
+    coarse factorisation, and the eigenvalue estimate of a Chebyshev smoother.
+    For an extruded 3-D problem that setup cost dominates the solve.
+
+    This mixin gives the inner PCMG a private copy of the operator and
+    refreshes the copy every ``lag`` Newton steps. Between two refreshes the
+    object state does not change, so PETSc skips the complete setup. The outer
+    Krylov method keeps the true Jacobian for its residual, therefore the
+    accuracy of the Newton step does not change. Only the preconditioner is
+    stale.
+
+    The snapshot is necessary. A lag that leaves the live Jacobian visible to
+    the smoother makes the smoother evaluate B_old^-1 A_live. A polynomial or
+    stationary smoother contracts only on a bounded region, and modes that
+    leave that region during a sharp wetting front make the multigrid cycle
+    expansive. With the snapshot the smoother evaluates B_old^-1 A_old, which
+    is inside the region by construction, and the drift reaches the outer
+    Krylov method as a benign near-identity perturbation.
+
+    Set the lag with the integer option ``<prefix>vlumping_lag``. The default
+    is 1, which refreshes on every Newton step and reproduces the unlagged
+    behaviour exactly. The snapshot costs one extra copy of the Jacobian.
+    """
+
+    def _lag_initialize(self, pc, P):
+        """Read the lag option and bind the inner PC to the snapshot."""
+        prefix = pc.getOptionsPrefix() or ""
+        self.lag = PETSc.Options().getInt(prefix + "vlumping_lag", 1)
+        self._nupdate = 0
+        if self.lag <= 1:
+            self._Alag = None
+            return
+
+        # Copy the values now, because the first solve uses this matrix.
+        self._Alag = P.duplicate(copy=True)
+        # Both arguments must be the snapshot. KSPSetUp_Chebyshev compares the
+        # state of Amat and of Pmat, so a live Amat re-triggers the estimate
+        # and defeats the lag.
+        self.pc.setOperators(self._Alag, self._Alag)
+
+    def _lag_update(self, pc):
+        """Refresh the snapshot when the lag interval is complete."""
+        if self._Alag is None:
+            return
+        self._nupdate += 1
+        if self._nupdate % self.lag == 0:
+            _, P = pc.getOperators()
+            # MatCopy increases the object state, so the inner PCMG runs a
+            # complete setup on this step and skips it on the others.
+            P.copy(self._Alag, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
+
+    def _lag_destroy(self):
+        if getattr(self, "_Alag", None) is not None:
+            self._Alag.destroy()
+            self._Alag = None
+
+
+class VerticallyLumpedPC(_LaggedOperatorMixin, PCBase):
     """Two-level MG that collapses the vertical dimension on the coarse level.
 
     This preconditioner targets extruded meshes of high aspect ratio. It
@@ -105,6 +167,10 @@ class VerticallyLumpedPC(PCBase):
 
     Solver options for the coarse level use the prefix ``lumped_mg_coarse_``.
     The fine-level smoother uses ``lumped_mg_levels_``.
+
+    The integer option ``vlumping_lag`` rebuilds the preconditioner every N
+    Newton steps against a private snapshot of the Jacobian. The default is 1,
+    which rebuilds on every step. See ``_LaggedOperatorMixin``.
 
     The fine space must be a scalar tensor-product space on an extruded mesh.
     """
@@ -167,6 +233,10 @@ class VerticallyLumpedPC(PCBase):
         self.pc.setMGInterpolation(1, Prol)
         self.pc.setFromOptions()
         self.pc.setUp()
+        # Bind the inner PCMG to a lagged snapshot when the user asks for one.
+        # This runs after the first setUp, so the multigrid residual callback
+        # keeps the live operator. See _LaggedOperatorMixin.
+        self._lag_initialize(pc, P)
         self.update(pc)
 
     def update(self, pc):
@@ -174,6 +244,7 @@ class VerticallyLumpedPC(PCBase):
         # The inner PCMG holds a reference to the same Mat. It still needs
         # setUp() to recompute the Galerkin coarse operator A_c = P^T A P from
         # the updated state.
+        self._lag_update(pc)
         self.pc.setUp()
 
     def apply(self, pc, X, Y):
@@ -183,6 +254,7 @@ class VerticallyLumpedPC(PCBase):
         self.pc.applyTranspose(X, Y)
 
     def destroy(self, pc):
+        self._lag_destroy()
         if hasattr(self, "pc"):
             self.pc.destroy()
 
@@ -200,7 +272,7 @@ class VerticallyLumpedPC(PCBase):
         self.pc.view(viewer)
 
 
-class VerticallyLumpedHMGPC(PCBase):
+class VerticallyLumpedHMGPC(_LaggedOperatorMixin, PCBase):
     """Two-level MG with the coarse level on the fine mesh's 2D base.
 
     This preconditioner uses the same two levels as ``VerticallyLumpedPC``.
@@ -215,6 +287,9 @@ class VerticallyLumpedHMGPC(PCBase):
 
     Fine space : V          = hele x vele      (full 3D tensor-product)
     Coarse     : V_base_2d  = hele on base_2d  (same horizontal element)
+
+    The integer option ``vlumping_lag`` applies here as well. See
+    ``_LaggedOperatorMixin``.
 
     The prolongation from ``V_base_2d`` into ``V`` is the same-mesh
     interpolation from the vertically constant 3D space ``V_R = hele x R``
@@ -348,6 +423,7 @@ class VerticallyLumpedHMGPC(PCBase):
 
         self.pc.setFromOptions()
         self.pc.setUp()
+        self._lag_initialize(pc, P)
         self.update(pc)
 
     @staticmethod
@@ -364,6 +440,7 @@ class VerticallyLumpedHMGPC(PCBase):
         return mats
 
     def update(self, pc):
+        self._lag_update(pc)
         self.pc.setUp()
 
     def apply(self, pc, X, Y):
@@ -373,6 +450,7 @@ class VerticallyLumpedHMGPC(PCBase):
         self.pc.applyTranspose(X, Y)
 
     def destroy(self, pc):
+        self._lag_destroy()
         if hasattr(self, "pc"):
             self.pc.destroy()
 
