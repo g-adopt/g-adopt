@@ -29,6 +29,8 @@ from firedrake import (
     inner,
 )
 
+from gadopt.richards_solver import vlumping_richards_solver_parameters
+
 from gadopt import (
     BackwardEuler,
     ExponentialCurve,
@@ -331,4 +333,83 @@ def test_update_is_not_noop_for_hmg(hierarchy_mesh):
         f"inner PCMG operator did not change between solves "
         f"(norm_before={norm_before}, norm_after={norm_after}); "
         f"update() appears to be a no-op"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Lagged setup: the inner PCMG runs against a private snapshot of the
+# Jacobian that only refreshes every `vlumping_lag` Newton steps.
+# ---------------------------------------------------------------------------
+
+
+def _lagged_preset(lag):
+    params = dict(vlumping_richards_solver_parameters)
+    params["vlumping_lag"] = lag
+    return params
+
+
+def test_lag_defaults_to_no_snapshot(flat_mesh):
+    """Without the option the PC holds no snapshot and nothing changes."""
+    _, solver = _run_short(flat_mesh, "vlumping")
+    ctx = solver.solver.snes.getKSP().getPC().getPythonContext()
+    assert ctx.lag == 1
+    assert ctx._Alag is None
+
+
+def test_lag_binds_inner_mg_to_the_snapshot(flat_mesh):
+    """With a lag the inner PCMG sees the snapshot, not the live Jacobian."""
+    _, solver = _run_short(flat_mesh, _lagged_preset(3))
+    outer_pc = solver.solver.snes.getKSP().getPC()
+    ctx = outer_pc.getPythonContext()
+    assert ctx._Alag is not None
+
+    inner_amat, inner_pmat = ctx.pc.getOperators()
+    # Both operators must be the snapshot. KSPSetUp_Chebyshev compares the
+    # state of Amat and of Pmat, so a live Amat defeats the lag.
+    assert inner_amat.handle == ctx._Alag.handle
+    assert inner_pmat.handle == ctx._Alag.handle
+
+    live_amat, _ = outer_pc.getOperators()
+    assert live_amat.handle != ctx._Alag.handle
+
+
+def test_lag_refreshes_the_snapshot_on_the_lag_th_update(flat_mesh):
+    """The snapshot follows the live Jacobian on every third update only."""
+    lag = 3
+    _, solver = _run_short(flat_mesh, _lagged_preset(lag))
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+    _, live = pc.getOperators()
+
+    # Move the live Jacobian before each update, so a refresh is visible as a
+    # change in the norm of the snapshot. This corrupts the operator, so the
+    # solver is not used again after this loop.
+    start = ctx._nupdate
+    refreshed = []
+    for _ in range(2 * lag):
+        live.scale(1.5)
+        before = ctx._Alag.norm()
+        ctx.update(pc)
+        refreshed.append(
+            not np.isclose(before, ctx._Alag.norm(), rtol=1e-12, atol=0.0)
+        )
+
+    expected = [(start + i + 1) % lag == 0 for i in range(2 * lag)]
+    assert refreshed == expected, (
+        f"snapshot refresh cadence {refreshed} does not match the expected "
+        f"{expected} for vlumping_lag={lag}"
+    )
+
+
+def test_lag_does_not_change_the_solution(flat_mesh):
+    """Lagging the preconditioner leaves the Newton solution unchanged."""
+    h_ref, _ = _run_short(flat_mesh, "vlumping")
+    h_lag, _ = _run_short(flat_mesh, _lagged_preset(3))
+
+    diff = assemble((h_ref - h_lag) ** 2 * dx) ** 0.5
+    ref_norm = assemble(h_ref ** 2 * dx) ** 0.5
+    rel = diff / ref_norm
+    assert rel < 1e-3, (
+        f"lagged and unlagged solutions differ by {rel:.3e}; the outer "
+        f"Krylov method should keep the true Jacobian for its residual"
     )
