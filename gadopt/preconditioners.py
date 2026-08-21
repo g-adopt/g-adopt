@@ -270,38 +270,43 @@ class _AutoRichardsonMixin:
     def _omega_apply(smoother, omega):
         """Make the smoother a Richardson iteration with this damping factor.
 
-        The options database is the only route. petsc4py has no binding for
-        KSPRichardsonSetScale. The type must go through the database as well,
-        because the preset already holds an entry for the smoother's ksp_type
-        and setFromOptions would otherwise restore it.
+        The options database is the only route, because petsc4py has no
+        binding for KSPRichardsonSetScale, and the type must go through it as
+        well, because the preset holds its own entry for the smoother's
+        ksp_type that setFromOptions would otherwise restore.
+
+        The database is global and Firedrake reuses an options prefix across
+        solver instances, so every key this method writes is removed again
+        before it returns. KSPSetFromOptions has already copied the values
+        into the KSP by then.
         """
         options = PETSc.Options()
         prefix = smoother.getOptionsPrefix() or ""
-        options[prefix + "ksp_type"] = "richardson"
-        options[prefix + "ksp_richardson_scale"] = omega
 
-        # KSPSetFromOptions also runs PCSetFromOptions. For a Python
-        # preconditioner that re-reads -pc_python_type and builds a new
-        # object, which discards everything initialize() set up. The HMG
-        # preset uses ASMLinesmoothPC on this level, so hide the key while
-        # the smoother reads its own options.
         # PCMG gives a level its own prefix, "mg_levels_1_", while a preset
         # usually writes the option against the generic "mg_levels_" prefix.
-        # Both must be hidden.
+        # Both must be hidden. Use getAll() rather than hasName(), because
+        # hasName() follows PETSc's alias and answers yes for a
+        # level-specific key that does not exist; restoring such a key would
+        # create it.
         candidates = {prefix, re.sub(r"\d+_$", "", prefix)}
-        # getAll() rather than hasName(), because hasName() follows PETSc's
-        # "mg_levels_" alias and answers yes for a level-specific key that
-        # does not exist. Restoring such a key would create it.
         present = options.getAll()
         saved = {}
         for candidate in candidates:
-            key = candidate + "pc_python_type"
-            if key in present:
-                saved[key] = present[key]
-                options.delValue(key)
+            for suffix in ("pc_python_type", "ksp_type"):
+                key = candidate + suffix
+                if key in present:
+                    saved[key] = present[key]
+                    options.delValue(key)
+
+        written = (prefix + "ksp_type", prefix + "ksp_richardson_scale")
+        options[written[0]] = "richardson"
+        options[written[1]] = omega
         try:
             smoother.setFromOptions()
         finally:
+            for key in written:
+                options.delValue(key)
             for key, value in saved.items():
                 options[key] = value
 
