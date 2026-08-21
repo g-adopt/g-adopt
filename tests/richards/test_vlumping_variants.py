@@ -29,7 +29,12 @@ from firedrake import (
     inner,
 )
 
-from gadopt.richards_solver import vlumping_richards_solver_parameters
+from firedrake.petsc import PETSc
+
+from gadopt.richards_solver import (
+    vlumping_hmg_richards_solver_parameters,
+    vlumping_richards_solver_parameters,
+)
 
 from gadopt import (
     BackwardEuler,
@@ -413,3 +418,119 @@ def test_lag_does_not_change_the_solution(flat_mesh):
         f"lagged and unlagged solutions differ by {rel:.3e}; the outer "
         f"Krylov method should keep the true Jacobian for its residual"
     )
+
+
+# ---------------------------------------------------------------------------
+# Automatic Richardson damping: the damping factor follows the measured
+# spectrum, and two conditions decide when to measure it again.
+# ---------------------------------------------------------------------------
+
+
+def _auto_preset(base=None, **extra):
+    params = dict(base or vlumping_richards_solver_parameters)
+    params["vlumping_omega_auto"] = True
+    params.update(extra)
+    return params
+
+
+def test_omega_auto_defaults_off(flat_mesh):
+    """Without the option the preconditioner derives nothing."""
+    _, solver = _run_short(flat_mesh, "vlumping")
+    ctx = solver.solver.snes.getKSP().getPC().getPythonContext()
+    assert ctx.omega_auto is False
+    assert ctx.omega is None
+
+
+def test_omega_auto_sets_a_richardson_smoother(flat_mesh):
+    """The fine smoother becomes Richardson with the derived damping."""
+    _, solver = _run_short(flat_mesh, _auto_preset())
+    ctx = solver.solver.snes.getKSP().getPC().getPythonContext()
+
+    assert ctx.omega is not None
+    assert ctx.omega > 0.0
+    assert ctx._omega_estimates >= 1
+
+    smoother = ctx.pc.getMGSmoother(1)
+    assert smoother.getType() == "richardson"
+    # The preset asked for Chebyshev. The derived value must override it.
+    assert vlumping_richards_solver_parameters[
+        "lumped_mg_levels_ksp_type"] == "chebyshev"
+
+
+def test_omega_auto_does_not_change_the_solution(flat_mesh):
+    """A different smoother must not move the Newton solution."""
+    h_ref, _ = _run_short(flat_mesh, "vlumping")
+    h_auto, _ = _run_short(flat_mesh, _auto_preset())
+
+    diff = assemble((h_ref - h_auto) ** 2 * dx) ** 0.5
+    ref_norm = assemble(h_ref ** 2 * dx) ** 0.5
+    assert diff / ref_norm < 1e-3
+
+
+def test_omega_auto_remeasures_when_the_operator_balance_moves(flat_mesh):
+    """A shift changes the diagonal alone, so the balance metric moves."""
+    _, solver = _run_short(flat_mesh, _auto_preset())
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+    before = ctx._omega_estimates
+
+    # A uniform rescaling leaves the metric alone by construction, so shift
+    # the diagonal instead. This corrupts the operator; the solver is not
+    # used again after this call.
+    A, _ = ctx.pc.getMGSmoother(1).getOperators()
+    A.shift(10.0 * A.norm(PETSc.NormType.FROBENIUS))
+    ctx.update(pc)
+
+    assert ctx._omega_estimates == before + 1
+
+
+def test_omega_auto_remeasures_when_iterations_rise(flat_mesh):
+    """A Newton step that costs far more iterations triggers a measurement."""
+    _, solver = _run_short(flat_mesh, _auto_preset())
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+
+    # Establish a reference of one iteration, then present a step that took
+    # far more. The balance is untouched, so only the second condition can
+    # fire.
+    ctx._omega_iter_reference = 1
+    ctx._omega_applies = ctx._omega_applies_seen + 20
+    before = ctx._omega_estimates
+    ctx.update(pc)
+
+    assert ctx._omega_estimates == before + 1
+
+
+def test_omega_auto_holds_still_when_nothing_moves(flat_mesh):
+    """Neither condition fires on a repeated update with a fixed operator."""
+    _, solver = _run_short(flat_mesh, _auto_preset())
+    pc = solver.solver.snes.getKSP().getPC()
+    ctx = pc.getPythonContext()
+    before = ctx._omega_estimates
+
+    for _ in range(4):
+        ctx.update(pc)
+
+    assert ctx._omega_estimates == before
+
+
+def test_omega_auto_works_with_the_lag(flat_mesh):
+    """The derived damping and the operator snapshot compose."""
+    _, solver = _run_short(flat_mesh, _auto_preset(vlumping_lag=3))
+    ctx = solver.solver.snes.getKSP().getPC().getPythonContext()
+    assert ctx.omega is not None
+    assert ctx._Alag is not None
+    # Under a lag the smoother reads the snapshot, so the measurement and the
+    # balance metric must both come from the snapshot.
+    assert ctx.pc.getMGSmoother(1).getOperators()[0].handle == ctx._Alag.handle
+
+
+def test_omega_auto_works_for_hmg(hierarchy_mesh):
+    """The HMG variant derives a damping factor for its fine level too."""
+    _, solver = _run_short(
+        hierarchy_mesh,
+        _auto_preset(vlumping_hmg_richards_solver_parameters),
+    )
+    ctx = solver.solver.snes.getKSP().getPC().getPythonContext()
+    assert ctx.omega is not None
+    assert ctx.pc.getMGSmoother(1).getType() == "richardson"
