@@ -180,13 +180,13 @@ Note:
 gia_outer_solver_parameters: dict[str, str | float] = {
     "mat_type": "matfree",
     "snes_type": "ksponly",
-    "ksp_type": "cg",
-    "ksp_rtol": 1e-5,
     "pc_type": "python",
     "pc_python_type": "gadopt.SPDAssembledPC",
 }
 
 gia_iterative_cpu_assembled_parameters: dict[str, str | float | int | bool] = {
+    "ksp_type": "cg",
+    "ksp_rtol": 1e-5,
     "assembled_pc_type": "gamg",
     "assembled_mg_levels_pc_type": "sor",
     "assembled_pc_gamg_threshold": 0.01,
@@ -205,6 +205,8 @@ gia_iterative_gpu_assembled_parameters: ConfigType = {
             "ksp_type": "preonly",
             "pc_type": "ksp",
             "ksp": {
+                "ksp_type": "cg",
+                "ksp_rtol": 1e-5,
                 "pc_type": "gamg",
                 "mg_levels_pc_type": "jacobi",
                 "mg_levels_ksp_max_it": 2,
@@ -521,7 +523,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             # modified
             offload_conf: ConfigType = deepcopy(in_config)
             if gpu_telescope_factor > 1:
-                ksp_params = in_config["assembled"]["offload"]
+                ksp_params = offload_conf["assembled"]["offload"]
                 offload_conf["assembled"]["offload"] = {
                     "ksp_type": "preonly",
                     "pc_type": "telescope",
@@ -531,10 +533,10 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             if device_type == "CUDA":
                 # Add cuda workarounds
                 odb = fd.PETSc.Options()
-                odb["matmatmult_backend_cpu"] = None
-                odb["matptap_backend_cpu"] = None
-                odb["inner_C_loc_mat_product_algorithm_backend_cpu"] = None
-                odb["inner_C_oth_mat_product_algorithm_backend_cpu"] = None
+                odb.setValue("matmatmult_backend_cpu", True)
+                odb.setValue("matptap_backend_cpu", True)
+                odb.setValue("inner_C_loc_mat_product_algorithm_backend_cpu", True)
+                odb.setValue("inner_C_oth_mat_product_algorithm_backend_cpu", True)
                 if gpu_telescope_factor == 1:
                     for k, v in iterative_cuda_ksp_workarounds_inner.items():
                         offload_conf["assembled"]["offload"]["ksp"][k] = v
