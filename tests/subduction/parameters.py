@@ -100,19 +100,19 @@ eta_bounds = {
     "maximum": {"mantle": 1e25, "weak layer": 1e25},
 }
 plastic_deformation_params = {
-    "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.2},
-    "weak layer": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.02},
+    "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.25},
+    "weak layer": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.015},
 }
 viscous_creep_params = {
     "upper": {
-        "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
+        "diffusion": {"prefactor": 1e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 4.4e-17,
+            "prefactor": 1e-17,
             "n": 3.5,
             "act_nrg": 5.4e5,
             "act_vol": 1.2e-5,
         },
-        "Peierls": {"prefactor": 1e-150, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
+        "Peierls": {"prefactor": 1e-142, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
         "diffusion": {"prefactor": 1e-15, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}

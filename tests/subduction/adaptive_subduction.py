@@ -315,7 +315,7 @@ class AdaptiveSimulation:
             solver_parameters="direct",
             solver_parameters_extra={
                 "snes_linesearch_type": "bisection",
-                "snes_max_it": 200,
+                "snes_max_it": 300,
                 "snes_rtol": 1e-5,
             },
             **nullspace_args,

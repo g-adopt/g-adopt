@@ -4,8 +4,10 @@ from ufl.core.operator import Operator
 
 from gadopt import material_field
 
+# isort: off
 import parameters as prms
 from utility import clip_expression, tensor_second_invariant
+# isort: on
 
 
 def viscous_creep(
@@ -162,11 +164,16 @@ def material_viscosity(
     epsilon_dot_ii = tensor_second_invariant(epsilon_dot, 1e-25 * prms.time_scale)
 
     depth = prms.domain_dims[1] - fd.SpatialCoordinate(mesh)[1]
-    # The following expressions are dimensional
+    # The following pressure and temperature are dimensional
     lith_pres = prms.rho_mantle * g * depth * prms.distance_scale
     T_full = (
         prms.temperature_scaling(T, dimensional=False)
-        + depth * prms.distance_scale * prms.adiab_grad
+        + (
+            fd.min_value(depth, prms.depth_lower_mantle)
+            + fd.max_value(depth - prms.depth_lower_mantle, 0.0) * 0.75
+        )
+        * prms.distance_scale
+        * prms.adiab_grad
     )
 
     eta_bounds_material = {}
