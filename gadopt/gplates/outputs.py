@@ -1,11 +1,22 @@
 """Create scalar fields from interpolated source channels.
 
-`GlobalLayerIndicator` creates an indicator for a layer that covers the sphere.
-`BoundedLayerIndicator` creates an indicator for a bounded layer.
-`LayerIndicator` composes a radial transition, a base depth, and a lateral weight.
+An output answers the second half of the question a Source cannot: given
+interpolated arrays at the target nodes, what scalar field do we actually want
+there? Sources say where the points are and what they carry; outputs turn that
+into a lithosphere indicator, a geotherm, or a membership field. See
+``gadopt.gplates.sources`` for the other half of the split.
 
-Each output lists its required source channels in `requires`.
-The connector rejects a source that does not provide these channels.
+The indicators are deliberately not written as one class per layer type. Every
+one of them is the same product of three independent choices -- how the field
+falls off in radius, where its base sits, and how strongly it acts laterally --
+so ``LayerIndicator`` composes those three strategies and the concrete classes
+(``GlobalLayerIndicator``, ``BoundedLayerIndicator``) are thin presets over it.
+A new layer type is usually a new combination, not new code.
+
+Each output declares the source channels it reads in ``requires``, which the
+connector checks against the source's ``provides`` when the two are wired
+together. That turns a mismatched pairing into an error at construction time
+rather than a ``KeyError`` deep inside ``compute`` on the first timestep.
 """
 
 from __future__ import annotations
@@ -23,8 +34,19 @@ from scipy.special import erf
 class MeshConfig:
     """Define mesh geometry for conversions from radius to physical depth.
 
-    `r_outer` is the surface radius in non-dimensional mesh units.
-    `depth_scale` is the depth in kilometres per non-dimensional radial unit.
+    Outputs receive target radii in the mesh's own non-dimensional units, but
+    every physical quantity they work with -- lithosphere thickness, a cooling
+    length, a transition width -- is in kilometres. This pair of numbers is the
+    only thing needed to move between the two, and it is kept in one frozen
+    object so a connector cannot pick up a mesh scale that disagrees with the
+    one its outputs assume.
+
+    Args:
+        r_outer: Surface radius in non-dimensional mesh units.
+        depth_scale: Depth in kilometres per non-dimensional radial unit.
+
+    Raises:
+        ValueError: If either value is not positive.
     """
 
     r_outer: float = 2.208
@@ -41,10 +63,26 @@ class MeshConfig:
 def ocean_erf_normalized(depth_m, z_lab_m, age_myr, thermal_diffusivity_m2_per_s):
     """Return a normalised half-space cooling geotherm.
 
-    The profile is `erf(z / a) / erf(z_lab / a)`.
-    Here, `a = 2 * sqrt(thermal_diffusivity_m2_per_s * t)`.
-    The result is zero at the surface and one at the lithosphere base.
-    A linear profile avoids unstable division when the denominator approaches zero.
+    The profile is ``erf(z / a) / erf(z_lab / a)`` with the cooling length
+    ``a = 2 * sqrt(thermal_diffusivity_m2_per_s * t)``. Dividing by the value at
+    the lithosphere base is what normalises it: the result is zero at the
+    surface and one at the base, whatever the plate age, so the caller can
+    scale it by a temperature contrast.
+
+    Very young lithosphere makes that denominator approach zero and the ratio
+    numerically useless, so below a small threshold the function falls back to
+    the linear profile the erf ratio tends towards anyway.
+
+    Args:
+        depth_m: Depth below the surface, in metres.
+        z_lab_m: Depth of the lithosphere base, in metres.
+        age_myr: Material age, in millions of years. Negative values are
+            treated as zero.
+        thermal_diffusivity_m2_per_s: Thermal diffusivity, in square metres per
+            second.
+
+    Returns:
+        The normalised temperature, clipped to the interval from zero to one.
     """
     depth_m = np.asarray(depth_m, dtype=float)
     z_lab_m = np.asarray(z_lab_m, dtype=float)
@@ -66,7 +104,20 @@ def ocean_erf_normalized(depth_m, z_lab_m, age_myr, thermal_diffusivity_m2_per_s
 
 
 def continental_linear(depth_m, z_lab_m):
-    """Return the normalised linear profile `z / z_lab`."""
+    """Return the normalised linear profile ``z / z_lab``.
+
+    This is the continental counterpart to ``ocean_erf_normalized``: a plate
+    old enough to have equilibrated has a geotherm close to linear, and there
+    is no age to carry.
+
+    Args:
+        depth_m: Depth below the surface, in metres.
+        z_lab_m: Depth of the lithosphere base, in metres.
+
+    Returns:
+        The normalised temperature, clipped to the interval from zero to one.
+        Nodes with a non-positive base depth return zero.
+    """
     depth_m = np.asarray(depth_m, dtype=float)
     z_lab_m = np.asarray(z_lab_m, dtype=float)
     result = np.zeros_like(depth_m)
@@ -79,11 +130,20 @@ def continental_linear(depth_m, z_lab_m):
 def radial_quintic_step(r_target, base_r, width_nondim):
     """Return a one-sided quintic radial transition.
 
-    The result is one at or above `base_r`.
-    The result is zero at or below `base_r - width_nondim`.
-    The first and second derivatives are continuous at both limits.
-    The midpoint lies halfway through the transition width.
-    All inputs use nondimensional mesh units.
+    The result is one at or above ``base_r``, zero at or below
+    ``base_r - width_nondim``, and one half at the midpoint of the transition.
+    The quintic is used rather than a linear ramp or a step because its first
+    and second derivatives vanish at both ends: the field it produces is
+    C2-continuous, so interpolating it onto a finite element space does not
+    leave a kink at the top and bottom of the transition.
+
+    Args:
+        r_target: Target radii, in non-dimensional mesh units.
+        base_r: Radius of the base of the layer, in the same units.
+        width_nondim: Width of the transition, in the same units.
+
+    Returns:
+        The transition value at each target radius, between zero and one.
     """
     t = np.clip(
         (np.asarray(r_target, dtype=float) - base_r) / width_nondim + 1.0,
@@ -96,8 +156,11 @@ def radial_quintic_step(r_target, base_r, width_nondim):
 class OutputStrategy(ABC):
     """Map interpolated source channels to a target field.
 
-    `requires` lists each required channel.
-    It does not include the `xyz` coordinate array.
+    A subclass declares in ``requires`` the source channels its ``compute``
+    reads, excluding the ``xyz`` coordinates, which every source provides. The
+    connector matches that set against the source's ``provides`` when the pair
+    is wired together, so an output can index ``interpolated`` without
+    defensive checks.
     """
 
     requires: frozenset[str]
@@ -113,12 +176,17 @@ class OutputStrategy(ABC):
         """Return the scalar field at the target points.
 
         Args:
-            interpolated: dict of arrays, one per key in ``self.requires``,
-                already kNN-interpolated onto target coords.
-            r_target: norms of target coords (one value per target node).
-            outside_source_range: boolean mask. True where no source point is within
-                ``InterpolationConfig.max_source_separation_rad``.
-            mesh: mesh geometry for radius↔depth conversion.
+            interpolated: Arrays keyed by channel name, one per key in
+                ``self.requires``, already kNN-interpolated onto the target
+                coordinates.
+            r_target: Norms of the target coordinates, one value per target
+                node.
+            outside_source_range: Boolean mask, True where no source point lies
+                within ``InterpolationConfig.max_source_separation_rad``.
+            mesh: Mesh geometry for the conversion between radius and depth.
+
+        Returns:
+            The scalar field, one value per target node.
         """
 
 
@@ -127,7 +195,17 @@ MEMBERSHIP_FLOOR = 1e-3
 
 
 class LateralWeight(Protocol):
-    """Define a strategy that supplies the lateral part of an indicator."""
+    """Supply the lateral part of an indicator.
+
+    This is the factor that decides how strongly a layer acts at each point on
+    the sphere, independent of depth: one everywhere for a global layer, a
+    membership fraction for a layer bounded by polygons. It is a Protocol
+    rather than a base class so that a caller can pass any object with the
+    right two members, including a test double.
+
+    Attributes:
+        requires: Source channels the strategy reads.
+    """
 
     requires: frozenset[str]
 
@@ -136,18 +214,49 @@ class LateralWeight(Protocol):
         interpolated: dict[str, np.ndarray],
         outside_source_range: np.ndarray,
     ) -> np.ndarray | float:
-        """Return a lateral weight between zero and one."""
+        """Return a lateral weight between zero and one.
+
+        Args:
+            interpolated: Arrays keyed by channel name.
+            outside_source_range: Boolean mask, True where no source point is
+                in range.
+
+        Returns:
+            The weight at each target node, or a single float that applies
+            everywhere.
+        """
         ...
 
 
 def _clip_membership(interpolated, outside_source_range):
-    """Return membership between zero and one within the source range."""
+    """Clip the membership channel and zero it outside the source range.
+
+    A node with no source point in range cannot be shown to belong to the
+    bounded region, so it is treated as outside it rather than inheriting the
+    membership of a distant point.
+
+    Args:
+        interpolated: Arrays keyed by channel name, including ``membership``.
+        outside_source_range: Boolean mask, True where no source point is in
+            range.
+
+    Returns:
+        Membership between zero and one, zero outside the source range.
+    """
     m = np.clip(interpolated["membership"], 0.0, 1.0)
     return np.where(outside_source_range, 0.0, m)
 
 
 class RadialQuinticTransition:
-    """Apply a quintic transition below the base depth."""
+    """Apply a quintic transition below the base depth.
+
+    Args:
+        base_transition_width_km: Width of the radial transition, in
+            kilometres.
+
+    Raises:
+        ValueError: If the width is not positive.
+    """
 
     requires = frozenset()
 
@@ -166,7 +275,17 @@ class RadialQuinticTransition:
 
 
 class FixedBaseDepth:
-    """Use one base depth for all target nodes."""
+    """Use one base depth for all target nodes.
+
+    This is the choice for a layer of prescribed thickness, where the source
+    supplies properties but not geometry.
+
+    Args:
+        fixed_base_depth_km: Base depth, in kilometres.
+
+    Raises:
+        ValueError: If the depth is not positive.
+    """
 
     requires = frozenset()
 
@@ -182,9 +301,15 @@ class FixedBaseDepth:
 
 
 class InterpolatedBaseDepth:
-    """Read each base depth from the `thickness` channel.
+    """Read each base depth from the ``thickness`` channel.
 
-    `fallback_thickness_km` replaces values outside the source range.
+    Args:
+        fallback_thickness_km: Thickness used where no source point is in
+            range, in kilometres. The default of zero puts the base at the
+            surface, which switches the layer off there.
+
+    Raises:
+        ValueError: If the fallback thickness is negative.
     """
 
     requires = frozenset({"thickness"})
@@ -206,9 +331,13 @@ class InterpolatedBaseDepth:
 class MembershipCorrectedBaseDepth:
     """Recover base depth from membership-weighted thickness.
 
-    The source channel contains `masked_thickness = membership * thickness`.
-    Division by membership recovers thickness within the bounded region.
-    Nodes below `MEMBERSHIP_FLOOR` receive a base depth of zero.
+    A bounded source cannot interpolate raw thickness, because averaging a
+    continental thickness with the zeros outside the polygon would thin the
+    margins. It carries ``masked_thickness = membership * thickness`` instead,
+    and dividing the interpolated product by the interpolated membership
+    recovers the physical thickness inside the region. Below
+    ``MEMBERSHIP_FLOOR`` the division is meaningless, so those nodes get a base
+    depth of zero and the layer vanishes there.
     """
 
     requires = frozenset({"masked_thickness", "membership"})
@@ -227,7 +356,11 @@ class MembershipCorrectedBaseDepth:
 
 
 class UniformLateralWeight:
-    """Return a lateral weight of one at all target nodes."""
+    """Return a lateral weight of one at all target nodes.
+
+    This is the strategy for a layer that covers the whole sphere and varies
+    only in thickness.
+    """
 
     requires = frozenset()
 
@@ -236,7 +369,11 @@ class UniformLateralWeight:
 
 
 class MembershipLateralWeight:
-    """Use the interpolated membership channel as the lateral weight."""
+    """Use the interpolated membership channel as the lateral weight.
+
+    The layer fades out across the edge of the bounded region in step with the
+    interpolated membership, which avoids a hard polygon boundary in the field.
+    """
 
     requires = frozenset({"membership"})
 
@@ -245,10 +382,14 @@ class MembershipLateralWeight:
 
 
 class MappedMembershipWeight:
-    """Map membership to a clipped lateral weight.
+    """Map membership through a callable to get the lateral weight.
 
-    `mapping` accepts membership between zero and one.
-    The returned weight is clipped to the same interval.
+    Use this when the layer must not follow membership linearly, for example to
+    sharpen a margin or to hold full strength over most of a region.
+
+    Args:
+        mapping: Callable applied to membership between zero and one. Its
+            result is clipped back to the same interval.
     """
 
     requires = frozenset({"membership"})
@@ -262,11 +403,12 @@ class MappedMembershipWeight:
 
 
 class SourceLateralWeight:
-    """Read the lateral weight from the source channel.
+    """Read the lateral weight from the ``lateral_weight`` source channel.
 
-    The output clips each source value to the interval from zero to one.
-    A target node outside the source range receives a weight of one.
-    This fallback prevents missing source points from suppressing the layer.
+    A node outside the source range falls back to a weight of one rather than
+    zero, because here a missing source point means the source has nothing to
+    say about that node, not that the layer is absent. Zeroing it would let
+    gaps in the source cloud punch holes in the field.
     """
 
     requires = frozenset({"lateral_weight"})
@@ -280,10 +422,19 @@ class SourceLateralWeight:
 class LayerIndicator(OutputStrategy):
     """Compose a radial transition, a base depth, and a lateral weight.
 
-    The radial transition defines the vertical profile at each target node.
-    The base-depth strategy locates that profile in radius.
-    The lateral-weight strategy scales its value across the sphere.
-    `requires` combines the source channels that these strategies need.
+    These three are independent: the transition sets the shape of the profile
+    in radius, the base depth places that profile, and the lateral weight
+    scales it across the sphere. The field is the product of the placed profile
+    and the weight. ``requires`` is the union of what the three strategies
+    read, so the composed output asks the source for exactly the channels its
+    parts need.
+
+    Args:
+        radial_transition: Strategy with a ``step(r_target, base_r, mesh)``
+            method.
+        base_depth: Strategy with a
+            ``base_r(interpolated, outside_source_range, mesh)`` method.
+        lateral_weight: Strategy following the ``LateralWeight`` protocol.
     """
 
     def __init__(
@@ -318,15 +469,27 @@ class LayerIndicator(OutputStrategy):
 class GlobalLayerIndicator(LayerIndicator):
     """Create an indicator field for a layer that covers the sphere.
 
-    `base_transition_width_km` sets the radial transition width in kilometers.
-    `fixed_base_depth_km` sets one base depth for all target nodes.
-    If this value is `None`, the `thickness` channel sets each base depth.
+    A preset over ``LayerIndicator`` for the unbounded case: oceanic
+    lithosphere, or any layer present everywhere and varying only in thickness.
+    The ``thickness`` channel is required whether or not the base depth is
+    actually read from it, so that swapping ``fixed_base_depth_km`` on and off
+    does not change what the paired source must provide.
 
-    `fallback_thickness_km` replaces thickness outside the source range.
-    This value has no effect when `fixed_base_depth_km` is set.
+    Args:
+        base_transition_width_km: Width of the radial transition, in
+            kilometres.
+        fixed_base_depth_km: One base depth for all target nodes, in
+            kilometres. If None, the ``thickness`` channel sets each base
+            depth.
+        fallback_thickness_km: Thickness used outside the source range, in
+            kilometres. Validated but never read when ``fixed_base_depth_km``
+            is set.
+        lateral_weight: Lateral-weight strategy. Defaults to
+            ``UniformLateralWeight``, which returns one everywhere.
 
-    `lateral_weight` selects a lateral-weight strategy.
-    The default strategy returns one at all target nodes.
+    Raises:
+        ValueError: If the fixed base depth is not positive, or the fallback
+            thickness is negative.
     """
 
     def __init__(
@@ -370,13 +533,25 @@ class GlobalLayerIndicator(LayerIndicator):
 class BoundedLayerIndicator(LayerIndicator):
     """Create an indicator field for a bounded layer.
 
-    The `membership` channel sets the lateral weight.
-    The `masked_thickness` channel contains thickness multiplied by membership.
-    The output removes membership before it calculates the base depth.
+    A preset over ``LayerIndicator`` for a layer confined to polygons, such as
+    continental lithosphere. The ``membership`` channel supplies the lateral
+    weight, and ``masked_thickness`` carries thickness already multiplied by
+    membership; the base-depth strategy divides that product back out. See
+    ``MembershipCorrectedBaseDepth`` for why the source masks the thickness in
+    the first place.
 
-    `base_transition_width_km` sets the radial transition width in kilometers.
-    `fixed_base_depth_km` sets one base depth for all target nodes.
-    If this value is `None`, the corrected thickness sets each base depth.
+    Both channels are required whether or not the base depth is read from
+    them, so that swapping ``fixed_base_depth_km`` on and off does not change
+    what the paired source must provide.
+
+    Args:
+        base_transition_width_km: Width of the radial transition, in
+            kilometres.
+        fixed_base_depth_km: One base depth for all target nodes, in
+            kilometres. If None, the corrected thickness sets each base depth.
+
+    Raises:
+        ValueError: If the fixed base depth is not positive.
     """
 
     def __init__(
@@ -405,9 +580,23 @@ class BoundedLayerIndicator(LayerIndicator):
 class HalfSpaceCoolingGeotherm(OutputStrategy):
     """Create a normalised half-space cooling geotherm.
 
-    `thermal_diffusivity_m2_per_s` sets thermal diffusivity in square metres per second.
-    `fallback_thickness_km` replaces thickness outside the source range.
-    `fallback_age_myr` replaces material age outside the source range.
+    The output for oceanic lithosphere, where plate age controls the thermal
+    structure. The fallbacks stand in where the source cloud has no point in
+    range: an old, thick plate, which is the closest thing to ambient mantle
+    that a cooling profile can express.
+
+    Args:
+        thermal_diffusivity_m2_per_s: Thermal diffusivity, in square metres per
+            second.
+        fallback_thickness_km: Thickness used outside the source range, in
+            kilometres.
+        fallback_age_myr: Material age used outside the source range, in
+            millions of years.
+        geotherm: Profile function. Defaults to ``ocean_erf_normalized``.
+
+    Raises:
+        ValueError: If the diffusivity, the fallback thickness, or the fallback
+            age is not positive.
     """
 
     requires = frozenset({"thickness", "age"})
@@ -458,8 +647,12 @@ class HalfSpaceCoolingGeotherm(OutputStrategy):
 class LinearGeotherm(OutputStrategy):
     """Create a normalised linear geotherm from unmasked thickness.
 
-    Within the source range, the result is `z / z_lab`.
-    Outside the source range, the result is one for mantle temperature.
+    Inside the source range the result is ``z / z_lab``. Outside it the result
+    is one, that is, mantle temperature, since a node with no source point in
+    range sits outside the lithosphere this geotherm describes.
+
+    Args:
+        geotherm: Profile function. Defaults to ``continental_linear``.
     """
 
     requires = frozenset({"thickness"})
@@ -483,9 +676,12 @@ class LinearGeotherm(OutputStrategy):
 class BoundedLinearGeotherm(OutputStrategy):
     """Create a linear geotherm for a bounded region.
 
-    The source channel contains `masked_thickness = membership * thickness`.
-    The output removes membership before it evaluates the geotherm.
-    It returns mantle temperature outside the bounded region.
+    The geotherm counterpart to ``BoundedLayerIndicator``: it divides
+    ``masked_thickness`` by membership to recover the physical thickness before
+    evaluating the profile, and returns mantle temperature outside the region.
+
+    Args:
+        geotherm: Profile function. Defaults to ``continental_linear``.
     """
 
     requires = frozenset({"masked_thickness", "membership"})
@@ -515,7 +711,7 @@ class BoundedLinearGeotherm(OutputStrategy):
         z_lab_m = z_lab_km * 1e3
         T_norm = self._geotherm(depth_m, z_lab_m)
         T_norm = np.clip(T_norm, 0.0, 1.0)
-        # `continental_linear` returns surface temperature when its base depth is
+        # ``continental_linear`` returns surface temperature when its base depth is
         # zero. Set uncovered nodes explicitly to mantle temperature instead.
         T_norm[~covered] = 1.0
         return T_norm
@@ -524,8 +720,9 @@ class BoundedLinearGeotherm(OutputStrategy):
 class MembershipField(OutputStrategy):
     """Return the membership channel as a field between zero and one.
 
-    Nodes outside the source range receive zero.
-    This output has no radial dependence.
+    Useful on its own for diagnostics and for masking other fields: it shows
+    where a bounded source considers itself present, with no radial dependence
+    at all. Nodes outside the source range are zero.
     """
 
     requires = frozenset({"membership"})
