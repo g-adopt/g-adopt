@@ -253,7 +253,7 @@ class FunctionContext:
     @cached_property
     def boundary_ids(self):
         """The boundary IDs of the mesh associated with this instance"""
-        return tuple(self.mesh.topology.exterior_facets.unique_markers) + (
+        return tuple(self.mesh.facet_markers) + (
             ("top", "bottom") if self.mesh.extruded else ()
         )
 
@@ -287,7 +287,7 @@ class FunctionContext:
         Creates a `DirichletBC` object, then uses the `.nodes` attribute for that
         object to provide a list of indices that reside on the boundary of the domain
         of the function associated with this `FunctionContext` instance. The
-        `dof_dset.size` parameter of the `FunctionSpace` is used to exclude nodes in
+        `axes.owned.local_size` parameter of the `FunctionSpace` is used to exclude nodes in
         the halo region of the domain.
 
         Args:
@@ -299,7 +299,7 @@ class FunctionContext:
         """
         self.check_boundary_id(boundary_id)
         bc = fd.DirichletBC(self.function_space, 0, boundary_id)
-        return [n for n in bc.nodes if n < self.function_space.dof_dset.size]
+        return [n for n in bc.nodes if n < self.function_space.axes.owned.local_size]
 
 
 class BaseDiagnostics:
