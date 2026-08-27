@@ -24,7 +24,7 @@ from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .scalar_equation import mass_term, sink_term, source_term
-from .solver_options_manager import SolverConfigurationMixin, ConfigType
+from .solver_options_manager import ConfigType, SolverConfigurationMixin
 from .utility import (
     DEBUG,
     INFO,
@@ -379,8 +379,25 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         solver_extras: ConfigType | None,
     ) -> None:
         """Sets PETSc solver options."""
-        # Application context for the inverse mass matrix preconditioner
-        self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        # Application context for Schur-complement preconditioners. ``mu``
+        # retains the historical density scaling used by MassInvPC. The
+        # explicit fields allow density-aware preconditioners to retain the
+        # distinct pressure-gradient and continuity blocks.
+        pressure_buoyancy = None
+        if hasattr(self.approximation, "dbuoyancydp"):
+            pressure = self.solution_split[1]
+            temperature = getattr(self, "T", 0)
+            pressure_buoyancy = (
+                self.approximation.dbuoyancydp(pressure, temperature) * self.k
+            )
+
+        self.appctx = {
+            "mu": self.approximation.mu / self.rho_continuity,
+            "viscosity": self.approximation.mu,
+            "rho_continuity": self.rho_continuity,
+        }
+        if pressure_buoyancy is not None:
+            self.appctx["pressure_buoyancy"] = pressure_buoyancy
 
         if isinstance(solver_preset, Mapping):
             self.add_to_solver_config(solver_preset)
