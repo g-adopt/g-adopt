@@ -365,12 +365,12 @@ class DensityAwareBFBTPC(fd.PCBase):
         """Transfer pressure quotient data according to the selected policy.
 
         G-ADOPT's analytical ALA pressure gauge is generally only an
-        approximate null mode of the discrete gradient. The default ``schur``
-        policy deliberately preserves the outer Schur quotient on both inner
-        operators; ``verified`` attaches a mode as exact only after the
-        absolute residual test controlled by
-        ``bfbt_nullspace_test_tolerance``. The latter is a diagnostic whose
-        tolerance must be scaled for the operator and units being tested.
+        approximate null mode of the discrete gradient. The default
+        ``verified`` policy attaches a mode as exact only after the absolute
+        residual test controlled by ``bfbt_nullspace_test_tolerance``. That
+        diagnostic tolerance must be scaled for the operator and units being
+        tested. The explicitly selected experimental ``schur`` policy instead
+        preserves the outer Schur quotient on both inner operators.
         """
         empty_nullspace = PETSc.NullSpace()
         self.exact_pressure_laplacian.setNullSpace(empty_nullspace)
