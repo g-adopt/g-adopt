@@ -4,6 +4,7 @@ import pytest
 from gadopt import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    DensityAwareBFBTPC,
     StokesSolver,
     TruncatedAnelasticLiquidApproximation,
     create_stokes_nullspace,
@@ -38,7 +39,12 @@ def bfbt_parameters():
     }
 
 
-def build_solver(approximation_name, *, quadrilateral=True):
+def build_solver(
+    approximation_name,
+    *,
+    quadrilateral=True,
+    viscosity_scale=None,
+):
     """Construct a variable-viscosity Boussinesq or variable-density TALA case."""
     mesh = fd.UnitSquareMesh(4, 4, quadrilateral=quadrilateral)
     mesh.cartesian = True
@@ -53,7 +59,9 @@ def build_solver(approximation_name, *, quadrilateral=True):
     temperature.interpolate(
         1 - y + 0.1 * fd.sin(fd.pi * x) * fd.sin(fd.pi * y)
     )
-    viscosity = fd.exp(6 * x)
+    if viscosity_scale is None:
+        viscosity_scale = fd.Constant(1)
+    viscosity = viscosity_scale * fd.exp(6 * x)
 
     if approximation_name == "Boussinesq":
         approximation = BoussinesqApproximation(1, mu=viscosity)
@@ -82,6 +90,9 @@ def build_solver(approximation_name, *, quadrilateral=True):
         mixed_space, closed=True, **nullspace_parameters
     )
     transpose_nullspace = create_stokes_nullspace(mixed_space, closed=True)
+    parameters = bfbt_parameters()
+    if approximation_name == "ALA":
+        parameters["fieldsplit_1"]["bfbt_nullspace_policy"] = "schur"
     solver = StokesSolver(
         solution,
         approximation,
@@ -89,7 +100,7 @@ def build_solver(approximation_name, *, quadrilateral=True):
         bcs=bcs,
         nullspace=nullspace,
         transpose_nullspace=transpose_nullspace,
-        solver_parameters=bfbt_parameters(),
+        solver_parameters=parameters,
     )
     return solver
 
@@ -185,6 +196,30 @@ def test_bfbt_update_increments_exact_operator_state():
     assert bfbt.exact_pressure_laplacian.stateGet() > state_before
 
 
+def test_bfbt_update_tracks_changed_viscosity_and_resolves():
+    """A reused nonlinear PC refreshes its state-dependent auxiliary data."""
+    viscosity_scale = fd.Constant(1)
+    solver = build_solver("TALA", viscosity_scale=viscosity_scale)
+    solver.solve()
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    weight_integral_before = fd.assemble(bfbt.weight * fd.dx)
+    operator_state_before = bfbt.exact_pressure_laplacian.stateGet()
+
+    viscosity_scale.assign(4)
+    solver.solution.assign(0)
+    solver.solve()
+
+    weight_integral_after = fd.assemble(bfbt.weight * fd.dx)
+    residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
+    assert weight_integral_after == pytest.approx(
+        2 * weight_integral_before, rel=1e-12
+    )
+    assert bfbt.exact_pressure_laplacian.stateGet() > operator_state_before
+    assert bfbt.inner_failures_total == 0
+    assert residual.dat.norm < 1e-8
+
+
 @pytest.mark.parametrize(
     "form_compiler_parameters",
     [None, {"quadrature_degree": 6}],
@@ -201,6 +236,18 @@ def test_bfbt_accepts_application_form_compiler_parameters(
     pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
     bfbt = pressure_ksp.pc.getPythonContext()
     assert bfbt.inner_failures_total == 0
+
+
+def test_bfbt_rejects_coupled_pressure_free_surface_space():
+    """The volume pressure PC cannot silently flatten a surface unknown."""
+    mesh = fd.UnitSquareMesh(1, 1)
+    pressure_space = fd.FunctionSpace(mesh, "CG", 1)
+    free_surface_space = fd.FunctionSpace(mesh, "CG", 1)
+
+    with pytest.raises(ValueError, match="pressure/free-surface"):
+        DensityAwareBFBTPC._validate_pressure_space(
+            pressure_space * free_surface_space
+        )
 
 
 def test_bfbt_rejects_unsupported_transpose_application():

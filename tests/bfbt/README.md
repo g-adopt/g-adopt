@@ -24,9 +24,14 @@ part of `G` and receives the non-constant right pressure nullspace.
 
 Run one configuration per process from the repository root. The JSON output
 reports maximum-rank cold timing, the median and samples of repeated warm
-timings, total nested solve/iteration counts for every warm sample,
+timings, fieldsplit solve/iteration counts for every warm sample,
 convergence failures, MPI size, and equation residuals. The benchmark uses
 communicator barriers and only rank zero writes JSON.
+
+For BFBT, the JSON additionally reports both inner pressure solves and their
+iterations. It does not currently instrument the MassInvPC baseline's private
+`Mp_ksp`, so nested iteration-work totals are not symmetric between those two
+arms. Wall time and the common fieldsplit counters remain comparable.
 
 ```bash
 python tests/bfbt/benchmark.py \
@@ -77,15 +82,16 @@ increased outer pressure iterations from 15 to 20 in the tuning case.
 
 Inner BFBT failure is fatal by default. Each application records both inner
 solve reasons and total work. ``bfbt_raise_on_inner_failure false`` is
-intended only for controlled failure diagnostics. ALA uses G-ADOPT's outer
-Schur pressure quotient by default and reports whether its analytical gauge
-is an exact discrete mode; in the present Q2/Q1 test it is not. Consequently
-the ALA momentum residual depends on that existing approximate gauge
-construction, and the benchmark reports momentum and continuity residuals
-separately.
+intended only for controlled failure diagnostics. Exact pressure-nullspace
+attachment is verified by default. The benchmark explicitly opts into
+``bfbt_nullspace_policy=schur`` for ALA so it can compare G-ADOPT's existing
+non-exact analytical quotient; the output reports that discrepancy and gives
+momentum and continuity residuals separately.
 
 ALA use remains experimental until the non-exact analytical gauge and the
 full projected residual have been validated on the target discretisation.
+Its pressure-buoyancy term also makes the assembled inner GAMG operator
+nonsymmetric, which requires production-rank hierarchy and convergence tests.
 The preconditioner is currently forward-only: transpose application fails
 clearly instead of assuming that every selectable inner PC supplies a valid
 numerical transpose.
@@ -103,3 +109,33 @@ On very small problems with a direct velocity solve, BFBT can be slower even
 when it reduces pressure iterations. Its two auxiliary pressure solves have a
 fixed cost. Production assessment should therefore use representative MPI
 meshes, AMG velocity solves and warm timings.
+
+## Testing the GPlates TALA case
+
+Apply the same pressure configuration to the Newton and frozen-viscosity
+Picard solvers:
+
+```python
+{
+    "ksp_type": "fgmres",
+    "ksp_converged_reason": None,
+    "ksp_rtol": 5e-3,
+    "pc_type": "python",
+    "pc_python_type": "gadopt.DensityAwareBFBTPC",
+    "bfbt_ksp_type": "fgmres",
+    "bfbt_ksp_rtol": 1e-2,
+    "bfbt_ksp_max_it": 200,
+    "bfbt_pc_type": "gamg",
+}
+```
+
+TALA should retain the default `bfbt_nullspace_policy=verified`; do not copy
+the benchmark's experimental ALA `schur` setting. Test BFBT and the conformal
+near-nullspace branch independently before combining them. On Gadi, sync or
+clone the complete branch and verify `python -c "import gadopt;
+print(gadopt.__file__)"` points to it rather than the centrally installed
+package.
+
+`DensityAwareBFBTPC` supports a scalar pressure Schur block. Coupled implicit
+free-surface systems must retain `FreeSurfaceMassInvPC` until a surface-aware
+BFBT operator is implemented.

@@ -219,6 +219,17 @@ def build_case(args):
         mixed_space, closed=True, **nullspace_parameters
     )
     transpose_nullspace = create_stokes_nullspace(mixed_space, closed=True)
+    parameters = solver_parameters(
+        args.pc,
+        args.velocity_pc,
+        args.bfbt_inner_ksp,
+        args.bfbt_inner_rtol,
+        args.bfbt_mass_lumping,
+        args.bfbt_weight_degree,
+        args.case == "viscoplastic",
+    )
+    if args.case == "ala" and args.pc == "bfbt":
+        parameters["fieldsplit_1"]["bfbt_nullspace_policy"] = "schur"
     solver = StokesSolver(
         solution,
         approximation,
@@ -226,15 +237,7 @@ def build_case(args):
         bcs=bcs,
         nullspace=nullspace,
         transpose_nullspace=transpose_nullspace,
-        solver_parameters=solver_parameters(
-            args.pc,
-            args.velocity_pc,
-            args.bfbt_inner_ksp,
-            args.bfbt_inner_rtol,
-            args.bfbt_mass_lumping,
-            args.bfbt_weight_degree,
-            args.case == "viscoplastic",
-        ),
+        solver_parameters=parameters,
     )
     return solution, solver
 

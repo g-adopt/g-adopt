@@ -123,9 +123,11 @@ class DensityAwareBFBTPC(fd.PCBase):
     :math:`D_\rho C^{-1}G`; an assembled
     :math:`(\rho/\sqrt{\mu})`-weighted pressure Laplacian is supplied as the
     inner preconditioning matrix. For ALA, the auxiliary operator also
-    includes the pressure-buoyancy contribution to :math:`G`, retaining its
-    non-constant right nullspace. The defaults are FGMRES with GAMG and can be
-    overridden, for example, using ``bfbt_ksp_type`` and ``bfbt_pc_type``.
+    includes the pressure-buoyancy contribution to :math:`G`; this makes that
+    experimental preconditioning matrix nonsymmetric, so its GAMG behaviour
+    must be validated at production scale. The defaults are FGMRES with GAMG
+    and can be overridden, for example, using ``bfbt_ksp_type`` and
+    ``bfbt_pc_type``.
     A failed inner solve raises by default rather than silently returning a
     corrupted preconditioner application. Set
     ``bfbt_raise_on_inner_failure false`` only for controlled diagnostics.
@@ -151,13 +153,17 @@ class DensityAwareBFBTPC(fd.PCBase):
     beneficial.
 
     ``bfbt_nullspace_policy`` controls pressure-gauge treatment. The default,
-    ``schur``, uses the same quotient space supplied to the outer Schur solve.
-    This is needed for G-ADOPT's ALA gauge, which is not in general an exact
-    null mode of the discrete gradient. The implementation tests and reports
-    that discrepancy rather than claiming exactness. The alternative
-    ``verified`` policy attaches only modes that the weighted pressure
-    operators annihilate to ``bfbt_nullspace_test_tolerance``. It is useful
-    diagnostically but may leave the near-singular ALA inner solve expensive.
+    ``verified``, attaches a mode as an exact PETSc nullspace only when the
+    weighted pressure operator annihilates it to
+    ``bfbt_nullspace_test_tolerance``. The alternative ``schur`` policy uses
+    the same quotient space supplied to the outer Schur solve even when the
+    mode is not an exact discrete null mode. It exists only for controlled ALA
+    experiments and must be selected explicitly.
+
+    The convergence-controlled inner FGMRES makes this a variable
+    preconditioner. The enclosing pressure solver must therefore use a
+    flexible Krylov method such as FGMRES unless the inner application is a
+    fixed linear ``preonly`` operation.
 
     Reference:
       Rudi, J., Stadler, G., and Ghattas, O. (2017), *Weighted BFBT
@@ -192,6 +198,7 @@ class DensityAwareBFBTPC(fd.PCBase):
         if pressure_test.function_space() != pressure_trial.function_space():
             raise ValueError("Pressure test and trial spaces differ")
         pressure_space = pressure_test.function_space()
+        self._validate_pressure_space(pressure_space)
 
         if self.velocity.getType() != "python":
             raise ValueError(
@@ -299,7 +306,7 @@ class DensityAwareBFBTPC(fd.PCBase):
             prefix + "nullspace_test_tolerance", 1e-10
         )
         self.nullspace_policy = opts.getString(
-            prefix + "nullspace_policy", "schur"
+            prefix + "nullspace_policy", "verified"
         ).lower()
         if self.nullspace_policy not in {"schur", "verified"}:
             raise ValueError(
@@ -333,6 +340,18 @@ class DensityAwareBFBTPC(fd.PCBase):
         velocity_1 = self.velocity.createVecLeft()
         self.workspace = (pressure_0, pressure_1, velocity_0, velocity_1)
 
+    @staticmethod
+    def _validate_pressure_space(
+        pressure_space: fd.functionspaceimpl.WithGeometry,
+    ) -> None:
+        """Reject coupled free-surface Schur blocks not represented by BFBT."""
+        if len(pressure_space) != 1 or pressure_space.value_shape != ():
+            raise ValueError(
+                "DensityAwareBFBTPC supports a scalar pressure Schur block "
+                "only; coupled pressure/free-surface blocks require "
+                "FreeSurfaceMassInvPC or a dedicated surface-aware BFBT."
+            )
+
     def _set_blocks(self, schur_complement: PETSc.Mat) -> None:
         """Store the current Jacobian blocks underlying a Schur matrix."""
         velocity, _, gradient, divergence, _ = (
@@ -358,9 +377,18 @@ class DensityAwareBFBTPC(fd.PCBase):
         self.exact_pressure_laplacian.setTransposeNullSpace(empty_nullspace)
         self.pressure_laplacian.petscmat.setNullSpace(empty_nullspace)
         self.pressure_laplacian.petscmat.setTransposeNullSpace(empty_nullspace)
+        self.exact_pressure_laplacian.setNearNullSpace(empty_nullspace)
         self.pressure_laplacian.petscmat.setNearNullSpace(empty_nullspace)
 
         nullspace = schur_complement.getNullSpace()
+        if nullspace.handle != 0:
+            self.schur_right_nullspace = nullspace
+        else:
+            nullspace = getattr(
+                self,
+                "schur_right_nullspace",
+                nullspace,
+            )
         self.right_nullspace_is_exact = None
         self.auxiliary_right_nullspace_is_exact = None
         if nullspace.handle != 0:
@@ -376,12 +404,22 @@ class DensityAwareBFBTPC(fd.PCBase):
             self.auxiliary_right_nullspace_is_exact = auxiliary_is_null
             if exact_is_null or self.nullspace_policy == "schur":
                 self.exact_pressure_laplacian.setNullSpace(nullspace)
+            else:
+                self.exact_pressure_laplacian.setNearNullSpace(nullspace)
             if auxiliary_is_null or self.nullspace_policy == "schur":
                 self.pressure_laplacian.petscmat.setNullSpace(nullspace)
             else:
                 self.pressure_laplacian.petscmat.setNearNullSpace(nullspace)
 
         transpose_nullspace = schur_complement.getTransposeNullSpace()
+        if transpose_nullspace.handle != 0:
+            self.schur_left_nullspace = transpose_nullspace
+        else:
+            transpose_nullspace = getattr(
+                self,
+                "schur_left_nullspace",
+                transpose_nullspace,
+            )
         self.left_nullspace_is_exact = None
         self.auxiliary_left_nullspace_is_exact = None
         if transpose_nullspace.handle != 0:
@@ -407,6 +445,14 @@ class DensityAwareBFBTPC(fd.PCBase):
                 )
 
         near_nullspace = schur_complement.getNearNullSpace()
+        if near_nullspace.handle != 0:
+            self.schur_near_nullspace = near_nullspace
+        else:
+            near_nullspace = getattr(
+                self,
+                "schur_near_nullspace",
+                near_nullspace,
+            )
         if (
             near_nullspace.handle != 0
             and self.pressure_laplacian.petscmat.getNearNullSpace().handle == 0
@@ -487,6 +533,7 @@ class DensityAwareBFBTPC(fd.PCBase):
         self._update_inverse_velocity_mass()
         self.exact_pressure_laplacian.assemble()
         self._assemble_pressure_laplacian(tensor=self.pressure_laplacian)
+        self.pressure_laplacian.petscmat.assemble()
         self._set_pressure_nullspaces(A)
         self.ksp.setOperators(
             self.exact_pressure_laplacian,
