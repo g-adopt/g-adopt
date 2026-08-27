@@ -128,6 +128,16 @@ def test_density_aware_bfbt_solve(approximation_name, quadrilateral):
     assert fieldsplit_ksps[1].getConvergedReason() > 0
     assert bfbt.mass_lumping == "diagonal"
     assert bfbt.inverse_velocity_mass.min()[1] > 0
+    assert bfbt.inner_solves_total > 0
+    assert bfbt.inner_iterations_total > 0
+    assert bfbt.inner_failures_total == 0
+    assert all(reason > 0 for reason in bfbt.last_inner_reasons)
+    if approximation_name == "ALA":
+        assert bfbt.right_nullspace_is_exact is False
+        assert bfbt.auxiliary_right_nullspace_is_exact is False
+        assert bfbt.nullspace_policy == "schur"
+    else:
+        assert bfbt.right_nullspace_is_exact is True
 
 
 def test_weighted_pressure_laplacian_transpose():
@@ -160,3 +170,73 @@ def test_weighted_pressure_laplacian_transpose():
 
     for vector in (x, y, laplacian_x, transpose_laplacian_y):
         vector.destroy()
+
+
+def test_bfbt_update_increments_exact_operator_state():
+    """Updating a reused Python matrix tells PETSc its action has changed."""
+    solver = build_solver("TALA")
+    solver.solve()
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    state_before = bfbt.exact_pressure_laplacian.stateGet()
+
+    bfbt.update(pressure_ksp.pc)
+
+    assert bfbt.exact_pressure_laplacian.stateGet() > state_before
+
+
+@pytest.mark.parametrize(
+    "form_compiler_parameters",
+    [None, {"quadrature_degree": 6}],
+)
+def test_bfbt_accepts_application_form_compiler_parameters(
+    form_compiler_parameters,
+):
+    """Auxiliary forms handle both unset and production quadrature context."""
+    solver = build_solver("TALA")
+    solver.appctx["form_compiler_parameters"] = form_compiler_parameters
+
+    solver.solve()
+
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    assert bfbt.inner_failures_total == 0
+
+
+def test_bfbt_rejects_unsupported_transpose_application():
+    """The forward-only PC cannot silently provide an incorrect adjoint."""
+    solver = build_solver("TALA")
+    solver.solve()
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    pressure = bfbt.exact_pressure_laplacian.createVecRight()
+    result = bfbt.exact_pressure_laplacian.createVecLeft()
+
+    with pytest.raises(NotImplementedError, match="currently forward-only"):
+        bfbt.applyTranspose(pressure_ksp.pc, pressure, result)
+
+    pressure.destroy()
+    result.destroy()
+
+
+def test_bfbt_inner_failure_is_not_silent():
+    """A failed inner inversion cannot return a corrupted PC application."""
+    solver = build_solver("TALA")
+    solver.solve()
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    rhs = bfbt.exact_pressure_laplacian.createVecRight()
+    result = bfbt.exact_pressure_laplacian.createVecLeft()
+    rhs.setRandom()
+    nullspace = bfbt.exact_pressure_laplacian.getNullSpace()
+    if nullspace.handle != 0:
+        nullspace.remove(rhs)
+    original_tolerances = bfbt.ksp.getTolerances()
+    bfbt.ksp.setTolerances(max_it=0)
+
+    with pytest.raises(RuntimeError, match="BFBT left inner pressure solve failed"):
+        bfbt.apply(pressure_ksp.pc, rhs, result)
+
+    bfbt.ksp.setTolerances(*original_tolerances)
+    rhs.destroy()
+    result.destroy()

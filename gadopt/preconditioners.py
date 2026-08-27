@@ -126,6 +126,15 @@ class DensityAwareBFBTPC(fd.PCBase):
     includes the pressure-buoyancy contribution to :math:`G`, retaining its
     non-constant right nullspace. The defaults are FGMRES with GAMG and can be
     overridden, for example, using ``bfbt_ksp_type`` and ``bfbt_pc_type``.
+    A failed inner solve raises by default rather than silently returning a
+    corrupted preconditioner application. Set
+    ``bfbt_raise_on_inner_failure false`` only for controlled diagnostics.
+
+    Transpose application is deliberately unsupported. A
+    convergence-controlled Krylov inverse is not a fixed linear map, and even
+    a ``preonly`` configuration would require an explicit contract that the
+    selected inner preconditioner implements its numerical transpose. Failing
+    clearly is safer than silently producing an incorrect adjoint.
 
     ``bfbt_mass_lumping`` may be ``diagonal`` (the default) or ``rowsum``.
     Row-sum lumping is the construction used in the original paper, but can
@@ -140,6 +149,15 @@ class DensityAwareBFBTPC(fd.PCBase):
     default coefficient is cellwise constant; ``bfbt_weight_degree`` selects
     a higher discontinuous degree if additional within-cell resolution is
     beneficial.
+
+    ``bfbt_nullspace_policy`` controls pressure-gauge treatment. The default,
+    ``schur``, uses the same quotient space supplied to the outer Schur solve.
+    This is needed for G-ADOPT's ALA gauge, which is not in general an exact
+    null mode of the discrete gradient. The implementation tests and reports
+    that discrepancy rather than claiming exactness. The alternative
+    ``verified`` policy attaches only modes that the weighted pressure
+    operators annihilate to ``bfbt_nullspace_test_tolerance``. It is useful
+    diagnostically but may leave the near-singular ALA inner solve expensive.
 
     Reference:
       Rudi, J., Stadler, G., and Ghattas, O. (2017), *Weighted BFBT
@@ -186,6 +204,11 @@ class DensityAwareBFBTPC(fd.PCBase):
         velocity_space = velocity_test.function_space()
 
         appctx = self.get_appctx(pc)
+        appctx_fcp = appctx.get("form_compiler_parameters") or {}
+        velocity_fcp = dict(velocity_context.fc_params or {})
+        velocity_fcp.update(appctx_fcp)
+        pressure_fcp = dict(pressure_context.fc_params or {})
+        pressure_fcp.update(appctx_fcp)
         rho = appctx.get("rho_continuity", 1)
         viscosity = appctx.get("viscosity")
         if viscosity is None:
@@ -222,7 +245,7 @@ class DensityAwareBFBTPC(fd.PCBase):
         if self.mass_lumping == "diagonal":
             mass_assembler = get_assembler(
                 mass_form,
-                form_compiler_parameters=velocity_context.fc_params,
+                form_compiler_parameters=velocity_fcp,
                 diagonal=True,
             )
         else:
@@ -230,7 +253,7 @@ class DensityAwareBFBTPC(fd.PCBase):
             ones.assign(1)
             mass_assembler = get_assembler(
                 fd.action(mass_form, ones),
-                form_compiler_parameters=velocity_context.fc_params,
+                form_compiler_parameters=velocity_fcp,
             )
         self.weighted_velocity_mass = mass_assembler.allocate()
         self._assemble_weighted_velocity_mass = mass_assembler.assemble
@@ -254,7 +277,7 @@ class DensityAwareBFBTPC(fd.PCBase):
         lp_mat_type = opts.getString(prefix + "mat_type", "aij")
         lp_assembler = get_assembler(
             pressure_laplacian,
-            form_compiler_parameters=pressure_context.fc_params,
+            form_compiler_parameters=pressure_fcp,
             mat_type=lp_mat_type,
             options_prefix=prefix,
         )
@@ -272,19 +295,37 @@ class DensityAwareBFBTPC(fd.PCBase):
             laplacian_sizes, context=laplacian_context, comm=pc.comm
         )
         self.exact_pressure_laplacian.setUp()
+        self.nullspace_test_tolerance = opts.getReal(
+            prefix + "nullspace_test_tolerance", 1e-10
+        )
+        self.nullspace_policy = opts.getString(
+            prefix + "nullspace_policy", "schur"
+        ).lower()
+        if self.nullspace_policy not in {"schur", "verified"}:
+            raise ValueError(
+                "bfbt_nullspace_policy must be either 'schur' or 'verified'"
+            )
         self._set_pressure_nullspaces(A)
 
         self.ksp = PETSc.KSP().create(comm=pc.comm)
         self.ksp.incrementTabLevel(1, parent=pc)
         self.ksp.setOptionsPrefix(prefix)
         self.ksp.setType(PETSc.KSP.Type.FGMRES)
-        self.ksp.setTolerances(rtol=1e-2, max_it=50)
+        self.ksp.setTolerances(rtol=1e-2, max_it=200)
         self.ksp.getPC().setType(PETSc.PC.Type.GAMG)
         self.ksp.setOperators(
             self.exact_pressure_laplacian,
             self.pressure_laplacian.petscmat,
         )
         self.ksp.setFromOptions()
+        self.raise_on_inner_failure = opts.getBool(
+            prefix + "raise_on_inner_failure", True
+        )
+        self.inner_iterations_total = 0
+        self.inner_solves_total = 0
+        self.inner_failures_total = 0
+        self.last_inner_iterations = ()
+        self.last_inner_reasons = ()
 
         pressure_0 = self.gradient.createVecRight()
         pressure_1 = self.divergence.createVecLeft()
@@ -302,24 +343,115 @@ class DensityAwareBFBTPC(fd.PCBase):
         self.divergence = divergence
 
     def _set_pressure_nullspaces(self, schur_complement: PETSc.Mat) -> None:
-        """Transfer pressure nullspaces to exact and auxiliary operators."""
+        """Transfer pressure quotient data according to the selected policy.
+
+        G-ADOPT's analytical ALA pressure gauge is generally only an
+        approximate null mode of the discrete gradient. The default ``schur``
+        policy deliberately preserves the outer Schur quotient on both inner
+        operators; ``verified`` attaches a mode as exact only after the
+        absolute residual test controlled by
+        ``bfbt_nullspace_test_tolerance``. The latter is a diagnostic whose
+        tolerance must be scaled for the operator and units being tested.
+        """
+        empty_nullspace = PETSc.NullSpace()
+        self.exact_pressure_laplacian.setNullSpace(empty_nullspace)
+        self.exact_pressure_laplacian.setTransposeNullSpace(empty_nullspace)
+        self.pressure_laplacian.petscmat.setNullSpace(empty_nullspace)
+        self.pressure_laplacian.petscmat.setTransposeNullSpace(empty_nullspace)
+        self.pressure_laplacian.petscmat.setNearNullSpace(empty_nullspace)
+
         nullspace = schur_complement.getNullSpace()
+        self.right_nullspace_is_exact = None
+        self.auxiliary_right_nullspace_is_exact = None
         if nullspace.handle != 0:
-            self.exact_pressure_laplacian.setNullSpace(nullspace)
-            self.pressure_laplacian.petscmat.setNullSpace(nullspace)
+            exact_is_null = self._is_exact_nullspace(
+                self.exact_pressure_laplacian,
+                nullspace,
+            )
+            auxiliary_is_null = self._is_exact_nullspace(
+                self.pressure_laplacian.petscmat,
+                nullspace,
+            )
+            self.right_nullspace_is_exact = exact_is_null
+            self.auxiliary_right_nullspace_is_exact = auxiliary_is_null
+            if exact_is_null or self.nullspace_policy == "schur":
+                self.exact_pressure_laplacian.setNullSpace(nullspace)
+            if auxiliary_is_null or self.nullspace_policy == "schur":
+                self.pressure_laplacian.petscmat.setNullSpace(nullspace)
+            else:
+                self.pressure_laplacian.petscmat.setNearNullSpace(nullspace)
 
         transpose_nullspace = schur_complement.getTransposeNullSpace()
+        self.left_nullspace_is_exact = None
+        self.auxiliary_left_nullspace_is_exact = None
         if transpose_nullspace.handle != 0:
-            self.exact_pressure_laplacian.setTransposeNullSpace(
-                transpose_nullspace
+            exact_is_left_null = self._is_exact_nullspace(
+                self.exact_pressure_laplacian,
+                transpose_nullspace,
+                transpose=True,
             )
-            self.pressure_laplacian.petscmat.setTransposeNullSpace(
-                transpose_nullspace
+            auxiliary_is_left_null = self._is_exact_nullspace(
+                self.pressure_laplacian.petscmat,
+                transpose_nullspace,
+                transpose=True,
             )
+            self.left_nullspace_is_exact = exact_is_left_null
+            self.auxiliary_left_nullspace_is_exact = auxiliary_is_left_null
+            if exact_is_left_null or self.nullspace_policy == "schur":
+                self.exact_pressure_laplacian.setTransposeNullSpace(
+                    transpose_nullspace
+                )
+            if auxiliary_is_left_null or self.nullspace_policy == "schur":
+                self.pressure_laplacian.petscmat.setTransposeNullSpace(
+                    transpose_nullspace
+                )
 
         near_nullspace = schur_complement.getNearNullSpace()
-        if near_nullspace.handle != 0:
+        if (
+            near_nullspace.handle != 0
+            and self.pressure_laplacian.petscmat.getNearNullSpace().handle == 0
+        ):
             self.pressure_laplacian.petscmat.setNearNullSpace(near_nullspace)
+
+    def _is_exact_nullspace(
+        self,
+        operator: PETSc.Mat,
+        nullspace: PETSc.NullSpace,
+        *,
+        transpose: bool = False,
+    ) -> bool:
+        """Return whether every supplied null vector is discretely annihilated."""
+        has_constant = nullspace.hasConstant()
+        candidates = list(nullspace.getVecs())
+        constant = None
+        if has_constant:
+            constant = (
+                operator.createVecLeft()
+                if transpose
+                else operator.createVecRight()
+            )
+            constant.set(1)
+            constant.normalize()
+            candidates.append(constant)
+
+        residual = (
+            operator.createVecRight()
+            if transpose
+            else operator.createVecLeft()
+        )
+        try:
+            for candidate in candidates:
+                if transpose:
+                    operator.multTranspose(candidate, residual)
+                else:
+                    operator.mult(candidate, residual)
+                if residual.norm() > self.nullspace_test_tolerance:
+                    return False
+        finally:
+            residual.destroy()
+            if constant is not None:
+                constant.destroy()
+        return True
 
     def _update_inverse_velocity_mass(self) -> None:
         """Reassemble and invert the selected weighted mass diagonal."""
@@ -353,6 +485,7 @@ class DensityAwareBFBTPC(fd.PCBase):
 
         self._update_weight()
         self._update_inverse_velocity_mass()
+        self.exact_pressure_laplacian.assemble()
         self._assemble_pressure_laplacian(tensor=self.pressure_laplacian)
         self._set_pressure_nullspaces(A)
         self.ksp.setOperators(
@@ -363,26 +496,56 @@ class DensityAwareBFBTPC(fd.PCBase):
     def apply(self, pc: PETSc.PC, x: PETSc.Vec, y: PETSc.Vec) -> None:
         """Apply the density-aware weighted BFBT Schur inverse."""
         pressure_0, pressure_1, velocity_0, velocity_1 = self.workspace
-        self.ksp.solve(x, pressure_0)
+        iterations = []
+        reasons = []
+        self._solve_inner(x, pressure_0, "left", iterations, reasons)
         self.gradient.mult(pressure_0, velocity_0)
         velocity_0.pointwiseMult(self.inverse_velocity_mass, velocity_0)
         self.velocity.mult(velocity_0, velocity_1)
         velocity_1.pointwiseMult(self.inverse_velocity_mass, velocity_1)
         self.divergence.mult(velocity_1, pressure_1)
-        self.ksp.solve(pressure_1, y)
+        self._solve_inner(pressure_1, y, "right", iterations, reasons)
+        self.last_inner_iterations = tuple(iterations)
+        self.last_inner_reasons = tuple(reasons)
+
+    def _solve_inner(
+        self,
+        rhs: PETSc.Vec,
+        solution: PETSc.Vec,
+        side: str,
+        iterations: list[int],
+        reasons: list[int],
+        *,
+        transpose: bool = False,
+    ) -> None:
+        """Apply one weighted pressure inverse and record its outcome."""
+        if transpose:
+            self.ksp.solveTranspose(rhs, solution)
+        else:
+            self.ksp.solve(rhs, solution)
+        reason = self.ksp.getConvergedReason()
+        iteration_count = self.ksp.getIterationNumber()
+        self.inner_solves_total += 1
+        self.inner_iterations_total += iteration_count
+        iterations.append(iteration_count)
+        reasons.append(reason)
+        if reason <= 0:
+            self.inner_failures_total += 1
+            if self.raise_on_inner_failure:
+                raise RuntimeError(
+                    f"BFBT {side} inner pressure solve failed after "
+                    f"{iteration_count} iterations with PETSc reason {reason}."
+                )
 
     def applyTranspose(
         self, pc: PETSc.PC, x: PETSc.Vec, y: PETSc.Vec
     ) -> None:
-        """Apply the transpose density-aware weighted BFBT inverse."""
-        pressure_0, pressure_1, velocity_0, velocity_1 = self.workspace
-        self.ksp.solveTranspose(x, pressure_0)
-        self.divergence.multTranspose(pressure_0, velocity_0)
-        velocity_0.pointwiseMult(self.inverse_velocity_mass, velocity_0)
-        self.velocity.multTranspose(velocity_0, velocity_1)
-        velocity_1.pointwiseMult(self.inverse_velocity_mass, velocity_1)
-        self.gradient.multTranspose(velocity_1, pressure_1)
-        self.ksp.solveTranspose(pressure_1, y)
+        """Reject transpose use until the inner-PC contract is established."""
+        raise NotImplementedError(
+            "DensityAwareBFBTPC is currently forward-only; a tested "
+            "transpose contract for every selectable inner PC is not yet "
+            "available."
+        )
 
     def view(self, pc: PETSc.PC, viewer=None) -> None:
         """Display the BFBT construction and its inner solver."""
@@ -392,6 +555,9 @@ class DensityAwareBFBTPC(fd.PCBase):
         viewer.printfASCII(
             "Density-aware weighted BFBT Schur inverse\n"
             f"Velocity mass approximation: {self.mass_lumping}\n"
+            f"Pressure nullspace policy: {self.nullspace_policy}\n"
+            f"Right null mode verified exact: {self.right_nullspace_is_exact}\n"
+            f"Left null mode verified exact: {self.left_nullspace_is_exact}\n"
             "Inner weighted pressure-Laplacian KSP:\n"
         )
         self.ksp.view(viewer)

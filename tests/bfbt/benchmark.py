@@ -6,16 +6,17 @@ Run one configuration per process, for example::
     python benchmark.py --case tala --contrast 1e6 --pc bfbt
     python benchmark.py --case viscoplastic --pc bfbt
 
-The first solve includes JIT compilation and cold PETSc setup. The reported
-``warm_seconds`` is a second solve from the same initial state and is the
-appropriate timing for comparing preconditioners. Correctness is checked
-independently using the assembled equation residual.
+The first solve includes JIT compilation and cold PETSc setup. Warm timings
+are repeated from the same initial state. All timings are communicator
+barrier-to-barrier maximum-rank wall times, and only rank zero writes JSON.
+Correctness is checked independently using the assembled equation residual.
 """
 
 import argparse
 import json
 import sys
 from importlib import import_module
+from statistics import median
 from time import perf_counter
 
 
@@ -41,6 +42,7 @@ def argument_parser():
         default="diagonal",
     )
     parser.add_argument("--bfbt-weight-degree", type=int, default=0)
+    parser.add_argument("--warm-repeats", type=int, default=3)
     return parser
 
 
@@ -237,31 +239,99 @@ def build_case(args):
     return solution, solver
 
 
-def timed_solve(solution, solver):
-    """Run cold and warm solves and return PETSc iteration diagnostics."""
-    start = perf_counter()
-    solver.solve()
-    cold_seconds = perf_counter() - start
+def timed_solve(solution, solver, warm_repeats):
+    """Run cold and repeated warm solves with MPI-safe diagnostics."""
+    comm = solution.function_space().mesh().comm
+    mpi = import_module("mpi4py.MPI")
 
-    solution.assign(0)
+    comm.barrier()
     start = perf_counter()
     solver.solve()
-    warm_seconds = perf_counter() - start
+    comm.barrier()
+    cold_seconds = comm.allreduce(perf_counter() - start, op=mpi.MAX)
 
     snes = solver.solver.snes
     velocity_ksp, pressure_ksp = snes.ksp.pc.getFieldSplitSubKSP()
+
+    velocity_counter = {"solves": 0, "iterations": 0, "failures": 0}
+    pressure_counter = {"solves": 0, "iterations": 0, "failures": 0}
+
+    def count_velocity(ksp, rhs, result):
+        velocity_counter["solves"] += 1
+        velocity_counter["iterations"] += ksp.getIterationNumber()
+        velocity_counter["failures"] += int(ksp.getConvergedReason() <= 0)
+
+    def count_pressure(ksp, rhs, result):
+        pressure_counter["solves"] += 1
+        pressure_counter["iterations"] += ksp.getIterationNumber()
+        pressure_counter["failures"] += int(ksp.getConvergedReason() <= 0)
+
+    velocity_ksp.setPostSolve(count_velocity)
+    pressure_ksp.setPostSolve(count_pressure)
+
+    warm_samples = []
+    warm_work = []
+    pressure_pc = pressure_ksp.pc.getPythonContext()
+    uses_bfbt = pressure_pc.__class__.__name__ == "DensityAwareBFBTPC"
+    for _ in range(warm_repeats):
+        solution.assign(0)
+        for counter in (velocity_counter, pressure_counter):
+            counter.update(solves=0, iterations=0, failures=0)
+        if uses_bfbt:
+            bfbt_iterations_before = pressure_pc.inner_iterations_total
+            bfbt_solves_before = pressure_pc.inner_solves_total
+            bfbt_failures_before = pressure_pc.inner_failures_total
+
+        comm.barrier()
+        start = perf_counter()
+        solver.solve()
+        comm.barrier()
+        elapsed = comm.allreduce(perf_counter() - start, op=mpi.MAX)
+        warm_samples.append(elapsed)
+
+        sample = {
+            "velocity_solves": velocity_counter["solves"],
+            "velocity_iterations": velocity_counter["iterations"],
+            "velocity_failures": velocity_counter["failures"],
+            "pressure_solves": pressure_counter["solves"],
+            "pressure_iterations": pressure_counter["iterations"],
+            "pressure_failures": pressure_counter["failures"],
+            "snes_iterations": snes.getIterationNumber(),
+            "snes_linear_iterations": snes.getLinearSolveIterations(),
+        }
+        if uses_bfbt:
+            sample.update(
+                bfbt_inner_iterations=(
+                    pressure_pc.inner_iterations_total
+                    - bfbt_iterations_before
+                ),
+                bfbt_inner_solves=(
+                    pressure_pc.inner_solves_total - bfbt_solves_before
+                ),
+                bfbt_inner_failures=(
+                    pressure_pc.inner_failures_total
+                    - bfbt_failures_before
+                ),
+            )
+        warm_work.append(sample)
+
+    velocity_ksp.setPostSolve(None)
+    pressure_ksp.setPostSolve(None)
+
     result = {
         "cold_seconds": cold_seconds,
-        "warm_seconds": warm_seconds,
+        "warm_seconds": median(warm_samples),
+        "warm_seconds_samples": warm_samples,
+        "warm_work_samples": warm_work,
+        "mpi_size": comm.size,
         "snes_iterations": snes.getIterationNumber(),
         "snes_linear_iterations": snes.getLinearSolveIterations(),
         "velocity_iterations_last": velocity_ksp.getIterationNumber(),
         "pressure_iterations_last": pressure_ksp.getIterationNumber(),
     }
-    if pressure_ksp.pc.getPythonContext().__class__.__name__ == "DensityAwareBFBTPC":
-        result["bfbt_inner_iterations_last"] = (
-            pressure_ksp.pc.getPythonContext().ksp.getIterationNumber()
-        )
+    if uses_bfbt:
+        result["bfbt_inner_iterations_last"] = pressure_pc.ksp.getIterationNumber()
+        result["bfbt_inner_reasons_last_apply"] = pressure_pc.last_inner_reasons
 
     residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
     result["equation_residual"] = residual.dat.norm
@@ -273,8 +343,9 @@ def timed_solve(solution, solver):
 def main(args):
     """Run one cold and one warm solve for the selected configuration."""
     solution, solver = build_case(args)
-    result = vars(args) | timed_solve(solution, solver)
-    print(json.dumps(result, sort_keys=True))
+    result = vars(args) | timed_solve(solution, solver, args.warm_repeats)
+    if solution.function_space().mesh().comm.rank == 0:
+        print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

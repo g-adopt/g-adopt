@@ -23,13 +23,18 @@ part of `G` and receives the non-constant right pressure nullspace.
 ## Reproducing the comparison
 
 Run one configuration per process from the repository root. The JSON output
-reports cold and warm timing, iteration counts, and equation residuals.
+reports maximum-rank cold timing, the median and samples of repeated warm
+timings, total nested solve/iteration counts for every warm sample,
+convergence failures, MPI size, and equation residuals. The benchmark uses
+communicator barriers and only rank zero writes JSON.
 
 ```bash
 python tests/bfbt/benchmark.py \
-  --case tala --contrast 1e10 --pc mass --n 24 --velocity-pc gamg
+  --case tala --contrast 1e10 --pc mass --n 24 --velocity-pc gamg \
+  --warm-repeats 5
 python tests/bfbt/benchmark.py \
-  --case tala --contrast 1e10 --pc bfbt --n 24 --velocity-pc gamg
+  --case tala --contrast 1e10 --pc bfbt --n 24 --velocity-pc gamg \
+  --warm-repeats 5
 
 python tests/bfbt/benchmark.py \
   --case viscoplastic --pc mass --n 12 --velocity-pc gamg
@@ -43,8 +48,11 @@ be appended and are left in `sys.argv` for PETSc to consume.
 
 ## Local reference measurements
 
-The following single-rank Apple-silicon measurements use the commands above.
-They are smoke-performance evidence, not production scaling results.
+The following earlier single-rank Apple-silicon measurements used one warm
+sample and recorded only the final nested solve's iterations. They are
+retained as historical smoke evidence, not as a production speedup claim.
+Re-run the current harness and compare ``warm_work_samples`` and repeated
+wall times before making a performance decision.
 
 | Case | Pressure PC | Pressure iterations | Warm seconds | Residual |
 | --- | --- | ---: | ---: | ---: |
@@ -57,7 +65,7 @@ They are smoke-performance evidence, not production scaling results.
 | Viscoplastic, 5 Newton steps | Mass | 12 | 0.906 | 3.56e-9 |
 | Viscoplastic, 5 Newton steps | BFBT | 7 | 0.820 | 3.56e-9 |
 
-The projected DG0 square-root-viscosity weight avoids passing the
+The DG0-interpolated square-root-viscosity weight avoids passing the
 viscoplastic rheology's large symbolic polynomial degree into the auxiliary
 forms. In this test it removes the TSFC quadrature-degree warning without
 changing the nonlinear iteration count or final residual.
@@ -66,6 +74,30 @@ The tuned defaults are diagonal mass lumping, a DG0 weight and an inner
 FGMRES tolerance of `1e-2`. Row-sum lumping and a DG1 weight did not improve
 the tested TALA solve. An inner tolerance of `1e-1` reduced inner work but
 increased outer pressure iterations from 15 to 20 in the tuning case.
+
+Inner BFBT failure is fatal by default. Each application records both inner
+solve reasons and total work. ``bfbt_raise_on_inner_failure false`` is
+intended only for controlled failure diagnostics. ALA uses G-ADOPT's outer
+Schur pressure quotient by default and reports whether its analytical gauge
+is an exact discrete mode; in the present Q2/Q1 test it is not. Consequently
+the ALA momentum residual depends on that existing approximate gauge
+construction, and the benchmark reports momentum and continuity residuals
+separately.
+
+ALA use remains experimental until the non-exact analytical gauge and the
+full projected residual have been validated on the target discretisation.
+The preconditioner is currently forward-only: transpose application fails
+clearly instead of assuming that every selectable inner PC supplies a valid
+numerical transpose.
+
+The current local tests are two-dimensional smoke and regression cases. A
+production claim still requires repeated MPI runs on the three-dimensional
+extruded spherical mesh, a frozen fully plastic checkpoint, and an end-to-end
+nonlinear slice. Report total fieldsplit_0, fieldsplit_1, and BFBT inner work,
+GAMG setup and operator complexity, maximum-rank time, memory, and full
+nonlinear residuals. The pressure-mass and BFBT configurations should also be
+tuned to comparable final accuracy; their inner tolerances need not have the
+same numerical value to achieve that.
 
 On very small problems with a direct velocity solve, BFBT can be slower even
 when it reduces pressure iterations. Its two auxiliary pressure solves have a
