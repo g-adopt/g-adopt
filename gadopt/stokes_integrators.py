@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from typing import Any
 from warnings import warn
+from types import MappingProxyType
 
 import firedrake as fd
 from ufl.core.expr import Expr
@@ -39,76 +40,84 @@ from .utility import (
     get_device_type
 )
 
-iterative_fieldsplit_0_cpu_params: dict[str, dict[str, str | int | float]] = {
-    "fieldsplit_0": {
+gamg_common_parameters: Mapping[str, str | float | int | bool] = MappingProxyType(
+    {
+        "pc_type": "gamg",
+        "pc_gamg_threshold": 0.01,
+        "pc_gamg_square_graph": 100,
+        "pc_gamg_coarse_eq_limit": 1000,
+        "pc_gamg_mis_k_minimum_degree_ordering": True,
+    }
+)
+
+spd_ksp_parameters: Mapping[str, str | float | int] = MappingProxyType(
+    {
         "ksp_type": "cg",
         "ksp_rtol": 1e-5,
         "ksp_max_it": 1000,
+    }
+)
+
+spd_pc_parameters: Mapping[str, str] = MappingProxyType(
+    {
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_mg_levels_pc_type": "sor",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-        "assembled_pc_gamg_coarse_eq_limit": 1000,
-        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
     }
-}
+)
 
-iterative_fieldsplit_0_gpu_parameters: ConfigType = {
-    "fieldsplit_0": {
+cpu_gamg_parameters: Mapping[str, str] = MappingProxyType(
+    {
+        "mg_levels_pc_type": "sor",
+    }
+)
+
+gpu_gamg_parameters: Mapping[str, str | int] = MappingProxyType(
+    {
+        "mg_levels_pc_type": "jacobi",
+        "mg_levels_ksp_max_it": 2,
+    }
+)
+
+offload_parameters: Mapping[str, str | Mapping[str, str]] = MappingProxyType(
+    {
         "ksp_type": "preonly",
         "pc_type": "python",
-        "pc_python_type": "gadopt.SPDAssembledPC",
-        "assembled": {
-            "ksp_type": "preonly",
-            "pc_type": "python",
-            "pc_python_type": "firedrake.OffloadPC",
-            "offload": {
-                "ksp_type": "preonly",
-                "pc_type": "ksp",
-                "ksp": {
-                    "ksp_type": "cg",
-                    "ksp_rtol": 1e-5,
-                    "ksp_max_it": 1000,
-                    "pc_type": "gamg",
-                    "mg_levels_pc_type": "jacobi",
-                    "mg_levels_ksp_max_it": 2,
-                    "pc_gamg_threshold": 0.01,
-                    "pc_gamg_square_graph": 100,
-                    "pc_gamg_coarse_eq_limit": 1000,
-                    "pc_gamg_mis_k_minimum_degree_ordering": True,
-                },
-            },
-        },
+        "pc_python_type": "firedrake.OffloadPC",
+        "offload": MappingProxyType({"ksp_type": "preonly", "pc_type": "ksp"}),
     }
-}
+)
 
-iterative_cuda_ksp_workarounds_inner: dict[str, bool] = {
+iterative_cuda_ksp_workarounds_inner: Mapping[str, bool] = MappingProxyType({
     "pc_gamg_square_0_mat_product_algorithm_backend_cpu": True,
     "pc_gamg_square_1_mat_product_algorithm_backend_cpu": True,
     "pc_gamg_square_2_mat_product_algorithm_backend_cpu": True,
-}
+})
 
 # Missing parameter: "fieldsplit_0"
-iterative_outer_stokes_solver_parameters: dict[str, str | dict[str, str | int | float]] = {
-    "mat_type": "matfree",
-    "ksp_type": "preonly",
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "schur",
-    "pc_fieldsplit_schur_type": "full",
-    "fieldsplit_1": {
-        "ksp_type": "fgmres",
-        "ksp_rtol": 1e-4,
-        "ksp_max_it": 200,
-        "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
-        "Mp_pc_type": "ksp",
-        "Mp_ksp_ksp_rtol": 1e-5,
-        "Mp_ksp_ksp_type": "cg",
-        "Mp_ksp_pc_type": "sor",
-    },
-}
+iterative_outer_stokes_solver_parameters: Mapping[
+    str, str | Mapping[str, str | int | float]
+] = MappingProxyType(
+    {
+        "mat_type": "matfree",
+        "ksp_type": "preonly",
+        "pc_type": "fieldsplit",
+        "pc_fieldsplit_type": "schur",
+        "pc_fieldsplit_schur_type": "full",
+        "fieldsplit_1": MappingProxyType(
+            {
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-4,
+                "ksp_max_it": 200,
+                "pc_type": "python",
+                "pc_python_type": "firedrake.MassInvPC",
+                "Mp_pc_type": "ksp",
+                "Mp_ksp_ksp_rtol": 1e-5,
+                "Mp_ksp_ksp_type": "cg",
+                "Mp_ksp_pc_type": "sor",
+            }
+        ),
+    }
+)
 """Default iterative solver parameters for solution of Stokes system.
 
 We configure the Schur complement approach as described in Section of 4.3 of Davies et
@@ -137,12 +146,14 @@ Note:
   .
 """
 
-direct_stokes_solver_parameters: dict[str, str] = {
-    "mat_type": "aij",
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
+direct_stokes_solver_parameters: Mapping[str, str] = MappingProxyType(
+    {
+        "mat_type": "aij",
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    }
+)
 """Default direct solver parameters for solution of Stokes system.
 
 We configure the direct solver to use the LU (`lu`) factorisation provided by the MUMPS
@@ -157,13 +168,15 @@ Note:
   and values to extend the default ones.
 """
 
-newton_stokes_solver_parameters: dict[str, str | int | float] = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-}
+newton_stokes_solver_parameters: Mapping[str, str | int | float] = MappingProxyType(
+    {
+        "snes_type": "newtonls",
+        "snes_linesearch_type": "l2",
+        "snes_max_it": 100,
+        "snes_atol": 1e-10,
+        "snes_rtol": 1e-5,
+    }
+)
 """Default non-linear solver parameters for solution of Stokes system.
 
 We use a setup based on Newton's method (newtonls) with a secant line
@@ -177,74 +190,34 @@ Note:
   dictionary via the `solver_parameters_extra` argument. This dictionary can also hold
   new pairs of keys and values to extend the default ones.
 """
-gia_outer_solver_parameters: dict[str, str | float] = {
-    "mat_type": "matfree",
-    "snes_type": "ksponly",
-    "pc_type": "python",
-    "pc_python_type": "gadopt.SPDAssembledPC",
-}
+gia_outer_solver_parameters: Mapping[str, str | float] = MappingProxyType(
+    {
+        "mat_type": "matfree",
+        "snes_type": "ksponly",
+        **spd_pc_parameters
+    }
+)
 
-gia_iterative_cpu_assembled_parameters: dict[str, str | float | int | bool] = {
-    "ksp_type": "cg",
-    "ksp_rtol": 1e-5,
-    "assembled_pc_type": "gamg",
-    "assembled_mg_levels_pc_type": "sor",
-    "assembled_pc_gamg_threshold": 0.01,
-    "assembled_pc_gamg_square_graph": 100,
-    "assembled_pc_gamg_coarse_eq_limit": 1000,
-    "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-}
-
-gia_iterative_gpu_assembled_parameters: ConfigType = {
-    "ksp_type": "preonly",
-    "assembled": {
-        "ksp_type": "preonly",
-        "pc_type": "python",
-        "pc_python_type": "firedrake.OffloadPC",
-        "offload": {
-            "ksp_type": "preonly",
-            "pc_type": "ksp",
-            "ksp": {
-                "ksp_type": "cg",
-                "ksp_rtol": 1e-5,
-                "pc_type": "gamg",
-                "mg_levels_pc_type": "jacobi",
-                "mg_levels_ksp_max_it": 2,
-                "pc_gamg_threshold": 0.01,
-                "pc_gamg_square_graph": 100,
-                "pc_gamg_coarse_eq_limit": 1000,
-                "pc_gamg_mis_k_minimum_degree_ordering": True,
-            }
-        },
-    },
-}
-
-coupled_gia_solver_parameters: ConfigType = {
-    "mat_type": "matfree",
-    "ksp_type": "gmres",
-    "ksp_rtol": 1e-3,
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "symmetric_multiplicative",
-    "fieldsplit_0": {
-        "ksp_type": "cg",
-        "pc_type": "python",
-        "pc_python_type": "gadopt.SPDAssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_mg_levels_pc_type": "sor",
-        "ksp_rtol": 1e-5,
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-        "assembled_pc_gamg_coarse_eq_limit": 1000,
-        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-    },
-    "fieldsplit_1": {
-        "ksp_type": "cg",
-        "pc_type": "python",
-        "pc_python_type": "firedrake.AssembledPC",
-        "assembled_pc_type": "sor",
-        "ksp_rtol": 1e-5,
-    },
-}
+coupled_gia_solver_parameters: Mapping[str, str | float | Mapping[str, str | float]] = (
+    MappingProxyType(
+        {
+            "mat_type": "matfree",
+            "ksp_type": "gmres",
+            "ksp_rtol": 1e-3,
+            "pc_type": "fieldsplit",
+            "pc_fieldsplit_type": "symmetric_multiplicative",
+            "fieldsplit_1": MappingProxyType(
+                {
+                    "ksp_type": "cg",
+                    "pc_type": "python",
+                    "pc_python_type": "firedrake.AssembledPC",
+                    "assembled_pc_type": "sor",
+                    "ksp_rtol": 1e-5,
+                }
+            ),
+        }
+    )
+)
 """Default iterative solver parameters for CoupledInternalVariableSolver (GIA problems).
 
 Uses a Newton SNES outer loop with a GMRES/fieldsplit preconditioned inner solve. SNES
@@ -521,7 +494,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         else:
             # in_config can be one of the predefined config dicts, make sure it is not
             # modified
-            offload_conf: ConfigType = deepcopy(in_config)
+            offload_conf = deepcopy(in_config)
             if gpu_telescope_factor > 1:
                 ksp_params = offload_conf["assembled"]["offload"]
                 offload_conf["assembled"]["offload"] = {
@@ -583,20 +556,20 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                         }
                     )
                 else:
-                    extra_param_dict = {
+                    extra_params = {
                         "fieldsplit_0": {"assembled": {"offload": {}}},
                         "fieldsplit_1": {"ksp_monitor": None},
                     }
                     if gpu_telescope_factor > 1:
-                        extra_param_dict["fieldsplit_0"]["assembled"]["offload"] = {
+                        extra_params["fieldsplit_0"]["assembled"]["offload"] = {
                             "telescope": {"ksp": {"ksp_converged_reason": None}}
                         }
 
                     else:
-                        extra_param_dict["fieldsplit_0"]["assembled"]["offload"] = {
+                        extra_params["fieldsplit_0"]["assembled"]["offload"] = {
                             "ksp": {"ksp_converged_reason": None}
                         }
-                    self.add_to_solver_config(extra_param_dict)
+                    self.add_to_solver_config(extra_params)
 
             elif INFO >= log_level:
                 self.add_to_solver_config(
@@ -609,27 +582,27 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 if DEBUG >= log_level:
                     self.add_to_solver_config({"ksp_monitor": None})
             else:
-                extra_param_dict = {"assembled": {"offload": {}}}
+                extra_params = {"assembled": {"offload": {}}}
                 if gpu_telescope_factor > 1:
                     if INFO >= log_level:
-                        extra_param_dict["assembled"]["offload"]["telescope"] = {
+                        extra_params["assembled"]["offload"]["telescope"] = {
                             "ksp": {"ksp_converged_reason": None}
                         }
                     if DEBUG >= log_level:
-                        extra_param_dict["assembled"]["offload"]["telescope"]["ksp"][
+                        extra_params["assembled"]["offload"]["telescope"]["ksp"][
                             "ksp_monitor"
                         ] = None
                 else:
                     if INFO >= log_level:
-                        extra_param_dict["assembled"]["offload"]["ksp"] = {
+                        extra_params["assembled"]["offload"]["ksp"] = {
                             "ksp_converged_reason": None
                         }
                     if DEBUG >= log_level:
-                        extra_param_dict["assembled"]["offload"]["ksp"][
+                        extra_params["assembled"]["offload"]["ksp"][
                             "ksp_monitor"
                         ] = None
 
-                self.add_to_solver_config(extra_param_dict)
+                self.add_to_solver_config(extra_params)
 
     def set_solver_options(
         self,
@@ -665,30 +638,64 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         device_type = get_device_type(gpu_extras)
         if iterative_solve:
+            # First construct SPD solver settings
             if self.solver_parameters.get("pc_type") == "fieldsplit":
                 if "fieldsplit_0" not in self.solver_parameters:
                     # If fieldsplit_0 is missing, decide which set of parameters
                     # to use based whether we detect a GPU, and the settings the
-                    # user has specified
+                    # user has specified.
+                    self.add_to_solver_config({"fieldsplit_0": spd_pc_parameters})
                     if device_type is None:
-                        self.add_to_solver_config(iterative_fieldsplit_0_cpu_params)
-                    else:
-                        gpu_params: ConfigType = {"fieldsplit_0": None}
-                        gpu_params["fieldsplit_0"] = self._handle_gpu_settings(
-                            gpu_extras,
-                            device_type,
-                            iterative_fieldsplit_0_gpu_parameters["fieldsplit_0"],
+                        self.add_to_solver_config({"fieldsplit_0": spd_ksp_parameters})
+                        self.add_to_solver_config(
+                            {"fieldsplit_0": {"assembled": cpu_gamg_parameters}}
                         )
-                        self.add_to_solver_config(gpu_params)
+                        self.add_to_solver_config(
+                            {"fieldsplit_0": {"assembled": gamg_common_parameters}}
+                        )
+                    else:
+                        # dict() cast copies MappingProxyTypes to mutable dicts
+                        additional_params = dict(spd_pc_parameters)
+                        additional_params["ksp_type"] = "preonly"
+                        additional_params["assembled"] = dict(offload_parameters)
+                        additional_params["assembled"]["offload"] = dict(
+                            offload_parameters["offload"]
+                        )
+                        additional_params["assembled"]["offload"]["ksp"] = {
+                            **gamg_common_parameters,
+                            **gpu_gamg_parameters,
+                            **spd_ksp_parameters
+                        }
+                        self.add_to_solver_config(
+                            {
+                                "fieldsplit_0": self._handle_gpu_settings(
+                                    gpu_extras,
+                                    device_type,
+                                    additional_params,
+                                )
+                            }
+                        )
             else:
                 # Iterative solve with no fieldsplit assumes GIA
                 if device_type is None:
-                    self.add_to_solver_config(gia_iterative_cpu_assembled_parameters)
+                    self.add_to_solver_config(spd_ksp_parameters)
+                    self.add_to_solver_config({"assembled": cpu_gamg_parameters})
+                    self.add_to_solver_config({"assembled": gamg_common_parameters})
                 else:
+                    additional_params = {"ksp_type": "preonly"}
+                    additional_params["assembled"] = dict(offload_parameters)
+                    additional_params["assembled"]["offload"] = dict(
+                        offload_parameters["offload"]
+                    )
+                    additional_params["assembled"]["offload"]["ksp"] = {
+                        **gamg_common_parameters,
+                        **gpu_gamg_parameters,
+                        **spd_ksp_parameters,
+                    }
                     gpu_params = self._handle_gpu_settings(
                         gpu_extras,
                         device_type,
-                        gia_iterative_gpu_assembled_parameters,
+                        additional_params,
                     )
                     self.add_to_solver_config(gpu_params)
 
