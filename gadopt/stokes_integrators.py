@@ -23,6 +23,7 @@ from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
+from .nullspaces import ConformalKillingNearNullspace
 from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
@@ -256,7 +257,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         constant_jacobian: bool = False,
         nullspace: fd.MixedVectorSpaceBasis | None = None,
         transpose_nullspace: fd.MixedVectorSpaceBasis | None = None,
-        near_nullspace: fd.MixedVectorSpaceBasis | None = None,
+        near_nullspace: (
+            fd.MixedVectorSpaceBasis | ConformalKillingNearNullspace | None
+        ) = None,
     ) -> None:
         self.solution = solution
         self.approximation = approximation
@@ -267,6 +270,16 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.quad_degree = quad_degree
         self.J = J
         self.constant_jacobian = constant_jacobian
+        if isinstance(nullspace, ConformalKillingNearNullspace):
+            raise TypeError(
+                "ConformalKillingNearNullspace is accepted only through the "
+                "near_nullspace argument."
+            )
+        if isinstance(transpose_nullspace, ConformalKillingNearNullspace):
+            raise TypeError(
+                "ConformalKillingNearNullspace is accepted only through the "
+                "near_nullspace argument."
+            )
         self.nullspace = nullspace
         self.transpose_nullspace = transpose_nullspace
         self.near_nullspace = near_nullspace
@@ -298,6 +311,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.equations = []  # G-ADOPT's Equation instances
 
         self.set_boundary_conditions()
+        if isinstance(self.near_nullspace, ConformalKillingNearNullspace):
+            self.near_nullspace = self.near_nullspace._build(
+                self.solution_space,
+                self.strong_bcs,
+            )
         self.set_equations()
         self.set_form()
         self.set_solver_options(solver_parameters, solver_parameters_extra)
