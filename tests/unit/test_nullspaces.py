@@ -7,6 +7,7 @@ from gadopt import (
     StokesSolver,
     TruncatedAnelasticLiquidApproximation,
     create_stokes_nullspace,
+    get_boundary_ids,
     rigid_body_modes,
 )
 
@@ -304,3 +305,90 @@ def test_conformal_modes_reach_velocity_assembled_preconditioner():
     solver.solve()
     updated_matrix = velocity_ksp.pc.getPythonContext().P.petscmat
     assert len(updated_matrix.getNearNullSpace().getVecs()) == 10
+
+
+@pytest.mark.longtest
+def test_conformal_modes_reach_gamg_on_resolved_tala_shell():
+    """Ten modes survive GAMG setup for the production-shaped shell BCs."""
+    rmin, rmax = 1.22, 2.22
+    base_mesh = fd.CubedSphereMesh(
+        rmin,
+        refinement_level=2,
+        degree=2,
+    )
+    mesh = fd.ExtrudedMesh(base_mesh, layers=2, extrusion_type="radial")
+    mesh.cartesian = False
+    boundary = get_boundary_ids(mesh)
+    velocity_space = fd.VectorFunctionSpace(mesh, "CG", 2)
+    pressure_space = fd.FunctionSpace(mesh, "CG", 1)
+    temperature_space = fd.FunctionSpace(mesh, "CG", 2)
+    mixed_space = velocity_space * pressure_space
+    solution = fd.Function(mixed_space)
+    coordinates = fd.SpatialCoordinate(mesh)
+    radius = fd.sqrt(fd.dot(coordinates, coordinates))
+    temperature = fd.Function(temperature_space).interpolate(
+        (rmax - radius) / (rmax - rmin)
+    )
+    density = fd.Function(temperature_space).interpolate(
+        fd.exp(0.5 * (rmax - radius) / (rmax - rmin))
+    )
+    viscosity = fd.Function(temperature_space).interpolate(
+        fd.exp(2 * (radius - rmin) / (rmax - rmin))
+    )
+    approximation = TruncatedAnelasticLiquidApproximation(
+        Ra=1,
+        Di=0.5,
+        rho=density,
+        mu=viscosity,
+    )
+    imposed_velocity = 1e-3 * fd.as_vector(
+        (-coordinates[1], coordinates[0], 0)
+    )
+    boundary_conditions = {
+        boundary.bottom: {"un": 0},
+        boundary.top: {"u": imposed_velocity},
+    }
+    nullspace = create_stokes_nullspace(mixed_space, closed=True)
+    solver = StokesSolver(
+        solution,
+        approximation,
+        temperature,
+        bcs=boundary_conditions,
+        nullspace=nullspace,
+        transpose_nullspace=nullspace,
+        near_nullspace=ConformalKillingNearNullspace(),
+        solver_parameters={
+            "snes_type": "ksponly",
+            "mat_type": "matfree",
+            "ksp_type": "preonly",
+            "pc_type": "fieldsplit",
+            "pc_fieldsplit_type": "schur",
+            "pc_fieldsplit_schur_fact_type": "full",
+            "fieldsplit_0": {
+                "ksp_type": "cg",
+                "ksp_rtol": 1e-7,
+                "ksp_max_it": 300,
+                "pc_type": "python",
+                "pc_python_type": "gadopt.SPDAssembledPC",
+                "assembled_pc_type": "gamg",
+                "assembled_mg_levels_pc_type": "sor",
+                "assembled_pc_gamg_threshold": 0.01,
+            },
+            "fieldsplit_1": {
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-7,
+                "pc_type": "python",
+                "pc_python_type": "firedrake.MassInvPC",
+                "Mp_pc_type": "lu",
+            },
+        },
+    )
+
+    solver.solve()
+
+    velocity_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[0]
+    matrix = velocity_ksp.pc.getPythonContext().P.petscmat
+    assert velocity_ksp.getConvergedReason() > 0
+    assert len(matrix.getNearNullSpace().getVecs()) == 10
+    residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
+    assert residual.dat.norm < 1e-5

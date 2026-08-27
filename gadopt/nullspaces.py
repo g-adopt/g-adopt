@@ -189,6 +189,10 @@ class ConformalKillingNearNullspace:
     the Stokes system prevent the conformal fields from being exact null modes
     of the full saddle-point operator.
 
+    The fields are materialised from the mesh coordinates when the Stokes
+    solver is constructed. They are intended for fixed meshes; a moving-mesh
+    calculation must rebuild the solver and basis after changing coordinates.
+
     By default the complete ten-dimensional conformal Killing space is used.
     The complete space is independent of the choice of coordinate origin up
     to a change of basis. A subset need not have that property. The polynomial

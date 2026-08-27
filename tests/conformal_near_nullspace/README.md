@@ -36,6 +36,13 @@ operator-complexity and memory analysis, for example:
 -info :pc
 ```
 
+The warm samples reuse the already constructed basis and GAMG hierarchy. They
+measure repeated solve/application cost, not candidate construction, global
+orthonormalisation, or hierarchy rebuilds. The cold value includes lazy GAMG
+setup but is also affected by JIT compilation. Use the PETSc event log and a
+fresh process for each arm when comparing total setup and nonlinear-update
+cost.
+
 Laptop measurements are mechanism and regression evidence only. A production
 decision requires repeated Gadi runs from the same checkpoint and allocation,
 including a frozen fully plastic operator and an end-to-end Picard/Newton
@@ -93,3 +100,15 @@ iterations and calls, GAMG hierarchy/operator complexity and memory, and the
 final nonlinear residual. Do not select an arm from `fieldsplit_0` iterations
 alone: broader interpolation can reduce iterations while increasing setup,
 coarse-grid, communication, and memory costs.
+
+On Gadi, first sync or clone this complete branch and verify the import before
+submitting a full allocation:
+
+```bash
+python -c "import gadopt; print(gadopt.__file__)"
+```
+
+The printed path must be this branch, not the centrally installed G-ADOPT.
+For the first checkpoint comparison, use fresh output directories, one
+timestep, identical rank placement and PETSc options, and separate PETSc JSON
+logs for each arm.
