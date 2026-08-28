@@ -463,16 +463,19 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         device_type: str | None,
         telescope_factor: int,
     ):
-        """Add a key-value pair to a solver that may be using OffloadPC
+        """Add any ConfigType object to a solver that may be using OffloadPC
 
         Handles the varied levels of nesting in the default solver configurations
-        that are subject to offloading when a GPU is used.
+        that are subject to offloading when a GPU is used. Determines the nesting
+        level of the 'inner' KSP solver in the case of a fieldsplit preconditioner
+        or the main KSP solve using heuristics based on the default solver settings.
+        Not intended to work with custom solver settings.
 
         Args:
-            key: _description_
-            val: _description_
-            device_type:
-            telescope_factor:
+            d: The object to insert.
+            device_type: Target GPU device type (e.g., `CUDA`).
+            telescope_factor: If PCTELESCOPE is in use, the telescope reduction
+            factor (see https://petsc.org/main/manualpages/PC/PCTELESCOPE/)
         """
         top_pc = self.solver_parameters.get("pc_type")
         if top_pc == "fieldsplit":

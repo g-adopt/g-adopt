@@ -450,6 +450,14 @@ for test_type, direct_params, iter_params, device_type, gpu_param in TEST_VARIAN
             )
         )
 
+debugging_tests = [
+    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_DEBUG_PARAMS), "HOST", {}),
+    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CUDA_DEBUG_PARAMS), "CUDA", {}),
+    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CUDA_DEBUG_PARAMS_TELESCOPE), "CUDA", {"telescope_factor": 2}),
+    ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_CPU_PARAMS | {"ksp_monitor": None}), "HOST", {}),
+    ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_CUDA_PARAMS | {"ksp_monitor": None}), "CUDA", {})
+]
+
 
 def idfn(fixture_value):
     if isinstance(fixture_value, str):
@@ -572,15 +580,6 @@ def test_free_surface_params():
     )
 
     assert solver.solver_parameters == ITERATIVE_FREE_SURFACE_CPU_PARAMS
-
-
-debugging_tests = [
-    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_DEBUG_PARAMS), "HOST", {}),
-    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CUDA_DEBUG_PARAMS), "CUDA", {}),
-    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CUDA_DEBUG_PARAMS_TELESCOPE), "CUDA", {"telescope_factor": 2}),
-    ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_CPU_PARAMS | {"ksp_monitor": None}), "HOST", {}),
-    ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_CUDA_PARAMS | {"ksp_monitor": None}), "CUDA", {})
-]
 
 
 @pytest.mark.parametrize("test_type, mesh_and_fields, test_params, device, gpu_extra_parameters", debugging_tests, ids=idfn, indirect=["mesh_and_fields"])
