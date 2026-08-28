@@ -10,6 +10,13 @@ def clip_expression(
     return fd.min_value(fd.max_value(expr, minimum), maximum)
 
 
+def function_name(field: fd.Function | Indexed) -> str:
+    if isinstance(field, Indexed):
+        return f"{field.ufl_operands[0].name()}_{field.ufl_operands[1].indices()[0]}"
+    else:
+        return field.name()
+
+
 def generate_mesh(
     domain_dims: list[float], mesh_layers: dict[str, float | list[float]]
 ) -> None:
@@ -50,13 +57,6 @@ def generate_mesh(
 
     gmsh.write("mesh.msh")
     gmsh.finalize()
-
-
-def function_name(field: fd.Function | Indexed) -> str:
-    if isinstance(field, Indexed):
-        return f"{field.ufl_operands[0].name()}_{field.ufl_operands[1].indices()[0]}"
-    else:
-        return field.name()
 
 
 def half_space_cooling_model(

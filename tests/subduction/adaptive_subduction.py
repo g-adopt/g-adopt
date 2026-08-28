@@ -8,10 +8,12 @@ from mpi4py import MPI
 
 from gadopt import *
 
+# isort: off
 import parameters as prms
 from field_initialisation import initial_level_set, initial_temperature
 from rheology import material_viscosity
 from utility import function_name, generate_mesh
+# isort: on
 
 
 class AdaptiveSimulation:
