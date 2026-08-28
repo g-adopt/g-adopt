@@ -457,6 +457,55 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     raise ValueError("Solver type must be 'direct' or 'iterative'.")
         return self.mesh.topological_dimension == 3
 
+    def _add_to_offloaded_solver(
+        self,
+        d: ConfigType,
+        device_type: str | None,
+        telescope_factor: int,
+    ):
+        """Add a key-value pair to a solver that may be using OffloadPC
+
+        Handles the varied levels of nesting in the default solver configurations
+        that are subject to offloading when a GPU is used.
+
+        Args:
+            key: _description_
+            val: _description_
+            device_type:
+            telescope_factor:
+        """
+        top_pc = self.solver_parameters.get("pc_type")
+        if top_pc == "fieldsplit":
+            if device_type is None:
+                self.add_to_solver_config({"fieldsplit_0": d})
+            else:
+                if telescope_factor == 1:
+                    self.add_to_solver_config(
+                        {"fieldsplit_0": {"assembled": {"offload": {"ksp": d}}}}
+                    )
+                else:
+                    self.add_to_solver_config(
+                        {
+                            "fieldsplit_0": {
+                                "assembled": {
+                                    "offload": {"telescope": {"ksp": d}}
+                                }
+                            }
+                        }
+                    )
+        else:
+            if device_type is None:
+                self.add_to_solver_config(d)
+            else:
+                if telescope_factor == 1:
+                    self.add_to_solver_config(
+                        {"assembled": {"offload": {"ksp": d}}}
+                    )
+                else:
+                    self.add_to_solver_config(
+                        {"assembled": {"offload": {"telescope": {"ksp": d}}}}
+                    )
+
     def _handle_gpu_settings(
         self,
         gpu_extras: ConfigType | None,
@@ -510,12 +559,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 odb.setValue("matptap_backend_cpu", True)
                 odb.setValue("inner_C_loc_mat_product_algorithm_backend_cpu", True)
                 odb.setValue("inner_C_oth_mat_product_algorithm_backend_cpu", True)
-                if gpu_telescope_factor == 1:
-                    for k, v in iterative_cuda_ksp_workarounds_inner.items():
-                        offload_conf["assembled"]["offload"]["ksp"][k] = v
-                else:
-                    for k, v in iterative_cuda_ksp_workarounds_inner.items():
-                        offload_conf["assembled"]["offload"]["telescope"]["ksp"][k] = v
+                self._add_to_offloaded_solver(iterative_cuda_ksp_workarounds_inner, device_type, gpu_telescope_factor)
             return offload_conf
 
     def _set_monitoring_config(
@@ -546,63 +590,20 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         gpu_telescope_factor = (
             1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
         )
-        if self.solver_parameters.get("pc_type") == "fieldsplit":
-            if DEBUG >= log_level:
-                if device_type is None:
-                    self.add_to_solver_config(
-                        {
-                            "fieldsplit_0": {"ksp_converged_reason": None},
-                            "fieldsplit_1": {"ksp_monitor": None},
-                        }
-                    )
-                else:
-                    extra_params = {
-                        "fieldsplit_0": {"assembled": {"offload": {}}},
-                        "fieldsplit_1": {"ksp_monitor": None},
-                    }
-                    if gpu_telescope_factor > 1:
-                        extra_params["fieldsplit_0"]["assembled"]["offload"] = {
-                            "telescope": {"ksp": {"ksp_converged_reason": None}}
-                        }
-
-                    else:
-                        extra_params["fieldsplit_0"]["assembled"]["offload"] = {
-                            "ksp": {"ksp_converged_reason": None}
-                        }
-                    self.add_to_solver_config(extra_params)
-
-            elif INFO >= log_level:
+        print(log_level)
+        if DEBUG >= log_level:
+            self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
+            if self.solver_parameters.get("pc_type") == "fieldsplit":
+                self.add_to_solver_config({"fieldsplit_1": {"ksp_monitor": None}})
+            else:
+                self.add_to_solver_config({"ksp_monitor": None})
+        if INFO >= log_level:
+            if self.solver_parameters.get("pc_type") == "fieldsplit":
                 self.add_to_solver_config(
                     {"fieldsplit_1": {"ksp_converged_reason": None}}
                 )
-        else:
-            if device_type is None:
-                if INFO >= log_level:
-                    self.add_to_solver_config({"ksp_converged_reason": None})
-                if DEBUG >= log_level:
-                    self.add_to_solver_config({"ksp_monitor": None})
             else:
-                extra_params = {"assembled": {"offload": {}}}
-                if gpu_telescope_factor > 1:
-                    if INFO >= log_level:
-                        extra_params["assembled"]["offload"]["telescope"] = {
-                            "ksp": {"ksp_converged_reason": None}
-                        }
-                    if DEBUG >= log_level:
-                        extra_params["assembled"]["offload"]["telescope"]["ksp"][
-                            "ksp_monitor"
-                        ] = None
-                else:
-                    if INFO >= log_level:
-                        extra_params["assembled"]["offload"]["ksp"] = {
-                            "ksp_converged_reason": None
-                        }
-                    if DEBUG >= log_level:
-                        extra_params["assembled"]["offload"]["ksp"][
-                            "ksp_monitor"
-                        ] = None
-
-                self.add_to_solver_config(extra_params)
+                self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
 
     def set_solver_options(
         self,
