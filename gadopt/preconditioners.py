@@ -383,45 +383,37 @@ class _AutoRichardsonMixin:
         self._omega_applies_seen = self._omega_applies
         self._omega_since_estimate += 1
 
-        # Under a lag the smoother reads a snapshot that changes only on a
-        # refresh step. Between refreshes the operator is identical, so a
-        # measurement would return what it returned last time. Check only on
-        # the steps where the snapshot moves.
-        lagged = getattr(self, "_Alag", None) is not None
-        refreshed = (not lagged) or self._nupdate % self.lag == 0
-
         reason = None
-        if refreshed:
-            diagonal = self._omega_diagonal_norm(
-                self._omega_smoother().getOperators()[0]
-            )
-            if self._omega_diagonal:
-                ratio = diagonal / self._omega_diagonal
-                if (ratio > self.omega_diagonal_ratio
-                        or ratio < 1.0 / self.omega_diagonal_ratio):
-                    reason = f"the diagonal moved by {ratio:.2f}"
+        diagonal = self._omega_diagonal_norm(
+            self._omega_smoother().getOperators()[0]
+        )
+        if self._omega_diagonal:
+            ratio = diagonal / self._omega_diagonal
+            if (ratio > self.omega_diagonal_ratio
+                    or ratio < 1.0 / self.omega_diagonal_ratio):
+                reason = f"the diagonal moved by {ratio:.2f}"
 
-            if reason is None and iterations > 0:
-                if len(self._omega_iter_samples) < self.omega_iter_window:
-                    # Establish the reference over several Newton steps. The
-                    # first step of a timestep is systematically cheaper than
-                    # the rest, so one sample makes the threshold trip on
-                    # ordinary variation.
-                    self._omega_iter_samples.append(iterations)
-                    ordered = sorted(self._omega_iter_samples)
-                    self._omega_iter_reference = ordered[len(ordered) // 2]
-                elif iterations > self.omega_iter_growth * self._omega_iter_reference:
-                    reason = (
-                        f"linear iterations rose from a reference of "
-                        f"{self._omega_iter_reference} to {iterations}"
-                    )
-
-            if (reason is None and self.omega_interval > 0
-                    and self._omega_since_estimate >= self.omega_interval):
+        if reason is None and iterations > 0:
+            if len(self._omega_iter_samples) < self.omega_iter_window:
+                # Establish the reference over several Newton steps. The
+                # first step of a timestep is systematically cheaper than
+                # the rest, so one sample makes the threshold trip on
+                # ordinary variation.
+                self._omega_iter_samples.append(iterations)
+                ordered = sorted(self._omega_iter_samples)
+                self._omega_iter_reference = ordered[len(ordered) // 2]
+            elif iterations > self.omega_iter_growth * self._omega_iter_reference:
                 reason = (
-                    f"{self._omega_since_estimate} Newton steps since the "
-                    f"last measurement"
+                    f"linear iterations rose from a reference of "
+                    f"{self._omega_iter_reference} to {iterations}"
                 )
+
+        if (reason is None and self.omega_interval > 0
+                and self._omega_since_estimate >= self.omega_interval):
+            reason = (
+                f"{self._omega_since_estimate} Newton steps since the "
+                f"last measurement"
+            )
 
         if reason is not None:
             self._omega_estimate(pc, reason)
@@ -430,97 +422,7 @@ class _AutoRichardsonMixin:
         self._omega_applies += 1
 
 
-class _LaggedOperatorMixin:
-    """Hold a private snapshot of the operator for the inner multigrid.
-
-    Firedrake reassembles the Jacobian in place on every Newton step, so the
-    PETSc object state of the operator changes every time. The inner PCMG
-    reacts to that change with a full setup: the Galerkin product P^T A P, the
-    coarse factorisation, and the eigenvalue estimate of a Chebyshev smoother.
-    For an extruded 3-D problem that setup cost dominates the solve.
-
-    This mixin gives the inner PCMG a private copy of the operator and
-    refreshes the copy every ``lag`` Newton steps. Between two refreshes the
-    object state does not change, so PETSc skips the complete setup. The outer
-    Krylov method keeps the true Jacobian for its residual, therefore the
-    accuracy of the Newton step does not change. Only the preconditioner is
-    stale.
-
-    The snapshot is necessary. A lag that leaves the live Jacobian visible to
-    the smoother makes the smoother evaluate B_old^-1 A_live. A polynomial or
-    stationary smoother contracts only on a bounded region, and modes that
-    leave that region during a sharp wetting front make the multigrid cycle
-    expansive. With the snapshot the smoother evaluates B_old^-1 A_old, which
-    is inside the region by construction, and the drift reaches the outer
-    Krylov method as a benign near-identity perturbation.
-
-    Set the lag with the integer option ``<prefix>vlumping_lag``. The default
-    is 1, which refreshes on every Newton step and reproduces the unlagged
-    behaviour exactly. The snapshot costs one extra copy of the Jacobian.
-
-    The boolean option ``<prefix>vlumping_lag_smoother`` decides whether the
-    fine smoother reads the snapshot as well. The default is on, which is the
-    coherent setting described above. Turn it off and the smoother keeps the
-    live Jacobian, so the multigrid cycle approximates the inverse of the
-    current operator with a stale smoother. On the cases measured so far that
-    is faster, about 17% against 9%, and it costs no extra iterations. It is
-    not the default because it evaluates ``B_old^-1 A_live``, which has no
-    guarantee of contraction once a front moves the spectrum.
-    """
-
-    def _lag_initialize(self, pc, P):
-        """Read the lag option and bind the inner PC to the snapshot."""
-        prefix = pc.getOptionsPrefix() or ""
-        self.lag = PETSc.Options().getInt(prefix + "vlumping_lag", 1)
-        self.lag_smoother = PETSc.Options().getBool(
-            prefix + "vlumping_lag_smoother", True
-        )
-        self._nupdate = 0
-        if self.lag <= 1:
-            self._Alag = None
-            return
-
-        # Copy the values now, because the first solve uses this matrix.
-        self._Alag = P.duplicate(copy=True)
-        # Both arguments must be the snapshot. KSPSetUp_Chebyshev compares the
-        # state of Amat and of Pmat, so a live Amat re-triggers the estimate
-        # and defeats the lag.
-        self.pc.setOperators(self._Alag, self._Alag)
-
-        # The fine smoother needs the snapshot as well, and it needs it
-        # explicitly. PCSetUp_MG binds the operators of the finest smoother
-        # only while they still match the operators of the PC
-        # (src/ksp/pc/impls/mg/mg.c:888-892). The first setup bound them to
-        # the live Jacobian, so the guard is now false and the smoother would
-        # keep the live operator for the whole run. It would then evaluate
-        # B_old^-1 A_live, which is the combination that loses the guarantee
-        # of contraction during a sharp front.
-        #
-        # The multigrid residual callback cannot be corrected the same way.
-        # PCMGSetResidual takes a permanent reference on the first setup
-        # (mgfunc.c:151-156) and petsc4py has no binding for it, so the
-        # mid-cycle residual keeps the live operator.
-        if self.lag_smoother:
-            self.pc.getMGSmoother(1).setOperators(self._Alag, self._Alag)
-
-    def _lag_update(self, pc):
-        """Refresh the snapshot when the lag interval is complete."""
-        if self._Alag is None:
-            return
-        self._nupdate += 1
-        if self._nupdate % self.lag == 0:
-            _, P = pc.getOperators()
-            # MatCopy increases the object state, so the inner PCMG runs a
-            # complete setup on this step and skips it on the others.
-            P.copy(self._Alag, structure=PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
-
-    def _lag_destroy(self):
-        if getattr(self, "_Alag", None) is not None:
-            self._Alag.destroy()
-            self._Alag = None
-
-
-class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
+class VerticallyLumpedPC(_AutoRichardsonMixin, PCBase):
     """Two-level MG that collapses the vertical dimension on the coarse level.
 
     This preconditioner targets extruded meshes of high aspect ratio. It
@@ -538,10 +440,6 @@ class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
 
     Solver options for the coarse level use the prefix ``lumped_mg_coarse_``.
     The fine-level smoother uses ``lumped_mg_levels_``.
-
-    The integer option ``vlumping_lag`` rebuilds the preconditioner every N
-    Newton steps against a private snapshot of the Jacobian. The default is 1,
-    which rebuilds on every step. See ``_LaggedOperatorMixin``.
 
     The fine space must be a scalar tensor-product space on an extruded mesh.
     """
@@ -604,10 +502,6 @@ class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
         self.pc.setMGInterpolation(1, Prol)
         self.pc.setFromOptions()
         self.pc.setUp()
-        # Bind the inner PCMG to a lagged snapshot when the user asks for one.
-        # This runs after the first setUp, so the multigrid residual callback
-        # keeps the live operator. See _LaggedOperatorMixin.
-        self._lag_initialize(pc, P)
         # Derive the Richardson damping factor when the user asks for it. The
         # first measurement needs a preconditioner that is already set up.
         self._omega_initialize(pc)
@@ -618,7 +512,6 @@ class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
         # The inner PCMG holds a reference to the same Mat. It still needs
         # setUp() to recompute the Galerkin coarse operator A_c = P^T A P from
         # the updated state.
-        self._lag_update(pc)
         self._omega_update(pc)
         self.pc.setUp()
 
@@ -630,7 +523,6 @@ class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
         self.pc.applyTranspose(X, Y)
 
     def destroy(self, pc):
-        self._lag_destroy()
         if hasattr(self, "pc"):
             self.pc.destroy()
 
@@ -648,7 +540,7 @@ class VerticallyLumpedPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
         self.pc.view(viewer)
 
 
-class VerticallyLumpedHMGPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
+class VerticallyLumpedHMGPC(_AutoRichardsonMixin, PCBase):
     """Two-level MG with the coarse level on the fine mesh's 2D base.
 
     This preconditioner uses the same two levels as ``VerticallyLumpedPC``.
@@ -663,9 +555,6 @@ class VerticallyLumpedHMGPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
 
     Fine space : V          = hele x vele      (full 3D tensor-product)
     Coarse     : V_base_2d  = hele on base_2d  (same horizontal element)
-
-    The integer option ``vlumping_lag`` applies here as well. See
-    ``_LaggedOperatorMixin``.
 
     The prolongation from ``V_base_2d`` into ``V`` is the same-mesh
     interpolation from the vertically constant 3D space ``V_R = hele x R``
@@ -799,7 +688,6 @@ class VerticallyLumpedHMGPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
 
         self.pc.setFromOptions()
         self.pc.setUp()
-        self._lag_initialize(pc, P)
         self._omega_initialize(pc)
         self.update(pc)
 
@@ -817,7 +705,6 @@ class VerticallyLumpedHMGPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
         return mats
 
     def update(self, pc):
-        self._lag_update(pc)
         self._omega_update(pc)
         self.pc.setUp()
 
@@ -829,7 +716,6 @@ class VerticallyLumpedHMGPC(_AutoRichardsonMixin, _LaggedOperatorMixin, PCBase):
         self.pc.applyTranspose(X, Y)
 
     def destroy(self, pc):
-        self._lag_destroy()
         if hasattr(self, "pc"):
             self.pc.destroy()
 

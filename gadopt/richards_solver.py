@@ -43,6 +43,7 @@ __all__ = [
     "direct_richards_solver_parameters",
     "iterative_richards_solver_parameters",
     "vlumping_richards_solver_parameters",
+    "vlumping_linesmooth_richards_solver_parameters",
     "vlumping_hmg_richards_solver_parameters",
 ]
 
@@ -119,9 +120,16 @@ vlumping_richards_solver_parameters: dict[str, Any] = {
     "pc_type": "python",
     "pc_python_type": "gadopt.VerticallyLumpedPC",
 
-    # Fine-level smoother: Chebyshev wrapping block-Jacobi ILU handles
-    # the stiff vertical modes at modest cost. Iteration counts are
-    # insensitive to vertical resolution.
+    # Fine-level smoother: block-Jacobi ILU handles the stiff vertical
+    # modes at modest cost, and iteration counts are insensitive to
+    # vertical resolution. The Krylov wrapper is Richardson with a damping
+    # factor measured at startup (see vlumping_omega_auto below), not
+    # Chebyshev: PETSc re-estimates the Chebyshev spectral bounds whenever
+    # the operator state changes, and Firedrake reassembles the Jacobian in
+    # place, so the estimate runs once per Newton step for the whole
+    # simulation. Removing it is worth 10-20% of wall time on the basin
+    # benchmarks at an unchanged iteration count.
+    "vlumping_omega_auto": True,
     "lumped_mg_levels_ksp_type": "chebyshev",
     "lumped_mg_levels_ksp_max_it": 2,
     "lumped_mg_levels_ksp_convergence_test": "skip",
@@ -150,6 +158,49 @@ MeshHierarchy.
 """
 
 
+vlumping_linesmooth_richards_solver_parameters: dict[str, Any] = dict(
+    vlumping_richards_solver_parameters,
+    **{
+        # Fine-level smoother: one ASM patch per vertical column, each
+        # factorised by LU, in place of the rank-local block-Jacobi ILU(0).
+        # An exact column solve removes the anisotropic vertical coupling in
+        # a single sweep, so max_it drops from two to one.
+        "lumped_mg_levels_ksp_max_it": 1,
+        "lumped_mg_levels_pc_type": "python",
+        "lumped_mg_levels_pc_python_type": "firedrake.ASMLinesmoothPC",
+        # codims="0": one patch per base cell, the column above that cell.
+        "lumped_mg_levels_pc_linesmooth_codims": "0",
+        # The outer ASM PC's prefix ends in "_sub_", so the patch-local
+        # sub-PC lives under "_sub_sub_". A single sub_ hits the ASM PC's
+        # own type and downgrades it to LU on the whole rank-local matrix,
+        # which exhausts memory immediately.
+        "lumped_mg_levels_pc_linesmooth_sub_sub_pc_type": "lu",
+        "lumped_mg_levels_pc_linesmooth_sub_sub_pc_factor_mat_ordering_type":
+            "natural",
+    },
+)
+# The block-Jacobi keys of the base preset are written against the same
+# "lumped_mg_levels_sub_" prefix the ASM patch solver reads, so they must be
+# removed rather than left unused.
+for _key in ("lumped_mg_levels_sub_pc_type",
+             "lumped_mg_levels_sub_pc_factor_levels"):
+    vlumping_linesmooth_richards_solver_parameters.pop(_key, None)
+del _key
+"""Iterative solver preset: vertical lumping with a column-exact smoother.
+
+Identical to ``vlumping_richards_solver_parameters`` except that the
+fine-level preconditioner solves each vertical column exactly by LU
+(``firedrake.ASMLinesmoothPC``) instead of applying a rank-local
+incomplete factorisation. The coarse solve stays the direct MUMPS
+factorisation of the vertically collapsed operator.
+
+Costs more per smoother application than ``vlumping`` and buys a lower
+iteration count. Which of the two is faster depends on the problem; both
+are recommended defaults for basin-scale extruded meshes, and neither
+requires a ``MeshHierarchy``.
+"""
+
+
 vlumping_hmg_richards_solver_parameters: dict[str, Any] = {
     "mat_type": "aij",
     "ksp_type": "fgmres",
@@ -163,7 +214,9 @@ vlumping_hmg_richards_solver_parameters: dict[str, Any] = {
 
     # Fine-level smoother: ASM line smoother (one patch per vertical
     # column, factorised by LU). Exact column solves damp vertical modes
-    # in one sweep.
+    # in one sweep. Richardson wrapper with a measured damping factor, as
+    # in vlumping_richards_solver_parameters.
+    "vlumping_omega_auto": True,
     "lumped_mg_levels_ksp_type": "chebyshev",
     "lumped_mg_levels_ksp_max_it": 1,
     "lumped_mg_levels_ksp_convergence_test": "skip",
@@ -472,6 +525,7 @@ class RichardsSolver(SolverConfigurationMixin):
         "direct": direct_richards_solver_parameters,
         "iterative": iterative_richards_solver_parameters,
         "vlumping": vlumping_richards_solver_parameters,
+        "vlumping_linesmooth": vlumping_linesmooth_richards_solver_parameters,
         "vlumping_hmg": vlumping_hmg_richards_solver_parameters,
     }
 
@@ -538,7 +592,7 @@ class RichardsSolver(SolverConfigurationMixin):
                     "extruded Cartesian meshes, or 'direct')."
                 )
 
-        if name in ("vlumping", "vlumping_hmg"):
+        if name in ("vlumping", "vlumping_linesmooth", "vlumping_hmg"):
             if not getattr(self.mesh, "extruded", False):
                 raise RuntimeError(
                     f"solver_parameters='{name}' requires an extruded mesh. "
