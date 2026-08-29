@@ -46,19 +46,18 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     """
     dim = eq.mesh.geometric_dimension
     identity = Identity(dim)
-    compressible_stress = eq.approximation.compressible
 
     mu = eq.approximation.mu
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
-    # When the viscosity depends on the solution (nonlinear rheology), the weak
-    # boundary terms below use the tangent stress and a penalty-derivative term
-    # so that the true Jacobian derivative(F, z) of the weak boundary conditions
-    # is symmetric. For linear mu these reduce to the frozen-mu form and the UFL
-    # is unchanged. The check is against the coefficient(s) underlying `trial`
-    # (not its terminals), so a linear viscosity that varies in space, e.g.
-    # mu = mu(x), stays on the frozen-mu path.
+    # The weak boundary terms below use the tangent stress so that the true
+    # Jacobian derivative(F, z) of the weak boundary conditions is symmetric. When
+    # the viscosity depends on the solution (nonlinear rheology), an extra
+    # penalty-derivative term is added; for linear mu the tangent stress reduces
+    # to stress(test) and that term is skipped. The check is against the
+    # coefficient(s) underlying `trial` (not its terminals), so a linear viscosity
+    # that varies in space, e.g. mu = mu(x), is treated as linear.
     mu_nonlinear = any(depends_on(mu, c) for c in extract_coefficients(trial))
 
     sigma = interior_penalty_factor(eq)
@@ -69,9 +68,9 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 "Symmetric SIPG boundary terms for a solution-dependent viscosity "
                 "are not implemented for discontinuous velocity elements."
             )
-        trial_tensor_jump = tensor_jump(eq.n, trial) + tensor_jump(trial, eq.n)
-        if compressible_stress:
-            trial_tensor_jump -= 2 / 3 * identity * jump(trial, eq.n)
+        trial_tensor_jump = eq.approximation.deviatoric_stress_shape(
+            tensor_jump(eq.n, trial)
+        )
 
         F += (
             sigma
@@ -96,64 +95,51 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
 
         if "u" in bc:
             w = trial - bc["u"]
-            trial_tensor_jump = 2 * sym(outer(eq.n, w))
-            if compressible_stress:
-                trial_tensor_jump -= 2 / 3 * identity * dot(eq.n, w)
+            jump_gradient = outer(eq.n, w)
+            jump_tensor = eq.approximation.deviatoric_stress_shape(jump_gradient)
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2
                 * sigma
-                * inner(outer(eq.n, eq.test), mu * trial_tensor_jump)
+                * inner(outer(eq.n, eq.test), mu * jump_tensor)
                 * eq.ds(bc_id)
             )
-            # Symmetrising term. For nonlinear mu this is the tangent stress
-            # contracted with the jump; for linear mu it is the frozen-mu form.
-            if mu_nonlinear:
-                tangent = eq.approximation.tangent_stress(trial, eq.test)
-                F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
-            else:
-                F -= inner(mu * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            # Symmetrising term (transpose of the flux integration by parts),
+            # written through the tangent stress so it is exact for nonlinear mu
+            # and reduces to the frozen-mu form for linear mu.
+            tangent = eq.approximation.tangent_stress(trial, eq.test)
+            F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
-            # Derivative of the penalty through mu, so that the penalty is the
-            # exact second variation of the boundary functional.
+            # Derivative of the penalty through mu, the exact second variation of
+            # the penalty functional sigma mu <G, A(G)> with G = jump_gradient.
             if mu_nonlinear:
-                beta = 1 - (2 / 3 if compressible_stress else 0)
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
-                F += (
-                    sigma
-                    * dmu
-                    * (dot(w, w) + beta * dot(eq.n, w) ** 2)
-                    * eq.ds(bc_id)
-                )
+                F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "un" in bc:
-            w = dot(eq.n, trial) - bc["un"]
-            trial_tensor_jump = 2 * outer(eq.n, eq.n) * w
-            if compressible_stress:
-                trial_tensor_jump -= 2 / 3 * identity * w
+            un_jump = dot(eq.n, trial) - bc["un"]
+            w = un_jump * eq.n
+            jump_gradient = outer(eq.n, w)
+            jump_tensor = eq.approximation.deviatoric_stress_shape(jump_gradient)
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2
                 * sigma
-                * inner(outer(eq.n, eq.test), mu * trial_tensor_jump)
+                * inner(outer(eq.n, eq.test), mu * jump_tensor)
                 * eq.ds(bc_id)
             )
-            # Symmetrising term. For nonlinear mu this is the tangent stress
-            # contracted with the jump; for linear mu it is the frozen-mu form.
-            if mu_nonlinear:
-                tangent = eq.approximation.tangent_stress(trial, eq.test)
-                F -= w * dot(eq.n, dot(tangent, eq.n)) * eq.ds(bc_id)
-            else:
-                F -= inner(mu * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
+            # Symmetrising term, as in the "u" branch but with the jump restricted
+            # to its normal component.
+            tangent = eq.approximation.tangent_stress(trial, eq.test)
+            F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             # We only keep the normal part of stress; the tangential part is assumed to
             # be zero stress (i.e. free slip) or prescribed via "stress".
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
-            # Derivative of the penalty through mu, so that the penalty is the
-            # exact second variation of the boundary functional.
+            # Derivative of the penalty through mu, the exact second variation of
+            # the penalty functional sigma mu <G, A(G)> with G = jump_gradient.
             if mu_nonlinear:
-                c = 2 - (2 / 3 if compressible_stress else 0)
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
-                F += c * sigma * dmu * w ** 2 * eq.ds(bc_id)
+                F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
             if hasattr(eq.approximation, 'bulk_modulus'):
                 trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])

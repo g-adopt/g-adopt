@@ -29,7 +29,38 @@ __all__ = [
 ]
 
 
-class BaseApproximation(abc.ABC):
+class DeviatoricStressMixin:
+    """Provides the single definition of the deviatoric stress shape.
+
+    All logic about how the deviatoric stress is assembled from a velocity
+    gradient lives in `deviatoric_stress_shape`, keyed off the `compressible`
+    property. The full stress, the tangent stress, and the weak (SIPG) boundary
+    terms in the momentum equation all build on this one method, so a subclass
+    that changes the stress form (for example a true 2D compressible model) only
+    overrides here.
+    """
+
+    def deviatoric_stress_shape(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+        r"""The mu-free deviatoric stress from a velocity-gradient-like tensor.
+
+        Returns $2 sym(G)$ for the incompressible case and
+        $2 sym(G) - 2/3 tr(G) I$ for the compressible case, where `G` is any
+        gradient-like tensor. With `G = grad(u)` this is `stress(u) / mu`; with
+        `G = outer(n, w)` it is the boundary jump tensor used by the SIPG
+        penalty. The 2/3 factor is fixed regardless of dimension, matching the
+        stress operator used throughout.
+
+        Returns:
+          A UFL expression for the deviatoric stress shape.
+
+        """
+        shape = 2 * sym(gradient)
+        if self.compressible:
+            shape = shape - 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
+        return shape
+
+
+class BaseApproximation(DeviatoricStressMixin, abc.ABC):
     """Base class to provide expressions for the coupled Stokes and Energy system.
 
     The basic assumption is that we are solving (to be extended when needed)
@@ -63,15 +94,17 @@ class BaseApproximation(abc.ABC):
         """
         pass
 
-    @abc.abstractmethod
     def stress(self, u: Function) -> ufl.core.expr.Expr:
         """Defines the deviatoric stress.
+
+        Built from the single deviatoric stress shape, so the incompressible and
+        compressible forms differ only through the `compressible` property.
 
         Returns:
           A UFL expression for the deviatoric stress.
 
         """
-        pass
+        return self.mu * self.deviatoric_stress_shape(grad(u))
 
     def tangent_stress(self, u, v, **kwargs):
         r"""Directional derivative $D\sigma(u)[v]$ of the deviatoric stress.
@@ -80,8 +113,10 @@ class BaseApproximation(abc.ABC):
         viscosity that does not depend on the velocity it is equal to
         `stress(v)`. The weak (SIPG) boundary terms in the momentum equation
         use it so that the Jacobian of the weak boundary conditions is
-        symmetric for a strain-rate-dependent viscosity. A subclass can
-        override this with an analytic tangent stress.
+        symmetric; it is used for every viscosity, linear or nonlinear. A
+        subclass can override this with an analytic tangent stress. A subclass
+        whose `stress` carries state-dependent terms (for example a previous-step
+        stress) must override this, since the default calls `stress(v)`.
 
         Returns:
           A UFL expression for the tangent deviatoric stress.
@@ -242,9 +277,6 @@ class BoussinesqApproximation(BaseApproximation):
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
 
-    def stress(self, u):
-        return 2 * self.mu * sym(grad(u))
-
     def buoyancy(self, p, T):
         return (
             self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
@@ -377,11 +409,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         self.Tbar = Tbar
         self.cp = cp
 
-    def stress(self, u):
-        stress = super().stress(u)
-        dim = len(u)  # Geometric dimension, i.e. 2D or 3D
-        return stress - 2/3 * self.mu * Identity(dim) * div(u)
-
     def rho_continuity(self):
         return self.rho
 
@@ -443,7 +470,7 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         return pressure_part + temperature_part
 
 
-class BaseGIAApproximation:
+class BaseGIAApproximation(DeviatoricStressMixin):
     """Base class for viscoelasticity assuming small displacements.
 
     By assuming a small displacement with respect to mantle thickness
@@ -506,6 +533,17 @@ class BaseGIAApproximation:
 
     def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
         return 0
+
+    def tangent_stress(self, u, v, **kwargs) -> ufl.core.expr.Expr:
+        r"""Tangent of the mu-scaled deviatoric stress for the SIPG boundary terms.
+
+        The viscosity is set to the effective viscosity `self.mu` (independent of
+        the displacement), so the tangent is `mu` times the deviatoric stress
+        shape of the test direction. This deliberately excludes the previous-step
+        stress and the bulk part, which the momentum equation handles in separate
+        terms.
+        """
+        return self.mu * self.deviatoric_stress_shape(grad(v))
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         return 0
