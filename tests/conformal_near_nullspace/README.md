@@ -13,6 +13,8 @@ python tests/conformal_near_nullspace/benchmark.py \
 python tests/conformal_near_nullspace/benchmark.py \
   --modes conformal-balanced --refinement-level 2 --layers 4 --warm-repeats 5
 python tests/conformal_near_nullspace/benchmark.py \
+  --modes conformal-ritz --refinement-level 2 --layers 4 --warm-repeats 5
+python tests/conformal_near_nullspace/benchmark.py \
   --modes conformal-raw --refinement-level 2 --layers 4 --warm-repeats 5
 python tests/conformal_near_nullspace/benchmark.py \
   --modes rigid-constrained --refinement-level 2 --layers 4 --warm-repeats 5
@@ -69,6 +71,30 @@ additional modes. The four-by-four Galerkin matrix is replicated on each rank.
 This preserves the complete ten-dimensional coarse information without
 requiring a first-level three-component aggregate to represent ten columns.
 
+`conformal-ritz` instead forms the ten-by-ten operator Ritz matrix for the
+complete conformal space and passes its six lowest-energy combinations to
+GAMG through `RitzConformalPC`. This retains the ordinary six-column hierarchy
+width and aggregate row-rank requirement. Its setup costs ten assembled
+operator actions and ten small collective dot products per rebuild. Initial
+validation of the input basis adds ten more small collective dot products; its
+application has no extra work beyond the unchanged six-mode GAMG cycle. The
+selection is refreshed when the assembled velocity operator is updated, and
+the JSON output records the Ritz spectrum, the relative sixth/seventh
+eigenvalue gap, and whether the deterministic rigid-six fallback was used. The
+class rejects a restricted operator with a significant negative eigenvalue.
+If the cutoff gap is numerically unresolved it uses the first six rigid
+candidates; the default threshold is the square root of machine precision and
+can be raised with the prefixed PETSc option `ritz_min_relative_gap`.
+
+Relative to rigid-six, the class keeps four additional input candidates and
+six selected vectors, or about ten extra real distributed vectors before
+ghost and object overhead. A negative restricted eigenvalue is not papered
+over by the fallback because that would invalidate the surrounding CG solve.
+In one deliberately under-resolved test, interpolating an exponential
+contrast of `1e8` into CG2 on only two vertical cells produced negative
+viscosity between interpolation nodes; the PSD check correctly rejected that
+physical-coefficient error.
+
 `conformal-raw` remains the direct ten-mode GAMG comparison. It can fail when
 an aggregate contains fewer than four velocity nodes; that failure is useful
 evidence and is not hidden by changing graph or smoother options.
@@ -92,6 +118,9 @@ python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
   --approximation tala --modes rigid-raw --n 8 --viscosity-contrast 1e4
 python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
   --approximation tala --modes conformal-balanced --n 8 \
+  --viscosity-contrast 1e4
+python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
+  --approximation tala --modes conformal-ritz --n 8 \
   --viscosity-contrast 1e4
 python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
   --approximation tala --modes conformal-raw --n 8 \
@@ -130,16 +159,41 @@ global correction. It remained vulnerable to an under-resolved aggregate at
 `1e6`. Therefore the balanced class is an experimental comparison arm, not a
 new default or demonstrated production optimisation.
 
-On the curved refinement-level-2, two-layer shell at contrast `1e4`, all three
-treatments required three velocity iterations. Median warm times were 0.0751,
-0.0778, and 0.0941 seconds for six rigid, balanced, and direct ten modes,
-respectively. These small local timings are mechanism evidence only.
+The operator-aware six-mode Ritz treatment reduced the same `n=8` TALA
+velocity work from 92 to 84 iterations at contrast `1e4` and from 110 to 94
+at contrast `1e6`; the corresponding ALA counts were 84 and 93. It also
+converged for both approximations at contrast `1e8` and under two MPI ranks.
+At `n=12`, contrast `1e6`, it reduced TALA work from 122 to 109 iterations in
+serial and from 133 to 116 on two ranks. These runs retained the original
+GAMG settings and the six-mode hierarchy width. At `n=8`, contrast `1e6`,
+rigid-six and Ritz-six had identical measured grid complexity (`1.04315`),
+operator complexity (`1.07533`), and coarse equation count (`636`). The small
+curved-shell case showed no iteration improvement, so `RitzConformalPC` is a
+testable near-term prototype rather than a demonstrated production default.
+The preferred long-term route remains PETSc-side repair of aggregates whose
+restricted ten-mode candidate matrix is rank deficient.
+[The proposed repair algorithm and its validation matrix](PETSC_RANK_AWARE_AGGREGATION.md)
+are documented separately.
 
-ALA uses G-ADOPT's analytical right pressure gauge, which is not an exact
-nullspace of the discrete operator. Its raw assembled momentum residual
-therefore includes a gauge component even after Krylov convergence. Compare
-the continuity residual and matched solver work, and do not interpret that
-known gauge residual as a velocity near-nullspace failure.
+Re-expressing the complete candidate space about the translated origin
+`(2.5, -1.75, 0.625)` left the `n=8`, contrast `1e6` result at 94 iterations
+and reproduced the Ritz spectrum to roundoff. This checks the expected origin
+invariance of selecting a subspace from all ten conformal candidates; selecting
+a fixed incomplete conformal subset would not have this property.
+
+The ALA benchmark reaches essentially the same velocity-iteration conclusion
+as TALA, but its independently assembled absolute momentum residual is about
+`0.99` (roughly `7e-4` relative to the linear right-hand side) for both rigid
+and Ritz candidates. This is associated with the existing approximate
+discrete ALA pressure null mode, not the velocity near-nullspace choice. The
+ALA counts are therefore solver comparisons rather than independent
+scientific validation of that benchmark solution.
+
+On the curved refinement-level-2, two-layer shell at contrast `1e4`, all four
+treatments required three velocity iterations. Median warm times for the
+previous rigid, balanced, and direct-ten comparison were 0.0751, 0.0778, and
+0.0941 seconds, respectively. These small local timings are mechanism evidence
+only.
 
 ### Why there is no two-dimensional conformal benchmark
 
@@ -173,7 +227,7 @@ solver = StokesSolver(
     near_nullspace=velocity_near_nullspace,
     solver_parameters_extra={
         "fieldsplit_0": {
-            "pc_python_type": "gadopt.BalancedConformalPC",
+            "pc_python_type": "gadopt.RitzConformalPC",
         },
     },
 )
@@ -195,8 +249,9 @@ For a controlled comparison from one checkpoint, run these fresh-job arms
 with otherwise identical PETSc options and process placement:
 
 1. six rigid modes with `SPDAssembledPC`;
-2. the balanced six-plus-four treatment with `BalancedConformalPC`;
-3. all ten modes passed directly to GAMG with `SPDAssembledPC`.
+2. six operator-selected conformal combinations with `RitzConformalPC`;
+3. the balanced six-plus-four treatment with `BalancedConformalPC`;
+4. all ten modes passed directly to GAMG with `SPDAssembledPC`.
 
 Compare maximum-rank Stokes time, total `fieldsplit_0` and `fieldsplit_1`
 iterations and calls, GAMG hierarchy/operator complexity and memory, and the

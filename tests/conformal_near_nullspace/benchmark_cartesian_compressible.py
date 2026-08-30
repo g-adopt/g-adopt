@@ -26,6 +26,9 @@ def argument_parser():
             "rigid-raw",
             "rigid-constrained",
             "conformal-balanced",
+            "conformal-balanced-constrained",
+            "conformal-ritz",
+            "conformal-ritz-constrained",
             "conformal-raw",
             "conformal-constrained",
         ),
@@ -83,11 +86,12 @@ def near_nullspace_for(modes, mixed_space):
 
 def solver_parameters(args):
     """Return the same fieldsplit/GAMG solver for every benchmark arm."""
-    velocity_pc = (
-        "gadopt.BalancedConformalPC"
-        if args.modes == "conformal-balanced"
-        else "gadopt.SPDAssembledPC"
-    )
+    if args.modes.startswith("conformal-balanced"):
+        velocity_pc = "gadopt.BalancedConformalPC"
+    elif args.modes.startswith("conformal-ritz"):
+        velocity_pc = "gadopt.RitzConformalPC"
+    else:
+        velocity_pc = "gadopt.SPDAssembledPC"
     return {
         "snes_type": "ksponly",
         "mat_type": "matfree",
@@ -297,6 +301,36 @@ def timed_runs(solution, solver, warm_repeats):
         "balanced_coarse_condition_number": getattr(
             velocity_pc_context,
             "coarse_condition_number",
+            None,
+        ),
+        "ritz_eigenvalues": (
+            velocity_pc_context.ritz_eigenvalues.tolist()
+            if hasattr(velocity_pc_context, "ritz_eigenvalues")
+            else None
+        ),
+        "ritz_relative_gap": getattr(
+            velocity_pc_context,
+            "ritz_relative_gap",
+            None,
+        ),
+        "ritz_used_rigid_fallback": getattr(
+            velocity_pc_context,
+            "ritz_used_fallback",
+            None,
+        ),
+        "ritz_minimum_relative_gap": getattr(
+            velocity_pc_context,
+            "ritz_minimum_relative_gap",
+            None,
+        ),
+        "ritz_basis_orthonormality_error": getattr(
+            velocity_pc_context,
+            "complete_mode_orthonormality_error",
+            None,
+        ),
+        "ritz_principal_angle_change": getattr(
+            velocity_pc_context,
+            "ritz_principal_angle_change",
             None,
         ),
         "equation_residual": residual.dat.norm,

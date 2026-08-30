@@ -29,6 +29,7 @@ from .nullspaces import (
 from .preconditioners import (
     BalancedConformalPC,
     FreeSurfaceMassInvPC,
+    RitzConformalPC,
     SPDAssembledPC,
 )
 from .solver_options_manager import DeleteParam
