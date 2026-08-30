@@ -51,13 +51,32 @@ GAMG setup/coarse-grid cost and memory, and final nonlinear residuals. Ten
 candidates increase interpolation width and can reduce iterations while still
 increasing time or memory.
 
-The default refinement level is 2. On the level-1 shell the six-mode arms run,
-but the ten-mode GAMG setup is under-resolved locally: some aggregates cannot
-represent ten scalar columns (at least four three-component nodes are needed),
-and the PETSc process can terminate during setup. This is a useful guardrail,
-not evidence against the production mesh. Keep the level-2 minimum for the
-ten-mode local comparison and inspect PETSc's aggregate/coarse-grid report on
-every target MPI layout.
+The ten-mode cases use a less destructive GAMG graph threshold and one SOR
+smoothing sweep per level:
+
+```python
+"assembled_mg_levels_ksp_max_it": 1,
+"assembled_pc_gamg_threshold": 1.0e-4,
+"assembled_pc_gamg_aggressive_coarsening": 1,
+"assembled_pc_gamg_aggressive_square_graph": True,
+```
+
+This combination addresses a concrete failure in the earlier configuration.
+With a threshold of `0.01` and a viscosity contrast of `1e6`, graph filtering
+could leave an aggregate with fewer than four three-component nodes. Such an
+aggregate cannot represent all ten scalar candidate columns. PETSc then padded
+the local QR factorisation, an intermediate coarse operator acquired a zero
+diagonal, and the SOR smoother returned `DIVERGED_NANORINF`. A threshold of
+`1e-4` retained enough graph connectivity for the same ten-mode problem to
+converge in serial and on two MPI ranks. The explicit aggressive-coarsening
+options replace the deprecated `pc_gamg_square_graph` spelling.
+
+This threshold is a tested benchmark setting, not a universal physical
+constant. Inspect the aggregate sizes, hierarchy, operator complexity and
+convergence on every production mesh and MPI layout. Keep refinement level 2
+as the minimum useful local shell comparison: the level-1 shell is too small
+to assess production performance and its iterative pressure solve can reach
+its iteration limit at high contrast even after the velocity NaN is removed.
 
 ## Cartesian TALA and ALA comparison
 
@@ -87,28 +106,28 @@ also available. The output records all nested velocity and pressure solves,
 candidate energy quotients, convergence failures, maximum-rank timings, and
 the assembled residual components.
 
-The first single-rank Apple-silicon measurements below used PETSc 3.25.0,
-Firedrake 2026.4.1, an `8 x 8 x 8` hexahedral mesh, a radial viscosity contrast
-of `1e4`, and three warm repeats. They demonstrate an algebraic effect, not a
-production speedup:
+The matched single-rank Apple-silicon measurements below used PETSc 3.25.0,
+Firedrake 2026.4.1, a `12 x 12 x 12` hexahedral mesh, a viscosity contrast of
+`1e4`, one SOR smoothing sweep per level, and three warm repeats. They isolate
+the candidate-space effect from the smoother change:
 
 | Approximation | Candidates | Velocity iterations | Warm seconds |
 | --- | --- | ---: | ---: |
-| TALA | none | 96 | 1.467 |
-| TALA | six rigid | 92 | 1.429 |
-| TALA | ten conformal | 80 | 1.477 |
-| ALA | none | 95 | 1.451 |
-| ALA | six rigid | 91 | 1.497 |
-| ALA | ten conformal | 79 | 1.541 |
+| TALA | none | 167 | 5.332 |
+| TALA | six rigid | 141 | 4.921 |
+| TALA | ten conformal | 117 | 4.828 |
 
-The ten modes reduce nested velocity iterations by about 17 percent relative
-to no candidates, but their wider GAMG interpolation offsets that saving on
-one rank. On a `12 x 12 x 12` TALA mesh the work fell from 119 to 97
-iterations, while median warm time increased from 6.20 to 6.93 seconds. At a
-viscosity contrast of `1e6`, the tested ten-mode hierarchy failed during its
-first velocity preconditioner application with `DIVERGED_NANORINF`; the zero-
-and six-mode controls converged. This robustness limit must be understood
-before enabling the ten modes by default.
+Against the matched no-candidate arm, all ten modes reduced nested velocity
+work by 30 percent and median warm time by about 9.5 percent. Comparing with
+the former two-sweep no-candidate result would suggest a larger time saving,
+but that would mix the near-nullspace improvement with the cheaper smoother.
+
+The high-contrast `8 x 8 x 8` TALA regression is now also finite: the matched
+one-sweep no-candidate arm required 155 velocity iterations and 1.410 seconds,
+while all ten modes required 118 iterations and 1.259 seconds. For ALA the ten
+modes reduced velocity work from 107 to 91 iterations, but the one-rank timing
+was noisier and did not improve. These are mechanism and regression results,
+not a claim of production speedup.
 
 ALA uses G-ADOPT's analytical right pressure gauge, which is not an exact
 nullspace of the discrete operator. Its raw assembled momentum residual
@@ -148,6 +167,24 @@ solver = StokesSolver(
     near_nullspace=velocity_near_nullspace,
 )
 ```
+
+Apply the tested GAMG changes to the existing velocity block as well:
+
+```python
+stokes_solver_parameters["fieldsplit_0"].update(
+    {
+        "assembled_mg_levels_ksp_max_it": 1,
+        "assembled_pc_gamg_threshold": 1.0e-4,
+        "assembled_pc_gamg_aggressive_coarsening": 1,
+        "assembled_pc_gamg_aggressive_square_graph": True,
+    }
+)
+```
+
+Remove `assembled_pc_gamg_square_graph` from that block. These option names
+were validated with PETSc 3.25.0. Check Gadi's installed PETSc with
+`-options_left` before a production run; an unused option means the requested
+hierarchy was not actually tested.
 
 `constrain_strong_bcs=False` is the recommended first test. It supplies the
 smooth, unmodified conformal fields to GAMG even though the GPlates velocity
