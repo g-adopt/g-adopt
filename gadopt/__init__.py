@@ -26,7 +26,11 @@ from .nullspaces import (
     create_stokes_nullspace,
     rigid_body_modes,
 )
-from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .preconditioners import (
+    BalancedConformalPC,
+    FreeSurfaceMassInvPC,
+    SPDAssembledPC,
+)
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,

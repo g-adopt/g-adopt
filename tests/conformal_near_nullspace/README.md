@@ -11,6 +11,8 @@ Run each arm in a fresh process or PBS job:
 python tests/conformal_near_nullspace/benchmark.py \
   --modes rigid-raw --refinement-level 2 --layers 4 --warm-repeats 5
 python tests/conformal_near_nullspace/benchmark.py \
+  --modes conformal-balanced --refinement-level 2 --layers 4 --warm-repeats 5
+python tests/conformal_near_nullspace/benchmark.py \
   --modes conformal-raw --refinement-level 2 --layers 4 --warm-repeats 5
 python tests/conformal_near_nullspace/benchmark.py \
   --modes rigid-constrained --refinement-level 2 --layers 4 --warm-repeats 5
@@ -51,32 +53,25 @@ GAMG setup/coarse-grid cost and memory, and final nonlinear residuals. Ten
 candidates increase interpolation width and can reduce iterations while still
 increasing time or memory.
 
-The ten-mode cases use a less destructive GAMG graph threshold and one SOR
-smoothing sweep per level:
+Every benchmark arm now uses the original GAMG configuration: a graph
+threshold of `0.01`, `pc_gamg_square_graph=100`, and the existing SOR
+smoother settings. `conformal-balanced` supplies the six rigid modes to GAMG
+and treats the remaining dilation and three special-conformal modes through
+`BalancedConformalPC`. The latter applies the symmetric coarse correction
 
-```python
-"assembled_mg_levels_ksp_max_it": 1,
-"assembled_pc_gamg_threshold": 1.0e-4,
-"assembled_pc_gamg_aggressive_coarsening": 1,
-"assembled_pc_gamg_aggressive_square_graph": True,
+```text
+Q + (I - Q A) M^-1 (I - A Q),
+Q = W (W^T A W)^-1 W^T,
 ```
 
-This combination addresses a concrete failure in the earlier configuration.
-With a threshold of `0.01` and a viscosity contrast of `1e6`, graph filtering
-could leave an aggregate with fewer than four three-component nodes. Such an
-aggregate cannot represent all ten scalar candidate columns. PETSc then padded
-the local QR factorisation, an intermediate coarse operator acquired a zero
-diagonal, and the SOR smoother returned `DIVERGED_NANORINF`. A threshold of
-`1e-4` retained enough graph connectivity for the same ten-mode problem to
-converge in serial and on two MPI ranks. The explicit aggressive-coarsening
-options replace the deprecated `pc_gamg_square_graph` spelling.
+where `M^-1` is the unchanged GAMG preconditioner and `W` contains the four
+additional modes. The four-by-four Galerkin matrix is replicated on each rank.
+This preserves the complete ten-dimensional coarse information without
+requiring a first-level three-component aggregate to represent ten columns.
 
-This threshold is a tested benchmark setting, not a universal physical
-constant. Inspect the aggregate sizes, hierarchy, operator complexity and
-convergence on every production mesh and MPI layout. Keep refinement level 2
-as the minimum useful local shell comparison: the level-1 shell is too small
-to assess production performance and its iterative pressure solve can reach
-its iteration limit at high contrast even after the velocity NaN is removed.
+`conformal-raw` remains the direct ten-mode GAMG comparison. It can fail when
+an aggregate contains fewer than four velocity nodes; that failure is useful
+evidence and is not hidden by changing graph or smoother options.
 
 ## Cartesian TALA and ALA comparison
 
@@ -96,6 +91,9 @@ python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
 python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
   --approximation tala --modes rigid-raw --n 8 --viscosity-contrast 1e4
 python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
+  --approximation tala --modes conformal-balanced --n 8 \
+  --viscosity-contrast 1e4
+python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
   --approximation tala --modes conformal-raw --n 8 \
   --viscosity-contrast 1e4
 ```
@@ -106,28 +104,36 @@ also available. The output records all nested velocity and pressure solves,
 candidate energy quotients, convergence failures, maximum-rank timings, and
 the assembled residual components.
 
-The matched single-rank Apple-silicon measurements below used PETSc 3.25.0,
-Firedrake 2026.4.1, a `12 x 12 x 12` hexahedral mesh, a viscosity contrast of
-`1e4`, one SOR smoothing sweep per level, and three warm repeats. They isolate
-the candidate-space effect from the smoother change:
+Earlier timing tables used altered smoothing and graph settings and must not
+be used to assess this prototype. The matched single-rank Apple-silicon
+measurements below used PETSc 3.25.0, Firedrake 2026.4.1, an `8 x 8 x 8`
+hexahedral mesh, three warm repeats, and the identical original settings now
+encoded in the benchmark:
 
-| Approximation | Candidates | Velocity iterations | Warm seconds |
-| --- | --- | ---: | ---: |
-| TALA | none | 167 | 5.332 |
-| TALA | six rigid | 141 | 4.921 |
-| TALA | ten conformal | 117 | 4.828 |
+| Approximation | Contrast | Treatment | Velocity iterations | Warm seconds |
+| --- | ---: | --- | ---: | ---: |
+| TALA | `1e4` | six rigid | 92 | 1.494 |
+| TALA | `1e4` | balanced six plus four | 93 | 1.656 |
+| TALA | `1e4` | direct ten | 80 | 1.507 |
+| ALA | `1e4` | six rigid | 91 | 1.516 |
+| ALA | `1e4` | balanced six plus four | 91 | 1.620 |
+| ALA | `1e4` | direct ten | 79 | 1.551 |
+| TALA | `1e6` | six rigid | 110 | 1.755 |
+| TALA | `1e6` | balanced six plus four | 110 | 1.875 |
+| TALA | `1e6` | direct ten | `DIVERGED_LINEAR_SOLVE` | -- |
 
-Against the matched no-candidate arm, all ten modes reduced nested velocity
-work by 30 percent and median warm time by about 9.5 percent. Comparing with
-the former two-sweep no-candidate result would suggest a larger time saving,
-but that would mix the near-nullspace improvement with the cheaper smoother.
+The balanced correction is robust but did not reduce work in these tests and
+added two four-scalar collective reductions to each velocity-PC application.
+Direct ten-mode GAMG reduced iterations at `1e4` because it uses the modes to
+construct local aggregate interpolation spaces, not merely a four-dimensional
+global correction. It remained vulnerable to an under-resolved aggregate at
+`1e6`. Therefore the balanced class is an experimental comparison arm, not a
+new default or demonstrated production optimisation.
 
-The high-contrast `8 x 8 x 8` TALA regression is now also finite: the matched
-one-sweep no-candidate arm required 155 velocity iterations and 1.410 seconds,
-while all ten modes required 118 iterations and 1.259 seconds. For ALA the ten
-modes reduced velocity work from 107 to 91 iterations, but the one-rank timing
-was noisier and did not improve. These are mechanism and regression results,
-not a claim of production speedup.
+On the curved refinement-level-2, two-layer shell at contrast `1e4`, all three
+treatments required three velocity iterations. Median warm times were 0.0751,
+0.0778, and 0.0941 seconds for six rigid, balanced, and direct ten modes,
+respectively. These small local timings are mechanism evidence only.
 
 ALA uses G-ADOPT's analytical right pressure gauge, which is not an exact
 nullspace of the discrete operator. Its raw assembled momentum residual
@@ -165,26 +171,18 @@ velocity_near_nullspace = ConformalKillingNearNullspace(
 solver = StokesSolver(
     # Existing arguments remain unchanged.
     near_nullspace=velocity_near_nullspace,
+    solver_parameters_extra={
+        "fieldsplit_0": {
+            "pc_python_type": "gadopt.BalancedConformalPC",
+        },
+    },
 )
 ```
 
-Apply the tested GAMG changes to the existing velocity block as well:
-
-```python
-stokes_solver_parameters["fieldsplit_0"].update(
-    {
-        "assembled_mg_levels_ksp_max_it": 1,
-        "assembled_pc_gamg_threshold": 1.0e-4,
-        "assembled_pc_gamg_aggressive_coarsening": 1,
-        "assembled_pc_gamg_aggressive_square_graph": True,
-    }
-)
-```
-
-Remove `assembled_pc_gamg_square_graph` from that block. These option names
-were validated with PETSc 3.25.0. Check Gadi's installed PETSc with
-`-options_left` before a production run; an unused option means the requested
-hierarchy was not actually tested.
+Do not change the GAMG graph, aggressive-coarsening, or smoother options for
+this comparison. The only velocity-block change is the Python preconditioner
+class shown above. Check Gadi's installed configuration with `-options_left`;
+an unused Python-PC option means the intended prototype was not tested.
 
 `constrain_strong_bcs=False` is the recommended first test. It supplies the
 smooth, unmodified conformal fields to GAMG even though the GPlates velocity
@@ -193,13 +191,12 @@ it zeros the top-boundary correction degrees of freedom before
 orthonormalising the modes, which introduces candidate strain near that
 boundary.
 
-For a controlled comparison from one checkpoint, run at least these fresh-job
-arms with otherwise identical PETSc options and process placement:
+For a controlled comparison from one checkpoint, run these fresh-job arms
+with otherwise identical PETSc options and process placement:
 
-1. the current near-nullspace;
-2. rotations only;
-3. six rigid modes, raw and constrained;
-4. all ten conformal modes, raw and constrained.
+1. six rigid modes with `SPDAssembledPC`;
+2. the balanced six-plus-four treatment with `BalancedConformalPC`;
+3. all ten modes passed directly to GAMG with `SPDAssembledPC`.
 
 Compare maximum-rank Stokes time, total `fieldsplit_0` and `fieldsplit_1`
 iterations and calls, GAMG hierarchy/operator complexity and memory, and the

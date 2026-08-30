@@ -23,6 +23,7 @@ def argument_parser():
             "rotations",
             "rigid-raw",
             "rigid-constrained",
+            "conformal-balanced",
             "conformal-raw",
             "conformal-constrained",
         ),
@@ -79,6 +80,11 @@ def near_nullspace_for(modes, mixed_space):
 
 def solver_parameters(args):
     """Return a production-shaped full-Schur/GAMG configuration."""
+    velocity_pc = (
+        "gadopt.BalancedConformalPC"
+        if args.modes == "conformal-balanced"
+        else "gadopt.SPDAssembledPC"
+    )
     return {
         "snes_type": "ksponly",
         "mat_type": "matfree",
@@ -91,13 +97,11 @@ def solver_parameters(args):
             "ksp_rtol": args.velocity_rtol,
             "ksp_max_it": 1000,
             "pc_type": "python",
-            "pc_python_type": "gadopt.SPDAssembledPC",
+            "pc_python_type": velocity_pc,
             "assembled_pc_type": "gamg",
             "assembled_mg_levels_pc_type": "sor",
-            "assembled_mg_levels_ksp_max_it": 1,
-            "assembled_pc_gamg_threshold": 1.0e-4,
-            "assembled_pc_gamg_aggressive_coarsening": 1,
-            "assembled_pc_gamg_aggressive_square_graph": True,
+            "assembled_pc_gamg_threshold": 0.01,
+            "assembled_pc_gamg_square_graph": 100,
             "assembled_pc_gamg_coarse_eq_limit": 1000,
             "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
         },
@@ -279,6 +283,7 @@ def timed_runs(solution, solver, warm_repeats):
         if attached_near_nullspace.handle != 0
         else 0
     )
+    velocity_pc_context = velocity_ksp.pc.getPythonContext()
     residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
     return {
         "mpi_size": comm.size,
@@ -289,6 +294,14 @@ def timed_runs(solution, solver, warm_repeats):
         "warm_seconds_samples": warm_seconds,
         "warm_work_samples": warm_work,
         "attached_velocity_near_nullspace_count": attached_count,
+        "balanced_coarse_mode_count": len(
+            getattr(velocity_pc_context, "_conformal_modes", ())
+        ),
+        "balanced_coarse_condition_number": getattr(
+            velocity_pc_context,
+            "coarse_condition_number",
+            None,
+        ),
         "assembled_velocity_block_size": assembled_velocity.getBlockSize(),
         "equation_residual": residual.dat.norm,
         "momentum_residual": residual.subfunctions[0].dat.norm,

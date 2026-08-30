@@ -370,13 +370,11 @@ def test_conformal_modes_reach_gamg_on_resolved_tala_shell():
                 "ksp_rtol": 1e-7,
                 "ksp_max_it": 300,
                 "pc_type": "python",
-                "pc_python_type": "gadopt.SPDAssembledPC",
+                "pc_python_type": "gadopt.BalancedConformalPC",
                 "assembled_pc_type": "gamg",
                 "assembled_mg_levels_pc_type": "sor",
-                "assembled_mg_levels_ksp_max_it": 1,
-                "assembled_pc_gamg_threshold": 1.0e-4,
-                "assembled_pc_gamg_aggressive_coarsening": 1,
-                "assembled_pc_gamg_aggressive_square_graph": True,
+                "assembled_pc_gamg_threshold": 0.01,
+                "assembled_pc_gamg_square_graph": 100,
             },
             "fieldsplit_1": {
                 "ksp_type": "fgmres",
@@ -391,9 +389,11 @@ def test_conformal_modes_reach_gamg_on_resolved_tala_shell():
     solver.solve()
 
     velocity_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[0]
-    matrix = velocity_ksp.pc.getPythonContext().P.petscmat
+    context = velocity_ksp.pc.getPythonContext()
+    matrix = context.P.petscmat
     assert velocity_ksp.getConvergedReason() > 0
-    assert len(matrix.getNearNullSpace().getVecs()) == 10
+    assert len(matrix.getNearNullSpace().getVecs()) == 6
+    assert len(context._conformal_modes) == 4
     residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
     assert residual.dat.norm < 1e-5
 
@@ -504,13 +504,11 @@ def test_high_contrast_conformal_gamg_converges(approximation_type):
                 "ksp_rtol": 1.0e-7,
                 "ksp_max_it": 1000,
                 "pc_type": "python",
-                "pc_python_type": "gadopt.SPDAssembledPC",
+                "pc_python_type": "gadopt.BalancedConformalPC",
                 "assembled_pc_type": "gamg",
                 "assembled_mg_levels_pc_type": "sor",
-                "assembled_mg_levels_ksp_max_it": 1,
-                "assembled_pc_gamg_threshold": 1.0e-4,
-                "assembled_pc_gamg_aggressive_coarsening": 1,
-                "assembled_pc_gamg_aggressive_square_graph": True,
+                "assembled_pc_gamg_threshold": 0.01,
+                "assembled_pc_gamg_square_graph": 100,
                 "assembled_pc_gamg_coarse_eq_limit": 1000,
                 "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
             },
@@ -527,8 +525,10 @@ def test_high_contrast_conformal_gamg_converges(approximation_type):
     solver.solve()
 
     velocity_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[0]
-    matrix = velocity_ksp.pc.getPythonContext().P.petscmat
+    context = velocity_ksp.pc.getPythonContext()
+    matrix = context.P.petscmat
     assert velocity_ksp.getConvergedReason() > 0
-    assert len(matrix.getNearNullSpace().getVecs()) == 10
+    assert len(matrix.getNearNullSpace().getVecs()) == 6
+    assert len(context._conformal_modes) == 4
     residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
     assert residual.subfunctions[1].dat.norm < 1e-5
