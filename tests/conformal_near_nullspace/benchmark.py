@@ -1,8 +1,10 @@
-"""MPI-safe benchmark for 3-D TALA velocity near-nullspace candidates.
+"""MPI-safe benchmark for 3-D spherical-shell near-nullspace candidates.
 
 Run one candidate set per process or PBS job. PETSc options not recognised by
 the argument parser are retained, so ``-log_view`` and scoped ``-info`` can be
-used for detailed GAMG setup and coarse-grid diagnostics.
+used for detailed GAMG setup and coarse-grid diagnostics.  The benchmark can
+either mirror the GPlates strong top-velocity condition or impose free slip
+weakly at both radii.  The latter retains the three rotational null modes.
 """
 
 import argparse
@@ -16,6 +18,25 @@ from time import perf_counter
 def argument_parser():
     """Return benchmark options while leaving PETSc options untouched."""
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--approximation",
+        choices=("boussinesq", "tala", "ala"),
+        default="tala",
+    )
+    parser.add_argument(
+        "--velocity-boundary",
+        choices=("strong-top", "free-slip"),
+        default="strong-top",
+    )
+    parser.add_argument(
+        "--rotation-nullspace",
+        choices=("auto", "exact", "omit"),
+        default="auto",
+        help=(
+            "Register shell rotations as an exact nullspace, omit them from "
+            "the exact nullspace, or select exact only for free-slip boundaries."
+        ),
+    )
     parser.add_argument(
         "--modes",
         choices=(
@@ -89,6 +110,19 @@ def solver_parameters(args):
         velocity_pc = "gadopt.RitzConformalPC"
     else:
         velocity_pc = "gadopt.SPDAssembledPC"
+    velocity_parameters = {
+        "ksp_type": "cg",
+        "ksp_rtol": args.velocity_rtol,
+        "ksp_max_it": 1000,
+        "pc_type": "python",
+        "pc_python_type": velocity_pc,
+        "assembled_pc_type": "gamg",
+        "assembled_mg_levels_pc_type": "sor",
+        "assembled_pc_gamg_threshold": 0.01,
+        "assembled_pc_gamg_square_graph": 100,
+        "assembled_pc_gamg_coarse_eq_limit": 1000,
+        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
+    }
     return {
         "snes_type": "ksponly",
         "mat_type": "matfree",
@@ -96,19 +130,7 @@ def solver_parameters(args):
         "pc_type": "fieldsplit",
         "pc_fieldsplit_type": "schur",
         "pc_fieldsplit_schur_fact_type": "full",
-        "fieldsplit_0": {
-            "ksp_type": "cg",
-            "ksp_rtol": args.velocity_rtol,
-            "ksp_max_it": 1000,
-            "pc_type": "python",
-            "pc_python_type": velocity_pc,
-            "assembled_pc_type": "gamg",
-            "assembled_mg_levels_pc_type": "sor",
-            "assembled_pc_gamg_threshold": 0.01,
-            "assembled_pc_gamg_square_graph": 100,
-            "assembled_pc_gamg_coarse_eq_limit": 1000,
-            "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-        },
+        "fieldsplit_0": velocity_parameters,
         "fieldsplit_1": {
             "ksp_type": "fgmres",
             "ksp_rtol": args.pressure_rtol,
@@ -123,8 +145,60 @@ def solver_parameters(args):
     }
 
 
+def approximation_for(args, density, viscosity):
+    """Return the selected approximation with matched viscosity and density."""
+    approximation_name = getattr(args, "approximation", "tala")
+    if approximation_name == "boussinesq":
+        return gadopt.BoussinesqApproximation(Ra=1, mu=viscosity)
+    approximation_type = (
+        gadopt.TruncatedAnelasticLiquidApproximation
+        if approximation_name == "tala"
+        else gadopt.AnelasticLiquidApproximation
+    )
+    return approximation_type(
+        Ra=1,
+        Di=0.5,
+        rho=density,
+        mu=viscosity,
+    )
+
+
+def nullspaces_for(args, mixed_space, approximation, boundary):
+    """Build exact right and transpose nullspaces for the chosen operator."""
+    free_slip = getattr(args, "velocity_boundary", "strong-top") == "free-slip"
+    rotation_nullspace = getattr(args, "rotation_nullspace", "auto")
+    if rotation_nullspace == "exact" and not free_slip:
+        raise ValueError(
+            "Exact rotations are incompatible with the strong top-velocity boundary."
+        )
+    rotational = rotation_nullspace == "exact" or (
+        rotation_nullspace == "auto" and free_slip
+    )
+    if getattr(args, "approximation", "tala") == "ala":
+        nullspace = gadopt.create_stokes_nullspace(
+            mixed_space,
+            closed=True,
+            rotational=rotational,
+            ala_approximation=approximation,
+            top_subdomain_id=boundary.top,
+        )
+        transpose_nullspace = gadopt.create_stokes_nullspace(
+            mixed_space,
+            closed=True,
+            rotational=rotational,
+        )
+        return nullspace, transpose_nullspace
+
+    nullspace = gadopt.create_stokes_nullspace(
+        mixed_space,
+        closed=True,
+        rotational=rotational,
+    )
+    return nullspace, nullspace
+
+
 def build_case(args):
-    """Build a curved-shell, variable-density, high-contrast frozen TALA case."""
+    """Build a curved, high-contrast, frozen spherical-shell Stokes case."""
     rmin, rmax = 1.22, 2.22
     base_mesh = fd.CubedSphereMesh(
         rmin,
@@ -161,22 +235,24 @@ def build_case(args):
             / (rmax - rmin)
         )
     )
-    approximation = gadopt.TruncatedAnelasticLiquidApproximation(
-        Ra=1,
-        Di=0.5,
-        rho=density,
-        mu=viscosity,
-    )
+    approximation = approximation_for(args, density, viscosity)
 
-    imposed_surface_velocity = fd.as_vector((-X[1], X[0], 0)) * 1e-3
-    bcs = {
-        boundary.bottom: {"un": 0},
-        boundary.top: {"u": imposed_surface_velocity},
-    }
-    nullspace = gadopt.create_stokes_nullspace(
+    if getattr(args, "velocity_boundary", "strong-top") == "free-slip":
+        bcs = {
+            boundary.bottom: {"un": 0},
+            boundary.top: {"un": 0},
+        }
+    else:
+        imposed_surface_velocity = fd.as_vector((-X[1], X[0], 0)) * 1e-3
+        bcs = {
+            boundary.bottom: {"un": 0},
+            boundary.top: {"u": imposed_surface_velocity},
+        }
+    nullspace, transpose_nullspace = nullspaces_for(
+        args,
         mixed_space,
-        closed=True,
-        rotational=False,
+        approximation,
+        boundary,
     )
     near_nullspace = near_nullspace_for(args.modes, mixed_space)
     solver = gadopt.StokesSolver(
@@ -185,11 +261,11 @@ def build_case(args):
         temperature,
         bcs=bcs,
         nullspace=nullspace,
-        transpose_nullspace=nullspace,
+        transpose_nullspace=transpose_nullspace,
         near_nullspace=near_nullspace,
         solver_parameters=solver_parameters(args),
     )
-    return solution, solver, boundary
+    return solution, solver, boundary, approximation
 
 
 def candidate_diagnostics(solver, boundary):
@@ -205,8 +281,7 @@ def candidate_diagnostics(solver, boundary):
     velocity_basis = next(iter(solver.near_nullspace))
     modes = velocity_basis._vecs
     identity = fd.Identity(3)
-    coordinates = fd.SpatialCoordinate(solver.mesh)
-    normal = fd.as_vector(coordinates) / fd.sqrt(fd.dot(coordinates, coordinates))
+    normal = fd.FacetNormal(solver.mesh)
     result = {
         "candidate_count": len(modes),
         "candidate_strain_energy": [],
@@ -232,7 +307,80 @@ def candidate_diagnostics(solver, boundary):
     return result
 
 
-def timed_runs(solution, solver, warm_repeats):
+def rotation_operator_diagnostics(solver, boundary, approximation, matrix):
+    """Measure how closely shell rotations satisfy velocity and continuity blocks."""
+    velocity_space = solver.solution_space.sub(0).collapse()
+    pressure_space = solver.solution_space.sub(1).collapse()
+    rotations = gadopt.rigid_body_modes(
+        velocity_space,
+        rotational=True,
+    )._vecs
+    matrix_norm = matrix.norm()
+    velocity_residuals = []
+    velocity_relative_residuals = []
+    velocity_rayleigh_quotients = []
+    for rotation in rotations:
+        image = matrix.createVecLeft()
+        with rotation.dat.vec_ro as vector:
+            matrix.mult(vector, image)
+            velocity_residuals.append(image.norm() / vector.norm())
+            velocity_relative_residuals.append(
+                image.norm() / (matrix_norm * vector.norm())
+            )
+            velocity_rayleigh_quotients.append(
+                abs(vector.dot(image)) / vector.dot(vector).real
+            )
+
+    all_free_slip = all(
+        "un" in solver.bcs[boundary_id]
+        for boundary_id in (boundary.bottom, boundary.top)
+    )
+    if not all_free_slip:
+        return {
+            "rotation_velocity_block_residuals": velocity_residuals,
+            "rotation_velocity_block_relative_residuals": (
+                velocity_relative_residuals
+            ),
+            "rotation_velocity_block_rayleigh_quotients": (
+                velocity_rayleigh_quotients
+            ),
+            "rotation_continuity_block_residuals": None,
+            "rotation_boundary_normal_energies": None,
+        }
+
+    pressure_test = fd.TestFunction(pressure_space)
+    rho = approximation.rho_continuity()
+    normal = fd.FacetNormal(solver.mesh)
+    boundary_measure = fd.ds_b(domain=solver.mesh) + fd.ds_t(domain=solver.mesh)
+    continuity_residuals = []
+    normal_energies = []
+    for rotation in rotations:
+        mode_norm = fd.assemble(fd.inner(rotation, rotation) * fd.dx) ** 0.5
+        continuity_residual = fd.assemble(
+            -pressure_test * fd.div(rho * rotation) * fd.dx
+            + pressure_test
+            * rho
+            * fd.dot(normal, rotation)
+            * boundary_measure
+        )
+        continuity_residuals.append(continuity_residual.dat.norm / mode_norm)
+        normal_energies.append(
+            fd.assemble(fd.dot(normal, rotation) ** 2 * boundary_measure)
+        )
+    return {
+        "rotation_velocity_block_residuals": velocity_residuals,
+        "rotation_velocity_block_relative_residuals": (
+            velocity_relative_residuals
+        ),
+        "rotation_velocity_block_rayleigh_quotients": (
+            velocity_rayleigh_quotients
+        ),
+        "rotation_continuity_block_residuals": continuity_residuals,
+        "rotation_boundary_normal_energies": normal_energies,
+    }
+
+
+def timed_runs(solution, solver, boundary, approximation, warm_repeats):
     """Run cold and warm Stokes solves with total nested-work counters."""
     comm = solution.function_space().mesh().comm
     comm.barrier()
@@ -289,7 +437,7 @@ def timed_runs(solution, solver, warm_repeats):
     )
     velocity_pc_context = velocity_ksp.pc.getPythonContext()
     residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
-    return {
+    result = {
         "mpi_size": comm.size,
         "velocity_dofs": solver.solution_space.sub(0).dim(),
         "pressure_dofs": solver.solution_space.sub(1).dim(),
@@ -341,14 +489,31 @@ def timed_runs(solution, solver, warm_repeats):
         "momentum_residual": residual.subfunctions[0].dat.norm,
         "continuity_residual": residual.subfunctions[1].dat.norm,
     }
+    result.update(
+        rotation_operator_diagnostics(
+            solver,
+            boundary,
+            approximation,
+            assembled_velocity,
+        )
+    )
+    return result
 
 
 def main(args):
     """Run one near-nullspace benchmark arm and print rank-zero JSON."""
-    solution, solver, boundary = build_case(args)
+    solution, solver, boundary, approximation = build_case(args)
     result = vars(args)
     result.update(candidate_diagnostics(solver, boundary))
-    result.update(timed_runs(solution, solver, args.warm_repeats))
+    result.update(
+        timed_runs(
+            solution,
+            solver,
+            boundary,
+            approximation,
+            args.warm_repeats,
+        )
+    )
     if solution.function_space().mesh().comm.rank == 0:
         print(json.dumps(result, sort_keys=True))
 

@@ -1,9 +1,11 @@
 # Conformal near-nullspace benchmark
 
-`benchmark.py` compares candidate velocity spaces for the 3-D TALA
-fieldsplit/GAMG solve on a curved, radially extruded cubed sphere. It mirrors
-the GPlates model's nonzero strong top velocity and weak bottom normal-velocity
-condition. The frozen viscosity has a selectable radial contrast.
+`benchmark.py` compares candidate velocity spaces for 3-D Boussinesq, TALA,
+and ALA fieldsplit/GAMG solves on a curved, radially extruded cubed sphere. By
+default it mirrors the GPlates model's nonzero strong top velocity and weak
+bottom normal-velocity condition. `--velocity-boundary free-slip` instead
+applies zero normal velocity weakly through the Nitsche terms at both radii.
+The frozen viscosity has a selectable radial contrast.
 
 Run each arm in a fresh process or PBS job:
 
@@ -22,17 +24,44 @@ python tests/conformal_near_nullspace/benchmark.py \
   --modes conformal-constrained --refinement-level 2 --layers 4 --warm-repeats 5
 ```
 
+Select Boussinesq, TALA, or ALA with `--approximation`; TALA remains the
+default. For a weak-free-slip shell comparison, run for example:
+
+```bash
+python tests/conformal_near_nullspace/benchmark.py \
+  --approximation tala --velocity-boundary free-slip \
+  --rotation-nullspace omit --modes rotations \
+  --refinement-level 2 --layers 4 --contrast 1e3 \
+  --velocity-rtol 1e-5 --pressure-rtol 1e-5
+python tests/conformal_near_nullspace/benchmark.py \
+  --approximation tala --velocity-boundary free-slip \
+  --rotation-nullspace omit --modes conformal-ritz \
+  --refinement-level 2 --layers 4 --contrast 1e3 \
+  --velocity-rtol 1e-5 --pressure-rtol 1e-5
+```
+
+`--rotation-nullspace auto` follows the established G-ADOPT convention: the
+three shell rotations are registered as exact right and transpose null modes
+when both radii are free slip, but omitted for a strong top velocity.
+`--rotation-nullspace exact` requests them explicitly and rejects the
+incompatible strong-top case. `--rotation-nullspace omit` retains only the
+pressure null mode. It is an essential diagnostic on curved meshes because
+the discrete boundary facets are only approximately spherical.
+
 Use `--modes none` as an overall control and `--modes rotations` to test the
-only raw conformal candidates intrinsically tangent to both spherical
-boundaries. The four primary arms isolate adding dilation/special-conformal
+only individual conformal candidates tangent to both radii in the continuum.
+The four primary arms isolate adding dilation/special-conformal
 modes from strong-boundary restriction. Do not compare only `rigid-raw` with
 `conformal-constrained`, because that changes both factors.
 
 The JSON output contains maximum-rank barrier-to-barrier timings, repeated
 warm samples, total velocity and pressure KSP calls/iterations, convergence
 failures, assembled-matrix candidate count, residuals, and candidate strain
-and boundary energies. Append PETSc logging options for GAMG setup, hierarchy,
-operator-complexity and memory analysis, for example:
+and boundary energies. It also reports the assembled velocity-block residual,
+Frobenius-scaled residual, Rayleigh quotient, density-weighted continuity
+residual, and discrete normal-trace energy of each shell rotation. Append
+PETSc logging options for GAMG setup, hierarchy, operator-complexity and memory
+analysis, for example:
 
 ```text
 -log_view :petsc_case.json:ascii_json
@@ -54,6 +83,88 @@ slice. Compare total Stokes time, all fieldsplit_0 and fieldsplit_1 work,
 GAMG setup/coarse-grid cost and memory, and final nonlinear residuals. Ten
 candidates increase interpolation width and can reduce iterations while still
 increasing time or memory.
+
+## Weak-free-slip shell findings
+
+The continuum rotations have zero volume strain and are tangent to an exact
+sphere. On an isoparametric cubed-sphere mesh, however, the geometric facet
+normal is not exactly radial between interpolation nodes. The weak Nitsche
+penalty therefore gives every rotation a small nonzero discrete energy. This
+is a geometric consistency error, not a TALA- or ALA-specific constitutive
+term. It decreases rapidly under geometric refinement but is multiplied by
+the boundary viscosity.
+
+At refinement level 2 with four radial layers, the three normal-trace energies
+were approximately `1.18e-8`. For TALA, their velocity-block Rayleigh quotient
+grew from about `1.49e-5` at unit viscosity contrast to `1.40e-2` at contrast
+`1e3`. Registering these approximate modes as exact was slightly beneficial at
+unit contrast, began producing failed nested velocity solves at contrast
+`1e2`, and roughly doubled work at contrast `1e3`. With exact rotations
+omitted, every nested solve converged. At refinement level 3 with eight radial
+layers, the relative velocity-block residual fell from about `4.68e-6` to
+`1.18e-7`; exact and omitted rotations then gave similar Ritz-six performance
+at contrast `1e3`.
+
+The following matched serial results used refinement level 2, four layers,
+unit contrast, one warm repeat, `fieldsplit_0` and `fieldsplit_1` tolerances of
+`1e-5`, and `--rotation-nullspace auto`. Iterations are accumulated over all
+nested velocity solves in one Stokes solve.
+
+| Approximation | Candidates | Velocity iterations | Warm seconds |
+| --- | --- | ---: | ---: |
+| Boussinesq | PETSc fallback | 126 | 0.906 |
+| Boussinesq | rotations 3 | 72 | 0.582 |
+| Boussinesq | rigid 6 | 90 | 0.791 |
+| Boussinesq | Ritz 6 | 63 | 0.635 |
+| Boussinesq | direct 10 | 62 | 0.813 |
+| TALA | PETSc fallback | 218 | 1.424 |
+| TALA | rotations 3 | 152 | 1.031 |
+| TALA | rigid 6 | 147 | 1.111 |
+| TALA | Ritz 6 | 102 | 0.856 |
+| TALA | direct 10 | 96 | 1.019 |
+| ALA | PETSc fallback | 186 | 1.429 |
+| ALA | rotations 3 | 131 | 0.938 |
+| ALA | rigid 6 | 128 | 1.022 |
+| ALA | Ritz 6 | 88 | 0.792 |
+| ALA | direct 10 | 84 | 0.965 |
+
+At contrast `1e3`, the same mesh used `--rotation-nullspace omit` to separate
+candidate-space performance from projection against a geometrically inexact
+rotational nullspace:
+
+| Approximation | Candidates | Velocity iterations | Warm seconds |
+| --- | --- | ---: | ---: |
+| Boussinesq | PETSc fallback | 765 | 4.769 |
+| Boussinesq | rotations 3 | 251 | 1.748 |
+| Boussinesq | Ritz 6 | 188 | 1.486 |
+| Boussinesq | direct 10 | 186 | 1.757 |
+| TALA | PETSc fallback | 2085 | 12.098 |
+| TALA | rotations 3 | 1028 | 6.086 |
+| TALA | Ritz 6 | 332 | 2.280 |
+| TALA | direct 10 | 325 | 2.519 |
+| ALA | PETSc fallback | 2101 | 12.057 |
+| ALA | rotations 3 | 1024 | 6.090 |
+| ALA | Ritz 6 | 333 | 2.254 |
+| ALA | direct 10 | 323 | 2.497 |
+
+On two MPI ranks, the contrast-`1e3` TALA counts were 1080, 358, and 358 for
+rotations 3, Ritz 6, and direct 10; the corresponding warm times were 4.215,
+1.568, and 1.795 seconds. On the larger 78,438-velocity-DoF level-3 shell,
+rotations 3 required 920 iterations and 60.25 seconds, while Ritz 6 required
+248 iterations and 19.08 seconds. These results demonstrate that additional
+operator-selected conformal information can help a curved shell when both
+radii are weakly free slip, even though it did not help the strong-top
+GPlates-shaped boundary problem.
+
+The ALA absolute residual remains limited by the existing approximate pressure
+null mode, as in the Cartesian benchmark; its candidate comparisons are still
+matched because every arm has the same pressure treatment. Timing values are
+local mechanism evidence, not a production scaling result.
+
+An exploratory extruded-line smoother reduced iterations on the small serial
+and two-rank cases, but reproducibly failed inside PETSc on the larger level-3
+shell. It is therefore not retained as a benchmark option or recommended by
+these tests.
 
 Every benchmark arm now uses the original GAMG configuration: a graph
 threshold of `0.01`, `pc_gamg_square_graph=100`, and the existing SOR

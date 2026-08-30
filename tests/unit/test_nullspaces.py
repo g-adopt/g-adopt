@@ -229,6 +229,63 @@ def test_conformal_modes_on_curved_extruded_spherical_mesh():
     assert max(strain_quotients) < 1e-2
 
 
+def test_rotations_are_near_null_modes_on_weak_free_slip_shell():
+    """Curved-facet error makes continuum shell rotations algebraically near-null."""
+    approximation_types = [
+        BoussinesqApproximation,
+        TruncatedAnelasticLiquidApproximation,
+        AnelasticLiquidApproximation,
+    ]
+    base_mesh = fd.CubedSphereMesh(1.22, refinement_level=1, degree=2)
+    mesh = fd.ExtrudedMesh(base_mesh, layers=2, extrusion_type="radial")
+    mesh.cartesian = False
+    velocity_space = fd.VectorFunctionSpace(mesh, "CG", 2)
+    pressure_space = fd.FunctionSpace(mesh, "CG", 1)
+    coefficient_space = fd.FunctionSpace(mesh, "CG", 2)
+    coordinates = fd.SpatialCoordinate(mesh)
+    radius = fd.sqrt(fd.dot(coordinates, coordinates))
+    density = fd.Function(coefficient_space).interpolate(fd.exp(2.22 - radius))
+    viscosity = fd.Function(coefficient_space).interpolate(1 + (radius - 1.22) ** 2)
+    pressure_test = fd.TestFunction(pressure_space)
+    normal = fd.FacetNormal(mesh)
+    boundary_measure = fd.ds_b(domain=mesh) + fd.ds_t(domain=mesh)
+    rotations = rigid_body_modes(
+        velocity_space,
+        rotational=True,
+    )._vecs
+    for approximation_type in approximation_types:
+        if approximation_type is BoussinesqApproximation:
+            approximation = approximation_type(Ra=1, mu=viscosity)
+        else:
+            approximation = approximation_type(
+                Ra=1,
+                Di=0.5,
+                rho=density,
+                mu=viscosity,
+            )
+
+        rho = approximation.rho_continuity()
+        for rotation in rotations:
+            stress_energy = fd.assemble(
+                fd.inner(fd.grad(rotation), approximation.stress(rotation))
+                * fd.dx
+            )
+            normal_energy = fd.assemble(
+                fd.dot(normal, rotation) ** 2 * boundary_measure
+            )
+            continuity_residual = fd.assemble(
+                -pressure_test * fd.div(rho * rotation) * fd.dx
+                + pressure_test
+                * rho
+                * fd.dot(normal, rotation)
+                * boundary_measure
+            )
+
+            assert stress_energy == pytest.approx(0, abs=1e-20)
+            assert 0 < normal_energy < 1e-5
+            assert continuity_residual.dat.norm < 1e-10
+
+
 def test_conformal_modes_reach_velocity_assembled_preconditioner():
     mesh = fd.UnitCubeMesh(2, 2, 2)
     mesh.cartesian = True
