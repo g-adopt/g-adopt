@@ -59,6 +59,75 @@ not evidence against the production mesh. Keep the level-2 minimum for the
 ten-mode local comparison and inspect PETSc's aggregate/coarse-grid report on
 every target MPI layout.
 
+## Cartesian TALA and ALA comparison
+
+`benchmark_cartesian_compressible.py` is the direct three-dimensional
+Cartesian analogue of the square TALA and ALA demos. It retains their
+reference density, reference temperature, thermal perturbation, Rayleigh
+number, dissipation number, free-slip walls, and Taylor-Hood discretisation.
+Only the temperature is frozen and the normally direct Stokes solve is
+replaced by the same full-Schur, assembled-velocity GAMG configuration in
+every arm.
+
+Run each arm in a fresh process:
+
+```bash
+python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
+  --approximation tala --modes none --n 8 --viscosity-contrast 1e4
+python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
+  --approximation tala --modes rigid-raw --n 8 --viscosity-contrast 1e4
+python tests/conformal_near_nullspace/benchmark_cartesian_compressible.py \
+  --approximation tala --modes conformal-raw --n 8 \
+  --viscosity-contrast 1e4
+```
+
+Use `--approximation ala` for the matched ALA cases. As in the spherical
+benchmark, `rotations`, `rigid-constrained`, and `conformal-constrained` are
+also available. The output records all nested velocity and pressure solves,
+candidate energy quotients, convergence failures, maximum-rank timings, and
+the assembled residual components.
+
+The first single-rank Apple-silicon measurements below used PETSc 3.25.0,
+Firedrake 2026.4.1, an `8 x 8 x 8` hexahedral mesh, a radial viscosity contrast
+of `1e4`, and three warm repeats. They demonstrate an algebraic effect, not a
+production speedup:
+
+| Approximation | Candidates | Velocity iterations | Warm seconds |
+| --- | --- | ---: | ---: |
+| TALA | none | 96 | 1.467 |
+| TALA | six rigid | 92 | 1.429 |
+| TALA | ten conformal | 80 | 1.477 |
+| ALA | none | 95 | 1.451 |
+| ALA | six rigid | 91 | 1.497 |
+| ALA | ten conformal | 79 | 1.541 |
+
+The ten modes reduce nested velocity iterations by about 17 percent relative
+to no candidates, but their wider GAMG interpolation offsets that saving on
+one rank. On a `12 x 12 x 12` TALA mesh the work fell from 119 to 97
+iterations, while median warm time increased from 6.20 to 6.93 seconds. At a
+viscosity contrast of `1e6`, the tested ten-mode hierarchy failed during its
+first velocity preconditioner application with `DIVERGED_NANORINF`; the zero-
+and six-mode controls converged. This robustness limit must be understood
+before enabling the ten modes by default.
+
+ALA uses G-ADOPT's analytical right pressure gauge, which is not an exact
+nullspace of the discrete operator. Its raw assembled momentum residual
+therefore includes a gauge component even after Krylov convergence. Compare
+the continuity residual and matched solver work, and do not interpret that
+known gauge residual as a velocity near-nullspace failure.
+
+### Why there is no two-dimensional conformal benchmark
+
+The extra conformal modes are a specifically three-dimensional result for the
+TALA/ALA viscous operator. G-ADOPT's two-dimensional compressible demos retain
+the physical three-dimensional coefficient `2/3` in the stress tensor. With
+that operator, two translations and one rotation are zero-energy modes, but
+dilation and the quadratic conformal fields are not. A two-dimensional test
+could therefore assess rigid-body candidates only; it could not validate or
+demonstrate the additional modes implemented by
+`ConformalKillingNearNullspace`. The class deliberately continues to reject
+two-dimensional meshes.
+
 ## Testing the GPlates case
 
 Use the same specification for every Stokes solver that acts on the same
