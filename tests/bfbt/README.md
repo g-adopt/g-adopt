@@ -75,10 +75,14 @@ viscoplastic rheology's large symbolic polynomial degree into the auxiliary
 forms. In this test it removes the TSFC quadrature-degree warning without
 changing the nonlinear iteration count or final residual.
 
-The tuned defaults are diagonal mass lumping, a DG0 weight and an inner
-FGMRES tolerance of `1e-2`. Row-sum lumping and a DG1 weight did not improve
-the tested TALA solve. An inner tolerance of `1e-1` reduced inner work but
-increased outer pressure iterations from 15 to 20 in the tuning case.
+The original small benchmark defaults are diagonal mass lumping, a DG0 weight
+and an inner FGMRES tolerance of `1e-2`. A later cylindrical TALA sweep at
+larger, high-contrast configurations found a better opt-in setting: a DG1
+weight, inner FGMRES tolerance `1e-4`, no aggressive GAMG coarsening and two
+smoothed-aggregation prolongator smoothing steps. This reduced both outer and
+velocity work and produced warm speedups on 64-by-16 and 128-by-32 meshes. It
+remained substantially slower than pressure mass at mild viscosity contrast,
+so it is not a replacement default for easy cases.
 
 Inner BFBT failure is fatal by default. Each application records both inner
 solve reasons and total work. ``bfbt_raise_on_inner_failure false`` is
@@ -123,9 +127,12 @@ Picard solvers:
     "pc_type": "python",
     "pc_python_type": "gadopt.DensityAwareBFBTPC",
     "bfbt_ksp_type": "fgmres",
-    "bfbt_ksp_rtol": 1e-2,
-    "bfbt_ksp_max_it": 200,
+    "bfbt_ksp_rtol": 1e-4,
+    "bfbt_ksp_max_it": 1000,
     "bfbt_pc_type": "gamg",
+    "bfbt_weight_degree": 1,
+    "bfbt_pc_gamg_aggressive_coarsening": 0,
+    "bfbt_pc_gamg_agg_nsmooths": 2,
 }
 ```
 
