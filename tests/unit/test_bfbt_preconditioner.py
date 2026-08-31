@@ -8,6 +8,7 @@ from gadopt import (
     StokesSolver,
     TruncatedAnelasticLiquidApproximation,
     create_stokes_nullspace,
+    get_boundary_ids,
 )
 
 
@@ -44,6 +45,7 @@ def build_solver(
     *,
     quadrilateral=True,
     viscosity_scale=None,
+    bfbt_options=None,
 ):
     """Construct a variable-viscosity Boussinesq or variable-density TALA case."""
     mesh = fd.UnitSquareMesh(4, 4, quadrilateral=quadrilateral)
@@ -91,6 +93,8 @@ def build_solver(
     )
     transpose_nullspace = create_stokes_nullspace(mixed_space, closed=True)
     parameters = bfbt_parameters()
+    if bfbt_options is not None:
+        parameters["fieldsplit_1"].update(bfbt_options)
     if approximation_name == "ALA":
         parameters["fieldsplit_1"]["bfbt_nullspace_policy"] = "schur"
     solver = StokesSolver(
@@ -142,7 +146,16 @@ def test_density_aware_bfbt_solve(approximation_name, quadrilateral):
     assert bfbt.inner_solves_total > 0
     assert bfbt.inner_iterations_total > 0
     assert bfbt.inner_failures_total == 0
+    assert sum(bfbt.inner_iterations_by_side.values()) == (
+        bfbt.inner_iterations_total
+    )
+    assert sum(bfbt.inner_solves_by_side.values()) == bfbt.inner_solves_total
+    assert sum(bfbt.inner_failures_by_side.values()) == 0
     assert all(reason > 0 for reason in bfbt.last_inner_reasons)
+    assert bfbt.left_nullspace_is_exact is True
+    assert bfbt.auxiliary_left_nullspace_is_exact is True
+    assert bfbt.left_nullspace_residual < 1e-10
+    assert bfbt.auxiliary_left_nullspace_residual < 1e-10
     if approximation_name == "ALA":
         assert bfbt.right_nullspace_is_exact is False
         assert bfbt.auxiliary_right_nullspace_is_exact is False
@@ -181,6 +194,103 @@ def test_weighted_pressure_laplacian_transpose():
 
     for vector in (x, y, laplacian_x, transpose_laplacian_y):
         vector.destroy()
+
+
+def test_bfbt_overrides_nonzero_inner_initial_guess():
+    """Reused work vectors cannot become history-dependent KSP guesses."""
+    solver = build_solver(
+        "TALA",
+        bfbt_options={"bfbt_ksp_initial_guess_nonzero": True},
+    )
+
+    solver.solve()
+
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    assert bfbt.inner_initial_guess_was_overridden is True
+    assert bfbt.ksp.getInitialGuessNonzero() is False
+
+
+def test_density_aware_bfbt_spherical_tala_gplates_boundaries():
+    """BFBT solves a curved TALA shell with GPlates-style boundaries."""
+    rmin = 1.2
+    rmax = 2.2
+    surface_mesh = fd.CubedSphereMesh(
+        rmin,
+        refinement_level=1,
+        degree=2,
+    )
+    mesh = fd.ExtrudedMesh(
+        surface_mesh,
+        layers=2,
+        layer_height=(rmax - rmin) / 2,
+        extrusion_type="radial",
+    )
+    mesh.cartesian = False
+    boundary = get_boundary_ids(mesh)
+
+    velocity_space = fd.VectorFunctionSpace(mesh, "CG", 2)
+    pressure_space = fd.FunctionSpace(mesh, "CG", 1)
+    temperature_space = fd.FunctionSpace(mesh, "CG", 2)
+    mixed_space = velocity_space * pressure_space
+    solution = fd.Function(mixed_space)
+
+    x = fd.SpatialCoordinate(mesh)
+    radius = fd.sqrt(fd.inner(x, x))
+    depth = rmax - radius
+    temperature = fd.Function(temperature_space).interpolate(
+        depth
+        + 0.05
+        * x[0]
+        / radius
+        * fd.sin(fd.pi * depth / (rmax - rmin))
+    )
+    density = fd.Function(temperature_space).interpolate(fd.exp(0.5 * depth))
+    viscosity = fd.exp(fd.ln(fd.Constant(1e4)) * depth)
+    approximation = TruncatedAnelasticLiquidApproximation(
+        1,
+        0.5,
+        rho=density,
+        mu=viscosity,
+    )
+
+    zero_velocity = fd.Constant((0.0, 0.0, 0.0))
+    bcs = {
+        boundary.bottom: {"un": 0},
+        boundary.top: {"u": zero_velocity},
+    }
+    nullspace = create_stokes_nullspace(
+        mixed_space,
+        closed=True,
+        rotational=False,
+    )
+    near_nullspace = create_stokes_nullspace(
+        mixed_space,
+        closed=False,
+        rotational=True,
+        translations=[0, 1, 2],
+    )
+    solver = StokesSolver(
+        solution,
+        approximation,
+        temperature,
+        bcs=bcs,
+        nullspace=nullspace,
+        transpose_nullspace=nullspace,
+        near_nullspace=near_nullspace,
+        solver_parameters=bfbt_parameters(),
+    )
+
+    solver.solve()
+
+    residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    assert residual.dat.norm < 1e-8
+    assert pressure_ksp.getConvergedReason() > 0
+    assert bfbt.inner_failures_total == 0
+    assert bfbt.uses_constant_left_nullspace_fallback is True
+    assert bfbt.left_nullspace_is_exact is True
 
 
 def test_bfbt_update_increments_exact_operator_state():

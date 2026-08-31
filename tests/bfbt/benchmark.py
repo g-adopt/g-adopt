@@ -14,8 +14,10 @@ Correctness is checked independently using the assembled equation residual.
 
 import argparse
 import json
+import subprocess
 import sys
 from importlib import import_module
+from pathlib import Path
 from statistics import median
 from time import perf_counter
 
@@ -54,6 +56,20 @@ else:
 
 fd = import_module("firedrake")
 gadopt = import_module("gadopt")
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+EXPECTED_GADOPT = (REPOSITORY_ROOT / "gadopt" / "__init__.py").resolve()
+IMPORTED_GADOPT = Path(gadopt.__file__).resolve()
+if IMPORTED_GADOPT != EXPECTED_GADOPT:
+    raise RuntimeError(
+        "The benchmark imported gadopt from the wrong checkout: "
+        f"{IMPORTED_GADOPT}. Run it from the intended repository root with "
+        "PYTHONPATH=$PWD."
+    )
+if not hasattr(gadopt, "DensityAwareBFBTPC"):
+    raise RuntimeError(
+        f"{IMPORTED_GADOPT} does not export DensityAwareBFBTPC"
+    )
 (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
@@ -284,6 +300,12 @@ def timed_solve(solution, solver, warm_repeats):
             bfbt_iterations_before = pressure_pc.inner_iterations_total
             bfbt_solves_before = pressure_pc.inner_solves_total
             bfbt_failures_before = pressure_pc.inner_failures_total
+            bfbt_iterations_by_side_before = (
+                pressure_pc.inner_iterations_by_side.copy()
+            )
+            bfbt_solves_by_side_before = (
+                pressure_pc.inner_solves_by_side.copy()
+            )
 
         comm.barrier()
         start = perf_counter()
@@ -315,6 +337,16 @@ def timed_solve(solution, solver, warm_repeats):
                     pressure_pc.inner_failures_total
                     - bfbt_failures_before
                 ),
+                bfbt_inner_iterations_by_side={
+                    side: pressure_pc.inner_iterations_by_side[side]
+                    - bfbt_iterations_by_side_before[side]
+                    for side in ("left", "right")
+                },
+                bfbt_inner_solves_by_side={
+                    side: pressure_pc.inner_solves_by_side[side]
+                    - bfbt_solves_by_side_before[side]
+                    for side in ("left", "right")
+                },
             )
         warm_work.append(sample)
 
@@ -333,8 +365,29 @@ def timed_solve(solution, solver, warm_repeats):
         "pressure_iterations_last": pressure_ksp.getIterationNumber(),
     }
     if uses_bfbt:
-        result["bfbt_inner_iterations_last"] = pressure_pc.ksp.getIterationNumber()
+        result["bfbt_inner_iterations_last"] = (
+            pressure_pc.ksp.getIterationNumber()
+        )
         result["bfbt_inner_reasons_last_apply"] = pressure_pc.last_inner_reasons
+        result.update(
+            bfbt_update_count=pressure_pc.update_count,
+            bfbt_right_nullspace_is_exact=(
+                pressure_pc.right_nullspace_is_exact
+            ),
+            bfbt_left_nullspace_is_exact=pressure_pc.left_nullspace_is_exact,
+            bfbt_right_nullspace_residual=(
+                pressure_pc.right_nullspace_residual
+            ),
+            bfbt_left_nullspace_residual=(
+                pressure_pc.left_nullspace_residual
+            ),
+            bfbt_constant_left_nullspace_fallback=(
+                pressure_pc.uses_constant_left_nullspace_fallback
+            ),
+            bfbt_nonzero_inner_guess_overridden=(
+                pressure_pc.inner_initial_guess_was_overridden
+            ),
+        )
 
     residual = fd.assemble(solver.F, bcs=solver.strong_bcs)
     result["equation_residual"] = residual.dat.norm
@@ -348,6 +401,19 @@ def main(args):
     solution, solver = build_case(args)
     result = vars(args) | timed_solve(solution, solver, args.warm_repeats)
     if solution.function_space().mesh().comm.rank == 0:
+        try:
+            git_commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=REPOSITORY_ROOT,
+                text=True,
+            ).strip()
+        except (OSError, subprocess.CalledProcessError):
+            git_commit = None
+        result.update(
+            gadopt_path=str(IMPORTED_GADOPT),
+            firedrake_path=str(Path(fd.__file__).resolve()),
+            git_commit=git_commit,
+        )
         print(json.dumps(result, sort_keys=True))
 
 

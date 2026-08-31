@@ -100,11 +100,13 @@ class _WeightedDivergenceGradient:
 
 
 class DensityAwareBFBTPC(fd.PCBase):
-    r"""Density-aware weighted BFBT approximation of a Schur inverse.
+    r"""Density-aware weighted BFBT approximation of a pressure inverse.
 
     For a saddle-point Jacobian with velocity block :math:`A`, pressure
-    gradient :math:`G`, and density-weighted continuity block
-    :math:`D_\rho`, this class applies
+    gradient :math:`G`, density-weighted continuity block :math:`D_\rho`, and
+    zero pressure-pressure block, PETSc forms the Schur complement
+    :math:`S=-D_\rho A^{-1}G`. This class approximates the inverse of the
+    corresponding positive pressure operator, :math:`-S`, by applying
 
     .. math::
 
@@ -325,12 +327,29 @@ class DensityAwareBFBTPC(fd.PCBase):
             self.pressure_laplacian.petscmat,
         )
         self.ksp.setFromOptions()
+        self._enforce_zero_inner_guess()
+
         self.raise_on_inner_failure = opts.getBool(
             prefix + "raise_on_inner_failure", True
         )
+        self._set_initial_state()
+
+    def _enforce_zero_inner_guess(self) -> None:
+        """Keep reused work vectors from becoming history-dependent guesses."""
+        self.inner_initial_guess_was_overridden = (
+            self.ksp.getInitialGuessNonzero()
+        )
+        self.ksp.setInitialGuessNonzero(False)
+
+    def _set_initial_state(self) -> None:
+        """Initialise counters and work vectors after inner KSP construction."""
         self.inner_iterations_total = 0
         self.inner_solves_total = 0
         self.inner_failures_total = 0
+        self.inner_iterations_by_side = {"left": 0, "right": 0}
+        self.inner_solves_by_side = {"left": 0, "right": 0}
+        self.inner_failures_by_side = {"left": 0, "right": 0}
+        self.update_count = 0
         self.last_inner_iterations = ()
         self.last_inner_reasons = ()
 
@@ -371,6 +390,11 @@ class DensityAwareBFBTPC(fd.PCBase):
         diagnostic tolerance must be scaled for the operator and units being
         tested. The explicitly selected experimental ``schur`` policy instead
         preserves the outer Schur quotient on both inner operators.
+
+        PETSc does not always propagate the mixed problem's exact transpose
+        pressure nullspace to the Schur matrix. If it is absent, a constant
+        candidate is constructed and attached only when both inner operators
+        verify it as an exact left null mode.
         """
         empty_nullspace = PETSc.NullSpace()
         self.exact_pressure_laplacian.setNullSpace(empty_nullspace)
@@ -391,17 +415,23 @@ class DensityAwareBFBTPC(fd.PCBase):
             )
         self.right_nullspace_is_exact = None
         self.auxiliary_right_nullspace_is_exact = None
+        self.right_nullspace_residual = None
+        self.auxiliary_right_nullspace_residual = None
         if nullspace.handle != 0:
-            exact_is_null = self._is_exact_nullspace(
+            exact_is_null, exact_residual = self._is_exact_nullspace(
                 self.exact_pressure_laplacian,
                 nullspace,
+                trust_constant=True,
             )
-            auxiliary_is_null = self._is_exact_nullspace(
+            auxiliary_is_null, auxiliary_residual = self._is_exact_nullspace(
                 self.pressure_laplacian.petscmat,
                 nullspace,
+                trust_constant=True,
             )
             self.right_nullspace_is_exact = exact_is_null
             self.auxiliary_right_nullspace_is_exact = auxiliary_is_null
+            self.right_nullspace_residual = exact_residual
+            self.auxiliary_right_nullspace_residual = auxiliary_residual
             if exact_is_null or self.nullspace_policy == "schur":
                 self.exact_pressure_laplacian.setNullSpace(nullspace)
             else:
@@ -412,6 +442,7 @@ class DensityAwareBFBTPC(fd.PCBase):
                 self.pressure_laplacian.petscmat.setNearNullSpace(nullspace)
 
         transpose_nullspace = schur_complement.getTransposeNullSpace()
+        self.uses_constant_left_nullspace_fallback = False
         if transpose_nullspace.handle != 0:
             self.schur_left_nullspace = transpose_nullspace
         else:
@@ -420,21 +451,44 @@ class DensityAwareBFBTPC(fd.PCBase):
                 "schur_left_nullspace",
                 transpose_nullspace,
             )
+        if transpose_nullspace.handle == 0:
+            if not hasattr(self, "constant_left_nullspace"):
+                self.constant_left_nullspace = PETSc.NullSpace().create(
+                    constant=True,
+                    comm=schur_complement.comm,
+                )
+            transpose_nullspace = self.constant_left_nullspace
+            self.uses_constant_left_nullspace_fallback = True
         self.left_nullspace_is_exact = None
         self.auxiliary_left_nullspace_is_exact = None
+        self.left_nullspace_residual = None
+        self.auxiliary_left_nullspace_residual = None
         if transpose_nullspace.handle != 0:
-            exact_is_left_null = self._is_exact_nullspace(
+            exact_is_left_null, exact_left_residual = self._is_exact_nullspace(
                 self.exact_pressure_laplacian,
                 transpose_nullspace,
                 transpose=True,
+                trust_constant=(
+                    not self.uses_constant_left_nullspace_fallback
+                ),
             )
-            auxiliary_is_left_null = self._is_exact_nullspace(
+            (
+                auxiliary_is_left_null,
+                auxiliary_left_residual,
+            ) = self._is_exact_nullspace(
                 self.pressure_laplacian.petscmat,
                 transpose_nullspace,
                 transpose=True,
+                trust_constant=(
+                    not self.uses_constant_left_nullspace_fallback
+                ),
             )
             self.left_nullspace_is_exact = exact_is_left_null
             self.auxiliary_left_nullspace_is_exact = auxiliary_is_left_null
+            self.left_nullspace_residual = exact_left_residual
+            self.auxiliary_left_nullspace_residual = (
+                auxiliary_left_residual
+            )
             if exact_is_left_null or self.nullspace_policy == "schur":
                 self.exact_pressure_laplacian.setTransposeNullSpace(
                     transpose_nullspace
@@ -465,10 +519,18 @@ class DensityAwareBFBTPC(fd.PCBase):
         nullspace: PETSc.NullSpace,
         *,
         transpose: bool = False,
-    ) -> bool:
-        """Return whether every supplied null vector is discretely annihilated."""
+        trust_constant: bool = False,
+    ) -> tuple[bool, float]:
+        """Return exactness and the largest supplied null-vector residual.
+
+        A constant mode already marked exact by the outer Schur operator is
+        trusted structurally. This avoids rejecting the exact TALA pressure
+        gauge solely because an absolute residual accumulates round-off on a
+        very large distributed problem. Non-constant modes, including the
+        analytical ALA gauge, must still pass the explicit residual test.
+        """
         has_constant = nullspace.hasConstant()
-        candidates = list(nullspace.getVecs())
+        candidates = [(candidate, False) for candidate in nullspace.getVecs()]
         constant = None
         if has_constant:
             constant = (
@@ -478,26 +540,33 @@ class DensityAwareBFBTPC(fd.PCBase):
             )
             constant.set(1)
             constant.normalize()
-            candidates.append(constant)
+            candidates.append((constant, True))
 
         residual = (
             operator.createVecRight()
             if transpose
             else operator.createVecLeft()
         )
+        maximum_residual = 0.0
+        exact = True
         try:
-            for candidate in candidates:
+            for candidate, is_constant in candidates:
                 if transpose:
                     operator.multTranspose(candidate, residual)
                 else:
                     operator.mult(candidate, residual)
-                if residual.norm() > self.nullspace_test_tolerance:
-                    return False
+                residual_norm = residual.norm()
+                maximum_residual = max(maximum_residual, residual_norm)
+                if (
+                    not (is_constant and trust_constant)
+                    and residual_norm > self.nullspace_test_tolerance
+                ):
+                    exact = False
         finally:
             residual.destroy()
             if constant is not None:
                 constant.destroy()
-        return True
+        return exact, maximum_residual
 
     def _update_inverse_velocity_mass(self) -> None:
         """Reassemble and invert the selected weighted mass diagonal."""
@@ -522,6 +591,7 @@ class DensityAwareBFBTPC(fd.PCBase):
 
     def update(self, pc: PETSc.PC) -> None:
         """Update state-dependent weights and auxiliary operators."""
+        self.update_count += 1
         A, _ = pc.getOperators()
         self._set_blocks(A)
         laplacian_context = self.exact_pressure_laplacian.getPythonContext()
@@ -574,10 +644,13 @@ class DensityAwareBFBTPC(fd.PCBase):
         iteration_count = self.ksp.getIterationNumber()
         self.inner_solves_total += 1
         self.inner_iterations_total += iteration_count
+        self.inner_solves_by_side[side] += 1
+        self.inner_iterations_by_side[side] += iteration_count
         iterations.append(iteration_count)
         reasons.append(reason)
         if reason <= 0:
             self.inner_failures_total += 1
+            self.inner_failures_by_side[side] += 1
             if self.raise_on_inner_failure:
                 raise RuntimeError(
                     f"BFBT {side} inner pressure solve failed after "
@@ -605,6 +678,12 @@ class DensityAwareBFBTPC(fd.PCBase):
             f"Pressure nullspace policy: {self.nullspace_policy}\n"
             f"Right null mode verified exact: {self.right_nullspace_is_exact}\n"
             f"Left null mode verified exact: {self.left_nullspace_is_exact}\n"
+            "Constant left-nullspace fallback: "
+            f"{self.uses_constant_left_nullspace_fallback}\n"
+            "Nonzero inner initial guess overridden: "
+            f"{self.inner_initial_guess_was_overridden}\n"
+            f"Right null residual: {self.right_nullspace_residual}\n"
+            f"Left null residual: {self.left_nullspace_residual}\n"
             "Inner weighted pressure-Laplacian KSP:\n"
         )
         self.ksp.view(viewer)
@@ -622,3 +701,5 @@ class DensityAwareBFBTPC(fd.PCBase):
             self.exact_pressure_laplacian.destroy()
         if hasattr(self, "pressure_laplacian"):
             self.pressure_laplacian.petscmat.destroy()
+        if hasattr(self, "constant_left_nullspace"):
+            self.constant_left_nullspace.destroy()
