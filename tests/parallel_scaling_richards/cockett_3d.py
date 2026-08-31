@@ -27,8 +27,11 @@ def _parse_args() -> "argparse.Namespace":
                         help="Time step in seconds.")
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--solver", type=str, required=True,
-                        choices=("iterative", "vlumping", "vlumping_hmg"),
-                        help="RichardsSolver preset name.")
+                        choices=("iterative", "bjacobi", "vlumping",
+                                 "vlumping_linesmooth", "vlumping_hmg"),
+                        help="RichardsSolver preset name, or 'bjacobi' for "
+                             "the single-level baseline defined in this "
+                             "driver.")
     parser.add_argument("--hmg-levels", type=int, default=2,
                         help="MeshHierarchy depth used by the vlumping_hmg "
                              "preset. Ignored for other presets.")
@@ -45,6 +48,50 @@ if __name__ == "__main__":
 import time as time_mod  # noqa: E402
 
 from gadopt import *  # noqa: E402, F401
+
+
+# Single-level baseline, deliberately NOT a shipped RichardsSolver preset.
+# Block-Jacobi with ILU(0) has no coarse-grid correction, so its iteration
+# count grows with horizontal refinement; it is here to give the vertically
+# lumped presets something to be measured against, not as a recommended
+# configuration. G-ADOPT does not advertise it because it cannot take a step
+# at all in the near-saturated, long-time-step regime the library targets.
+#
+# The SNES block and ksp_rtol match _newton_common and the vlumping presets
+# exactly, so a difference in wall time is a difference in the preconditioner
+# and nothing else. ksp_pc_side is right for the same reason: PETSc's GMRES
+# defaults to left preconditioning, which measures ||B^-1 r|| rather than
+# ||r||, and the gap between those two norms grows with the quality of the
+# preconditioner -- which is the very thing under comparison.
+_BJACOBI_BASELINE = {
+    "mat_type": "aij",
+    "ksp_type": "gmres",
+    "ksp_pc_side": "right",
+    "ksp_rtol": 1e-4,
+    "ksp_max_it": 200,
+    "ksp_gmres_restart": 30,
+
+    "pc_type": "bjacobi",
+    "sub_ksp_type": "preonly",
+    "sub_pc_type": "ilu",
+    "sub_pc_factor_levels": 0,
+
+    "snes_type": "newtonls",
+    "snes_linesearch_type": "bt",
+    "snes_rtol": 1e-8,
+    "snes_atol": 1e-12,
+    "snes_stol": 1e-8,
+    "snes_max_it": 50,
+}
+
+
+def _solver_parameters(solver: str):
+    """Map a --solver name to what RichardsSolver expects.
+
+    Shipped presets pass through as their string name; the local
+    ``bjacobi`` baseline resolves to its parameter dict.
+    """
+    return _BJACOBI_BASELINE if solver == "bjacobi" else solver
 
 
 def build_mesh(nx: int, nz: int, solver: str, hmg_levels: int):
@@ -135,7 +182,7 @@ def model(nx, nz, solver, *, degree=1, dt_value=300.0, steps=30, hmg_levels=2):
         h, soil_curves, dt,
         timestepper=BackwardEuler,
         bcs=richards_bcs,
-        solver_parameters=solver,
+        solver_parameters=_solver_parameters(solver),
         solver_parameters_extra=diagnostics,
     )
 

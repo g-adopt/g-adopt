@@ -50,7 +50,18 @@ _TIME_TOL = 0.20     # fractional
 
 
 def _load_expected(csv_name: str) -> pd.DataFrame:
-    return pd.read_csv(_HERE / csv_name).set_index(["case", "level", "solver"])
+    """Read a reference CSV, keyed by (case, level, solver).
+
+    ``comment="#"`` so each CSV can carry a header block recording how and
+    where its numbers were produced. That provenance matters here: the
+    values are hardware- and preset-specific, and a reader who assumes
+    they came from somewhere else will draw the wrong conclusion from a
+    failure.
+    """
+    return (
+        pd.read_csv(_HERE / csv_name, comment="#")
+        .set_index(["case", "level", "solver"])
+    )
 
 
 def _expected_row(df: pd.DataFrame, csv_name: str,

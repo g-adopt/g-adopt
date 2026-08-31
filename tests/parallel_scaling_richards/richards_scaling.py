@@ -1,24 +1,33 @@
 """Case definitions and output parser for the Richards parallel-scaling
 long-test suite.
 
-Three weak-scaling case families exercise the g-adopt default iterative
-presets for RichardsSolver:
+Three weak-scaling case families exercise the iterative presets of
+RichardsSolver:
 
-    cockett           - synthetic 3D heterogeneous infiltration, extruded
-                        quads on a box. No external dependencies.
-    murr_vertical     - Lower Murrumbidgee floodplain, fixed horizontal
-                        resolution (1775 m), vertical layers scale with
-                        node count. Requires ``omega`` and the CSV data
-                        bundle under ``murrumbidgee_data/``.
-    murr_horizontal   - Lower Murrumbidgee floodplain, fixed 300 vertical
-                        layers, horizontal resolution halves with node
-                        count (paper's headline scaling figure).
+    cockett         - synthetic 3D heterogeneous infiltration, extruded
+                      quads on a box. Isotropic cells. No external
+                      dependencies.
+    murr_vertical   - basin floodplain, fixed horizontal resolution
+                      (1775 m), vertical layers scale with node count.
+                      The aspect ratio climbs from 500:1 to 4000:1, so
+                      this is the case that tests whether the lumped
+                      presets stay independent of vertical resolution.
+    murr_seasonal   - same basin, fixed 300 vertical layers, horizontal
+                      resolution halves with node count, integrated with
+                      three-month time steps on a near-saturated column.
 
-Each level keys a node count on Gadi's Sapphire Rapids ``normalsr`` queue
-(104 CPUs per node). The three iterative presets exercised at every level
-are ``"iterative"`` (Hypre BoomerAMG), ``"vlumping"`` (vertically lumped
-2-level MG) and ``"vlumping_hmg"`` (vlumping + geometric MG on the 2D
-base hierarchy).
+Each level keys a node count on Gadi's Sapphire Rapids ``normalsr``
+queue (104 CPUs per node). ``CASE_SOLVERS`` records which presets each
+case exercises, and why.
+
+Both Murrumbidgee cases need ``omega`` for the mesh, but no data
+bundle: the driver builds its terrain and spatial fields from analytic
+surfaces.
+
+CAUTION: those analytic fields mean the basin numbers here are not the
+observational basin of Morrow et al. (2026). They are a self-consistent
+regression baseline for the presets on a basin-shaped problem. Do not
+compare them against the manuscript.
 
 The ``get_data`` parser extracts mean linear-iteration count from the
 driver's stdout and ``PCSetUp`` / total-wall-time from a PETSc
@@ -71,9 +80,27 @@ MURR_VERTICAL_CASES: dict[int, dict[str, Any]] = {
     8: {"horiz_res": 1775, "layers": 1200},
 }
 
-# Lower Murrumbidgee, horizontal weak scaling: fixed 300 layers; horizontal
-# resolution halves with node count, matching Morrow et al. (2026).
-MURR_HORIZONTAL_CASES: dict[int, dict[str, Any]] = {
+# Lower Murrumbidgee, seasonal regime. Same horizontal weak-scaling ladder as
+# the ordinary basin case (fixed 300 layers, resolution halves with node
+# count), but integrated with three-month time steps on a near-saturated
+# basin.
+#
+# This is the regime that separates the solvers. The discriminant is the
+# column-integrated diffusion number
+#
+#     D_col = dt * T / (S_col * L^2),   T = int K dz,  S_col = int (Ss S + C) dz
+#
+# which is the conditioning of the vertically collapsed 2-D operator that a
+# single-level preconditioner has no coarse correction for. It is NOT the mesh
+# aspect ratio: the ordinary-regime runs already carry extreme aspect ratio and
+# block-Jacobi is fastest there. Raising dt to three months and flattening the
+# retention curve drives D_col up until block-Jacobi's admissible time step
+# collapses as 1/L^2, while the direct-coarse lumped presets keep taking full
+# steps at a low, flat iteration count.
+#
+# The soil levers (see the driver's --watertable-offset / --retention-flatten)
+# are applied per level by meta.py, not stored here.
+MURR_SEASONAL_CASES: dict[int, dict[str, Any]] = {
     1: {"horiz_res": 1775, "layers": 300},
     2: {"horiz_res": 1250, "layers": 300},
     4: {"horiz_res": 880, "layers": 300},
@@ -83,27 +110,66 @@ MURR_HORIZONTAL_CASES: dict[int, dict[str, Any]] = {
 CASES: dict[str, dict[int, dict[str, Any]]] = {
     "cockett": COCKETT_CASES,
     "murr_vertical": MURR_VERTICAL_CASES,
-    "murr_horizontal": MURR_HORIZONTAL_CASES,
+    "murr_seasonal": MURR_SEASONAL_CASES,
+}
+
+# -----------------------------------------------------------------------------
+# Seasonal regime parameters
+# -----------------------------------------------------------------------------
+# dt ceiling of three months (3 x 31 days) with a ramp from 60 s, a raised
+# water table, and a retention curve flattened by 3. Ss stays 0: the
+# Ss*S*Dt(h) mass term is not needed for the mechanism and BackwardEuler stays
+# well posed without it, because the SIPG diffusion and the Robin side
+# condition anchor the saturated cells.
+SEASONAL_PARAMETERS: dict[str, float] = {
+    "dt_init": 60.0,
+    "dt_max": 8_035_200.0,
+    "dt_growth": 1.5,
+    "dt_shrink": 0.5,
+    "t_final": 40_000_000.0,
+    "watertable_offset": 5.0,
+    "retention_flatten": 3.0,
+    "ss": 0.0,
 }
 
 
 # -----------------------------------------------------------------------------
 # Solver scope
 # -----------------------------------------------------------------------------
-# All iterative string presets exposed by RichardsSolver. The direct preset
-# is excluded because it does not weak-scale.
-SOLVERS: tuple[str, ...] = ("iterative", "vlumping", "vlumping_hmg")
+# Every iterative preset exercised anywhere in the suite. The ``direct``
+# preset is excluded because it does not weak-scale. ``bjacobi`` is not a
+# RichardsSolver preset: it is the single-level baseline defined inside
+# cockett_3d.py, kept here so the matrix records what was measured.
+SOLVERS: tuple[str, ...] = (
+    "iterative", "bjacobi", "vlumping", "vlumping_linesmooth", "vlumping_hmg",
+)
 
-# Per-case solver lists. BoomerAMG (``iterative``) is excluded from the two
-# Murrumbidgee families: the operator's strong horizontal/vertical anisotropy
-# makes Hypre's coarsening diverge within a few time steps (see Morrow et al.
-# 2026), so benchmarking it there would just record a failure. The point of
-# the ``vlumping`` presets is precisely that they stay robust in that regime.
-_MURR_SOLVERS: tuple[str, ...] = ("vlumping", "vlumping_hmg")
+# Per-case solver lists.
+#
+# Cockett takes everything: it is the isotropic case, the only one where all
+# five complete, and therefore the only place a baseline can carry a numeric
+# assertion.
+#
+# The Murrumbidgee families drop the two single-level solvers for opposite
+# reasons. BoomerAMG (``iterative``) diverges within a few time steps on the
+# basin operator, because Hypre's coarsening cannot cope with the
+# horizontal/vertical anisotropy. ``bjacobi`` survives the ordinary regime but
+# cannot take a step in the seasonal one. Neither produces an iteration count
+# to regress against, so benchmarking them there would only record a failure.
+#
+# ``vlumping_hmg`` is excluded from the seasonal case specifically: its
+# iterative coarse solve thrashes at long time steps, where it needs several
+# times the step count of the direct-coarse presets to reach t_final. That is
+# a real property worth knowing, but it is not a stable regression baseline.
+# Cockett and murr_vertical cover the preset instead.
+_MURR_VERTICAL_SOLVERS: tuple[str, ...] = (
+    "vlumping", "vlumping_linesmooth", "vlumping_hmg",
+)
+_MURR_SEASONAL_SOLVERS: tuple[str, ...] = ("vlumping", "vlumping_linesmooth")
 CASE_SOLVERS: dict[str, tuple[str, ...]] = {
     "cockett": SOLVERS,
-    "murr_vertical": _MURR_SOLVERS,
-    "murr_horizontal": _MURR_SOLVERS,
+    "murr_vertical": _MURR_VERTICAL_SOLVERS,
+    "murr_seasonal": _MURR_SEASONAL_SOLVERS,
 }
 assert set(CASE_SOLVERS) == set(CASES), \
     "CASE_SOLVERS must cover every case in CASES"
@@ -195,8 +261,8 @@ def get_data(
     """Return the iteration/timing metrics for a (case, solver, level) run.
 
     Args:
-        case: ``"cockett"``, ``"murr_vertical"`` or ``"murr_horizontal"``.
-        solver: ``"iterative"``, ``"vlumping"`` or ``"vlumping_hmg"``.
+        case: A key of ``CASES``.
+        solver: A preset name listed in ``CASE_SOLVERS[case]``.
         level: Node count key from the matching case dict.
         base_path: Directory containing ``<case>_<solver>_<level>.out`` and
             ``profile_<case>_<solver>_<level>.txt`` (matches the filenames
