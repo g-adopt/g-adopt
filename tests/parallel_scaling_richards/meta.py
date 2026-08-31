@@ -1,25 +1,33 @@
 """HPC step registry for the Richards parallel-scaling long-test suite.
 
 Each step covers one (case, solver, level) triple. ``CASE_SOLVERS`` in
-``scaling.py`` defines which solver presets are exercised per case;
-BoomerAMG (``iterative``) is excluded from the Murrumbidgee families
-because Hypre diverges on that operator within a few time steps.
+``richards_scaling.py`` defines which solver presets are exercised per
+case and records why each case drops the ones it drops.
 
 The level number is a node count on Gadi's ``normalsr`` queue
 (``CPUS_PER_NODE = 104``). All steps use ``run.template`` to export
 ``PETSC_OPTIONS="-log_view :profile_<tag>.txt"`` before launching the
 driver, so the timings consumed by ``test_parallel_scaling_richards.py``
 land in a predictable location.
+
+Neither Murrumbidgee case reads external data: the driver builds its
+terrain and its spatial fields from analytic ``omega`` surfaces, so a
+step needs nothing in the job directory beyond the drivers themselves.
 """
 
-from .richards_scaling import CASES, CASE_SOLVERS, CPUS_PER_NODE
+from .richards_scaling import (
+    CASES,
+    CASE_SOLVERS,
+    CPUS_PER_NODE,
+    SEASONAL_PARAMETERS,
+)
 
 
 # Entry points are case-specific; both Murrumbidgee variants share one driver.
 _ENTRYPOINTS = {
     "cockett": "cockett_3d.py",
     "murr_vertical": "murrumbidgee_3d.py",
-    "murr_horizontal": "murrumbidgee_3d.py",
+    "murr_seasonal": "murrumbidgee_3d.py",
 }
 
 
@@ -30,12 +38,25 @@ def _args_for(case: str, solver: str, params: dict) -> str:
             f"--nx {params['nx']} --nz {params['nz']} "
             f"--solver {solver} --steps {params['steps']}"
         )
-    # Both Murrumbidgee variants share the same flag surface; data_dir is
-    # resolved relative to the job CWD (the test directory on Gadi).
-    return (
+
+    args = (
         f"--horiz-res {params['horiz_res']} --layers {params['layers']} "
-        f"--solver {solver} --data-dir ./murrumbidgee_data"
+        f"--solver {solver}"
     )
+    if case == "murr_seasonal":
+        # The seasonal regime is the ordinary basin driver plus a
+        # three-month dt ceiling and the two soil levers that push the
+        # column-integrated diffusion number up. See SEASONAL_PARAMETERS.
+        p = SEASONAL_PARAMETERS
+        args += (
+            f" --dt-init {p['dt_init']} --dt-max {p['dt_max']}"
+            f" --dt-growth {p['dt_growth']} --dt-shrink {p['dt_shrink']}"
+            f" --t-final {p['t_final']}"
+            f" --watertable-offset {p['watertable_offset']}"
+            f" --retention-flatten {p['retention_flatten']}"
+            f" --ss {p['ss']}"
+        )
+    return args
 
 
 steps = {}
