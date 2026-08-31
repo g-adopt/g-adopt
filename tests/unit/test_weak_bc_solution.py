@@ -1,16 +1,13 @@
 """Solver-output tests for the weak-BC momentum branches with nonlinear mu.
 
-Commit 0e173d6 rewrote the weak ("u"/"un") SIPG boundary terms of
-``gadopt.momentum_equation.viscosity_term`` for a solution-dependent viscosity.
-For nonlinear mu the boundary residual now uses the tangent stress and a
-penalty-derivative term so that the true Jacobian ``derivative(F, z)`` is
-symmetric. The pre-existing tests check that Jacobian symmetry (and, for the
-incompressible "un" branch, one variational identity). None of them checks that
-the *converged solution* of the new residual is the solution of the intended
-continuous problem. A symmetric residual can still be a symmetric *wrong*
-residual: a term scaled by the wrong constant stays the exact first variation of
-a (wrong) functional, so its Jacobian is still symmetric. These tests close that
-gap by checking solver output.
+``test_symmetry.py`` checks that the Jacobian of the weak ("u"/"un") SIPG
+boundary terms in ``gadopt.momentum_equation.viscosity_term`` is symmetric.
+This file checks the complementary property: that the *converged solution*
+those terms produce is the solution of the intended continuous problem. A
+symmetric residual can still be a symmetric *wrong* residual — a term scaled
+by the wrong constant stays the exact first variation of a (wrong)
+functional, so its Jacobian is still symmetric — which is why solver output
+needs its own coverage.
 
 The file has three tests. ``test_mms_weak_un_convergence`` (1a) drives the weak
 "un" branch through ``StokesSolver`` on a manufactured incompressible Stokes
@@ -24,13 +21,6 @@ strong-BC formulation. Both MMS tests are incompressible; the compressible
 branches stay covered only by the symmetry tests. Test 2 is a coarsened,
 single-solve, fixed-temperature version of the Tosi benchmark, not the full
 time-stepped run.
-
-Known limitation. Mutations of the *penalty coefficients alone* (for example
-``c: 2 -> 4/3`` or ``beta: 1 -> 0`` changed consistently in both the penalty
-term and the penalty-derivative term) keep the method Nitsche-consistent. They
-change stability constants, not the continuous limit, so no solver-output test
-can catch them. They are pinned, for the incompressible "un" branch only, by
-``test_viscosity_term_un_variational_structure`` in ``test_symmetry.py``.
 """
 
 from math import log2
@@ -81,7 +71,8 @@ def test_mms_weak_un_convergence():
         sigma_ex = 2 * mu_of(u_ex) * fd.sym(fd.grad(u_ex))
         f_mms = -fd.div(sigma_ex) + fd.grad(p_ex)
         v = fd.TestFunctions(Z)[0]
-        # sign follows momentum_source_term (momentum_equation.py:212-213)
+        # sign matches the forcing convention of momentum_source_term, which
+        # subtracts the source from the residual.
         forcing = -fd.dot(v, f_mms) * fd.dx(degree=8)
 
         n = fd.FacetNormal(mesh)
@@ -127,7 +118,10 @@ def test_mms_weak_un_convergence():
         # drop toward 2.0 is still correct, not a regression.
         assert order_p >= 1.5  # expected 2.0
 
-    # observed err_u=1.71e-05, err_p=4.57e-04 at N=32 on 2026-08-28, cap = 3x
+    # Absolute regression guard on top of the order check above: a correct order
+    # with a much worse constant would still pass the order assertions, so pin
+    # the N=32 error to a small multiple of its converged value (err_u=1.71e-05,
+    # err_p=4.57e-04).
     CAP_U = 3 * 1.71e-05
     CAP_P = 3 * 4.57e-04
     assert errs_u[-1] <= CAP_U
@@ -182,13 +176,14 @@ def test_mms_weak_u_convergence():
         order_u = log2(errs_u[k] / errs_u[k + 1])
         assert order_u >= 2.5  # expected 3.0
 
-    # observed err_u=5.43e-06 at N=32 on 2026-08-28, cap = 3x
+    # Absolute regression guard, as in test_mms_weak_un_convergence above: pin
+    # the N=32 error to a small multiple of its converged value (err_u=5.43e-06).
     CAP_U = 3 * 5.43e-06
     assert errs_u[-1] <= CAP_U
 
 
 def _tosi_viscosity(z, T, X):
-    """Tosi viscoplastic viscosity as in viscoplastic_case_DG.py:76-82.
+    """Tosi viscoplastic viscosity, matching the formulation in viscoplastic_case_DG.py.
 
     ``u`` is taken from split(z)[0] of the passed solve's own z.
     """
@@ -247,8 +242,9 @@ def _tosi_solve(mesh, bcs, use_switch):
 
 def test_tosi_weak_freeslip_matches_strong():
     """Weak free-slip ("un") Tosi solve matches the strong-BC formulation (2)."""
-    # Switch pre-solve was not needed: Newton from zero converged for both the
-    # strong and weak solves at both resolutions on 2026-08-28.
+    # use_switch=False: Newton from zero converges directly for both the strong
+    # and weak solves at these resolutions, so the linear continuation
+    # pre-solve in _tosi_solve is not required here.
     def bcs_strong(b):
         return {b.bottom: {'uy': 0}, b.top: {'uy': 0},
                 b.left: {'ux': 0}, b.right: {'ux': 0}}
@@ -269,14 +265,21 @@ def test_tosi_weak_freeslip_matches_strong():
         urms_rel[N] = abs(fd.sqrt(fd.assemble(fd.dot(u_w, u_w) * fd.dx))
                           / fd.sqrt(fd.assemble(fd.dot(u_s, u_s) * fd.dx)) - 1)
 
-    # observed d_32=7.33e-05 on 2026-08-28, cap = 3x
+    # Absolute regression guard on d[32], the relative velocity difference
+    # between the weak and strong formulations: pin it to a small multiple of
+    # its converged value (7.33e-05) so a solver-output regression is caught
+    # even where the refinement check below still passes.
     assert d[32] <= 0.05  # sanity ceiling
     assert d[32] <= 3 * 7.33e-05
     # difference is a discretization effect and must shrink under refinement
     assert d[32] / d[64] >= 1.3
-    # observed 9.14e-9 unmutated, 1.21e-6 under M3 (tangent sign flip), 2026-08-28;
-    # cap sits between them. This is a near-cancellation quantity (~700x smaller
-    # than d_64), so its exact value is not robust across CI's BLAS/MUMPS stack; a
-    # 3x margin would flake. 1e-7 is ~10x observed and 12x below the M3 signal.
+    # urms_rel is the relative difference in bulk kinetic energy between the two
+    # formulations, a near-cancellation quantity about 700x smaller than d[64]
+    # since it hides in a norm that is far less sensitive to local velocity
+    # differences than the pointwise comparison above. Its precise value is not
+    # robust across CI's BLAS/MUMPS stack, so the cap is set an order of
+    # magnitude above the converged floor (~9e-9) while staying well below the
+    # scale a sign error in the tangent-stress term would produce (~1e-6),
+    # leaving a clean margin on both sides.
     assert urms_rel[64] <= 1e-2  # ceiling
     assert urms_rel[64] <= 1e-7

@@ -51,13 +51,14 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
-    # The weak boundary terms below use the tangent stress so that the true
-    # Jacobian derivative(F, z) of the weak boundary conditions is symmetric. When
-    # the viscosity depends on the solution (nonlinear rheology), an extra
-    # penalty-derivative term is added; for linear mu the tangent stress reduces
-    # to stress(test) and that term is skipped. The check is against the
-    # coefficient(s) underlying `trial` (not its terminals), so a linear viscosity
-    # that varies in space, e.g. mu = mu(x), is treated as linear.
+    # Whether mu depends on the velocity unknown determines two things below:
+    # the weak boundary terms always use the tangent stress (so the Jacobian of
+    # the weak boundary conditions is symmetric), but the extra
+    # penalty-derivative term is only needed when mu itself varies with `trial`
+    # -- for a viscosity independent of velocity that term is identically zero.
+    # Checking against the coefficient(s) `trial` depends on, rather than its
+    # UFL terminals directly, means a spatially varying but velocity-independent
+    # viscosity (e.g. mu = mu(x)) is correctly treated as linear.
     mu_nonlinear = any(depends_on(mu, c) for c in extract_coefficients(trial))
 
     sigma = interior_penalty_factor(eq)
@@ -104,14 +105,17 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 * inner(outer(eq.n, eq.test), mu * jump_tensor)
                 * eq.ds(bc_id)
             )
-            # Symmetrising term (transpose of the flux integration by parts),
-            # written through the tangent stress so it is exact for nonlinear mu
-            # and reduces to the frozen-mu form for linear mu.
+            # Symmetrising term, the transpose of the flux integration by parts.
+            # Using the tangent stress here (rather than differentiating stress
+            # directly) makes this term the exact adjoint of the flux term above
+            # under Newton linearisation, for any mu, linear or nonlinear.
             tangent = eq.approximation.tangent_stress(trial, eq.test)
             F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
-            # Derivative of the penalty through mu, the exact second variation of
-            # the penalty functional sigma mu <G, A(G)> with G = jump_gradient.
+            # Derivative of the penalty term through mu: the penalty functional
+            # is sigma * mu * <G, A(G)> with G = jump_gradient and A the
+            # deviatoric-stress-shape operator, so its exact second variation
+            # picks up this extra term whenever mu itself depends on the trial.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
@@ -129,14 +133,14 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 * eq.ds(bc_id)
             )
             # Symmetrising term, as in the "u" branch but with the jump restricted
-            # to its normal component.
+            # to its normal component (free-slip/free-stress tangential direction).
             tangent = eq.approximation.tangent_stress(trial, eq.test)
             F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             # We only keep the normal part of stress; the tangential part is assumed to
             # be zero stress (i.e. free slip) or prescribed via "stress".
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
-            # Derivative of the penalty through mu, the exact second variation of
-            # the penalty functional sigma mu <G, A(G)> with G = jump_gradient.
+            # Derivative of the penalty term through mu, as in the "u" branch
+            # above, restricted to the normal component of the jump.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)

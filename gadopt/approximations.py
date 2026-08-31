@@ -109,14 +109,17 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
     def tangent_stress(self, u, v, **kwargs):
         r"""Directional derivative $D\sigma(u)[v]$ of the deviatoric stress.
 
-        This is the derivative of `stress(u)` in the direction of `v`. For a
-        viscosity that does not depend on the velocity it is equal to
-        `stress(v)`. The weak (SIPG) boundary terms in the momentum equation
-        use it so that the Jacobian of the weak boundary conditions is
-        symmetric; it is used for every viscosity, linear or nonlinear. A
-        subclass can override this with an analytic tangent stress. A subclass
-        whose `stress` carries state-dependent terms (for example a previous-step
-        stress) must override this, since the default calls `stress(v)`.
+        This is the linearisation of `stress(u)` in the direction `v`: the term
+        the Jacobian of a nonlinear momentum residual must contain wherever the
+        residual involves `stress` evaluated at the current velocity. The weak
+        (SIPG) boundary terms in the momentum equation use it, for every
+        viscosity, linear or nonlinear, so their Jacobian is symmetric. When mu
+        does not depend on the velocity the linearisation reduces algebraically
+        to `stress(v)`, which is returned directly rather than routed through
+        symbolic differentiation. A subclass whose `stress` depends on
+        additional state that itself depends on `u` (for example a previous-step
+        stress carried forward in a time-stepping scheme) must override this
+        method, since UFL differentiation alone would not see that dependency.
 
         Returns:
           A UFL expression for the tangent deviatoric stress.
@@ -537,11 +540,12 @@ class BaseGIAApproximation(DeviatoricStressMixin):
     def tangent_stress(self, u, v, **kwargs) -> ufl.core.expr.Expr:
         r"""Tangent of the mu-scaled deviatoric stress for the SIPG boundary terms.
 
-        The viscosity is set to the effective viscosity `self.mu` (independent of
-        the displacement), so the tangent is `mu` times the deviatoric stress
-        shape of the test direction. This deliberately excludes the previous-step
-        stress and the bulk part, which the momentum equation handles in separate
-        terms.
+        The solver sets `self.mu` to `effective_viscosity(dt)` before assembly,
+        a quantity independent of the displacement `u`, so the linearisation is
+        exact and reduces to `mu` times the deviatoric stress shape of the test
+        direction `v`. This deliberately omits the previous-step stress and the
+        bulk part of the full stress, which the momentum equation assembles as
+        separate terms rather than folding into the SIPG boundary linearisation.
         """
         return self.mu * self.deviatoric_stress_shape(grad(v))
 
