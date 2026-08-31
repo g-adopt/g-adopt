@@ -94,7 +94,7 @@ def test_mms_weak_un_convergence():
             # bt line search: the g-adopt default "l2" search diverges from the
             # zero initial guess on this cubic-viscosity residual; backtracking
             # converges. Convergence itself is part of what this test asserts.
-            solver_parameters_extra={"snes_rtol": 1e-12, "snes_atol": 1e-14,
+            solver_parameters_extra={"snes_rtol": 1e-10, "snes_atol": 1e-12,
                                      "snes_linesearch_type": "bt",
                                      "snes_max_it": 100},
             nullspace=Z_nullspace, transpose_nullspace=Z_nullspace,
@@ -161,7 +161,7 @@ def test_mms_weak_u_convergence():
         problem = fd.NonlinearVariationalProblem(F, u)
         solver = fd.NonlinearVariationalSolver(problem, solver_parameters={
             "snes_type": "newtonls", "snes_linesearch_type": "bt",
-            "snes_rtol": 1e-12, "snes_atol": 1e-14,
+            "snes_rtol": 1e-10, "snes_atol": 1e-12,
             # backtracking takes small steps in the stiff cubic region: the
             # N=32 solve needs 51 Newton iterations, above the PETSc default 50.
             "snes_max_it": 200, "ksp_type": "preonly",

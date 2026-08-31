@@ -51,13 +51,16 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
-    # Whether mu depends on the velocity unknown determines two things below:
+    # Whether mu depends on the solution `trial` determines two things below:
     # the weak boundary terms always use the tangent stress (so the Jacobian of
     # the weak boundary conditions is symmetric), but the extra
     # penalty-derivative term is only needed when mu itself varies with `trial`
-    # -- for a viscosity independent of velocity that term is identically zero.
-    # Checking against the coefficient(s) `trial` depends on, rather than its
-    # UFL terminals directly, means a spatially varying but velocity-independent
+    # -- for a viscosity independent of the solution that term is identically
+    # zero. The test detects a dependence on any component of the mixed solution
+    # that `trial` belongs to, not the velocity specifically: a pressure-
+    # dependent mu(p), for example, also sets mu_nonlinear = True. Checking
+    # against the coefficient(s) `trial` depends on, rather than its UFL
+    # terminals directly, means a spatially varying but solution-independent
     # viscosity (e.g. mu = mu(x)) is correctly treated as linear.
     mu_nonlinear = any(depends_on(mu, c) for c in extract_coefficients(trial))
 
@@ -66,8 +69,8 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     if not is_continuous(eq.trial_space):
         if mu_nonlinear:
             raise NotImplementedError(
-                "Symmetric SIPG boundary terms for a solution-dependent viscosity "
-                "are not implemented for discontinuous velocity elements."
+                "Symmetric SIPG interior-facet (dS) terms for a solution-dependent "
+                "viscosity are not implemented for discontinuous velocity elements."
             )
         trial_tensor_jump = eq.approximation.deviatoric_stress_shape(
             tensor_jump(eq.n, trial)
@@ -106,16 +109,19 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 * eq.ds(bc_id)
             )
             # Symmetrising term, the transpose of the flux integration by parts.
-            # Using the tangent stress here (rather than differentiating stress
-            # directly) makes this term the exact adjoint of the flux term above
-            # under Newton linearisation, for any mu, linear or nonlinear.
+            # Writing this through the overridable tangent_stress method, which
+            # returns the exact directional derivative of stress, makes the term
+            # the exact adjoint of the flux term below under Newton linearisation,
+            # for any mu, linear or nonlinear.
             tangent = eq.approximation.tangent_stress(trial, eq.test)
             F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
             # Derivative of the penalty term through mu: the penalty functional
             # is sigma * mu * <G, A(G)> with G = jump_gradient and A the
-            # deviatoric-stress-shape operator, so its exact second variation
-            # picks up this extra term whenever mu itself depends on the trial.
+            # deviatoric-stress-shape operator, so its exact first variation
+            # (the residual) picks up this extra term whenever mu itself depends
+            # on the trial. This makes the resulting Newton Jacobian (the second
+            # variation) symmetric by construction.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
