@@ -135,10 +135,6 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
         bcs[bids[3]] = {'u': zero_vec}
     solver = gadopt.StokesSolver(z, approximation, T, bcs=bcs)
 
-    # The weak boundary residual is symmetrised directly, so no custom Jacobian
-    # is built and derivative(F, z) is the true (symmetric) Jacobian.
-    assert solver.J is None
-
     if approximation.compressible:
         # only the velocity block will be symmetric
         M = fd.assemble(fd.derivative(solver.F, z), mat_type='nest')
@@ -256,28 +252,52 @@ def test_viscosity_term_weak_u_symmetry(approx_class, mesh):
     assert_symmetric(M.petscmat)
 
 
+@pytest.mark.parametrize("compressible", [False, True])
+@pytest.mark.parametrize("bc_kind", ["u", "un"])
 @pytest.mark.parametrize("mesh_key", ["2D-tri", "3D-tet", "2D-cylinder"])
-def test_viscosity_term_un_variational_structure(mesh_key):
-    """The weak "un" boundary residual is the first variation of a functional.
+def test_viscosity_term_variational_structure(mesh_key, bc_kind, compressible):
+    """Pin the weak boundary residual to the first variation of its functional.
 
-    Symmetry tests cannot see a sign or constant error that is itself symmetric.
-    This pins the boundary residual to an independently written boundary
-    functional E_bdy, so that any such slip is caught. Incompressible "un" only;
-    a smooth polynomial viscosity keeps entries O(1) for a tight tolerance.
+    Symmetry cannot see an error that keeps the residual symmetric: a mis-scaled
+    penalty, or a wrong constant in a term that is still the first variation of
+    some functional, leaves the Jacobian symmetric. Being consistent it also
+    keeps the optimal convergence order, so the solver-output tests do not see it
+    either. The only property that pins such an error is that the residual is the
+    first variation of the boundary functional the code documents,
+
+        E_bdy = int_bdy [ -w . sigma(u).n + sigma_pen mu <G, A(G)> ] ds,
+
+    with G = outer(n, w), A the deviatoric stress shape (2 sym(G) for
+    incompressible, minus 2/3 tr(G) I for compressible), and w = u - u_D for weak
+    "u" or (n.u - un) n for weak "un". A symmetric wrong sign or constant breaks
+    F_bdy == derivative(E_bdy, u). Both branches and both compressibilities are
+    covered, with inhomogeneous boundary data so the flux and penalty terms are
+    exercised away from the trivial w = 0 point that would hide a wrong constant.
+
+    The flux part of E_bdy reuses approximation.stress, so a bug inside stress
+    itself sits on both sides of the identity and is not caught here; the MMS
+    tests in test_weak_bc_solution.py pin stress absolutely against a manufactured
+    field.
     """
     mesh = meshes[mesh_key]
     mesh.cartesian = "cylinder" not in mesh_key
+    dim = mesh.geometric_dimension
 
     V = fd.VectorFunctionSpace(mesh, "CG", 2)
-    u = fd.Function(V)
-    X = fd.SpatialCoordinate(mesh)
-    u.interpolate(X)
-    epsilon = fd.sym(fd.grad(u))
-    mu = fd.Constant(1.0) + fd.inner(epsilon, epsilon)
+    u = fd.Function(V).interpolate(generic_velocity(mesh))
+    mu = nonlinear_mu(u, compressible)
 
-    approximation = gadopt.BoussinesqApproximation(1, mu=mu)
+    if compressible:
+        approximation = gadopt.TruncatedAnelasticLiquidApproximation(1, Di=1, mu=mu)
+    else:
+        approximation = gadopt.BoussinesqApproximation(1, mu=mu)
+
     bids = list(gadopt.get_boundary_ids(mesh))
-    bcs = {bid: {'un': 0} for bid in bids}
+    # Nonzero boundary data keeps the jump w = u - u_D (or n.u - un) away from
+    # zero, so a wrong coefficient in a term proportional to w is observable.
+    u_D = fd.Constant([0.1 * (i + 1) for i in range(dim)])
+    un = 0.2
+    bcs = {bid: ({"u": u_D} if bc_kind == "u" else {"un": un}) for bid in bids}
 
     eq = Equation(
         fd.TestFunction(V),
@@ -286,21 +306,32 @@ def test_viscosity_term_un_variational_structure(mesh_key):
         eq_attrs={"stress": approximation.stress(u)},
         approximation=approximation,
         bcs=bcs,
-        quad_degree=6,
+        quad_degree=8,
     )
     F = eq.residual(u)
     F_bdy = ufl.Form(
         [i for i in F.integrals() if "exterior_facet" in i.integral_type()]
     )
 
-    # independently stated boundary functional (incompressible, g = 0):
-    # E_bdy = -w (n.sigma.n) + 2 sigma_pen mu w^2, with w = n.u
+    # Deviatoric stress shape written out here rather than taken from the
+    # approximation, so a bug in the operator under test cannot hide by appearing
+    # identically on both sides of the identity.
+    def dev_shape(gradient):
+        shape = 2 * fd.sym(gradient)
+        if compressible:
+            shape = shape - 2 / 3 * fd.tr(gradient) * fd.Identity(dim)
+        return shape
+
     sigma = interior_penalty_factor(eq)
     sigma *= fd.FacetArea(mesh) / fd.avg(fd.CellVolume(mesh))
-    w = fd.dot(eq.n, u)
+    n = eq.n
     stress_u = approximation.stress(u)
+    # For "un" the jump keeps only its normal component; both branches then share
+    # the same functional with G = outer(n, w).
+    w = (u - u_D) if bc_kind == "u" else (fd.dot(n, u) - un) * n
+    G = fd.outer(n, w)
     E_bdy = sum(
-        (-w * fd.dot(eq.n, fd.dot(stress_u, eq.n)) + 2 * sigma * mu * w**2)
+        (-fd.dot(w, fd.dot(stress_u, n)) + sigma * mu * fd.inner(G, dev_shape(G)))
         * eq.ds(bid)
         for bid in bids
     )

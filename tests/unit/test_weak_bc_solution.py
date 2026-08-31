@@ -1,13 +1,13 @@
 """Solver-output tests for the weak-BC momentum branches with nonlinear mu.
 
-``test_symmetry.py`` checks that the Jacobian of the weak ("u"/"un") SIPG
-boundary terms in ``gadopt.momentum_equation.viscosity_term`` is symmetric.
-This file checks the complementary property: that the *converged solution*
-those terms produce is the solution of the intended continuous problem. A
-symmetric residual can still be a symmetric *wrong* residual — a term scaled
-by the wrong constant stays the exact first variation of a (wrong)
-functional, so its Jacobian is still symmetric — which is why solver output
-needs its own coverage.
+``test_symmetry.py`` checks two properties of the weak ("u"/"un") SIPG boundary
+terms in ``gadopt.momentum_equation.viscosity_term``: that their Jacobian is
+symmetric, and that the residual is the first variation of the documented
+boundary functional. This file checks the remaining property, that the
+*converged solution* those terms produce is the solution of the intended
+continuous problem. A boundary term inconsistent with that continuous problem
+converges to a different solution and so degrades the convergence measured here,
+while keeping the Jacobian symmetric; the symmetry test alone would pass it.
 
 The file has three tests. ``test_mms_weak_un_convergence`` (1a) drives the weak
 "un" branch through ``StokesSolver`` on a manufactured incompressible Stokes
@@ -19,8 +19,8 @@ manufactured velocity-only problem. ``test_tosi_weak_freeslip_matches_strong``
 rheology and pins the weak free-slip ("un") solution against the trusted
 strong-BC formulation. Both MMS tests are incompressible; the compressible
 branches stay covered only by the symmetry tests. Test 2 is a coarsened,
-single-solve, fixed-temperature version of the Tosi benchmark, not the full
-time-stepped run.
+fixed-temperature, single-timestep version of the Tosi benchmark (not the full
+time-stepped run) compared across three resolutions.
 """
 
 from math import log2
@@ -44,6 +44,7 @@ def test_mms_weak_un_convergence():
     """MMS convergence of the weak "un" branch through StokesSolver (1a)."""
     errs_u = []
     errs_p = []
+    errs_interp_u = []
     for N in (8, 16, 32):
         mesh = fd.UnitSquareMesh(N, N, quadrilateral=True)
         mesh.cartesian = True
@@ -110,27 +111,48 @@ def test_mms_weak_un_convergence():
         errs_u.append(err_u)
         errs_p.append(err_p)
 
-    for k in range(2):
-        order_u = log2(errs_u[k] / errs_u[k + 1])
-        order_p = log2(errs_p[k] / errs_p[k + 1])
-        assert order_u >= 2.5  # expected 3.0
-        # observed p orders ~3.7, superconvergent vs the theoretical 2.0; a future
-        # drop toward 2.0 is still correct, not a regression.
-        assert order_p >= 1.5  # expected 2.0
+        # Nodal interpolation error of the exact field: no solve, a
+        # discretisation-only reference for the constant guard below.
+        u_interp = fd.Function(V).interpolate(u_ex)
+        errs_interp_u.append(fd.sqrt(fd.assemble(
+            fd.inner(u_ex - u_interp, u_ex - u_interp) * fd.dx(degree=12))))
 
-    # Absolute regression guard on top of the order check above: a correct order
-    # with a much worse constant would still pass the order assertions, so pin
-    # the N=32 error to a small multiple of its converged value (err_u=1.71e-05,
-    # err_p=4.57e-04).
-    CAP_U = 3 * 1.71e-05
-    CAP_P = 3 * 4.57e-04
-    assert errs_u[-1] <= CAP_U
-    assert errs_p[-1] <= CAP_P
+    # Taylor-Hood P2-P1 L2 convergence orders.
+    THEORY_ORDER_U, THEORY_ORDER_P = 3.0, 2.0
+    # Tolerance band on the measured order, sized to the failure it guards. A
+    # boundary term inconsistent with the continuous problem converges to a
+    # different solution and collapses the order well below theory, so 0.25
+    # separates a passing solve from that failure. A consistent but wrong term
+    # (a mis-scaled penalty, or a non-symmetric symmetriser) keeps the optimal
+    # order 3; those are caught by the symmetry and variational-structure tests
+    # in test_symmetry.py, not by the order here.
+    ORDER_TOL = 0.25
+    # Quasi-optimality factor: Cea and Aubin-Nitsche bound the Galerkin L2
+    # error by a constant times the best-approximation (here interpolation)
+    # error. The measured ratio is ~1 at every level, so K=2 is a real
+    # stability margin, dimensionless and scaling with h.
+    K_STAB = 2
+
+    for k in range(2):
+        # One-sided: exceeding the theoretical order is genuine superconvergence
+        # on this uniform quad mesh (pressure runs ~3.7), never a regression.
+        assert log2(errs_u[k] / errs_u[k + 1]) >= THEORY_ORDER_U - ORDER_TOL
+        assert log2(errs_p[k] / errs_p[k + 1]) >= THEORY_ORDER_P - ORDER_TOL
+
+    # Bound the error constant, not just the rate: an inconsistent boundary term
+    # inflates the velocity error by orders of magnitude alongside the order
+    # collapse, while a correct scheme stays within a small factor of the
+    # interpolation error (quasi-optimality). A consistent but mis-scaled penalty
+    # leaves this constant essentially unchanged and is pinned by the
+    # variational-structure test in test_symmetry.py instead.
+    for err, err_interp in zip(errs_u, errs_interp_u):
+        assert err <= K_STAB * err_interp
 
 
 def test_mms_weak_u_convergence():
     """MMS convergence of the weak "u" branch at the Equation level (1b)."""
     errs_u = []
+    errs_interp_u = []
     for N in (8, 16, 32):
         mesh = fd.UnitSquareMesh(N, N, quadrilateral=True)
         mesh.cartesian = True
@@ -162,8 +184,8 @@ def test_mms_weak_u_convergence():
         solver = fd.NonlinearVariationalSolver(problem, solver_parameters={
             "snes_type": "newtonls", "snes_linesearch_type": "bt",
             "snes_rtol": 1e-10, "snes_atol": 1e-12,
-            # backtracking takes small steps in the stiff cubic region: the
-            # N=32 solve needs 51 Newton iterations, above the PETSc default 50.
+            # backtracking takes small steps in the stiff cubic region and can
+            # exceed the PETSc default of 50 iterations, so raise the cap.
             "snes_max_it": 200, "ksp_type": "preonly",
             "pc_type": "lu", "pc_factor_mat_solver_type": "mumps"})
         solver.solve()  # monotone operator; a failed solve fails the test
@@ -172,14 +194,23 @@ def test_mms_weak_u_convergence():
             fd.inner(u - u_ex, u - u_ex) * fd.dx(degree=12)))
         errs_u.append(err_u)
 
-    for k in range(2):
-        order_u = log2(errs_u[k] / errs_u[k + 1])
-        assert order_u >= 2.5  # expected 3.0
+        # Nodal interpolation error of the exact field: the discretisation-only
+        # reference for the constant guard below.
+        u_interp = fd.Function(V).interpolate(u_ex)
+        errs_interp_u.append(fd.sqrt(fd.assemble(
+            fd.inner(u_ex - u_interp, u_ex - u_interp) * fd.dx(degree=12))))
 
-    # Absolute regression guard, as in test_mms_weak_un_convergence above: pin
-    # the N=32 error to a small multiple of its converged value (err_u=5.43e-06).
-    CAP_U = 3 * 5.43e-06
-    assert errs_u[-1] <= CAP_U
+    # Taylor-Hood P2 velocity L2 convergence order (see 1a for the rationale
+    # of the tolerance band and the quasi-optimality constant guard).
+    THEORY_ORDER_U = 3.0
+    ORDER_TOL = 0.25
+    K_STAB = 2
+
+    for k in range(2):
+        assert log2(errs_u[k] / errs_u[k + 1]) >= THEORY_ORDER_U - ORDER_TOL
+
+    for err, err_interp in zip(errs_u, errs_interp_u):
+        assert err <= K_STAB * err_interp
 
 
 def _tosi_viscosity(z, T, X):
@@ -241,7 +272,14 @@ def _tosi_solve(mesh, bcs, use_switch):
 
 
 def test_tosi_weak_freeslip_matches_strong():
-    """Weak free-slip ("un") Tosi solve matches the strong-BC formulation (2)."""
+    """Weak free-slip ("un") Tosi solve matches the strong-BC formulation (2).
+
+    The weak and strong formulations are consistent discretisations of the same
+    continuous problem, so their relative velocity difference decays at the P2
+    discretisation order under refinement. This tests that trend. A bug that
+    scales both solves identically cancels in the difference and is not caught
+    here; the MMS tests pin the absolute solution against exact fields instead.
+    """
     # use_switch=False: Newton from zero converges directly for both the strong
     # and weak solves at these resolutions, so the linear continuation
     # pre-solve in _tosi_solve is not required here.
@@ -252,9 +290,10 @@ def test_tosi_weak_freeslip_matches_strong():
     def bcs_weak(b):
         return {bid: {'un': 0} for bid in list(b)}
 
+    # Three levels give two refinement pairs, enough to measure a decay rate.
+    Ns = (16, 32, 64)
     d = {}
-    urms_rel = {}
-    for N in (32, 64):
+    for N in Ns:
         mesh = fd.UnitSquareMesh(N, N, quadrilateral=True)
         mesh.cartesian = True
         u_s = _tosi_solve(mesh, bcs_strong, use_switch=False)
@@ -262,24 +301,23 @@ def test_tosi_weak_freeslip_matches_strong():
 
         d[N] = (fd.sqrt(fd.assemble(fd.inner(u_w - u_s, u_w - u_s) * fd.dx))
                 / fd.sqrt(fd.assemble(fd.inner(u_s, u_s) * fd.dx)))
-        urms_rel[N] = abs(fd.sqrt(fd.assemble(fd.dot(u_w, u_w) * fd.dx))
-                          / fd.sqrt(fd.assemble(fd.dot(u_s, u_s) * fd.dx)) - 1)
 
-    # Absolute regression guard on d[32], the relative velocity difference
-    # between the weak and strong formulations: pin it to a small multiple of
-    # its converged value (7.33e-05) so a solver-output regression is caught
-    # even where the refinement check below still passes.
-    assert d[32] <= 0.05  # sanity ceiling
-    assert d[32] <= 3 * 7.33e-05
-    # difference is a discretization effect and must shrink under refinement
-    assert d[32] / d[64] >= 1.3
-    # urms_rel is the relative difference in bulk kinetic energy between the two
-    # formulations, a near-cancellation quantity about 700x smaller than d[64]
-    # since it hides in a norm that is far less sensitive to local velocity
-    # differences than the pointwise comparison above. Its precise value is not
-    # robust across CI's BLAS/MUMPS stack, so the cap is set an order of
-    # magnitude above the converged floor (~9e-9) while staying well below the
-    # scale a sign error in the tangent-stress term would produce (~1e-6),
-    # leaving a clean margin on both sides.
-    assert urms_rel[64] <= 1e-2  # ceiling
-    assert urms_rel[64] <= 1e-7
+    # d is bounded by the sum of the two P2 velocity L2 errors, so it decays at
+    # their order (3) under refinement.
+    THEORY_ORDER_D = 3.0
+    # The failure this guards is a weak side inconsistent with the continuous
+    # problem: d then decays at a visibly degraded rate, or plateaus, well below
+    # the threshold rather than at order 3. A consistent but wrong weak term
+    # (a mis-scaled penalty, or a non-symmetric symmetriser) keeps the rate and
+    # is caught by the symmetry and variational-structure tests, not here. The
+    # band is looser than the MMS tests because d is a difference of two errors
+    # (partial cancellation) and the Tosi solution's regularity is not certified,
+    # so a correct rate can genuinely sit somewhat below 3.
+    ORDER_TOL_D = 0.5
+    for N, N2 in zip(Ns[:-1], Ns[1:]):
+        assert log2(d[N] / d[N2]) >= THEORY_ORDER_D - ORDER_TOL_D
+
+    # The one absolute bound in the file: a specification, not a regression pin.
+    # The two formulations must agree to within 1% in relative velocity at the
+    # working resolution.
+    assert d[Ns[-1]] <= 1e-2

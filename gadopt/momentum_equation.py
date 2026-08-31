@@ -54,8 +54,8 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     # Whether mu depends on the solution `trial` determines two things below:
     # the weak boundary terms always use the tangent stress (so the Jacobian of
     # the weak boundary conditions is symmetric), but the extra
-    # penalty-derivative term is only needed when mu itself varies with `trial`
-    # -- for a viscosity independent of the solution that term is identically
+    # penalty-derivative term is only needed when mu itself varies with `trial`.
+    # For a viscosity independent of the solution (linear mu) that term is identically
     # zero. The test detects a dependence on any component of the mixed solution
     # that `trial` belongs to, not the velocity specifically: a pressure-
     # dependent mu(p), for example, also sets mu_nonlinear = True. Checking
@@ -109,10 +109,6 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 * eq.ds(bc_id)
             )
             # Symmetrising term, the transpose of the flux integration by parts.
-            # Writing this through the overridable tangent_stress method, which
-            # returns the exact directional derivative of stress, makes the term
-            # the exact adjoint of the flux term below under Newton linearisation,
-            # for any mu, linear or nonlinear.
             tangent = eq.approximation.tangent_stress(trial, eq.test)
             F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
