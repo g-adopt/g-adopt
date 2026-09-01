@@ -90,11 +90,15 @@ forms. In this test it removes the TSFC quadrature-degree warning without
 changing the nonlinear iteration count or final residual.
 
 The conservative defaults remain diagonal mass lumping, a DG0 weight and an
-inner FGMRES tolerance of `1e-2`. Row-sum lumping and a DG1 weight did not
-improve the tested TALA solve. An inner tolerance of `3e-2` was about 2%
-faster locally with unchanged outer work, but that margin is too small to
-justify weakening the default before a representative production test. At
-`1e-1`, outer pressure work increased materially.
+inner FGMRES tolerance of `1e-2`. A later cylindrical TALA sweep at larger,
+high-contrast configurations identified a better opt-in setting: a DG1
+weight, inner FGMRES tolerance `1e-4`, no aggressive GAMG coarsening and two
+smoothed-aggregation prolongator smoothing steps. This reduced outer and
+velocity work and produced warm speedups on 64-by-16 and 128-by-32 meshes. It
+remained substantially slower than pressure mass at mild viscosity contrast,
+so it is not a replacement default for easy cases. Looser inner tolerances
+and fixed four-step Richardson reduced inner Krylov work but increased outer
+work in the larger local cases.
 
 Inner BFBT failure is fatal by default. Each application records both inner
 solve reasons and total work. ``bfbt_raise_on_inner_failure false`` is
@@ -146,9 +150,12 @@ Picard solvers:
     "pc_type": "python",
     "pc_python_type": "gadopt.DensityAwareBFBTPC",
     "bfbt_ksp_type": "fgmres",
-    "bfbt_ksp_rtol": 1e-2,
-    "bfbt_ksp_max_it": 200,
+    "bfbt_ksp_rtol": 1e-4,
+    "bfbt_ksp_max_it": 1000,
     "bfbt_pc_type": "gamg",
+    "bfbt_weight_degree": 1,
+    "bfbt_pc_gamg_aggressive_coarsening": 0,
+    "bfbt_pc_gamg_agg_nsmooths": 2,
 }
 ```
 

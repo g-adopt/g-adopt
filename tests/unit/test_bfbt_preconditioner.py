@@ -1,3 +1,5 @@
+import math
+
 import firedrake as fd
 import pytest
 
@@ -45,6 +47,10 @@ def build_solver(
     *,
     quadrilateral=True,
     viscosity_scale=None,
+    discontinuous_density=False,
+    nullspace_policy=None,
+    right_inner_rtol=None,
+    left_inner_rtol=None,
     bfbt_options=None,
 ):
     """Construct a variable-viscosity Boussinesq or variable-density TALA case."""
@@ -68,9 +74,15 @@ def build_solver(
     if approximation_name == "Boussinesq":
         approximation = BoussinesqApproximation(1, mu=viscosity)
     elif approximation_name in {"TALA", "ALA"}:
-        density = fd.Function(temperature_space).interpolate(
-            fd.exp(0.5 * (1 - y))
-        )
+        if discontinuous_density:
+            density_space = fd.FunctionSpace(mesh, "DQ", 0)
+            density = fd.Function(density_space).interpolate(
+                1 + fd.conditional(fd.gt(x, 0.47), 1, 0)
+            )
+        else:
+            density = fd.Function(temperature_space).interpolate(
+                fd.exp(0.5 * (1 - y))
+            )
         approximation_class = (
             AnelasticLiquidApproximation
             if approximation_name == "ALA"
@@ -97,6 +109,14 @@ def build_solver(
         parameters["fieldsplit_1"].update(bfbt_options)
     if approximation_name == "ALA":
         parameters["fieldsplit_1"]["bfbt_nullspace_policy"] = "schur"
+    if nullspace_policy is not None:
+        parameters["fieldsplit_1"]["bfbt_nullspace_policy"] = (
+            nullspace_policy
+        )
+    if right_inner_rtol is not None:
+        parameters["fieldsplit_1"]["bfbt_right_ksp_rtol"] = right_inner_rtol
+    if left_inner_rtol is not None:
+        parameters["fieldsplit_1"]["bfbt_left_ksp_rtol"] = left_inner_rtol
     solver = StokesSolver(
         solution,
         approximation,
@@ -107,6 +127,32 @@ def build_solver(
         solver_parameters=parameters,
     )
     return solver
+
+
+def test_bfbt_uses_side_specific_inner_tolerances():
+    """The algebraic rightmost and leftmost solves retain distinct controls."""
+    solver = build_solver(
+        "TALA",
+        right_inner_rtol=1e-7,
+        left_inner_rtol=1e-3,
+    )
+    solver.solve()
+
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    assert bfbt.right_inner_rtol == pytest.approx(1e-7)
+    assert bfbt.left_inner_rtol == pytest.approx(1e-3)
+    assert bfbt.last_inner_tolerances == pytest.approx((1e-7, 1e-3))
+    assert bfbt.inner_solves_by_side["right"] > 0
+    assert (
+        bfbt.inner_solves_by_side["right"]
+        == bfbt.inner_solves_by_side["left"]
+    )
+    assert sum(bfbt.inner_iterations_by_side.values()) == (
+        bfbt.inner_iterations_total
+    )
+    assert sum(bfbt.inner_failures_by_side.values()) == 0
+    assert fd.assemble(solver.F, bcs=solver.strong_bcs).dat.norm < 1e-8
 
 
 @pytest.mark.parametrize(
@@ -142,26 +188,93 @@ def test_density_aware_bfbt_solve(approximation_name, quadrilateral):
     bfbt = fieldsplit_ksps[1].pc.getPythonContext()
     assert fieldsplit_ksps[1].getConvergedReason() > 0
     assert bfbt.mass_lumping == "diagonal"
+    assert bfbt.sides["right"] is bfbt.sides["left"]
     assert bfbt.inverse_velocity_mass.min()[1] > 0
     assert bfbt.inner_solves_total > 0
     assert bfbt.inner_iterations_total > 0
     assert bfbt.inner_failures_total == 0
-    assert sum(bfbt.inner_iterations_by_side.values()) == (
-        bfbt.inner_iterations_total
-    )
     assert sum(bfbt.inner_solves_by_side.values()) == bfbt.inner_solves_total
     assert sum(bfbt.inner_failures_by_side.values()) == 0
     assert all(reason > 0 for reason in bfbt.last_inner_reasons)
-    assert bfbt.left_nullspace_is_exact is True
-    assert bfbt.auxiliary_left_nullspace_is_exact is True
-    assert bfbt.left_nullspace_residual < 1e-10
-    assert bfbt.auxiliary_left_nullspace_residual < 1e-10
     if approximation_name == "ALA":
         assert bfbt.right_nullspace_is_exact is False
         assert bfbt.auxiliary_right_nullspace_is_exact is False
         assert bfbt.nullspace_policy == "schur"
+        assert bfbt.left_nullspace_source == "none"
+        assert bfbt.left_nullspace_fallback_used is False
     else:
         assert bfbt.right_nullspace_is_exact is True
+        assert bfbt.left_nullspace_is_exact is True
+        assert bfbt.auxiliary_left_nullspace_is_exact is True
+        assert bfbt.left_nullspace_source == "verified_right_fallback"
+        assert bfbt.left_nullspace_fallback_used is True
+        assert bfbt.exact_left_nullspace_attached is True
+        assert bfbt.auxiliary_left_nullspace_attached is True
+        assert bfbt.exact_pressure_laplacian.getTransposeNullSpace().handle != 0
+        assert (
+            bfbt.pressure_laplacian.petscmat.getTransposeNullSpace().handle
+            != 0
+        )
+
+
+def test_bfbt_rejects_incompatible_discontinuous_density_nullspace():
+    """A discontinuous density cannot inherit a false transpose null mode."""
+    solver = build_solver(
+        "TALA",
+        discontinuous_density=True,
+        nullspace_policy="schur",
+    )
+    solver.solve()
+    pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
+    bfbt = pressure_ksp.pc.getPythonContext()
+    operator, _ = pressure_ksp.pc.getOperators()
+    assert bfbt.right_nullspace_is_exact is True
+    assert bfbt.left_nullspace_is_exact is False
+    assert bfbt.auxiliary_left_nullspace_is_exact is True
+    assert bfbt.left_nullspace_source == "verified_right_fallback"
+    assert bfbt.exact_left_nullspace_attached is False
+    assert bfbt.auxiliary_left_nullspace_attached is True
+
+    bfbt.nullspace_policy = "verified"
+    with pytest.raises(
+        ValueError,
+        match="no compatible transpose nullspace.*rho_continuity",
+    ):
+        bfbt._set_pressure_nullspaces(operator)
+    assert bfbt.exact_right_nullspace_attached is False
+    assert bfbt.auxiliary_right_nullspace_attached is False
+    assert bfbt.exact_left_nullspace_attached is False
+    assert bfbt.auxiliary_left_nullspace_attached is False
+    assert bfbt.exact_pressure_laplacian.getNullSpace().handle == 0
+    assert bfbt.exact_pressure_laplacian.getTransposeNullSpace().handle == 0
+    assert bfbt.pressure_laplacian.petscmat.getNullSpace().handle == 0
+    assert (
+        bfbt.pressure_laplacian.petscmat.getTransposeNullSpace().handle == 0
+    )
+
+
+@pytest.mark.parametrize(
+    ("absolute_tolerance", "relative_tolerance", "message"),
+    [
+        (math.inf, 0.0, "test_tolerance"),
+        (math.nan, 0.0, "test_tolerance"),
+        (0.0, math.inf, "relative_tolerance"),
+        (0.0, math.nan, "relative_tolerance"),
+        (-1.0, 0.0, "test_tolerance"),
+        (0.0, -1.0, "relative_tolerance"),
+    ],
+)
+def test_bfbt_rejects_invalid_nullspace_tolerances(
+    absolute_tolerance,
+    relative_tolerance,
+    message,
+):
+    """Invalid diagnostics cannot make every pressure mode appear exact."""
+    with pytest.raises(ValueError, match=message):
+        DensityAwareBFBTPC._validate_nullspace_test_tolerances(
+            absolute_tolerance,
+            relative_tolerance,
+        )
 
 
 def test_weighted_pressure_laplacian_transpose():
@@ -289,7 +402,7 @@ def test_density_aware_bfbt_spherical_tala_gplates_boundaries():
     assert residual.dat.norm < 1e-8
     assert pressure_ksp.getConvergedReason() > 0
     assert bfbt.inner_failures_total == 0
-    assert bfbt.uses_constant_left_nullspace_fallback is True
+    assert bfbt.left_nullspace_fallback_used is True
     assert bfbt.left_nullspace_is_exact is True
 
 
@@ -300,10 +413,17 @@ def test_bfbt_update_increments_exact_operator_state():
     pressure_ksp = solver.solver.snes.ksp.pc.getFieldSplitSubKSP()[1]
     bfbt = pressure_ksp.pc.getPythonContext()
     state_before = bfbt.exact_pressure_laplacian.stateGet()
+    update_count_before = bfbt.update_count
 
     bfbt.update(pressure_ksp.pc)
 
     assert bfbt.exact_pressure_laplacian.stateGet() > state_before
+    assert bfbt.update_count == update_count_before + 1
+    assert bfbt.left_nullspace_source == "verified_right_fallback"
+    assert bfbt.left_nullspace_is_exact is True
+    assert bfbt.auxiliary_left_nullspace_is_exact is True
+    assert bfbt.exact_left_nullspace_attached is True
+    assert bfbt.auxiliary_left_nullspace_attached is True
 
 
 def test_bfbt_update_tracks_changed_viscosity_and_resolves():
@@ -328,6 +448,12 @@ def test_bfbt_update_tracks_changed_viscosity_and_resolves():
     assert bfbt.exact_pressure_laplacian.stateGet() > operator_state_before
     assert bfbt.inner_failures_total == 0
     assert residual.dat.norm < 1e-8
+    assert bfbt.exact_left_nullspace_attached is True
+    assert bfbt.auxiliary_left_nullspace_attached is True
+    assert bfbt.exact_pressure_laplacian.getTransposeNullSpace().handle != 0
+    assert (
+        bfbt.pressure_laplacian.petscmat.getTransposeNullSpace().handle != 0
+    )
 
 
 @pytest.mark.parametrize(
@@ -391,7 +517,10 @@ def test_bfbt_inner_failure_is_not_silent():
     original_tolerances = bfbt.ksp.getTolerances()
     bfbt.ksp.setTolerances(max_it=0)
 
-    with pytest.raises(RuntimeError, match="BFBT left inner pressure solve failed"):
+    with pytest.raises(
+        RuntimeError,
+        match="BFBT right inner pressure solve failed",
+    ):
         bfbt.apply(pressure_ksp.pc, rhs, result)
 
     bfbt.ksp.setTolerances(*original_tolerances)
