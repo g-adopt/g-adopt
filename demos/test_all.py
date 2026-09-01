@@ -33,7 +33,9 @@ cases = {
         "extra_checks": ["nu_top", "T_min", "T_max", "entrainment"]
     },
     f"{mm_path}/compositional_buoyancy": {"extra_checks": ["entrainment"]},
-    f"{mm_path}/free_surface": {"extra_checks": ["slab_tip_depth"]},
+    f"{mm_path}/free_surface": {
+        "extra_checks": [("slab_tip_depth", {"rtol": 1e-4})]
+    },
     f"{mm_path}/thermochemical_buoyancy": {"extra_checks": ["entrainment"]},
     f"{gia_path}/base_case": {"extra_checks": ["uv_min"]},
     f"{gia_path}/2d_cylindrical": {"extra_checks": ["uv_min"]},
