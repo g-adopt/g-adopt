@@ -44,12 +44,15 @@ iterative_stokes_solver_parameters = {
     "pc_fieldsplit_type": "schur",
     "pc_fieldsplit_schur_type": "full",
     "fieldsplit_0": {
-        "ksp_type": "cg",
+        "ksp_type": "fgmres",
         "ksp_rtol": 1e-5,
         "ksp_max_it": 1000,
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
         "assembled_pc_type": "gamg",
+        "assembled_mg_levels_ksp_type": "richardson",
+        "assembled_mg_levels_ksp_max_it": 2,
+        "assembled_mg_levels_ksp_norm_type": "none",
         "assembled_mg_levels_pc_type": "sor",
         "assembled_pc_gamg_threshold": 0.01,
         "assembled_pc_gamg_square_graph": 100,
@@ -76,8 +79,10 @@ preconditioners for mixed problems that allows a user to apply different precond
 to different blocks of the system.
 
 The `fieldsplit_0` entries configure solver options for the velocity block. The linear
-systems associated with this matrix are solved using a combination of the Conjugate
-Gradient (`cg`) method and an algebraic multigrid preconditioner (`gamg`).
+systems associated with this matrix are solved using a combination of the Flexible
+Generalized Minimal Residual (`fgmres`) method and an algebraic multigrid preconditioner
+(`gamg`). Each non-coarse multigrid level applies two fixed Richardson iterations with
+successive over-relaxation (`sor`) as the preconditioner.
 
 The `fieldsplit_1` entries contain solver options for the Schur complement solve itself.
 For preconditioning, we approximate the Schur complement matrix with a mass matrix
