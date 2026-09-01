@@ -690,7 +690,10 @@ def fetch_data_file(url: str, dest: Path):
     # would mistake for a good one.
     tmp = dest.with_suffix(dest.suffix + ".partial")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with urlopen(url) as response, tmp.open("wb") as out:
+    # Time out rather than hang the whole doit run on a stalled connection:
+    # this executes on a login node before any job is submitted, so a wedged
+    # download blocks every case behind it.
+    with urlopen(url, timeout=60) as response, tmp.open("wb") as out:
         shutil.copyfileobj(response, out)
     tmp.rename(dest)
 

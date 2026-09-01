@@ -283,11 +283,20 @@ def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,
     coords_cg.interpolate(SpatialCoordinate(mesh))
     mesh_xy = coords_cg.dat.data_ro[:, :2]
 
-    spatial = {
-        name: _sample(V, V_cg, mesh_xy, surfaces[name], name)
-        for name in ("elevation", "shallow_layer", "lower_layer",
-                     "water_table", "rainfall")
-    }
+    # Sample each distinct surface once. Rainfall is the elevation surface
+    # (the bundle's rainfall grid is its elevation grid), so sampling by name
+    # would build two identical DG fields -- a whole redundant Function at
+    # the largest scales.
+    spatial: dict = {}
+    for name in ("elevation", "shallow_layer", "lower_layer",
+                 "water_table", "rainfall"):
+        surface = surfaces[name]
+        for done, field in spatial.items():
+            if surfaces[done] is surface:
+                spatial[name] = field
+                break
+        else:
+            spatial[name] = _sample(V, V_cg, mesh_xy, surface, name)
 
     x = SpatialCoordinate(mesh)
     elevation = spatial["elevation"]
