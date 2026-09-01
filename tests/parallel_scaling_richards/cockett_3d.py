@@ -45,6 +45,7 @@ if __name__ == "__main__":
     _ARGS = _parse_args()
     sys.argv = sys.argv[:1]
 
+import os  # noqa: E402
 import time as time_mod  # noqa: E402
 
 from gadopt import *  # noqa: E402, F401
@@ -186,6 +187,25 @@ def model(nx, nz, solver, *, degree=1, dt_value=300.0, steps=30, hmg_levels=2):
         solver_parameters_extra=diagnostics,
     )
 
+    # Per-step diagnostics, written by rank 0 to a file named after the job
+    # tag so every step of the suite can share one directory.
+    #
+    # theta_total is the total water content, int theta(h) dx, in m^3. It is
+    # the suite's only check that the solve produced the right answer rather
+    # than merely converging: iteration counts and timings are both blind to
+    # a preconditioner that converges to the wrong solution. At a given mesh
+    # every preset solves the same problem, so their values must agree to
+    # solver tolerance.
+    #
+    # No boundary-flux column here, unlike the basin driver. This case
+    # carries Dirichlet head conditions on top and bottom, so the boundary
+    # flux is solution-dependent through the Nitsche and SIPG penalty terms;
+    # reconstructing it would mean rebuilding the numerical flux by hand.
+    theta_expr = soil_curves.moisture_content(h)
+    tag = os.environ.get("TAG", "run")
+    plog = ParameterLog(f"params_{tag}.log", mesh)
+    plog.log_str("step time dt wall nl lin theta_total")
+
     sim_time = 0.0
     total_nl = 0
     total_l = 0
@@ -201,12 +221,19 @@ def model(nx, nz, solver, *, degree=1, dt_value=300.0, steps=30, hmg_levels=2):
         lit = snes.getLinearSolveIterations()
         total_nl += nl
         total_l += lit
+        theta_total = assemble(theta_expr * dx)
         log(f"step {step + 1}/{steps} | t={sim_time:.1f}s | "
-            f"wall={wall_times[-1]:.2f}s | NL={nl} | L={lit}")
+            f"wall={wall_times[-1]:.2f}s | NL={nl} | L={lit} | "
+            f"theta={theta_total:.10e}")
+        plog.log_str(
+            f"{step + 1} {sim_time:.10e} {float(dt):.10e} "
+            f"{wall_times[-1]:.6e} {nl} {lit} {theta_total:.10e}"
+        )
 
     mean_wall = sum(wall_times) / len(wall_times)
     log(f"done | total NL={total_nl} | total L={total_l} | "
         f"mean wall/step={mean_wall:.2f}s")
+    plog.close()
 
 
 if __name__ == "__main__":

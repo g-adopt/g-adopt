@@ -1,17 +1,24 @@
 """Parallel-scaling assertions for the Richards default iterative presets.
 
-Collected by the g-adopt longtest runner on Gadi. Three metrics are
-checked per (case, solver, level) triple:
+Collected by the g-adopt longtest runner on Gadi. Per (case, solver,
+level) triple:
 
 * ``linear_iterations`` -- mean Krylov iteration count across all time
   steps, parsed from the driver's stdout.
-* ``pc_setup`` -- wall time spent in ``PCSetUp`` according to PETSc's
-  ``-log_view``, parsed from ``profile_<tag>.txt``.
+* ``theta_total`` -- total water content at the end of the run, parsed
+  from ``params_<tag>.log``. This is the only assertion that checks the
+  solve reached the right *answer*; the rest would all stay green for a
+  preconditioner that converged briskly to the wrong one.
+* ``pc_setup`` / ``pc_apply`` -- wall time in ``PCSetUp`` and
+  ``PCApply`` from PETSc's ``-log_view``, kept apart because setup is
+  paid per Jacobian and apply per Krylov iteration, so a smoother change
+  trades one against the other.
 * ``solve_time`` -- wall time reported by ``-log_view``.
 
 Reference values are kept in two CSVs:
 
-* ``expected.csv`` -- iteration count is hardware-independent.
+* ``expected.csv`` -- iteration count and water content, both
+  hardware-independent.
 * ``gadi_expected.csv`` -- timings are system-specific (Sapphire Rapids).
 
 Rows whose expected value is ``nan`` are skipped rather than asserted,
@@ -47,6 +54,12 @@ _HERE = Path(__file__).parent.resolve()
 # than Stokes (nonlinear residual sensitivity).
 _ITER_TOL = 1.0      # absolute count
 _TIME_TOL = 0.20     # fractional
+# Total water content is a converged solution functional, not a timing, so it
+# is held far tighter. Across presets on one mesh the measured values agreed
+# to every digit recorded; 1e-8 leaves room for reduction-order differences
+# at a different rank count while still catching a preconditioner that
+# converges comfortably to the wrong answer.
+_THETA_TOL = 1e-8    # fractional
 
 
 def _load_expected(csv_name: str) -> pd.DataFrame:
@@ -129,6 +142,48 @@ def test_linear_iterations(case, level, solver):
 
 @pytest.mark.longtest
 @pytest.mark.parametrize("case,level,solver", list(all_triples()))
+def test_total_water_content(case, level, solver):
+    """Converged solution functional matches the recorded value.
+
+    The only check in the suite that the solve reached the right answer.
+    Iteration counts and wall times both stay perfectly healthy for a
+    preconditioner that converges quickly to the wrong solution; this does
+    not.
+
+    For the basin cases the timestep is adaptive, so a run that failed a
+    different number of steps followed a different dt trajectory and
+    integrated to a different end state. That is a change of problem
+    rather than a drift in the answer, so it is reported as its own
+    failure instead of as a water-content mismatch.
+    """
+    expected_row = _expected_row(_load_expected("expected.csv"),
+                                 "expected.csv", case, level, solver)
+    expected = float(expected_row["theta_total"])
+    _skip_if_nan(expected, "theta_total")
+
+    data = get_data(case, solver, level, _HERE)
+    measured = data["theta_total"]
+    assert not math.isnan(measured), (
+        f"no theta_total parsed for {case} / {solver} / l={level}"
+    )
+
+    expected_steps = float(expected_row["steps"])
+    if not math.isnan(expected_steps):
+        assert data["steps"] == expected_steps, (
+            f"{case}/{solver}/l={level}: completed {data['steps']:.0f} steps "
+            f"vs expected {expected_steps:.0f}. The dt trajectory changed, so "
+            f"this run did not integrate the same problem and its water "
+            f"content and timings are not comparable."
+        )
+
+    assert abs(measured - expected) / abs(expected) < _THETA_TOL, (
+        f"{case}/{solver}/l={level}: total water content {measured:.10e} "
+        f"vs expected {expected:.10e} (rel tol {_THETA_TOL:.0e})"
+    )
+
+
+@pytest.mark.longtest
+@pytest.mark.parametrize("case,level,solver", list(all_triples()))
 def test_pc_setup_time(case, level, solver):
     assert not isinstance(ghpc_system, str), (
         "attempted to run longtest without gadopt_hpc_helper module"
@@ -149,6 +204,39 @@ def test_pc_setup_time(case, level, solver):
     )
     assert abs((measured - expected) / expected) < _TIME_TOL, (
         f"{case}/{solver}/l={level}: pc_setup {measured:.2f}s "
+        f"vs expected {expected:.2f}s (tol {_TIME_TOL*100:.0f}%)"
+    )
+
+
+@pytest.mark.longtest
+@pytest.mark.parametrize("case,level,solver", list(all_triples()))
+def test_pc_apply_time(case, level, solver):
+    """Time in PCApply stays within tolerance of the recorded value.
+
+    Split out from PCSetUp because the two move independently and for
+    different reasons: setup is paid once per Jacobian, apply once per
+    Krylov iteration. A smoother change trades one against the other, so
+    watching only their sum hides it.
+    """
+    assert not isinstance(ghpc_system, str), (
+        "attempted to run longtest without gadopt_hpc_helper module"
+    )
+    csv_name = f"{ghpc_system.name}_expected.csv"
+    expected_df = _load_expected(csv_name)
+    expected = float(_expected_row(expected_df, csv_name,
+                                   case, level, solver)["pc_apply"])
+    _skip_if_nan(expected, "pc_apply")
+
+    data = get_data(case, solver, level, _HERE)
+    measured = data["pc_apply"]
+    assert not math.isnan(measured), (
+        f"no pc_apply data parsed for {case} / {solver} / l={level}"
+    )
+    assert expected > 0, (
+        f"expected timing for {case}/{solver}/l={level} is non-positive"
+    )
+    assert abs((measured - expected) / expected) < _TIME_TOL, (
+        f"{case}/{solver}/l={level}: pc_apply {measured:.2f}s "
         f"vs expected {expected:.2f}s (tol {_TIME_TOL*100:.0f}%)"
     )
 
