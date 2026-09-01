@@ -12,24 +12,21 @@ count. ``murr_seasonal`` holds the layer count fixed, halves the
 horizontal resolution with the node count, and runs the three-month time
 step on a near-saturated basin.
 
-The terrain and the spatial fields are analytic, not observational. They
-are built as ``omega`` ``Surface`` objects, the same primitive the mesh
-extrusion consumes, so the basin has the correct shape, stratigraphy and
-aspect ratio with no data bundle in the repository. See ``_SURFACES``
-below for the values they reproduce.
-
-CAUTION: because the fields are analytic, the iteration counts and
-timings this driver produces are NOT the observational basin of Morrow
-et al. (2026). They are a self-consistent regression baseline for the
-solver presets on a basin-shaped problem. Do not compare them against
-the numbers in the manuscript.
+Terrain and spatial fields come from the observational bundle at
+``DATA_URL``, wrapped as ``omega`` ``Surface`` objects -- the same
+primitive the mesh extrusion consumes. The bundle is fetched by the doit
+task that runs these cases, not by this driver: it must already be on
+disk before the job starts, because compute nodes have no outbound
+network and every rank would otherwise race on one download.
 
 Requires the ``omega`` package at a revision that provides the Surface
 API: ``build_mesh_hierarchy`` taking ``top_surface`` and
 ``thickness_surface``. Older revisions took four coordinate/value arrays
-and will fail on the call below.
+and will fail on the call below. omega is needed only to run these
+cases, so it is not a dependency of g-adopt itself.
 
 Usage:
+    curl -fsSLO https://data.gadopt.org/github-actions/murrumbidgee_data.npz
     mpiexec -n 104 python murrumbidgee_3d.py \
         --horiz-res 1775 --layers 300 --solver vlumping
 """
@@ -84,6 +81,7 @@ if __name__ == "__main__":
     sys.argv = sys.argv[:1]
 
 import time as time_mod  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 import numpy as np  # noqa: E402
 
@@ -99,116 +97,77 @@ _DOMAIN_VERTICES = [
 # omega tags the polygon side boundary with physical group id 1.
 _SIDE_BC_ID = 1
 
-# Bounding box of the polygon above, used to normalise the analytic
-# surfaces onto the unit square. Both are in metres.
-_DOMAIN_LENGTH = 280000.0
-_DOMAIN_WIDTH = 130000.0
+#: Basin terrain and field data, published alongside the other g-adopt test
+#: fixtures. A compressed .npz holding five float32 fields on a shared regular
+#: lattice, plus the six scalars that describe it. Storing the lattice rather
+#: than a coordinate pair per point, and float32 rather than text, takes the
+#: bundle from 31 MB of CSV to 3.3 MB; the round-trip error is 1.5e-05 m
+#: against a 400 m elevation, which is far below anything the mesh resolves.
+DATA_URL = "https://data.gadopt.org/github-actions/murrumbidgee_data.npz"
+#: Resolved against this file's directory rather than the working directory.
+#: Under doit the case runs with its cwd set to the case directory and the
+#: bundle symlinked in, so the two coincide; anchoring to __file__ keeps a
+#: manual run from any other directory working too.
+DATA_FILE = Path(__file__).parent / "murrumbidgee_data.npz"
 
 
-def _analytic_surfaces():
-    """Return the analytic terrain and field surfaces for the basin.
+def _load_surfaces(data_file=DATA_FILE):
+    """Load the basin terrain and field data as omega Surfaces.
 
-    Every surface is an ``omega.Surface``: a pure callable mapping
-    horizontal points ``(m, 2)`` to scalar values ``(m,)``. That is the
-    same contract ``build_mesh_hierarchy`` consumes for the extrusion, so
-    the terrain and the solution fields are sampled through one
-    primitive.
+    Every value is wrapped in a ``GridSurface``: a ``Surface`` is any pure
+    callable mapping horizontal points ``(m, 2)`` to scalars ``(m,)``, and
+    that is the one contract both ``build_mesh_hierarchy`` and the field
+    sampling below consume. Using the same primitive for the extrusion and
+    for the solution fields means the terrain is interpolated once, one way.
 
-    The expressions are chosen to reproduce the range and the spatial
-    character of the observational basin without carrying its data:
+    ``GridSurface`` is the right primitive here rather than omega's
+    Gaussian-kernel fitter: the source is a dense, regular 500 m lattice,
+    finer than any mesh in the scaling ladder. There are no co-located
+    conflicting picks to decluster, and a kernel mean is bounded by its
+    inputs, so smoothing such a source would only flatten real relief.
 
-    ==================  ===========  ================
-    surface             this driver  observed basin
-    ==================  ===========  ================
-    ground elevation    60-414 m     64-416 m
-    sediment thickness  115-374 m    124-424 m
-    shallow interface   ~46 m deep   15-83 m
-    lower interface     ~104 m deep  56-153 m
-    water-table depth   13-31 m      9-47 m
-    ==================  ===========  ================
+    The file stores field values in ``meshgrid(indexing="ij")`` order
+    against a lattice described by ``x0``, ``y0``, ``dx``, ``dy``, ``nx``
+    and ``ny``. Rebuilding the coordinates from those six scalars is exact
+    in float64 and is what lets the file drop two thirds of its bulk.
 
-    Ground elevation falls steeply from the upstream (west) edge and
-    flattens across the floodplain, which is the feature that sets the
-    terrain-following mesh's vertical grading. Sediment thickness runs
-    the other way, deepening downstream as the basin opens out.
-
-    The two layer interfaces are defined as fixed fractions of the
-    sediment thickness rather than as independent surfaces. That
-    guarantees ``0 < shallow < lower < thickness`` everywhere by
-    construction, so the tanh layer indicators below can never invert and
-    no monotonicity repair is needed.
+    Args:
+        data_file: Path to the ``.npz`` bundle.
 
     Returns:
         A dict with keys ``elevation``, ``thickness``, ``shallow_layer``,
         ``lower_layer``, ``water_table`` and ``rainfall``.
+
+    Raises:
+        FileNotFoundError: If the bundle is absent, with the URL to fetch.
     """
-    from omega import Surface
+    from omega import GridSurface
 
-    class _AnalyticSurface(Surface):
-        """A Surface backed by a closed-form expression in (x, y).
+    path = Path(data_file)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"{path} not found. The basin cases need the terrain bundle; "
+            f"fetch it with: curl -fsSLO {DATA_URL}"
+        )
 
-        Satisfies omega's requirement that a surface be pure,
-        deterministic and replicated on every MPI rank: there is no
-        state beyond the function itself, so every rank evaluating the
-        same nodes gets bit-identical geometry.
-        """
+    data = np.load(path)
+    # Reconstruct the source lattice. meshgrid indexing="ij" matches the
+    # order the field arrays were flattened in; getting this wrong would
+    # transpose the basin rather than fail loudly.
+    xs = data["x0"] + data["dx"] * np.arange(int(data["nx"]))
+    ys = data["y0"] + data["dy"] * np.arange(int(data["ny"]))
+    grid_x, grid_y = np.meshgrid(xs, ys, indexing="ij")
+    coords = np.column_stack([grid_x.ravel(), grid_y.ravel()])
 
-        def __init__(self, fn, label):
-            self._fn = fn
-            self._label = label
-
-        def __call__(self, xy: np.ndarray) -> np.ndarray:
-            xy = np.asarray(xy, dtype=float)
-            # Normalise onto the unit square so the expressions below
-            # read as shape functions rather than as metre-scaled magic.
-            u = xy[:, 0] / _DOMAIN_LENGTH
-            v = xy[:, 1] / _DOMAIN_WIDTH
-            return self._fn(u, v)
-
-        def __repr__(self) -> str:
-            return f"_AnalyticSurface({self._label})"
-
-    # Ground elevation: a steep upstream rise decaying eastward, plus a
-    # low-amplitude relief mode so the terrain is not a pure ramp.
-    elevation = _AnalyticSurface(
-        lambda u, v: 72.0 + 330.0 * np.exp(-6.0 * u)
-        + 12.0 * np.sin(3.0 * np.pi * u) * np.cos(2.0 * np.pi * v),
-        "elevation",
-    )
-
-    # Depth to bedrock, positive metres below ground. omega's extrusion
-    # maps normalised z in [0, 1] to thickness * z + top - thickness, so
-    # z = 0 lands on bedrock and z = 1 on the ground surface.
-    thickness = _AnalyticSurface(
-        lambda u, v: 140.0 + 220.0 * (1.0 - np.exp(-3.0 * u))
-        + 25.0 * np.cos(2.0 * np.pi * v),
-        "thickness",
-    )
-
-    # Layer interfaces as fractions of the sediment column. The
-    # fractions are set so the mean interface depths land on the
-    # observed basin's (~46 m and ~104 m).
-    shallow_layer = thickness * 0.16
-    lower_layer = thickness * 0.36
-
-    # Depth to the water table, positive metres below ground. Shallow
-    # everywhere, which is what keeps the basin near saturation.
-    water_table = _AnalyticSurface(
-        lambda u, v: 22.0 + 9.0 * np.sin(np.pi * u) * np.cos(np.pi * v),
-        "water_table",
-    )
-
-    return {
-        "elevation": elevation,
-        "thickness": thickness,
-        "shallow_layer": shallow_layer,
-        "lower_layer": lower_layer,
-        "water_table": water_table,
-        # Rainfall is taken proportional to ground elevation, the same
-        # orographic proxy the observational bundle uses (its rainfall
-        # grid is the elevation grid).
-        "rainfall": elevation,
+    surfaces = {
+        name: GridSurface(coords, data[name])
+        for name in ("elevation", "thickness", "shallow_layer",
+                     "lower_layer", "water_table")
     }
+    # Rainfall is an orographic proxy: the source bundle's rainfall grid is
+    # byte-identical to its elevation grid, so it is not stored twice.
+    surfaces["rainfall"] = surfaces["elevation"]
+    return surfaces
 
 
 def _sample(V, V_cg, mesh_xy, surface, name):
@@ -243,7 +202,7 @@ def build_mesh(horiz_res, n_layers, hmg_levels, surfaces):
             coarse PCMG descends this hierarchy; the other presets use
             the fine level alone, so we pass 0 for them to keep mesh
             generation fast.
-        surfaces: The dict returned by ``_analytic_surfaces``.
+        surfaces: The dict returned by ``_load_surfaces``.
 
     Returns:
         The finest mesh of the hierarchy, tagged Cartesian.
@@ -306,7 +265,7 @@ def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,
             capacity. 1.0 leaves the Haverkamp curve unchanged.
         ss: Specific storage in 1/m.
     """
-    surfaces = _analytic_surfaces()
+    surfaces = _load_surfaces()
     levels_for_mesh = hmg_levels if solver == "vlumping_hmg" else 0
     mesh = build_mesh(horiz_res, n_layers, levels_for_mesh, surfaces)
 
@@ -317,7 +276,7 @@ def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,
     log(f"DOFs: {V.dim()}  (dx={horiz_res}m, layers={n_layers}, "
         f"DG{degree}, preset={solver})")
 
-    # CG1 coordinates are the sampling target for every analytic surface.
+    # CG1 coordinates are the sampling target for every surface.
     V_cg = FunctionSpace(mesh, "CG", 1)
     coords_cg = Function(VectorFunctionSpace(mesh, "CG", 1))
     coords_cg.interpolate(SpatialCoordinate(mesh))

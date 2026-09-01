@@ -82,4 +82,18 @@ for case, case_levels in CASES.items():
             }
 
 
+# Read-only input bundle for the basin cases: observational terrain and
+# field grids. Fetched by doit's fetch_data task before any job is
+# submitted, because compute nodes have no outbound network. Declared for
+# every step so a partial run (a single case) still pulls it in; the
+# download itself is skipped when the file is already present.
+_BASIN_DATA = [{
+    "url": "https://data.gadopt.org/github-actions/murrumbidgee_data.npz",
+    "file": "murrumbidgee_data.npz",
+}]
+for _tag, _step in steps.items():
+    if not _tag.startswith("cockett_"):
+        _step["data"] = _BASIN_DATA
+del _tag, _step
+
 pytest_hpc = "local"
