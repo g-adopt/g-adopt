@@ -80,6 +80,7 @@ if __name__ == "__main__":
     _ARGS = _parse_args()
     sys.argv = sys.argv[:1]
 
+import os  # noqa: E402
 import time as time_mod  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -371,6 +372,33 @@ def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,
         solver_parameters_extra=diagnostics,
     )
 
+    # Per-step diagnostics, written by rank 0 to a file named after the job
+    # tag so the 40 steps of the suite can share one directory. Two physical
+    # scalars are recorded alongside the solver counts:
+    #
+    #   theta_total  total water content, int theta(h) dx, in m^3. Sensitive
+    #                to the solution everywhere the front is moving, unlike
+    #                int h dx, which the deep saturated column dominates.
+    #   flux_total   net boundary flux, the sum of the prescribed and
+    #                solution-dependent boundary integrals, in m^3/s.
+    #
+    # They are logged separately rather than combined into a mass residual.
+    # The Richards residual is written with the divergence terms positive,
+    # so the sign a positive `flux` boundary value carries is not obvious
+    # from the equation; keeping the halves apart lets the balance be formed
+    # afterwards, once the convention is confirmed, and shows which side
+    # moved when it fails.
+    theta_expr = soil_curves.moisture_content(h)
+    # Boundary flux integrals. The side condition is solution-dependent, so
+    # it has to be re-assembled each step rather than scaled from a constant.
+    flux_forms = [
+        rain_scale * rainfall * ds_t,
+        -(h - (depth - water_table)) * ds_v(_SIDE_BC_ID),
+    ]
+    tag = os.environ.get("TAG", "run")
+    plog = ParameterLog(f"params_{tag}.log", mesh)
+    plog.log_str("step time dt wall nl lin failed theta_total flux_total")
+
     h_backup = Function(V, name="PressureHead_backup")
     sim_time = 0.0
     total_nl = 0
@@ -406,8 +434,17 @@ def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,
         lit = snes.getLinearSolveIterations()
         total_nl += nl
         total_l += lit
+        # Assembled after the step is accepted, so a rolled-back failure
+        # never contributes a row. Both are collective over the communicator.
+        theta_total = assemble(theta_expr * dx)
+        flux_total = sum(assemble(form) for form in flux_forms)
         log(f"step {step} | t={sim_time/86400:.2f}d | dt={dt_current:.1f}s | "
-            f"wall={wall_times[-1]:.2f}s | NL={nl} | L={lit}")
+            f"wall={wall_times[-1]:.2f}s | NL={nl} | L={lit} | "
+            f"theta={theta_total:.10e}")
+        plog.log_str(
+            f"{step} {sim_time:.10e} {dt_current:.10e} {wall_times[-1]:.6e} "
+            f"{nl} {lit} {failed} {theta_total:.10e} {flux_total:.10e}"
+        )
 
         dt_current = min(dt_current * dt_growth, dt_max)
         dt.assign(dt_current)
@@ -419,6 +456,7 @@ def model(horiz_res, n_layers, solver, *, degree=1, hmg_levels=1,
             f"sim_time={sim_time/86400:.2f}d")
     else:
         log(f"FAILED - no successful steps | failed={failed}")
+    plog.close()
 
 
 if __name__ == "__main__":

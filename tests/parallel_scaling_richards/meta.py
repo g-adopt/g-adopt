@@ -72,6 +72,7 @@ for case, case_levels in CASES.items():
                     f"{tag}.out",
                     f"{tag}.err",
                     f"profile_{tag}.txt",
+                    f"params_{tag}.log",
                 ],
                 "args": _args_for(case, solver, params),
                 "launcher_args": (
