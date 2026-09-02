@@ -381,7 +381,8 @@ coupled_solver = CoupledInternalVariableSolver(
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
-    scaling_factor=1e6
+    scaling_factor=1e6,
+    solver_parameters_extra={"snes_atol": 1e-15, "snes_rtol": 1e-4},
 )
 
 
