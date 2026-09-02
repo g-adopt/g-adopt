@@ -312,35 +312,34 @@ def case_configurations(request):
     cfg, direct_base, iterative_base, dim = request.param
 
     iterative_different_tolerance = deepcopy(iterative_base)
+    tol_dict = {"ksp_rtol": 1e-4}
     if iterative_base["pc_type"] == "fieldsplit":
         # Indicates GPU solve
         if iterative_base["fieldsplit_0"]["ksp_type"] == "preonly":
             # Indicates 'telescope_factor' has been specified
             if "telescope" in iterative_different_tolerance["fieldsplit_0"]["assembled"]["offload"]:
-                iterative_different_tolerance["fieldsplit_0"]["assembled"]["offload"]["telescope"]["ksp"]["ksp_rtol"] = 1e-4
-                tol_dict = {"fieldsplit_0": {"assembled": {"offload": {"telescope": {"ksp": {"ksp_rtol": 1e-4}}}}},
-                            "fieldsplit_1": {"ksp_rtol": 1e-3}}
+                iterative_different_tolerance["fieldsplit_0"]["assembled"]["offload"]["telescope"]["ksp"] |= tol_dict
+                tol_dict = {"fieldsplit_0": {"assembled": {"offload": {"telescope": {"ksp": tol_dict}}}}}
             else:
-                iterative_different_tolerance["fieldsplit_0"]["assembled"]["offload"]["ksp"]["ksp_rtol"] = 1e-4
-                tol_dict = {"fieldsplit_0": {"assembled": {"offload": {"ksp": {"ksp_rtol": 1e-4}}}},
-                            "fieldsplit_1": {"ksp_rtol": 1e-3}}
+                iterative_different_tolerance["fieldsplit_0"]["assembled"]["offload"]["ksp"] |= tol_dict
+                tol_dict = {"fieldsplit_0": {"assembled": {"offload": {"ksp": tol_dict}}}}
         else:
-            iterative_different_tolerance["fieldsplit_0"]["ksp_rtol"] = 1e-4
-            tol_dict = {"fieldsplit_0": {"ksp_rtol": 1e-4}, "fieldsplit_1": {"ksp_rtol": 1e-3}}
+            iterative_different_tolerance["fieldsplit_0"] |= tol_dict
+            tol_dict = {"fieldsplit_0": tol_dict}
+        tol_dict["fieldsplit_1"] = {"ksp_rtol": 1e-3}
         iterative_different_tolerance["fieldsplit_1"]["ksp_rtol"] = 1e-3
     else:
         # Indicates GPU solve
         if iterative_base["ksp_type"] == "preonly":
             # Indicates 'telescope_factor' has been specified
             if "telescope" in iterative_different_tolerance["assembled"]["offload"]:
-                iterative_different_tolerance["assembled"]["offload"]["telescope"]["ksp"]["ksp_rtol"] = 1e-4
-                tol_dict = {"assembled": {"offload": {"telescope": {"ksp": {"ksp_rtol": 1e-4}}}}}
+                iterative_different_tolerance["assembled"]["offload"]["telescope"]["ksp"] |= tol_dict
+                tol_dict = {"assembled": {"offload": {"telescope": {"ksp": tol_dict}}}}
             else:
-                iterative_different_tolerance["assembled"]["offload"]["ksp"]["ksp_rtol"] = 1e-4
-                tol_dict = {"assembled": {"offload": {"ksp": {"ksp_rtol": 1e-4}}}}
+                iterative_different_tolerance["assembled"]["offload"]["ksp"] |= tol_dict
+                tol_dict = {"assembled": {"offload": {"ksp": tol_dict}}}
         else:
-            iterative_different_tolerance["ksp_rtol"] = 1e-4
-            tol_dict = {"ksp_rtol": 1e-4}
+            iterative_different_tolerance |= tol_dict
     configs = {
         "unspecified": {
             "solver_parameters": None,
