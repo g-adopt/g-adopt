@@ -72,7 +72,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 "Symmetric SIPG interior-facet (dS) terms for a solution-dependent "
                 "viscosity are not implemented for discontinuous velocity elements."
             )
-        trial_tensor_jump = eq.approximation.deviatoric_stress_shape(
+        trial_tensor_jump = eq.approximation.deviatoric_stress_per_mu(
             tensor_jump(eq.n, trial)
         )
 
@@ -100,7 +100,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
         if "u" in bc:
             w = trial - bc["u"]
             jump_gradient = outer(eq.n, w)
-            jump_tensor = eq.approximation.deviatoric_stress_shape(jump_gradient)
+            jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2
@@ -113,10 +113,11 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
             # Derivative of the penalty term through mu: the penalty functional
-            # is sigma * mu * <G, A(G)> with G = jump_gradient and A the
-            # deviatoric-stress-shape operator, so its exact first variation
-            # (the residual) picks up this extra term whenever mu itself depends
-            # on the trial. This makes the resulting Newton Jacobian (the second
+            # is $\sigma_{pen}\,\mu\,\langle G, A(G)\rangle$ with
+            # $G = n \otimes w$ (jump_gradient) and $A$ the deviatoric stress
+            # per $\mu$ operator, so its exact first variation (the residual)
+            # picks up this extra term whenever $\mu$ itself depends on the
+            # trial. This makes the resulting Newton Jacobian (the second
             # variation) symmetric by construction.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
@@ -126,7 +127,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             un_jump = dot(eq.n, trial) - bc["un"]
             w = un_jump * eq.n
             jump_gradient = outer(eq.n, w)
-            jump_tensor = eq.approximation.deviatoric_stress_shape(jump_gradient)
+            jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
             # Terms below are similar to the above terms for the DG dS integrals.
             F += (
                 2

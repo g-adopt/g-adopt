@@ -30,38 +30,57 @@ __all__ = [
 
 
 class DeviatoricStressMixin:
-    """Provides the single definition of the deviatoric stress shape.
+    r"""Provides the single definition of the deviatoric stress divided by $\mu$.
 
     All logic about how the deviatoric stress is assembled from a velocity
-    gradient lives in `deviatoric_stress_shape`, keyed off the `compressible`
+    gradient lives in `deviatoric_stress_per_mu`, keyed off the `compressible`
     property. The full stress, the tangent stress, and the weak (SIPG) boundary
     terms in the momentum equation all build on this one method, so a subclass
     that changes the stress form (for example a true 2D compressible model) only
     overrides here.
     """
 
-    def deviatoric_stress_shape(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
-        r"""The mu-free deviatoric stress from a velocity-gradient-like tensor.
+    def deviatoric_stress_per_mu(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+        r"""The deviatoric stress divided by $\mu$, from a gradient-like tensor.
 
-        Returns $2 sym(G)$ for the incompressible case and
-        $2 sym(G) - 2/3 tr(G) I$ for the compressible case, where `G` is any
-        gradient-like tensor. With `G = grad(u)` this is `stress(u) / mu`; with
-        `G = outer(n, w)` it is the boundary jump tensor used by the SIPG
-        penalty. The 2/3 factor is fixed regardless of dimension, matching the
-        stress operator used throughout.
+        For a gradient-like tensor $G$ this returns
+
+        $$ 2\,\mathrm{sym}(G) $$
+
+        in the incompressible case, and
+
+        $$ 2\,\mathrm{sym}(G) - \tfrac{2}{3}\,\mathrm{tr}(G)\,I
+           = 2\,\mathrm{dev}(\mathrm{sym}(G)) $$
+
+        in the compressible case, where $\mathrm{dev}(A) = A -
+        \tfrac{1}{3}\mathrm{tr}(A) I$. The two branches agree only where
+        $\mathrm{tr}(G) = 0$, which the incompressible model imposes on the
+        continuous solution but not pointwise on the discrete one, so the
+        incompressible branch keeps the volumetric part rather than removing it.
+
+        With $G = \nabla u$ this is $\sigma(u)/\mu$, that is
+        $2\,\mathrm{sym}(\nabla u)$ or $2\,\mathrm{dev}(\mathrm{sym}(\nabla u))
+        = 2\,\mathrm{sym}(\nabla u) - \tfrac{2}{3}(\nabla\cdot u) I$. With
+        $G = n \otimes w$ it is the boundary jump tensor used by the SIPG
+        penalty. The factor $\tfrac{2}{3}$ is fixed regardless of dimension,
+        matching the stress operator used throughout.
 
         Returns:
-          A UFL expression for the deviatoric stress shape.
+          A UFL expression for the deviatoric stress divided by $\mu$.
 
         """
-        shape = 2 * sym(gradient)
+        # Twice the symmetric part of the gradient: $2 sym(G)$.
+        stress_per_mu = 2 * sym(gradient)
         if self.compressible:
-            shape = shape - 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
-        return shape
+            # Remove the volumetric part, giving $2 dev(sym(G))$.
+            stress_per_mu = (
+                stress_per_mu - 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
+            )
+        return stress_per_mu
 
 
 class BaseApproximation(DeviatoricStressMixin, abc.ABC):
-    """Base class to provide expressions for the coupled Stokes and Energy system.
+    r"""Base class to provide expressions for the coupled Stokes and Energy system.
 
     The basic assumption is that we are solving (to be extended when needed)
 
@@ -77,8 +96,10 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
     - kappa() is diffusivity or conductivity depending on rhocp()
     - Tbar is 0 or reference temperature profile (ALA)
     - dev_stress depends on the compressible property (False or True):
-        - if compressible then dev_stress = mu * [sym(grad(u) - 2/3 div(u)]
-        - if not compressible then dev_stress = mu * sym(grad(u)) and
+        - if compressible then
+          $\sigma = 2\mu\,\mathrm{sym}(\nabla u)
+          - \tfrac{2}{3}\mu\,(\nabla\cdot u)\,I$
+        - if not compressible then $\sigma = 2\mu\,\mathrm{sym}(\nabla u)$ and
           rho_continuity is assumed to be 1
 
     """
@@ -95,16 +116,18 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
         pass
 
     def stress(self, u: Function) -> ufl.core.expr.Expr:
-        """Defines the deviatoric stress.
+        r"""Defines the deviatoric stress $\sigma(u)$.
 
-        Built from the single deviatoric stress shape, so the incompressible and
-        compressible forms differ only through the `compressible` property.
+        Built from the single definition of $\sigma/\mu$, so the incompressible
+        form $\sigma = 2\mu\,\mathrm{sym}(\nabla u)$ and the compressible form
+        $\sigma = 2\mu\,\mathrm{dev}(\mathrm{sym}(\nabla u))$ differ only
+        through the `compressible` property.
 
         Returns:
           A UFL expression for the deviatoric stress.
 
         """
-        return self.mu * self.deviatoric_stress_shape(grad(u))
+        return self.mu * self.deviatoric_stress_per_mu(grad(u))
 
     def tangent_stress(self, u, v, **kwargs):
         r"""Directional derivative $D\sigma(u)[v]$ of the deviatoric stress.
@@ -538,16 +561,17 @@ class BaseGIAApproximation(DeviatoricStressMixin):
         return 0
 
     def tangent_stress(self, u, v, **kwargs) -> ufl.core.expr.Expr:
-        r"""Tangent of the mu-scaled deviatoric stress for the SIPG boundary terms.
+        r"""Tangent $D\sigma(u)[v]$ of the deviatoric stress, for the SIPG terms.
 
         The solver sets `self.mu` to `effective_viscosity(dt)` before assembly,
-        a quantity independent of the displacement `u`, so the linearisation is
-        exact and reduces to `mu` times the deviatoric stress shape of the test
-        direction `v`. This deliberately omits the previous-step stress and the
+        a quantity independent of the displacement $u$, so the linearisation is
+        exact and reduces to $\mu$ times the deviatoric stress per $\mu$
+        evaluated at the test direction, $D\sigma(u)[v] = \mu\,(\sigma/\mu)
+        (\nabla v)$. This deliberately omits the previous-step stress and the
         bulk part of the full stress, which the momentum equation assembles as
         separate terms rather than folding into the SIPG boundary linearisation.
         """
-        return self.mu * self.deviatoric_stress_shape(grad(v))
+        return self.mu * self.deviatoric_stress_per_mu(grad(v))
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         return 0
