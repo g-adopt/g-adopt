@@ -477,37 +477,16 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             telescope_factor: If PCTELESCOPE is in use, the telescope reduction
             factor (see https://petsc.org/main/manualpages/PC/PCTELESCOPE/)
         """
+        if device_type is not None:
+            if telescope_factor == 1:
+                d = {"assembled": {"offload": {"ksp": d}}}
+            else:
+                d = {"assembled": {"offload": {"telescope": {"ksp": d}}}}
         top_pc = self.solver_parameters.get("pc_type")
         if top_pc == "fieldsplit":
-            if device_type is None:
-                self.add_to_solver_config({"fieldsplit_0": d})
-            else:
-                if telescope_factor == 1:
-                    self.add_to_solver_config(
-                        {"fieldsplit_0": {"assembled": {"offload": {"ksp": d}}}}
-                    )
-                else:
-                    self.add_to_solver_config(
-                        {
-                            "fieldsplit_0": {
-                                "assembled": {
-                                    "offload": {"telescope": {"ksp": d}}
-                                }
-                            }
-                        }
-                    )
+            self.add_to_solver_config({"fieldsplit_0": d})
         else:
-            if device_type is None:
-                self.add_to_solver_config(d)
-            else:
-                if telescope_factor == 1:
-                    self.add_to_solver_config(
-                        {"assembled": {"offload": {"ksp": d}}}
-                    )
-                else:
-                    self.add_to_solver_config(
-                        {"assembled": {"offload": {"telescope": {"ksp": d}}}}
-                    )
+            self.add_to_solver_config(d)
 
     def _handle_gpu_settings(
         self,
@@ -543,27 +522,26 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         )
         if device_type is None:
             return in_config
-        else:
-            # in_config can be one of the predefined config dicts, make sure it is not
-            # modified
-            offload_conf = deepcopy(in_config)
-            if gpu_telescope_factor > 1:
-                ksp_params = offload_conf["assembled"]["offload"]
-                offload_conf["assembled"]["offload"] = {
-                    "ksp_type": "preonly",
-                    "pc_type": "telescope",
-                    "pc_telescope_reduction_factor": gpu_telescope_factor,
-                    "telescope": ksp_params,
-                }
-            if device_type == "CUDA":
-                # Add cuda workarounds
-                odb = fd.PETSc.Options()
-                odb.setValue("matmatmult_backend_cpu", True)
-                odb.setValue("matptap_backend_cpu", True)
-                odb.setValue("inner_C_loc_mat_product_algorithm_backend_cpu", True)
-                odb.setValue("inner_C_oth_mat_product_algorithm_backend_cpu", True)
-                self._add_to_offloaded_solver(iterative_cuda_ksp_workarounds_inner, device_type, gpu_telescope_factor)
-            return offload_conf
+        # in_config can be one of the predefined config dicts, make sure it is not
+        # modified
+        offload_conf = deepcopy(in_config)
+        if gpu_telescope_factor > 1:
+            ksp_params = offload_conf["assembled"]["offload"]
+            offload_conf["assembled"]["offload"] = {
+                "ksp_type": "preonly",
+                "pc_type": "telescope",
+                "pc_telescope_reduction_factor": gpu_telescope_factor,
+                "telescope": ksp_params,
+            }
+        if device_type == "CUDA":
+            # Add cuda workarounds
+            odb = fd.PETSc.Options()
+            odb.setValue("matmatmult_backend_cpu", True)
+            odb.setValue("matptap_backend_cpu", True)
+            odb.setValue("inner_C_loc_mat_product_algorithm_backend_cpu", True)
+            odb.setValue("inner_C_oth_mat_product_algorithm_backend_cpu", True)
+            self._add_to_offloaded_solver(iterative_cuda_ksp_workarounds_inner, device_type, gpu_telescope_factor)
+        return offload_conf
 
     def _set_monitoring_config(
         self,
@@ -593,7 +571,6 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         gpu_telescope_factor = (
             1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
         )
-        print(log_level)
         if DEBUG >= log_level:
             self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
             if self.solver_parameters.get("pc_type") == "fieldsplit":
@@ -607,6 +584,54 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 )
             else:
                 self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
+
+    def _configure_iterative_solver(
+        self, device_type: str | None, gpu_extras: ConfigType
+    ):
+        """Configure iterative solver settings
+
+        Add the appropriate parameter sets at the right nesting levels for iterative
+        solver settings with and without GPUs.
+
+        Args:
+            device_type: Target GPU device type (e.g., `CUDA`).
+            gpu_extras: GPU-specific settings. Used to determine whether to add
+            telescope configuration.
+        """
+        top_pc = self.solver_parameters.get("pc_type")
+        # Early return if this set of solver parameters already has a fieldsplit_0 entry
+        if top_pc == "fieldsplit" and "fieldsplit_0" in self.solver_parameters:
+            return
+        if device_type is None:
+            additional_params = {
+                "assembled": cpu_gamg_parameters | gamg_common_parameters
+            } | spd_ksp_parameters
+            if top_pc == "fieldsplit":
+                additional_params = {
+                    "fieldsplit_0": additional_params | spd_pc_parameters
+                }
+            self.add_to_solver_config(additional_params)
+        else:
+            additional_params = {
+                "assembled": dict(offload_parameters),
+                "ksp_type": "preonly",
+            }
+            additional_params["assembled"]["offload"] = dict(
+                offload_parameters["offload"]
+            )
+            additional_params["assembled"]["offload"]["ksp"] = (
+                gamg_common_parameters | gpu_gamg_parameters | spd_ksp_parameters
+            )
+            if top_pc == "fieldsplit":
+                additional_params = self._handle_gpu_settings(
+                    gpu_extras, device_type, additional_params | spd_pc_parameters
+                )
+                additional_params = {"fieldsplit_0": additional_params}
+            else:
+                additional_params = self._handle_gpu_settings(
+                    gpu_extras, device_type, additional_params | {"ksp_type": "preonly"}
+                )
+            self.add_to_solver_config(additional_params)
 
     def set_solver_options(
         self,
@@ -642,66 +667,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         device_type = get_device_type(gpu_extras)
         if iterative_solve:
-            # First construct SPD solver settings
-            if self.solver_parameters.get("pc_type") == "fieldsplit":
-                if "fieldsplit_0" not in self.solver_parameters:
-                    # If fieldsplit_0 is missing, decide which set of parameters
-                    # to use based whether we detect a GPU, and the settings the
-                    # user has specified.
-                    self.add_to_solver_config({"fieldsplit_0": spd_pc_parameters})
-                    if device_type is None:
-                        self.add_to_solver_config({"fieldsplit_0": spd_ksp_parameters})
-                        self.add_to_solver_config(
-                            {"fieldsplit_0": {"assembled": cpu_gamg_parameters}}
-                        )
-                        self.add_to_solver_config(
-                            {"fieldsplit_0": {"assembled": gamg_common_parameters}}
-                        )
-                    else:
-                        # dict() cast copies MappingProxyTypes to mutable dicts
-                        additional_params = dict(spd_pc_parameters)
-                        additional_params["ksp_type"] = "preonly"
-                        additional_params["assembled"] = dict(offload_parameters)
-                        additional_params["assembled"]["offload"] = dict(
-                            offload_parameters["offload"]
-                        )
-                        additional_params["assembled"]["offload"]["ksp"] = {
-                            **gamg_common_parameters,
-                            **gpu_gamg_parameters,
-                            **spd_ksp_parameters
-                        }
-                        self.add_to_solver_config(
-                            {
-                                "fieldsplit_0": self._handle_gpu_settings(
-                                    gpu_extras,
-                                    device_type,
-                                    additional_params,
-                                )
-                            }
-                        )
-            else:
-                # Iterative solve with no fieldsplit assumes GIA
-                if device_type is None:
-                    self.add_to_solver_config(spd_ksp_parameters)
-                    self.add_to_solver_config({"assembled": cpu_gamg_parameters})
-                    self.add_to_solver_config({"assembled": gamg_common_parameters})
-                else:
-                    additional_params = {"ksp_type": "preonly"}
-                    additional_params["assembled"] = dict(offload_parameters)
-                    additional_params["assembled"]["offload"] = dict(
-                        offload_parameters["offload"]
-                    )
-                    additional_params["assembled"]["offload"]["ksp"] = {
-                        **gamg_common_parameters,
-                        **gpu_gamg_parameters,
-                        **spd_ksp_parameters,
-                    }
-                    gpu_params = self._handle_gpu_settings(
-                        gpu_extras,
-                        device_type,
-                        additional_params,
-                    )
-                    self.add_to_solver_config(gpu_params)
+            self._configure_iterative_solver(device_type, gpu_extras)
 
         self._set_monitoring_config(device_type, gpu_extras, iterative_solve)
 
