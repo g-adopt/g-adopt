@@ -47,6 +47,7 @@ iterative_stokes_solver_parameters = {
         "ksp_type": "fgmres",
         "ksp_rtol": 1e-5,
         "ksp_max_it": 1000,
+        "ksp_norm_type": "unpreconditioned",
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
         "assembled_pc_type": "gamg",
