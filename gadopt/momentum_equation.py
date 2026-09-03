@@ -44,9 +44,6 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    dim = eq.mesh.geometric_dimension
-    identity = Identity(dim)
-
     mu = eq.approximation.mu
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
@@ -84,6 +81,28 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
         F -= inner(avg(mu * nabla_grad(eq.test)), trial_tensor_jump) * eq.dS
         F -= inner(tensor_jump(eq.n, eq.test), avg(stress)) * eq.dS
 
+    # The symmetrising term of a weak velocity boundary condition is the
+    # transpose of the flux term, which makes it the derivative of the stress in
+    # the direction of the test function, $D\sigma(u)[\phi]$. It is taken from
+    # the stress expression this equation carries rather than rebuilt from the
+    # approximation, because only that expression holds the state a particular
+    # formulation puts into the stress: the internal variables of the
+    # viscoelastic solvers, or the stress carried over from the previous step.
+    # Differentiating it picks up the right shear coefficient in each case, and
+    # for a solution-dependent viscosity it also picks up the $D\mu[\phi]$
+    # contribution that makes the boundary Jacobian symmetric.
+    weak_velocity_bcs = any(bc.keys() & {"u", "un"} for bc in eq.bcs.values())
+    if weak_velocity_bcs:
+        if not any(depends_on(stress, c) for c in extract_coefficients(trial)):
+            raise ValueError(
+                "The stress supplied to viscosity_term does not depend on the "
+                "trial function, so the symmetrising term of the weak velocity "
+                "boundary conditions would be identically zero and their "
+                "Jacobian would not be symmetric. Build the stress from the "
+                "same function the residual is evaluated at."
+            )
+        tangent_stress = expand_derivatives(derivative(stress, trial, eq.test))
+
     # NOTE: Unspecified boundaries result in free stress (i.e. free in all directions).
     # NOTE: "un" can be combined with "stress" provided the stress component is
     # tangential (e.g. no normal flow with wind)
@@ -100,45 +119,56 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
         if "u" in bc:
             w = trial - bc["u"]
             jump_gradient = outer(eq.n, w)
-            jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
-            # Terms below are similar to the above terms for the DG dS integrals.
+            # Penalty term, similar to the above term for the DG dS integrals.
+            # The approximation converts the boundary jump tensor into a stress
+            # the same way it converts a velocity gradient, so the penalty
+            # carries every part of the stress the boundary condition
+            # constrains, volumetric part included.
             F += (
                 2
                 * sigma
-                * inner(outer(eq.n, eq.test), mu * jump_tensor)
+                * inner(
+                    outer(eq.n, eq.test),
+                    eq.approximation.stress_from_grad(jump_gradient),
+                )
                 * eq.ds(bc_id)
             )
             # Symmetrising term, the transpose of the flux integration by parts.
-            tangent = eq.approximation.tangent_stress(trial, eq.test)
-            F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
+            F -= dot(w, dot(tangent_stress, eq.n)) * eq.ds(bc_id)
             F -= inner(outer(eq.n, eq.test), stress) * eq.ds(bc_id)
             # Derivative of the penalty term through mu: the penalty functional
-            # is $\sigma_{pen}\,\mu\,\langle G, A(G)\rangle$ with
-            # $G = n \otimes w$ (jump_gradient) and $A$ the deviatoric stress
-            # per $\mu$ operator, so its exact first variation (the residual)
+            # is $\sigma_{pen}\,\langle G, S(G)\rangle$ with
+            # $G = n \otimes w$ (jump_gradient) and $S$ the stress from a
+            # gradient-like tensor, so its exact first variation (the residual)
             # picks up this extra term whenever $\mu$ itself depends on the
-            # trial. This makes the resulting Newton Jacobian (the second
-            # variation) symmetric by construction.
+            # trial. Only the deviatoric part of $S$ scales with $\mu$, so only
+            # that part appears here. This makes the resulting Newton Jacobian
+            # (the second variation) symmetric by construction.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
+                jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "un" in bc:
             un_jump = dot(eq.n, trial) - bc["un"]
             w = un_jump * eq.n
             jump_gradient = outer(eq.n, w)
-            jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
-            # Terms below are similar to the above terms for the DG dS integrals.
+            # Penalty term, as in the "u" branch but with the jump restricted to
+            # its normal component. The trace of the jump tensor is the normal
+            # jump itself, so an approximation with a bulk modulus penalises the
+            # normal jump volumetrically as well as deviatorically.
             F += (
                 2
                 * sigma
-                * inner(outer(eq.n, eq.test), mu * jump_tensor)
+                * inner(
+                    outer(eq.n, eq.test),
+                    eq.approximation.stress_from_grad(jump_gradient),
+                )
                 * eq.ds(bc_id)
             )
             # Symmetrising term, as in the "u" branch but with the jump restricted
             # to its normal component (free-slip/free-stress tangential direction).
-            tangent = eq.approximation.tangent_stress(trial, eq.test)
-            F -= dot(w, dot(tangent, eq.n)) * eq.ds(bc_id)
+            F -= dot(w, dot(tangent_stress, eq.n)) * eq.ds(bc_id)
             # We only keep the normal part of stress; the tangential part is assumed to
             # be zero stress (i.e. free slip) or prescribed via "stress".
             F -= dot(eq.n, eq.test) * dot(eq.n, dot(stress, eq.n)) * eq.ds(bc_id)
@@ -146,19 +176,8 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # above, restricted to the normal component of the jump.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
+                jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
-
-            if hasattr(eq.approximation, 'bulk_modulus'):
-                trial_tensor_jump = identity * (dot(eq.n, trial) - bc["un"])
-                bulk = eq.approximation.bulk_modulus * eq.approximation.bulk_shear_ratio
-                # Terms below are similar to the above terms for the DG dS integrals.
-                F += (
-                    2
-                    * sigma
-                    * inner(outer(eq.n, eq.test), bulk * trial_tensor_jump)
-                    * eq.ds(bc_id)
-                )
-                F -= inner(bulk * nabla_grad(eq.test), trial_tensor_jump) * eq.ds(bc_id)
 
         if "stress" in bc:  # a momentum flux, a.k.a. "force"
             # Here we need only the third term because we assume jump_u = 0
