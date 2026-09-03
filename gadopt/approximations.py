@@ -754,7 +754,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
         momentum equation assembles from the same expression.
 
         N.b. for 2d simulations dividing by 1/3 (instead of 1/2) may be slightly
-        inconsistent. But  that seems to be the definition in geodynamic 
+        inconsistent. But that seems to be the definition in geodynamic
         community and therefore analytical tests in
         tests/viscoelastic_internal_variable/ are setup assuming 3D geometry.
 
