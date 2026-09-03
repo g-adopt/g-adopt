@@ -13,8 +13,10 @@ a relevant set of arguments and then call the `solve` method to request a solver
 import abc
 from collections import defaultdict
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 from warnings import warn
+from types import MappingProxyType
 
 import firedrake as fd
 from ufl.core.expr import Expr
@@ -35,39 +37,87 @@ from .utility import (
     log_level,
     upward_normal,
     vertical_component,
+    get_device_type
 )
 
-iterative_stokes_solver_parameters = {
-    "mat_type": "matfree",
-    "ksp_type": "preonly",
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "schur",
-    "pc_fieldsplit_schur_type": "full",
-    "fieldsplit_0": {
+gamg_common_parameters: Mapping[str, str | float | int | bool] = MappingProxyType(
+    {
+        "pc_type": "gamg",
+        "pc_gamg_threshold": 0.01,
+        "pc_gamg_square_graph": 100,
+        "pc_gamg_coarse_eq_limit": 1000,
+        "pc_gamg_mis_k_minimum_degree_ordering": True,
+    }
+)
+
+spd_ksp_parameters: Mapping[str, str | float | int] = MappingProxyType(
+    {
         "ksp_type": "cg",
         "ksp_rtol": 1e-5,
         "ksp_max_it": 1000,
+    }
+)
+
+spd_pc_parameters: Mapping[str, str] = MappingProxyType(
+    {
         "pc_type": "python",
         "pc_python_type": "gadopt.SPDAssembledPC",
-        "assembled_pc_type": "gamg",
-        "assembled_mg_levels_pc_type": "sor",
-        "assembled_pc_gamg_threshold": 0.01,
-        "assembled_pc_gamg_square_graph": 100,
-        "assembled_pc_gamg_coarse_eq_limit": 1000,
-        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-    },
-    "fieldsplit_1": {
-        "ksp_type": "fgmres",
-        "ksp_rtol": 1e-4,
-        "ksp_max_it": 200,
+    }
+)
+
+cpu_gamg_parameters: Mapping[str, str] = MappingProxyType(
+    {
+        "mg_levels_pc_type": "sor",
+    }
+)
+
+gpu_gamg_parameters: Mapping[str, str | int] = MappingProxyType(
+    {
+        "mg_levels_pc_type": "jacobi",
+        "mg_levels_ksp_max_it": 2,
+    }
+)
+
+offload_parameters: Mapping[str, str | Mapping[str, str]] = MappingProxyType(
+    {
+        "ksp_type": "preonly",
         "pc_type": "python",
-        "pc_python_type": "firedrake.MassInvPC",
-        "Mp_pc_type": "ksp",
-        "Mp_ksp_ksp_rtol": 1e-5,
-        "Mp_ksp_ksp_type": "cg",
-        "Mp_ksp_pc_type": "sor",
-    },
-}
+        "pc_python_type": "firedrake.OffloadPC",
+        "offload": MappingProxyType({"ksp_type": "preonly", "pc_type": "ksp"}),
+    }
+)
+
+iterative_cuda_ksp_workarounds_inner: Mapping[str, bool] = MappingProxyType({
+    "pc_gamg_square_0_mat_product_algorithm_backend_cpu": True,
+    "pc_gamg_square_1_mat_product_algorithm_backend_cpu": True,
+    "pc_gamg_square_2_mat_product_algorithm_backend_cpu": True,
+})
+
+# Missing parameter: "fieldsplit_0"
+iterative_outer_stokes_solver_parameters: Mapping[
+    str, str | Mapping[str, str | int | float]
+] = MappingProxyType(
+    {
+        "mat_type": "matfree",
+        "ksp_type": "preonly",
+        "pc_type": "fieldsplit",
+        "pc_fieldsplit_type": "schur",
+        "pc_fieldsplit_schur_type": "full",
+        "fieldsplit_1": MappingProxyType(
+            {
+                "ksp_type": "fgmres",
+                "ksp_rtol": 1e-4,
+                "ksp_max_it": 200,
+                "pc_type": "python",
+                "pc_python_type": "firedrake.MassInvPC",
+                "Mp_pc_type": "ksp",
+                "Mp_ksp_ksp_rtol": 1e-5,
+                "Mp_ksp_ksp_type": "cg",
+                "Mp_ksp_pc_type": "sor",
+            }
+        ),
+    }
+)
 """Default iterative solver parameters for solution of Stokes system.
 
 We configure the Schur complement approach as described in Section of 4.3 of Davies et
@@ -96,12 +146,14 @@ Note:
   .
 """
 
-direct_stokes_solver_parameters = {
-    "mat_type": "aij",
-    "ksp_type": "preonly",
-    "pc_type": "lu",
-    "pc_factor_mat_solver_type": "mumps",
-}
+direct_stokes_solver_parameters: Mapping[str, str] = MappingProxyType(
+    {
+        "mat_type": "aij",
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_factor_mat_solver_type": "mumps",
+    }
+)
 """Default direct solver parameters for solution of Stokes system.
 
 We configure the direct solver to use the LU (`lu`) factorisation provided by the MUMPS
@@ -116,13 +168,15 @@ Note:
   and values to extend the default ones.
 """
 
-newton_stokes_solver_parameters = {
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-10,
-    "snes_rtol": 1e-5,
-}
+newton_stokes_solver_parameters: Mapping[str, str | int | float] = MappingProxyType(
+    {
+        "snes_type": "newtonls",
+        "snes_linesearch_type": "l2",
+        "snes_max_it": 100,
+        "snes_atol": 1e-10,
+        "snes_rtol": 1e-5,
+    }
+)
 """Default non-linear solver parameters for solution of Stokes system.
 
 We use a setup based on Newton's method (newtonls) with a secant line
@@ -136,34 +190,34 @@ Note:
   dictionary via the `solver_parameters_extra` argument. This dictionary can also hold
   new pairs of keys and values to extend the default ones.
 """
+gia_outer_solver_parameters: Mapping[str, str | float] = MappingProxyType(
+    {
+        "mat_type": "matfree",
+        "snes_type": "ksponly",
+        **spd_pc_parameters
+    }
+)
 
-coupled_gia_solver_parameters = {
-    "mat_type": "matfree",
-    "snes_type": "newtonls",
-    "snes_linesearch_type": "l2",
-    "snes_max_it": 100,
-    "snes_atol": 1e-15,
-    "snes_rtol": 1e-4,
-    "ksp_type": "gmres",
-    "ksp_rtol": 1e-3,
-    "pc_type": "fieldsplit",
-    "pc_fieldsplit_type": "symmetric_multiplicative",
-    "fieldsplit_0_ksp_type": "cg",
-    "fieldsplit_0_pc_type": "python",
-    "fieldsplit_0_pc_python_type": "gadopt.SPDAssembledPC",
-    "fieldsplit_0_assembled_pc_type": "gamg",
-    "fieldsplit_0_assembled_mg_levels_pc_type": "sor",
-    "fieldsplit_0_ksp_rtol": 1e-5,
-    "fieldsplit_0_assembled_pc_gamg_threshold": 0.01,
-    "fieldsplit_0_assembled_pc_gamg_square_graph": 100,
-    "fieldsplit_0_assembled_pc_gamg_coarse_eq_limit": 1000,
-    "fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-    "fieldsplit_1_ksp_type": "cg",
-    "fieldsplit_1_pc_type": "python",
-    "fieldsplit_1_pc_python_type": "firedrake.AssembledPC",
-    "fieldsplit_1_assembled_pc_type": "sor",
-    "fieldsplit_1_ksp_rtol": 1e-5,
-}
+coupled_gia_solver_parameters: Mapping[str, str | float | Mapping[str, str | float]] = (
+    MappingProxyType(
+        {
+            "mat_type": "matfree",
+            "ksp_type": "gmres",
+            "ksp_rtol": 1e-3,
+            "pc_type": "fieldsplit",
+            "pc_fieldsplit_type": "symmetric_multiplicative",
+            "fieldsplit_1": MappingProxyType(
+                {
+                    "ksp_type": "cg",
+                    "pc_type": "python",
+                    "pc_python_type": "firedrake.AssembledPC",
+                    "assembled_pc_type": "sor",
+                    "ksp_rtol": 1e-5,
+                }
+            ),
+        }
+    )
+)
 """Default iterative solver parameters for CoupledInternalVariableSolver (GIA problems).
 
 Uses a Newton SNES outer loop with a GMRES/fieldsplit preconditioned inner solve. SNES
@@ -197,6 +251,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         Dictionary of PETSc solver options or string matching one of the default sets
       solver_parameters_extra:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
+      gpu_extra_parameters:
+        Dictionary of additional GPU-specific settings that StokesSolver will translate
+        into appropriate PETSc solver options
       J:
         Firedrake function representing the Jacobian of the mixed Stokes system
       constant_jacobian:
@@ -252,6 +309,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         quad_degree: int = 6,
         solver_parameters: ConfigType | str | None = None,
         solver_parameters_extra: ConfigType | None = None,
+        gpu_extra_parameters: ConfigType | None = None,
         J: fd.Function | None = None,
         constant_jacobian: bool = False,
         nullspace: fd.MixedVectorSpaceBasis | None = None,
@@ -300,7 +358,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.set_boundary_conditions()
         self.set_equations()
         self.set_form()
-        self.set_solver_options(solver_parameters, solver_parameters_extra)
+        self.set_solver_options(solver_parameters, solver_parameters_extra, gpu_extra_parameters)
         self.set_solver()
 
     def set_boundary_conditions(self) -> None:
@@ -373,10 +431,215 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             eq.residual(sol) for eq, sol in zip(self.equations, self.solution_split)
         )
 
+    def _use_iterative_solve(self, solver_preset: str | None) -> bool:
+        """Determine whether a short-hand solver preset is iterative or not
+
+        If a user has not provided a dict of custom solver options (handled by the
+        caller), this function determines whether G-ADOPT will use an iterative or
+        direct solver either by user input (if provided) or the mesh dimension.
+
+        Args:
+            solver_preset: The string `solver_preset` or `None` as passed to the caller
+
+        Raises:
+            ValueError: The solver_preset was not one of `None`, `iterative` or `direct`
+
+        Returns:
+            A boolean to indicate whether an iterative solver is being used
+        """
+        if solver_preset is not None:
+            match solver_preset:
+                case "direct":
+                    return False
+                case "iterative":
+                    return True
+                case _:
+                    raise ValueError("Solver type must be 'direct' or 'iterative'.")
+        return self.mesh.topological_dimension == 3
+
+    def _add_to_offloaded_solver(
+        self,
+        d: ConfigType,
+        device_type: str | None,
+        telescope_factor: int,
+    ):
+        """Add any ConfigType object to a solver that may be using OffloadPC
+
+        Handles the varied levels of nesting in the default solver configurations
+        that are subject to offloading when a GPU is used. Determines the nesting
+        level of the 'inner' KSP solver in the case of a fieldsplit preconditioner
+        or the main KSP solve using heuristics based on the default solver settings.
+        Not intended to work with custom solver settings.
+
+        Args:
+            d: The object to insert.
+            device_type: Target GPU device type (e.g., `CUDA`).
+            telescope_factor: If PCTELESCOPE is in use, the telescope reduction
+            factor (see https://petsc.org/main/manualpages/PC/PCTELESCOPE/)
+        """
+        if device_type is not None:
+            if telescope_factor == 1:
+                d = {"assembled": {"offload": {"ksp": d}}}
+            else:
+                d = {"assembled": {"offload": {"telescope": {"ksp": d}}}}
+        top_pc = self.solver_parameters.get("pc_type")
+        if top_pc == "fieldsplit":
+            self.add_to_solver_config({"fieldsplit_0": d})
+        else:
+            self.add_to_solver_config(d)
+
+    def _handle_gpu_settings(
+        self,
+        gpu_extras: ConfigType | None,
+        device_type: str | None,
+        in_config: ConfigType,
+    ) -> ConfigType:
+        """Insert GPU settings into G-ADOPT preconfigured solver settings
+
+        Apply GPU solver settings to preconfigured G-ADOPT iterative solver settings.
+        Applying these settings is complicated by the change in nesting levels required
+        for the `OffloadPC` (and potentially `PCTelescope`). Also apply any
+        device-specific workarounds to both the solver settings and directly to the
+        PETSc options database if necessary.
+
+        Args:
+            gpu_extras: GPU-specific settings. Indicates whether to apply `PCTelescope`
+            wrapping.
+            device_type: Target GPU device type (e.g., `CUDA`).
+            in_config: The iterative solver configuration containing the `OffloadPC`
+            settings. This can be a full solver dict as in the case of
+            `gia_iterative_gpu_assembled_parameters`, or can be a subset as in the case
+            of `iterative_fieldsplit_0_gpu_parameters`. Must contain an 'assembled' key
+            with a sub-dictionary containing the 'offload' key.
+
+        Returns:
+            Solver settings for the requested device configuration. Deepcopy is used to
+            avoid mutating the input.
+        """
+        # Are we running an iterative solver on a GPU-enabled system?
+        gpu_telescope_factor = (
+            1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
+        )
+        if device_type is None:
+            return in_config
+        # in_config can be one of the predefined config dicts, make sure it is not
+        # modified
+        offload_conf = deepcopy(in_config)
+        if gpu_telescope_factor > 1:
+            ksp_params = offload_conf["assembled"]["offload"]
+            offload_conf["assembled"]["offload"] = {
+                "ksp_type": "preonly",
+                "pc_type": "telescope",
+                "pc_telescope_reduction_factor": gpu_telescope_factor,
+                "telescope": ksp_params,
+            }
+        if device_type == "CUDA":
+            # Add cuda workarounds
+            odb = fd.PETSc.Options()
+            odb.setValue("matmatmult_backend_cpu", True)
+            odb.setValue("matptap_backend_cpu", True)
+            odb.setValue("inner_C_loc_mat_product_algorithm_backend_cpu", True)
+            odb.setValue("inner_C_oth_mat_product_algorithm_backend_cpu", True)
+            self._add_to_offloaded_solver(iterative_cuda_ksp_workarounds_inner, device_type, gpu_telescope_factor)
+        return offload_conf
+
+    def _set_monitoring_config(
+        self,
+        device_type: str | None,
+        gpu_extras: ConfigType | None,
+        iterative_solve: bool,
+    ):
+        """Handle solver monitoring configuration
+
+        Applies GPU solver configurations to G-ADOPT iterative solver settings. Handles
+        the increased nesting depth required for `OffloadPC` and optional `PCTelescope`
+        wrapping. Also applies device-specific workarounds to both the solver
+        configuration dictionary and the PETSc options database when necessary.
+
+        Args:
+            device_type: Target GPU device type (e.g., `CUDA`).
+            gpu_extras: GPU-specific settings. Used to determine whether to add
+            telescope configuration.
+            iterative_solve: Whether an iterative solver is being used.
+        """
+        if INFO >= log_level:
+            self.add_to_solver_config({"snes_monitor": None})
+
+        if not iterative_solve:
+            return
+        # Extra monitoring options for iterative solvers
+        gpu_telescope_factor = (
+            1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
+        )
+        if DEBUG >= log_level:
+            self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
+            if self.solver_parameters.get("pc_type") == "fieldsplit":
+                self.add_to_solver_config({"fieldsplit_1": {"ksp_monitor": None}})
+            else:
+                self.add_to_solver_config({"ksp_monitor": None})
+        if INFO >= log_level:
+            if self.solver_parameters.get("pc_type") == "fieldsplit":
+                self.add_to_solver_config(
+                    {"fieldsplit_1": {"ksp_converged_reason": None}}
+                )
+            else:
+                self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
+
+    def _configure_iterative_solver(
+        self, device_type: str | None, gpu_extras: ConfigType
+    ):
+        """Configure iterative solver settings
+
+        Add the appropriate parameter sets at the right nesting levels for iterative
+        solver settings with and without GPUs.
+
+        Args:
+            device_type: Target GPU device type (e.g., `CUDA`).
+            gpu_extras: GPU-specific settings. Used to determine whether to add
+            telescope configuration.
+        """
+        top_pc = self.solver_parameters.get("pc_type")
+        # Early return if this set of solver parameters already has a fieldsplit_0 entry
+        if top_pc == "fieldsplit" and "fieldsplit_0" in self.solver_parameters:
+            return
+        if device_type is None:
+            additional_params = {
+                "assembled": cpu_gamg_parameters | gamg_common_parameters
+            } | spd_ksp_parameters
+            if top_pc == "fieldsplit":
+                additional_params = {
+                    "fieldsplit_0": additional_params | spd_pc_parameters
+                }
+            self.add_to_solver_config(additional_params)
+        else:
+            additional_params = {
+                "assembled": dict(offload_parameters),
+                "ksp_type": "preonly",
+            }
+            additional_params["assembled"]["offload"] = dict(
+                offload_parameters["offload"]
+            )
+            additional_params["assembled"]["offload"]["ksp"] = (
+                gamg_common_parameters | gpu_gamg_parameters | spd_ksp_parameters
+            )
+            if top_pc == "fieldsplit":
+                additional_params = self._handle_gpu_settings(
+                    gpu_extras, device_type, additional_params | spd_pc_parameters
+                )
+                additional_params = {"fieldsplit_0": additional_params}
+            else:
+                additional_params = self._handle_gpu_settings(
+                    gpu_extras, device_type, additional_params | {"ksp_type": "preonly"}
+                )
+            self.add_to_solver_config(additional_params)
+
     def set_solver_options(
         self,
         solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
+        gpu_extras: ConfigType | None,
+        iterative_preset: ConfigType = iterative_outer_stokes_solver_parameters,
+        direct_preset: ConfigType = direct_stokes_solver_parameters,
     ) -> None:
         """Sets PETSc solver options."""
         # Application context for the inverse mass matrix preconditioner
@@ -388,39 +651,25 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             self.register_update_callback(self.set_solver)
             return
 
-        if not depends_on(self.approximation.mu, self.solution):
-            self.add_to_solver_config({"snes_type": "ksponly"})
+        iterative_solve = self._use_iterative_solve(solver_preset)
+        if iterative_solve:
+            self.add_to_solver_config(iterative_preset)
         else:
-            self.add_to_solver_config(newton_stokes_solver_parameters)
+            self.add_to_solver_config(direct_preset)
 
-        if INFO >= log_level:
-            self.add_to_solver_config({"snes_monitor": None})
+        if "snes_type" not in self.solver_parameters:
+            if not depends_on(self.approximation.mu, self.solution):
+                # If a set of solver parameters already has a "snes_type", do not
+                # override it.
+                self.add_to_solver_config({"snes_type": "ksponly"})
+            else:
+                self.add_to_solver_config(newton_stokes_solver_parameters)
 
-        if solver_preset is not None:
-            match solver_preset:
-                case "direct":
-                    self.add_to_solver_config(direct_stokes_solver_parameters)
-                case "iterative":
-                    self.add_to_solver_config(iterative_stokes_solver_parameters)
-                case _:
-                    raise ValueError("Solver type must be 'direct' or 'iterative'.")
-        elif self.mesh.topological_dimension == 2:
-            self.add_to_solver_config(direct_stokes_solver_parameters)
-        else:
-            self.add_to_solver_config(iterative_stokes_solver_parameters)
+        device_type = get_device_type(gpu_extras)
+        if iterative_solve:
+            self._configure_iterative_solver(device_type, gpu_extras)
 
-        # Extra monitoring options for iterative solvers
-        if self.solver_parameters.get("pc_type") == "fieldsplit":
-            if DEBUG >= log_level:
-                self.add_to_solver_config(
-                    {
-                        "fieldsplit_0": {"ksp_converged_reason": None},
-                        "fieldsplit_1": {"ksp_monitor": None},
-                    }
-                )
-
-            elif INFO >= log_level:
-                self.add_to_solver_config({"fieldsplit_1": {"ksp_converged_reason": None}})
+        self._set_monitoring_config(device_type, gpu_extras, iterative_solve)
 
         self.add_to_solver_config(solver_extras)
         self.register_update_callback(self.set_solver)
@@ -496,6 +745,9 @@ class StokesSolver(StokesSolverBase):
         Dictionary of PETSc solver options or string matching one of the default sets
       solver_parameters_extra:
         Dictionary of PETSc solver options used to update the default G-ADOPT options
+      gpu_extra_parameters:
+        Dictionary of additional GPU-specific settings that StokesSolver will translate
+        into appropriate PETSc solver options
       J:
         Firedrake function representing the Jacobian of the mixed Stokes system
       constant_jacobian:
@@ -593,9 +845,16 @@ class StokesSolver(StokesSolverBase):
             )
 
     def set_solver_options(
-        self, solver_preset: ConfigType | None, solver_extras: ConfigType | None
+        self,
+        solver_preset: ConfigType | None,
+        solver_extras: ConfigType | None,
+        gpu_extras: ConfigType | None,
+        iterative_preset: ConfigType = iterative_outer_stokes_solver_parameters,
+        direct_preset: ConfigType = direct_stokes_solver_parameters,
     ) -> None:
-        super().set_solver_options(solver_preset, None)
+        super().set_solver_options(
+            solver_preset, None, gpu_extras, iterative_preset, direct_preset
+        )
         if self.free_surface_map and self.is_iterative_solver():
             # Update application context
             self.appctx["free_surface"] = self.free_surface_map
@@ -603,9 +862,13 @@ class StokesSolver(StokesSolverBase):
 
             # Gather pressure and free surface fields for Schur complement solve
             fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
-            self.add_to_solver_config({"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields_ind})
+            self.add_to_solver_config(
+                {"pc_fieldsplit_0_fields": "0", "pc_fieldsplit_1_fields": fields_ind}
+            )
             # Update mass inverse preconditioner
-            self.add_to_solver_config({"fieldsplit_1": {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}})
+            self.add_to_solver_config(
+                {"fieldsplit_1": {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}}
+            )
         self.add_to_solver_config(solver_extras)
 
     def force_on_boundary(self, subdomain_id: int | str, **kwargs) -> fd.Function:
@@ -812,6 +1075,18 @@ class InternalVariableSolver(StokesSolverBase):
 
         super().__init__(solution, approximation, dt=dt, **kwargs)
 
+    def set_solver_options(
+        self,
+        solver_preset: ConfigType | str | None,
+        solver_extras: ConfigType | None,
+        gpu_extras: ConfigType | None,
+        iterative_preset: ConfigType = gia_outer_solver_parameters,
+        direct_preset: ConfigType = direct_stokes_solver_parameters,
+    ) -> None:
+        super().set_solver_options(
+            solver_preset, solver_extras, gpu_extras, iterative_preset, direct_preset
+        )
+
     def set_equations(self) -> None:
         self.strain = self.approximation.deviatoric_strain(self.solution)
 
@@ -1015,6 +1290,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         self,
         solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
+        gpu_extras: ConfigType | None,
+        iterative_preset: ConfigType = coupled_gia_solver_parameters | newton_stokes_solver_parameters,
+        direct_preset: ConfigType = direct_stokes_solver_parameters | newton_stokes_solver_parameters
     ) -> None:
         """Sets PETSc solver options for the coupled GIA system.
 
@@ -1031,27 +1309,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         is intentionally not used here: its Schur-complement structure is designed
         for the standard Stokes system, not the larger coupled GIA block.
         """
-        if isinstance(solver_preset, Mapping):
-            super().set_solver_options(solver_preset, solver_extras)
-            return
-
-        if solver_preset == "direct":
-            # Delegate to base class for direct_stokes_solver_parameters and
-            # monitoring, then override SNES from ksponly to Newton.
-            super().set_solver_options(solver_preset, solver_extras)
-            self.add_to_solver_config(newton_stokes_solver_parameters)
-            return
-
-        if solver_preset not in (None, "iterative"):
-            raise ValueError("Solver type must be 'direct' or 'iterative'.")
-
-        # "iterative" or no preset: use the GIA-specific coupled solver defaults.
-        # Newton SNES is already included in coupled_gia_solver_parameters.
-        self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
-        self.add_to_solver_config(coupled_gia_solver_parameters)
-        if solver_extras:
-            self.add_to_solver_config(solver_extras)
-        self.register_update_callback(self.set_solver)
+        super().set_solver_options(
+            solver_preset, solver_extras, gpu_extras, iterative_preset, direct_preset
+        )
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
