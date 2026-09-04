@@ -12,7 +12,7 @@ def dev_stress_per_mu(gradient, compressible):
     For a gradient-like tensor $G$ this is $2\,\mathrm{sym}(G)$, minus
     $\tfrac{2}{3}\,\mathrm{tr}(G)\,I$ when the stress is compressible. Spelling
     it out in the test file rather than calling
-    `approximation.deviatoric_stress_per_mu` keeps a bug in the operator under
+    `approximation.stress_per_mu_from_grad` keeps a bug in the operator under
     test from hiding by appearing identically on both sides of an identity.
     """
     stress_per_mu = 2 * fd.sym(gradient)

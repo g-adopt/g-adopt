@@ -32,7 +32,7 @@ class DeviatoricStressMixin:
     r"""Provides the single definition of the deviatoric stress divided by $\mu$.
 
     All logic about how the deviatoric stress is assembled from a velocity
-    gradient lives in `deviatoric_stress_per_mu`, keyed off the `compressible`
+    gradient lives in `stress_per_mu_from_grad`, keyed off the `compressible`
     property. `stress_from_grad` multiplies it by the shear coefficient and adds
     whatever volumetric part the approximation carries. The full stress and the
     weak (SIPG) boundary terms in the momentum equation build on these two
@@ -40,7 +40,7 @@ class DeviatoricStressMixin:
     compressible model, or one with a bulk modulus) overrides here.
     """
 
-    def deviatoric_stress_per_mu(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def stress_per_mu_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         r"""The deviatoric stress divided by $\mu$, from a gradient-like tensor.
 
         For a gradient-like tensor $G$ this returns
@@ -82,7 +82,7 @@ class DeviatoricStressMixin:
         r"""The stress a gradient-like tensor produces, including any bulk part.
 
         For a gradient-like tensor $G$ this returns $\mu\,A(G)$, with
-        $A = $ `deviatoric_stress_per_mu`. An approximation that also carries a
+        $A = $ `stress_per_mu_from_grad`. An approximation that also carries a
         volumetric response adds it by overriding this method.
 
         There are two callers. With $G = \nabla u$ this is the stress itself.
@@ -95,7 +95,7 @@ class DeviatoricStressMixin:
           A UFL expression for the stress produced by `gradient`.
 
         """
-        return self.mu * self.deviatoric_stress_per_mu(gradient)
+        return self.mu * self.stress_per_mu_from_grad(gradient)
 
 
 class BaseApproximation(DeviatoricStressMixin, abc.ABC):
@@ -631,7 +631,7 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
         # so this is $2 \eta_{eff} sym(\nabla u)$ plus the scaled stress carried
         # over from the previous step.
         return (
-            self.effective_viscosity(dt) * self.deviatoric_stress_per_mu(grad(u))
+            self.effective_viscosity(dt) * self.stress_per_mu_from_grad(grad(u))
             + stress_old
         )
 
@@ -747,7 +747,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         r"""The deviatoric strain $\mathrm{dev}(\mathrm{sym}(\nabla u))$.
 
-        This is half of `deviatoric_stress_per_mu`, which for this compressible
+        This is half of `stress_per_mu_from_grad`, which for this compressible
         approximation is $2\,\mathrm{sym}(\nabla u)
         - \tfrac{2}{3}(\nabla \cdot u) I$. Sharing that one definition keeps
         the strain the internal variables relax towards and the stress the
@@ -762,7 +762,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
           A UFL expression for the deviatoric strain.
 
         """
-        return 0.5 * self.deviatoric_stress_per_mu(grad(u))
+        return 0.5 * self.stress_per_mu_from_grad(grad(u))
 
     def effective_viscosity(self, dt: float) -> ufl.core.expr.Expr:
         """Effective viscosity used to impose boundary conditions on displacement
@@ -838,7 +838,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
 
         $$ 2\mu_0\,\mathrm{dev}\,\varepsilon(u) - \sum_i 2\mu_i m_i $$
 
-        Built on `deviatoric_stress_per_mu`, which supplies
+        Built on `stress_per_mu_from_grad`, which supplies
         $2\,\mathrm{dev}\,\varepsilon(u)$, so the elastic part of the stress
         and the strain the internal variables relax towards share one
         definition.
@@ -847,7 +847,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
           A UFL expression for the deviatoric stress.
 
         """
-        dev_stress = self.mu0 * self.deviatoric_stress_per_mu(grad(u))
+        dev_stress = self.mu0 * self.stress_per_mu_from_grad(grad(u))
         for mu, m in zip(self.shear_modulus, internal_variables):
             dev_stress -= 2 * mu * m
         return dev_stress

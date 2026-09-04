@@ -69,7 +69,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 "Symmetric SIPG interior-facet (dS) terms for a solution-dependent "
                 "viscosity are not implemented for discontinuous velocity elements."
             )
-        trial_tensor_jump = eq.approximation.deviatoric_stress_per_mu(
+        trial_tensor_jump = eq.approximation.stress_per_mu_from_grad(
             tensor_jump(eq.n, trial)
         )
 
@@ -146,7 +146,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # (the second variation) symmetric by construction.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
-                jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
+                jump_tensor = eq.approximation.stress_per_mu_from_grad(jump_gradient)
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "un" in bc:
@@ -176,7 +176,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # above, restricted to the normal component of the jump.
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
-                jump_tensor = eq.approximation.deviatoric_stress_per_mu(jump_gradient)
+                jump_tensor = eq.approximation.stress_per_mu_from_grad(jump_gradient)
                 F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "stress" in bc:  # a momentum flux, a.k.a. "force"
