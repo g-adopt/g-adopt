@@ -97,8 +97,8 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
         M = fd.assemble(fd.derivative(solver.F, z), mat_type='aij')
         assert M.petscmat.isSymmetric(1e-13)
 
-
-def test_internal_variable_symmetry(mesh):
+@pytest.mark.parametrize('coupled', [True, False])
+def test_internal_variable_symmetry(mesh, coupled):
     """Test symmetry of discretised (viscoelastic) Stokes matrix where expected
 
     In particular, tests symmetry of weak bc terms."""
@@ -108,6 +108,9 @@ def test_internal_variable_symmetry(mesh):
     DG0 = fd.FunctionSpace(mesh, "DG", 0)
     u = fd.Function(V)
     m = fd.Function(S)
+    if coupled:
+        Z = fd.MixedFunctionSpace([V,S])
+        z = fd.Function(Z)
     # use a velocity that's not divergence free, to test symmetry of div(u) terms:
     X = fd.SpatialCoordinate(mesh)
     u.interpolate(X)
@@ -132,7 +135,17 @@ def test_internal_variable_symmetry(mesh):
         # (but will need to be for future element pairs)
         # at the moment type "u" is convert to a strong DirichletBC()
         bcs[bids[3]] = {'u': zero_vec}
-    solver = gadopt.InternalVariableSolver(u, approximation, dt=1, internal_variables=m, bcs=bcs)
 
-    M = fd.assemble(fd.derivative(solver.F, u), mat_type='aij')
-    assert M.petscmat.isSymmetric(1e-13)
+    if coupled:
+        solver = gadopt.CoupledInternalVariableSolver(z, approximation, dt=1, bcs=bcs)
+        # We just want to test the displacement block here
+        M = fd.assemble(fd.derivative(solver.F, z), mat_type='nest')
+        # the velocity block is assembled as type 'baij' for which .isSymmetric()
+        # appears to not work (always returns False); so convert to type 'aij'
+        M00 = M.petscmat.getNestSubMatrix(0, 0).convert('aij')
+        assert M00.isSymmetric(1e-13)
+    else:
+        solver = gadopt.InternalVariableSolver(u, approximation, dt=1, internal_variables=m, bcs=bcs)
+
+        M = fd.assemble(fd.derivative(solver.F, u), mat_type='aij')
+        assert M.petscmat.isSymmetric(1e-13)

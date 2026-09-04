@@ -1233,6 +1233,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         # for SIPG terms in the viscosity term of momentum_equation.py
         # N.b. the potential for confusion as GIA modellers often use
         # mu to represent the shear modulus.
+        #approximation.mu = approximation.mu0 #effective_viscosity(dt)
         approximation.mu = approximation.effective_viscosity(dt)
         self.scaling_factor = scaling_factor
 
