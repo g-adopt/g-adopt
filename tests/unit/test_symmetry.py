@@ -97,6 +97,7 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
         M = fd.assemble(fd.derivative(solver.F, z), mat_type='aij')
         assert M.petscmat.isSymmetric(1e-13)
 
+
 @pytest.mark.parametrize('coupled', [True, False])
 def test_internal_variable_symmetry(mesh, coupled):
     """Test symmetry of discretised (viscoelastic) Stokes matrix where expected
@@ -109,7 +110,7 @@ def test_internal_variable_symmetry(mesh, coupled):
     u = fd.Function(V)
     m = fd.Function(S)
     if coupled:
-        Z = fd.MixedFunctionSpace([V,S])
+        Z = fd.MixedFunctionSpace([V, S])
         z = fd.Function(Z)
     # use a velocity that's not divergence free, to test symmetry of div(u) terms:
     X = fd.SpatialCoordinate(mesh)
