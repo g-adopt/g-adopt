@@ -11,10 +11,11 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
+from firedrake import Function, Identity, derivative, div, grad, inner, sqrt, sym, tr
 import ufl
+from ufl.algorithms import expand_derivatives, extract_coefficients
 
-from .utility import ensure_constant, vertical_component
+from .utility import depends_on, ensure_constant, vertical_component
 
 __all__ = [
     "BoussinesqApproximation",
@@ -71,6 +72,24 @@ class BaseApproximation(abc.ABC):
 
         """
         pass
+
+    def tangent_stress(self, u, v, **kwargs):
+        r"""Directional derivative $D\sigma(u)[v]$ of the deviatoric stress.
+
+        This is the derivative of `stress(u)` in the direction of `v`. For a
+        viscosity that does not depend on the velocity it is equal to
+        `stress(v)`. The weak (SIPG) boundary terms in the momentum equation
+        use it so that the Jacobian of the weak boundary conditions is
+        symmetric for a strain-rate-dependent viscosity. A subclass can
+        override this with an analytic tangent stress.
+
+        Returns:
+          A UFL expression for the tangent deviatoric stress.
+
+        """
+        if not any(depends_on(self.mu, c) for c in extract_coefficients(u)):
+            return self.stress(v, **kwargs)
+        return expand_derivatives(derivative(self.stress(u, **kwargs), u, v))
 
     @abc.abstractmethod
     def buoyancy(self, p: Function, T: Function) -> ufl.core.expr.Expr:

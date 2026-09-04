@@ -1,13 +1,19 @@
 """Helper functions to generate null spaces for Stokes problems
 
 `ala_right_nullspace` computes the pressure null space for the Anelastic Liquid
-Approximation. `create_stokes_nullspace`, automatically generates null spaces
-for the mixed velocity-pressure Stokes system. `rigid_body_modes' returns the
-translational and rotational null spaces associated with the velocity
-(or displacement) field.
+Approximation. `create_stokes_nullspace` automatically generates null spaces
+for the mixed velocity-pressure Stokes system.
+`ConformalKillingNearNullspace` describes a near null space for the mixed
+Stokes system, including the additional conformal modes of the
+three-dimensional deviatoric-strain operator. `rigid_body_modes` returns the
+translational and rotational null spaces associated with the velocity (or
+displacement) field.
 """
 
+from dataclasses import dataclass
+
 import firedrake as fd
+
 from .approximations import AnelasticLiquidApproximation
 from .utility import upward_normal
 
@@ -160,6 +166,177 @@ def create_stokes_nullspace(
     return fd.MixedVectorSpaceBasis(Z, null_space)
 
 
+@dataclass(frozen=True)
+class ConformalKillingNearNullspace:
+    r"""Describe conformal near-null modes for a mixed Stokes system.
+
+    In three dimensions, the kernel of the trace-free symmetric gradient
+
+    .. math::
+
+       \varepsilon_{\mathrm{dev}}(u)
+       = \operatorname{sym}(\nabla u) - \tfrac{1}{3}\nabla\!\cdot u\,I
+
+    is the ten-dimensional space of conformal Killing fields. In addition to
+    the six rigid-body translations and rotations, it contains one dilation
+    and three special conformal modes. These extra modes are therefore useful
+    candidates for the algebraic multigrid near null space of three-dimensional
+    TALA and ALA velocity operators.
+
+    This specification is accepted only through the ``near_nullspace``
+    argument of G-ADOPT's Stokes solvers. It cannot be supplied as an exact or
+    transpose null space: boundary conditions, continuity, and other terms in
+    the Stokes system prevent the conformal fields from being exact null modes
+    of the full saddle-point operator.
+
+    The fields are materialised from the mesh coordinates when the Stokes
+    solver is constructed. They are intended for fixed meshes; a moving-mesh
+    calculation must rebuild the solver and basis after changing coordinates.
+
+    By default the complete ten-dimensional conformal Killing space is used.
+    The complete space is independent of the choice of coordinate origin up
+    to a change of basis. A subset need not have that property. The polynomial
+    fields are intended for non-periodic, three-dimensional Euclidean volume
+    meshes.
+
+    PETSc permits candidate modes from the operator before boundary
+    conditions, so raw modes are the default. Strong velocity conditions can
+    instead be applied homogeneously to the correction modes, including when
+    the prescribed velocity is nonzero. That creates a boundary-layer strain
+    in the constrained candidates and is therefore an empirical option rather
+    than an assumed improvement. Weak normal-velocity conditions remain part
+    of the operator and are not imposed on the candidate vectors.
+
+    Arguments:
+      rotational: Whether to include all rotational modes.
+      translations: Coordinate directions of translations to include.
+      dilation: Whether to include the dilation ``u = x``.
+      special_conformal: Whether to include the three fields
+                          ``u = 2 (a . x) x - |x|^2 a`` for Cartesian unit
+                          vectors ``a``.
+      constrain_strong_bcs: Whether to zero strongly constrained velocity
+                            degrees of freedom before orthonormalisation.
+    """
+    rotational: bool = True
+    translations: tuple[int, ...] = (0, 1, 2)
+    dilation: bool = True
+    special_conformal: bool = True
+    constrain_strong_bcs: bool = False
+
+    def __post_init__(self) -> None:
+        if not any(
+            (
+                self.rotational,
+                self.translations,
+                self.dilation,
+                self.special_conformal,
+            )
+        ):
+            raise ValueError("At least one near-null mode must be requested.")
+        if any(
+            isinstance(direction, bool) or not isinstance(direction, int)
+            for direction in self.translations
+        ):
+            raise ValueError("Translation directions must be integers.")
+        if len(set(self.translations)) != len(self.translations):
+            raise ValueError("Translation directions must be unique.")
+        if any(direction not in range(3) for direction in self.translations):
+            raise ValueError("Translation directions must be selected from 0, 1, and 2.")
+
+    def _build(
+        self,
+        Z: fd.functionspaceimpl.WithGeometry,
+        strong_bcs: list[fd.DirichletBC],
+    ) -> fd.nullspace.MixedVectorSpaceBasis:
+        """Materialise this specification after solver boundary-condition setup."""
+        if len(Z) < 2:
+            raise ValueError("A mixed Stokes space must contain velocity and pressure.")
+
+        stokes_subspaces = Z.subspaces
+        indexed_velocity_space = stokes_subspaces[0]
+        pressure_space = stokes_subspaces[1]
+        mesh = Z.mesh()
+        if mesh.topological_dimension != 3 or mesh.geometric_dimension != 3:
+            raise ValueError(
+                "Conformal near-null modes require a three-dimensional "
+                "volumetric domain."
+            )
+        if indexed_velocity_space.value_shape != (3,):
+            raise ValueError("The velocity subspace must contain three-component vectors.")
+        if pressure_space.value_shape != ():
+            raise ValueError("The pressure subspace must be scalar.")
+
+        velocity_space = indexed_velocity_space.collapse()
+        mode_functions = _rigid_body_mode_functions(
+            velocity_space,
+            rotational=self.rotational,
+            translations=list(self.translations),
+        )
+        X = fd.SpatialCoordinate(mesh)
+
+        if self.dilation:
+            mode_functions.append(
+                fd.Function(velocity_space).interpolate(fd.as_vector(X))
+            )
+
+        if self.special_conformal:
+            radius_squared = fd.dot(X, X)
+            for axis in range(3):
+                direction = fd.as_vector([int(i == axis) for i in range(3)])
+                mode = (
+                    2 * fd.dot(direction, X) * fd.as_vector(X)
+                    - radius_squared * direction
+                )
+                mode_functions.append(fd.Function(velocity_space).interpolate(mode))
+
+        if self.constrain_strong_bcs:
+            _apply_homogeneous_velocity_bcs(
+                mode_functions,
+                velocity_space,
+                indexed_velocity_space,
+                strong_bcs,
+            )
+
+        velocity_basis = fd.VectorSpaceBasis(mode_functions, comm=mesh.comm)
+        try:
+            velocity_basis.orthonormalize()
+        except ValueError as error:
+            raise ValueError(
+                "The selected conformal modes became linearly dependent after "
+                "applying the strong velocity boundary conditions."
+            ) from error
+
+        near_nullspace = [velocity_basis, pressure_space]
+        near_nullspace += stokes_subspaces[2:]
+        return fd.MixedVectorSpaceBasis(Z, near_nullspace)
+
+
+def _apply_homogeneous_velocity_bcs(
+    mode_functions: list[fd.Function],
+    velocity_space: fd.functionspaceimpl.WithGeometry,
+    indexed_velocity_space: fd.functionspaceimpl.WithGeometry,
+    strong_bcs: list[fd.DirichletBC],
+) -> None:
+    """Apply homogeneous strong velocity conditions to near-null modes."""
+    for bc in strong_bcs:
+        bc_space = bc.function_space()
+        if bc_space == indexed_velocity_space:
+            mode_bc = fd.DirichletBC(velocity_space, 0, bc.sub_domain)
+        elif (
+            bc_space.component is not None
+            and bc_space.parent == indexed_velocity_space
+        ):
+            mode_bc = fd.DirichletBC(
+                velocity_space.sub(bc_space.component),
+                0,
+                bc.sub_domain,
+            )
+        else:
+            continue
+        for mode in mode_functions:
+            mode_bc.zero(mode)
+
+
 def rigid_body_modes(
     V: fd.functionspaceimpl.WithGeometry,
     rotational: bool = False,
@@ -179,38 +356,11 @@ def rigid_body_modes(
       A Firedrake vector space basis incorporating the null space components
 
     """
-    X = fd.SpatialCoordinate(V.mesh())
-    dim = V.mesh().geometric_dimension
-
-    if rotational:
-        if dim == 2:
-            rotV = fd.Function(V).interpolate(
-                fd.as_vector((-X[1], X[0]))
-            )
-            basis = [rotV]
-        elif dim == 3:
-            x_rotV = fd.Function(V).interpolate(
-                fd.as_vector((0, -X[2], X[1]))
-            )
-            y_rotV = fd.Function(V).interpolate(
-                fd.as_vector((X[2], 0, -X[0]))
-            )
-            z_rotV = fd.Function(V).interpolate(
-                fd.as_vector((-X[1], X[0], 0))
-            )
-            basis = [x_rotV, y_rotV, z_rotV]
-        else:
-            raise ValueError("Can only handle 2 or 3 dimensional spaces")
-    else:
-        basis = []
-
-    if translations:
-        for tdim in translations:
-            vec = [0] * dim
-            vec[tdim] = 1
-            basis.append(
-                fd.Function(V).interpolate(fd.as_vector(vec))
-            )
+    basis = _rigid_body_mode_functions(
+        V,
+        rotational=rotational,
+        translations=translations,
+    )
 
     if basis:
         V_nullspace = fd.VectorSpaceBasis(basis, comm=V.mesh().comm)
@@ -219,3 +369,41 @@ def rigid_body_modes(
         V_nullspace = V
 
     return V_nullspace
+
+
+def _rigid_body_mode_functions(
+    V: fd.functionspaceimpl.WithGeometry,
+    *,
+    rotational: bool,
+    translations: list[int] | None,
+) -> list[fd.Function]:
+    """Construct rigid-body mode functions without orthonormalising them."""
+    X = fd.SpatialCoordinate(V.mesh())
+    dim = V.mesh().geometric_dimension
+
+    if rotational:
+        if dim == 2:
+            basis = [fd.Function(V).interpolate(fd.as_vector((-X[1], X[0])))]
+        elif dim == 3:
+            basis = [
+                fd.Function(V).interpolate(fd.as_vector((0, -X[2], X[1]))),
+                fd.Function(V).interpolate(fd.as_vector((X[2], 0, -X[0]))),
+                fd.Function(V).interpolate(fd.as_vector((-X[1], X[0], 0))),
+            ]
+        else:
+            raise ValueError("Can only handle 2 or 3 dimensional spaces")
+    else:
+        basis = []
+
+    if translations:
+        for translation_dimension in translations:
+            if translation_dimension not in range(dim):
+                raise ValueError(
+                    f"Translation direction {translation_dimension} is invalid for "
+                    f"a {dim}-dimensional geometric domain."
+                )
+            vector = [0] * dim
+            vector[translation_dimension] = 1
+            basis.append(fd.Function(V).interpolate(fd.as_vector(vector)))
+
+    return basis

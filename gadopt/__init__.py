@@ -21,8 +21,17 @@ from .level_set_tools import (
     min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
-from .nullspaces import create_stokes_nullspace, rigid_body_modes
-from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .nullspaces import (
+    ConformalKillingNearNullspace,
+    create_stokes_nullspace,
+    rigid_body_modes,
+)
+from .preconditioners import (
+    BalancedConformalPC,
+    FreeSurfaceMassInvPC,
+    RitzConformalPC,
+    SPDAssembledPC,
+)
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
