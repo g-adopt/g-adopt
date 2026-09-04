@@ -54,16 +54,16 @@ class DeviatoricStressMixin:
 
         in the compressible case, where $\mathrm{dev}(A) = A -
         \tfrac{1}{3}\mathrm{tr}(A) I$. The two branches agree only where
-        $\mathrm{tr}(G) = 0$, which the incompressible model imposes on the
-        continuous solution but not pointwise on the discrete one, so the
-        incompressible branch keeps the volumetric part rather than removing it.
+        $\mathrm{tr}(G) = 0$.
 
         With $G = \nabla u$ this is $\sigma(u)/\mu$, that is
         $2\,\mathrm{sym}(\nabla u)$ or $2\,\mathrm{dev}(\mathrm{sym}(\nabla u))
         = 2\,\mathrm{sym}(\nabla u) - \tfrac{2}{3}(\nabla\cdot u) I$. With
         $G = n \otimes w$ it is the boundary jump tensor used by the SIPG
-        penalty. The factor $\tfrac{2}{3}$ is fixed regardless of dimension,
-        matching the stress operator used throughout.
+        penalty.
+
+        Note: The factor $\tfrac{2}{3}$ is fixed regardless of dimension,
+        matching the stress in the geodynamics community.
 
         Returns:
           A UFL expression for the deviatoric stress divided by $\mu$.
@@ -73,9 +73,7 @@ class DeviatoricStressMixin:
         stress_per_mu = 2 * sym(gradient)
         if self.compressible:
             # Remove the volumetric part, giving $2 dev(sym(G))$.
-            stress_per_mu = (
-                stress_per_mu - 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
-            )
+            stress_per_mu -= 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
         return stress_per_mu
 
     def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
