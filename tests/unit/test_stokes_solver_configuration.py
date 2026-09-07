@@ -1,6 +1,6 @@
 import firedrake as fd
 import pytest
-from unittest.mock import create_autospec, patch
+from unittest.mock import patch
 
 from copy import deepcopy
 
@@ -611,16 +611,15 @@ def test_solver_reset(mesh_and_fields):
     # Mock the set_solver function and replace the real set_solver with the mocked
     # function. set_solver should be called twice, once on creation of the solver
     # object, and again when reset_solver_config is called.
-    mock_obj = create_autospec(StokesSolver.set_solver)
-    StokesSolver.set_solver = mock_obj
-    solver = StokesSolver(
-        stokes_function,
-        approximation,
-        temperature,
-        gpu_extra_parameters={"device_type": "HOST"},
-    )
+    with patch.object(StokesSolver, "set_solver", autospec=True):
+        solver = StokesSolver(
+            stokes_function,
+            approximation,
+            temperature,
+            gpu_extra_parameters={"device_type": "HOST"},
+        )
 
-    assert solver.solver_parameters == BASE_LINEAR_PARAMS_WITH_LOG | direct_stokes_solver_parameters
-    solver.reset_solver_config(BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_PARAMS)
-    assert solver.solver_parameters == BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_PARAMS
-    assert solver.set_solver.call_count == 2
+        assert solver.solver_parameters == BASE_LINEAR_PARAMS_WITH_LOG | direct_stokes_solver_parameters
+        solver.reset_solver_config(BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_PARAMS)
+        assert solver.solver_parameters == BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_PARAMS
+        assert solver.set_solver.call_count == 2
