@@ -48,17 +48,9 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
-    # Whether mu depends on the solution `trial` determines two things below:
-    # the weak boundary terms always use the tangent stress (so the Jacobian of
-    # the weak boundary conditions is symmetric), but the extra
-    # penalty-derivative term is only needed when mu itself varies with `trial`.
-    # For a viscosity independent of the solution (linear mu) that term is identically
-    # zero. The test detects a dependence on any component of the mixed solution
-    # that `trial` belongs to, not the velocity specifically: a pressure-
-    # dependent mu(p), for example, also sets mu_nonlinear = True. Checking
-    # against the coefficient(s) `trial` depends on, rather than its UFL
-    # terminals directly, means a spatially varying but solution-independent
-    # viscosity (e.g. mu = mu(x)) is correctly treated as linear.
+    # A solution-dependent `mu` adds the penalty derivative below. Test each
+    # coefficient behind `trial` to include every mixed field, such as pressure.
+    # Spatial variation alone does not make `mu` solution-dependent.
     mu_nonlinear = any(depends_on(mu, c) for c in extract_coefficients(trial))
 
     sigma = interior_penalty_factor(eq)

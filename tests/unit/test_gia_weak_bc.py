@@ -1,12 +1,8 @@
 r"""Weak boundary conditions of the viscoelastic (GIA) momentum equation.
 
-The glacial-isostatic-adjustment solvers impose a no-normal-displacement
-condition weakly, through the Nitsche/SIPG terms in
-`gadopt.momentum_equation.viscosity_term`. Three of those terms depend on the
-stress the equation carries: the flux, the symmetrising term (which uses the
-tangent of that stress in the direction of the test function) and the penalty
-(which uses the approximation's stress-from-gradient helper). This file checks
-the properties those terms must have for the viscoelastic approximations.
+The glacial-isostatic-adjustment solvers impose no normal displacement through
+the Nitsche terms in `gadopt.momentum_equation.viscosity_term`. These tests check
+the stress flux, its tangent in the symmetrising term, and the penalty scale.
 
 The two internal-variable solvers linearise differently and that is the point
 of most of the tests here. `InternalVariableSolver` substitutes the
@@ -21,9 +17,8 @@ asymmetric by $(\mu_0 - \eta_{eff})(C - C^T)$ with $C$ the boundary consistency
 term. That block is preconditioned with CG in the coupled preset, so the
 asymmetry is not merely cosmetic.
 
-The penalty coefficient stays at $\eta_{eff}$ in both solvers. Raising it to
-$\mu_0$ would over-penalise the problem obtained by eliminating the internal
-variables by a factor $1 + \Delta t/\tau$.
+Each solver also selects the penalty scale of its displacement formulation:
+$\eta_{eff}$ for the substituted solver and $\mu_0$ for the coupled solver.
 
 Fixtures and reference helpers are shared with `test_symmetry.py`, which holds
 the same checks for the mantle-convection approximations.
@@ -240,10 +235,12 @@ def test_coupled_variational_structure(mesh_key):
     system, so the displacement rows of the residual must be the first
     variation of the boundary functional taken with the history held fixed.
     The stress in that functional is elastic in the displacement, so its
-    variation carries $\\mu_0$; the penalty stays at the effective viscosity.
-    The reference therefore differs from the pointwise one only through the
-    stress, which is exactly the difference the code has to pick up
-    automatically.
+    variation carries $\\mu_0$, and the penalty carries $\\mu_0$ as well. The
+    reference therefore differs from the pointwise one through the stress and
+    the penalty coefficient. The form obtains these from the equation stress
+    and the solver-assigned `approximation.mu`, respectively. This test checks
+    the displacement variation at fixed history only. The internal-variable
+    rows contain no boundary term.
 
     The history is supplied as separate Functions holding the same values as the
     internal-variable component of the solution, so that differentiating the
@@ -274,7 +271,7 @@ def test_coupled_variational_structure(mesh_key):
     functional = weak_un_functional(
         eq, u, bids, WEAK_UN_VALUE,
         stress=raw_internal_variable_stress(approximation, u, [frozen_history]),
-        mu_penalty=raw_effective_viscosity(approximation, GIA_DT),
+        mu_penalty=sum(approximation.shear_modulus),
         bulk=GIA_BULK_SHEAR_RATIO * GIA_BULK_MODULUS,
     )
     assert_first_variation(form, functional, z)
@@ -306,8 +303,7 @@ def test_weak_u_symmetry(mesh_key, history):
     u = fd.Function(V).interpolate(generic_velocity(mesh))
     m = history_state(mesh, S)
     approximation = maxwell_approximation(mesh)
-    # The solvers set this before assembly; here the Equation is driven
-    # directly, so the effective viscosity is supplied the same way.
+    # This direct Equation test selects the effective viscosity as its penalty scale.
     approximation.mu = approximation.effective_viscosity(GIA_DT)
 
     if history == "pointwise":
@@ -390,19 +386,16 @@ def solve_surface_load(solver_kind, mesh, dt):
 def test_coupled_matches_pointwise_under_refinement(dt_over_tau):
     """Bound the solution gap the coupled weak boundary term introduces.
 
-    The coupled displacement rows carry the elastic tangent, so their residual
-    differs from the pointwise one by a term proportional to the normal jump
-    $n \\cdot u$ on the weak boundary. That term is consistent: it vanishes on
-    the exact solution, so the two converged discrete solutions approach each
-    other under refinement. This test measures that gap and the normal jump
-    itself on two resolutions and requires both to fall at least at second
-    order for the P2 displacement space.
+    The coupled displacement rows carry the elastic tangent in the symmetrising
+    term and the elastic modulus in the penalty, so their residual differs from
+    the pointwise one by terms proportional to the normal jump
+    $n \\cdot u$ on the weak boundary. These terms vanish when the exact solution
+    satisfies the boundary condition. This test measures that gap and the normal
+    jump on two resolutions. Both must fall at least at second order for the P2
+    displacement space.
 
-    The gap is also required to be resolvable on the coarse mesh, at least
-    $10^{-8}$ of the displacement itself. Without that bound the two rates
-    would be computed from round-off and would mean nothing. The measured
-    relative gap is about 2e-5 at $\\Delta t/\\tau = 0.25$ and about 1e-3 at
-    $\\Delta t/\\tau = 25$, so the bound has a wide margin.
+    The coarse gap must exceed round-off so that the two-level rate measures a
+    difference between the formulations.
 
     This test bounds the size of the difference between the two formulations;
     it does not detect an asymmetric displacement block.

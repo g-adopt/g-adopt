@@ -735,6 +735,10 @@ class InternalVariableApproximation(BaseGIAApproximation):
             ensure_constant(visc / mu)
             for visc, mu in zip(self.viscosity, self.shear_modulus)
         ]
+        # GIA literature uses `mu` for the shear modulus. Here, `mu` is the
+        # solver-selected shear scale for the Nitsche penalty and solver context.
+        # The material lists contain one entry per Maxwell element, and `mu0` is
+        # their total elastic shear modulus.
         self.mu0 = ensure_constant(sum(self.shear_modulus))
 
         # Power law arguments
@@ -763,9 +767,25 @@ class InternalVariableApproximation(BaseGIAApproximation):
         return 0.5 * self.stress_per_mu_from_grad(grad(u))
 
     def effective_viscosity(self, dt: float) -> ufl.core.expr.Expr:
-        """Effective viscosity used to impose boundary conditions on displacement
-        weakly through a Nitsche penalty term in the viscosity_term of
-        momentum_equation.py"""
+        r"""Shear coefficient of the time-step problem after substitution.
+
+        The backward-Euler substitution of the internal variables gives a
+        displacement problem with shear coefficient
+
+        $$ \eta_{eff} = \sum_i \frac{\eta_i}{\tau_i + \Delta t}
+                     = \sum_i \frac{\mu_i}{1 + \Delta t/\tau_i}, $$
+
+        a modulus despite the name. `InternalVariableSolver` uses this value for
+        its substituted displacement operator. `CoupledInternalVariableSolver`
+        uses `mu0` for its elastic displacement block.
+
+        Arguments:
+          dt: the time step.
+
+        Returns:
+          A UFL expression for the effective shear coefficient.
+
+        """
 
         eta_eff = 0
         for eta, maxwell_time in zip(self.viscosity, self.maxwell_times):
@@ -788,10 +808,10 @@ class InternalVariableApproximation(BaseGIAApproximation):
         normal displacement must feel for the same reason the interior
         divergence does.
 
-        The shear coefficient $\mu$ is the effective viscosity the solver sets
-        before assembly, not the elastic shear modulus, because the penalty
-        scales with the operator obtained after the internal variables are
-        eliminated.
+        The solver assigns $\mu$ before assembly. `InternalVariableSolver` uses
+        the effective shear coefficient of its substituted problem.
+        `CoupledInternalVariableSolver` uses $\mu_0$ to match its elastic
+        displacement block.
 
         Returns:
           A UFL expression for the stress produced by `gradient`.
@@ -814,7 +834,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
         $\mu_0 = \sum_i \mu_i$; the internal variables $m_i$ carry the
         relaxation away from that elastic response. This is deliberately not
         written through `stress_from_grad`, whose shear coefficient is the
-        effective viscosity of the SIPG penalty rather than $\mu_0$.
+        solver-selected scale `mu`, not always $\mu_0$.
 
         Returns:
           A UFL expression for the full stress.

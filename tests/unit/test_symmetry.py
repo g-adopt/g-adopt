@@ -552,9 +552,7 @@ def raw_maxwell_times(approximation):
 def raw_effective_viscosity(approximation, dt):
     r"""$\eta_{eff} = \sum_i \eta_i / (\tau_i + \Delta t)$ from raw attributes.
 
-    This is the shear coefficient the internal-variable solvers put into
-    `approximation.mu`, and therefore the coefficient the weak boundary penalty
-    must carry.
+    `InternalVariableSolver` uses this coefficient for its weak boundary penalty.
     """
     return sum(
         eta / (tau + dt)
@@ -740,8 +738,8 @@ def build_internal_variable_weak_u_case(mesh, bc_id):
     Every `StokesSolverBase` subclass turns a "u" boundary condition into a
     strong `DirichletBC`, so this drives the `Equation` directly on a
     displacement-only space. The effective viscosity is put into
-    `approximation.mu` here, which is what the solvers do before assembly, and
-    the history is advanced with the same backward-Euler update
+    `approximation.mu` here, which matches `InternalVariableSolver`, and the
+    history is advanced with the same backward-Euler update
     `InternalVariableSolver` uses.
 
     The weak "u" branch constrains all components of the displacement, so its
@@ -768,10 +766,8 @@ def build_internal_variable_weak_u_case(mesh, bc_id):
         bulk_shear_ratio=GIA_BULK_SHEAR_RATIO,
         B_mu=1.27,
     )
-    # The solvers put the effective viscosity into `approximation.mu` before
-    # assembly. The Equation is driven directly here, so the same assignment is
-    # made from the raw material parameters, wrapped as a UFL expression the way
-    # the approximations wrap a bare number.
+    # Match the effective penalty scale of `InternalVariableSolver`. Build it
+    # from raw parameters and wrap it as a UFL expression.
     eta_eff = raw_effective_viscosity(approximation, GIA_DT)
     approximation.mu = ufl.as_ufl(eta_eff)
 
