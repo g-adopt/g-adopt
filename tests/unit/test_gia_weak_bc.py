@@ -40,7 +40,7 @@ from test_symmetry import (
     GIA_DT,
     WEAK_UN_VALUE,
     assert_symmetric,
-    dev_stress_per_mu,
+    deviatoric_tensor,
     exterior_facet_form,
     generic_velocity,
     meshes,
@@ -125,7 +125,7 @@ def weak_un_functional(eq, u, boundary_ids, un, *, stress, mu_penalty, bulk):
     normal_jump = fd.dot(n, u) - un
     G = fd.outer(n, normal_jump * n)
     penalty_stress = (
-        mu_penalty * dev_stress_per_mu(G, True)
+        mu_penalty * deviatoric_tensor(G, True)
         + bulk * fd.tr(G) * fd.Identity(dim)
     )
     integrand = (

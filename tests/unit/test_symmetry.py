@@ -6,20 +6,21 @@ from gadopt.equations import Equation, interior_penalty_factor
 from gadopt.momentum_equation import viscosity_term
 
 
-def dev_stress_per_mu(gradient, compressible):
-    r"""The deviatoric stress per $\mu$, $A(G)$, written out here in the test.
+def deviatoric_tensor(gradient, compressible):
+    r"""Twice the deviatoric symmetric part $A(G)$, written out in the test.
 
     For a gradient-like tensor $G$ this is $2\,\mathrm{sym}(G)$, minus
-    $\tfrac{2}{3}\,\mathrm{tr}(G)\,I$ when the stress is compressible. Spelling
-    it out in the test file rather than calling
-    `approximation.stress_per_mu_from_grad` keeps a bug in the operator under
-    test from hiding by appearing identically on both sides of an identity.
+    $\tfrac{2}{3}\,\mathrm{tr}(G)\,I$ in the compressible case. The expression
+    is spelled out here instead of calling
+    `approximation.deviatoric_tensor_from_grad`, so that a bug in the operator
+    under test cannot hide by appearing identically on both sides of an
+    identity.
     """
-    stress_per_mu = 2 * fd.sym(gradient)
+    tensor = 2 * fd.sym(gradient)
     if compressible:
         dim = gradient.ufl_shape[0]
-        stress_per_mu = stress_per_mu - 2 / 3 * fd.tr(gradient) * fd.Identity(dim)
-    return stress_per_mu
+        tensor = tensor - 2 / 3 * fd.tr(gradient) * fd.Identity(dim)
+    return tensor
 
 
 def exterior_facet_form(form):
@@ -352,7 +353,7 @@ def test_viscosity_term_variational_structure(mesh_key, bc_kind, compressible):
     G = fd.outer(n, w)
     E_bdy = sum(
         (-fd.dot(w, fd.dot(stress_u, n))
-         + sigma * mu * fd.inner(G, dev_stress_per_mu(G, compressible)))
+         + sigma * mu * fd.inner(G, deviatoric_tensor(G, compressible)))
         * eq.ds(bid)
         for bid in bids
     )
@@ -483,7 +484,7 @@ def explicit_weak_boundary_form(
     # Trace of the jump tensor, which is what a bulk modulus responds to.
     normal_jump = fd.dot(n, w)
     G = fd.outer(n, w)
-    A_G = dev_stress_per_mu(G, compressible)
+    A_G = deviatoric_tensor(G, compressible)
 
     # Penalty on the deviatoric part of the jump.
     F = 2 * sigma * fd.inner(fd.outer(n, eq.test), mu_penalty * A_G) * ds
@@ -657,14 +658,14 @@ def build_stokes_weak_un_case(mesh, approx_class, compressible, nonlinear, bc_id
     form = exterior_facet_form(viscosity_term(eq, u))
 
     # Reference stress and tangent, written from mu and the strain alone.
-    stress = mu * dev_stress_per_mu(fd.grad(u), compressible)
-    tangent = mu * dev_stress_per_mu(fd.grad(eq.test), compressible)
+    stress = mu * deviatoric_tensor(fd.grad(u), compressible)
+    tangent = mu * deviatoric_tensor(fd.grad(eq.test), compressible)
     dmu = None
     if nonlinear:
         # A solution-dependent mu adds Dmu[phi] sigma/mu to the tangent, and a
         # penalty-derivative term to the residual.
         dmu = raw_nonlinear_dmu(u, eq.test, compressible)
-        tangent = tangent + dmu * dev_stress_per_mu(fd.grad(u), compressible)
+        tangent = tangent + dmu * deviatoric_tensor(fd.grad(u), compressible)
 
     reference = explicit_weak_boundary_form(
         eq, u, bc_id, WEAK_UN_VALUE, bc_kind="un",
@@ -721,7 +722,7 @@ def build_internal_variable_weak_un_case(mesh, shear_moduli, viscosities, bc_id)
     )
     stress = raw_internal_variable_stress(approximation, u, updated)
     eta_eff = raw_effective_viscosity(approximation, GIA_DT)
-    tangent = eta_eff * dev_stress_per_mu(fd.grad(eq.test), True)
+    tangent = eta_eff * deviatoric_tensor(fd.grad(eq.test), True)
 
     reference = explicit_weak_boundary_form(
         eq, u, bc_id, WEAK_UN_VALUE, bc_kind="un",
@@ -798,7 +799,7 @@ def build_internal_variable_weak_u_case(mesh, bc_id):
     reference = explicit_weak_boundary_form(
         eq, u, bc_id, u_D, bc_kind="u",
         stress=raw_internal_variable_stress(approximation, u, updated),
-        tangent=eta_eff * dev_stress_per_mu(fd.grad(eq.test), True),
+        tangent=eta_eff * deviatoric_tensor(fd.grad(eq.test), True),
         mu_penalty=eta_eff,
         compressible=True,
         bulk=GIA_BULK_SHEAR_RATIO * GIA_BULK_MODULUS,
@@ -847,7 +848,7 @@ def build_incompressible_maxwell_weak_un_case(mesh, bc_id):
     maxwell_time = viscosity / shear_modulus
     eta_eff = viscosity / (maxwell_time + GIA_DT / 2)
     stress = 2 * eta_eff * fd.sym(fd.grad(u)) + stress_old
-    tangent = eta_eff * dev_stress_per_mu(fd.grad(eq.test), False)
+    tangent = eta_eff * deviatoric_tensor(fd.grad(eq.test), False)
 
     reference = explicit_weak_boundary_form(
         eq, u, bc_id, WEAK_UN_VALUE, bc_kind="un",
