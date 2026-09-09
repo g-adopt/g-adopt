@@ -154,15 +154,27 @@ def taylor_remainders(reduced_functional, m, h, eps0=1.0, levels=8,
         hHh = h._ad_dot(Hh)
 
         epsilons = [eps0 / 2**i for i in range(levels)]
+        # R0, R1, R2 are the absolute remainders. r0, r1, r2 are the same remainders
+        # with their sign. The sign matters: R2 = |C eps^3 + D eps^2 + E eps^4 + ...|
+        # and once a quartic term of opposite sign to the cubic is present the signed
+        # remainder crosses zero inside the sweep, which the absolute value hides.
+        # The fit in three_term_fit uses the signed values.
         out = {"Jm": Jm, "eps": epsilons, "dJdm": dJdm, "hHh": hHh,
-               "R0": [], "R1": [], "R2": [], "timings": timings}
+               "R0": [], "R1": [], "R2": [], "r0": [], "r1": [], "r2": [],
+               "timings": timings}
 
         start = time.perf_counter()
         for eps in epsilons:
             Jp = reduced_functional(m._ad_add(h._ad_mul(eps)))
-            out["R0"].append(abs(Jp - Jm))
-            out["R1"].append(abs(Jp - Jm - eps * dJdm))
-            out["R2"].append(abs(Jp - Jm - eps * dJdm - 0.5 * eps**2 * hHh))
+            r0 = Jp - Jm
+            r1 = r0 - eps * dJdm
+            r2 = r1 - 0.5 * eps**2 * hHh
+            out["r0"].append(r0)
+            out["r1"].append(r1)
+            out["r2"].append(r2)
+            out["R0"].append(abs(r0))
+            out["R1"].append(abs(r1))
+            out["R2"].append(abs(r2))
         timings["epsilon_sweep"] = time.perf_counter() - start
 
     # Leave the functional evaluated at the expansion point, as taylor_to_dict does.
@@ -235,6 +247,58 @@ def two_term_fit(eps, R2):
     return {"fits": fits, "ratios": ratios, "pair": [e1, e2]}
 
 
+def three_term_fit(eps, r2, n_points=4):
+    """Fit the signed remainder r2 = D eps^2 + C eps^3 + E eps^4 by least squares.
+
+    This is the fit to read when the sweep is not deep inside the asymptotic range,
+    which is the case for long trajectories where the quartic coefficient E is tens
+    of times the cubic C. The two-term fit assumes E eps^4 << D eps^2, that is
+    eps << sqrt(D/E), and reports a D that is contaminated by E when that fails.
+    Fitting D, C and E together on the n smallest eps removes that contamination as
+    long as the quintic is small at those eps.
+
+    Two reference fits are returned as well, both with D fixed to zero: (C, E) and
+    (C, E, F) with F the quintic. If either reproduces the data as well as the fit
+    with D free, the data do not identify D, and no claim about a Hessian defect can
+    be made from them. The relative residual of each fit is what to compare.
+
+    Args:
+        eps (list): the epsilons, in decreasing order.
+        r2 (list): the signed second-order remainders at those epsilons.
+        n_points (int): how many of the smallest eps to use. Four by default; the
+            (D, C, E) fit needs at least three.
+
+    Returns:
+        dict: "DCE" with keys D, C, E and "resid" (max relative misfit over the
+            points), "CE" and "CEF" the reference fits with the same layout, and
+            "n_points" and "eps_used".
+    """
+    n = min(n_points, len(eps))
+    e = np.asarray(eps[-n:], dtype=float)
+    r = np.asarray(r2[-n:], dtype=float)
+
+    def lstsq(powers):
+        A = np.stack([e**p for p in powers], axis=1)
+        coef, *_ = np.linalg.lstsq(A, r, rcond=None)
+        pred = A @ coef
+        resid = float(np.max(np.abs(pred - r) / np.maximum(np.abs(r), 1e-300)))
+        return coef, resid
+
+    out = {"n_points": n, "eps_used": e.tolist()}
+
+    coef, resid = lstsq((2, 3, 4))
+    out["DCE"] = {"D": float(coef[0]), "C": float(coef[1]), "E": float(coef[2]), "resid": resid}
+
+    coef, resid = lstsq((3, 4))
+    out["CE"] = {"D": 0.0, "C": float(coef[0]), "E": float(coef[1]), "resid": resid}
+
+    if n >= 3:
+        coef, resid = lstsq((3, 4, 5))
+        out["CEF"] = {"D": 0.0, "C": float(coef[0]), "E": float(coef[1]),
+                      "F": float(coef[2]), "resid": resid}
+    return out
+
+
 def write_json(path, label, result, extra=None):
     """Write a Taylor result and its metadata to a JSON file.
 
@@ -253,6 +317,8 @@ def write_json(path, label, result, extra=None):
 
     payload = {"label": label, "result": result}
     payload["fit"] = two_term_fit(result["eps"], result["R2"])
+    if "r2" in result:
+        payload["fit3"] = three_term_fit(result["eps"], result["r2"])
     payload["rates"] = {key: rates(result[key]) for key in ("R0", "R1", "R2")}
     if extra:
         payload["extra"] = extra
@@ -302,6 +368,23 @@ def report(case, result):
     for (C, D), signs in zip(fit["fits"], ("++", "+-", "-+", "--")):
         rel = abs(D) / abs(result["hHh"]) if result["hHh"] != 0 else float("nan")
         print(f"  signs {signs}:  C = {C:+.4e}   D = {D:+.4e}   |D|/<h,Hh> = {rel:.2e}")
+
+    # The signed remainders and the least-squares fit with the quartic admitted.
+    if "r2" in result:
+        hHh = result["hHh"]
+        print("signed r2:  " + "  ".join(f"{r:+.4e}" for r in result["r2"]))
+        fit3 = three_term_fit(result["eps"], result["r2"])
+        print(f"least-squares fits on the {fit3['n_points']} smallest eps "
+              "(resid = max relative misfit of the fit)")
+        for name in ("DCE", "CE", "CEF"):
+            if name not in fit3:
+                continue
+            f = fit3[name]
+            rel = abs(f["D"]) / abs(hHh) if hHh != 0 else float("nan")
+            extra = f"   F = {f['F']:+.3e}" if "F" in f else ""
+            print(f"  {name:4s}: D = {f['D']:+.3e}   C = {f['C']:+.3e}   "
+                  f"E = {f['E']:+.3e}{extra}   |D|/<h,Hh> = {rel:.2e}   resid = {f['resid']:.2e}")
+        print("  If CE or CEF fits as well as DCE, the data do not identify D.")
 
     # Wall-clock cost, which is the other half of what the TAO work needs to know.
     # Every call is listed, in order: the first includes compilation and warm-up,

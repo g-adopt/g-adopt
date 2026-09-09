@@ -392,6 +392,10 @@ def main():
                              "entirely, which also makes Stokes linear. Anything but "
                              "'production' requires --make-reference, since the "
                              "rheology changes.")
+    parser.add_argument("--repeats", type=int, default=None,
+                        help="number of timed calls of functional, derivative and "
+                             "Hessian (default 2, 2, 3). Use 1 for a run whose only "
+                             "purpose is the Taylor sweep.")
     parser.add_argument("--json", default=None,
                         help="write the result, rates, two-term fit and timings to "
                              "this JSON file (rank 0 only)")
@@ -453,8 +457,13 @@ def main():
         if MPI.COMM_WORLD.rank == 0:
             report_fd(label, result)
     else:
+        repeat_kwargs = {}
+        if args.repeats is not None:
+            repeat_kwargs = dict(n_repeat_functional=args.repeats,
+                                 n_repeat_derivative=args.repeats,
+                                 n_repeat_hessian=args.repeats)
         result = taylor_remainders(reduced_functional, control, delta,
-                                   eps0=args.eps0, levels=args.levels)
+                                   eps0=args.eps0, levels=args.levels, **repeat_kwargs)
         if MPI.COMM_WORLD.rank == 0:
             report(label, result)
             if args.json:

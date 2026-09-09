@@ -16,6 +16,10 @@
 #           #4638 container, paired with petsc/3.25.0 by the private module file in
 #           ~/modules). main-20260902 is the other tested choice.
 #   LEVELS  number of epsilon halvings (default 5)
+#   EPS0    largest epsilon of the sweep (default 0.05). For long trajectories the
+#           series in eps has a small radius, so start lower, for example 0.0125.
+#   REPEATS number of timed calls of functional, derivative and Hessian (default:
+#           the harness default of 2, 2, 3). Use 1 for a pure Taylor sweep.
 #
 # Usage:
 #   cd /scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/hessian/tests/hessian
@@ -47,6 +51,8 @@ CASE="${CASE:-Tobs}"
 VISC="${VISC:-production}"
 FD_TAG="${FD_TAG:-JHopeCollins_nlvs-hessian-fix}"
 LEVELS="${LEVELS:-5}"
+EPS0="${EPS0:-0.05}"
+REPEATS="${REPEATS:-}"
 NCPUS="${PBS_NCPUS:-16}"
 
 module use /g/data/fp50/modules
@@ -70,7 +76,9 @@ RUNROOT=/scratch/xd2/sg8812/hessian-runs
 RUNDIR="${RUNROOT}/${FD_TAG}/t${STEPS}_${VISC}"
 mkdir -p "${RUNDIR}"
 
-TAG="${CASE}_t${STEPS}_${VISC}_${FD_TAG}"
+# The sweep parameters are part of the file name, so that a second sweep on the
+# same reference state does not overwrite the first.
+TAG="${CASE}_t${STEPS}_${VISC}_${FD_TAG}_e${EPS0}_L${LEVELS}"
 JSON="${RUNDIR}/${TAG}.json"
 LOG="${RUNDIR}/${TAG}.log"
 
@@ -81,6 +89,9 @@ echo "STEPS      = ${STEPS}"
 echo "CASE       = ${CASE}"
 echo "VISC       = ${VISC}"
 echo "FD_TAG     = ${FD_TAG}"
+echo "EPS0       = ${EPS0}"
+echo "LEVELS     = ${LEVELS}"
+echo "REPEATS    = ${REPEATS:-default}"
 echo "RUNDIR     = ${RUNDIR}"
 echo "Worktree   = $(git -C "${WORKTREE}" rev-parse --short HEAD) $(git -C "${WORKTREE}" branch --show-current)"
 echo "Started:    $(date -Is)"
@@ -99,6 +110,10 @@ VISC_ARGS=""
 if [[ "${VISC}" != "production" ]]; then
     VISC_ARGS="--viscosity ${VISC}"
 fi
+REPEAT_ARGS=""
+if [[ -n "${REPEATS}" ]]; then
+    REPEAT_ARGS="--repeats ${REPEATS}"
+fi
 
 cd "${WORKTREE}/tests/hessian"
 
@@ -108,9 +123,9 @@ mpiexec -n "${NCPUS}" python3 cylindrical_hvp_taylor.py "${CASE}" \
     --timesteps "${STEPS}" \
     --rundir "${RUNDIR}" \
     --perturbation smooth --seed 42 \
-    --eps0 0.05 --levels "${LEVELS}" \
+    --eps0 "${EPS0}" --levels "${LEVELS}" \
     --json "${JSON}" \
-    ${MAKE_REF} ${VISC_ARGS} 2>&1 | tee "${LOG}"
+    ${MAKE_REF} ${VISC_ARGS} ${REPEAT_ARGS} 2>&1 | tee "${LOG}"
 END=$(date +%s)
 
 echo
