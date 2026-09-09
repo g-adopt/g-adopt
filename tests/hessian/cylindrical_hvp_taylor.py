@@ -30,6 +30,7 @@ Usage:
 
 import argparse
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -69,16 +70,20 @@ def prepare_rundir(rundir):
     build products into the tracked test directory, run in a separate directory and
     link the one input that is tracked.
 
+    The file is copied and not symlinked. On a Lustre filesystem the ompio MPI-IO
+    component queries the stripe layout of the file it opens, and that query fails on
+    a symlink with "get_stripe failed: 61", after which the parallel HDF5 open fails.
+    The file is 4 MB, so a copy costs nothing.
+
     Only rank 0 touches the filesystem, and the other ranks wait on a barrier. Every
     rank running the same "test then create" sequence is a race: several ranks see the
-    link missing at the same moment and all try to make it, and every rank but the
-    first fails with FileExistsError.
+    file missing at the same moment and all try to make it.
 
     Args:
         rundir (Path): the directory to run in. Created if it does not exist.
 
     Returns:
-        Path: the same directory, with Checkpoint230.h5 linked into it.
+        Path: the same directory, with Checkpoint230.h5 copied into it.
     """
     rundir = Path(rundir).resolve()
     comm = MPI.COMM_WORLD
@@ -86,9 +91,12 @@ def prepare_rundir(rundir):
     if comm.rank == 0:
         rundir.mkdir(parents=True, exist_ok=True)
 
-        link = rundir / "Checkpoint230.h5"
-        if not link.exists():
-            link.symlink_to(CYLINDRICAL_DIR / "Checkpoint230.h5")
+        target = rundir / "Checkpoint230.h5"
+        # A symlink left by an older version of this script is replaced by a copy.
+        if target.is_symlink():
+            target.unlink()
+        if not target.exists():
+            shutil.copyfile(CYLINDRICAL_DIR / "Checkpoint230.h5", target)
 
     # Hold every rank here until the directory and the link exist, so that no rank
     # chdirs into a directory that is not ready.
