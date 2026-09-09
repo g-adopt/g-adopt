@@ -39,14 +39,14 @@ STRUCTURE_RTOL = 1e-12
 
 
 def load(name):
-    """Read one diagnostics file, keeping it two-dimensional.
+    """Read one diagnostics file as rows and columns.
 
-    `numpy.savetxt` writes a single-column array as one number per line, and
-    `loadtxt` reads that back as a one-dimensional array, so reshape to keep the
-    row-and-column indexing the same for every file.
+    `loadtxt` collapses a file holding a single row, or a single column, to one
+    dimension, and the two cases are then indistinguishable. `ndmin=2` keeps the
+    shape the file was written with, so every caller can index it as
+    `[row][column]`.
     """
-    data = np.loadtxt(CASE_DIR / name)
-    return data.reshape(data.shape[0], -1) if data.ndim > 1 else data.reshape(-1, 1)
+    return np.loadtxt(CASE_DIR / name, ndmin=2)
 
 
 APPROXIMATION_IDS = [name for name, _ in SYMMETRY_APPROXIMATIONS]
