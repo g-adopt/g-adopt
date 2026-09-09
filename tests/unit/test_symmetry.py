@@ -102,11 +102,61 @@ meshes = {
 }
 
 
+# The meshes that cover each distinct code path in the weak boundary terms
+# exactly once. Those terms branch on three properties of the mesh: the cell
+# type (simplex against tensor product, which sets the interior penalty factor
+# and the facet quadrature), whether the mesh is extruded (extruded meshes take
+# the ds_v/ds_t/ds_b facet measures instead of ds), and whether it is a
+# manifold (cartesian False, so the facet normal is not a coordinate direction
+# and the geometric dimension exceeds the topological one). The five keys below
+# cover simplex, tensor-product cell, three dimensions, extrusion and manifold
+# normals once each. The remaining five meshes in `meshes` repeat a combination
+# already covered here, and each one costs a separate kernel compilation, which
+# is the dominant cost of this file in CI.
+WEAK_BC_MESH_KEYS = ["2D-tri", "2D-quad", "3D-tet", "2D-cylinder", "3D-extruded"]
+
+
+def configure_mesh(id):
+    """Return the named mesh from `meshes`, with its coordinate system set.
+
+    `cartesian` tells the approximations whether the radial direction is a
+    coordinate direction. Cylinder and sphere meshes are immersed manifolds, so
+    it is False for them. The meshes are module-level objects shared between
+    fixtures, so this is an assignment on a shared object; every caller sets the
+    same value for a given id.
+    """
+    mesh = meshes[id]
+    mesh.cartesian = not any(x in id for x in ['cylinder', 'sphere'])
+    return mesh
+
+
+def taylor_hood(mesh):
+    """The P2-P1 velocity-pressure mixed space on `mesh`.
+
+    Only this pair is supported at the moment. Discontinuous velocity would be
+    worth testing too, but that needs the pressure gradient term to handle it.
+    """
+    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    W = fd.FunctionSpace(mesh, "CG", 1)
+    return V * W
+
+
 @pytest.fixture(scope="module", params=meshes.items(), ids=meshes.keys())
 def mesh(request):
     id, mesh = request.param
     mesh.cartesian = not any(x in id for x in ['cylinder', 'sphere'])
     return mesh
+
+
+@pytest.fixture(scope="module", params=WEAK_BC_MESH_KEYS, ids=WEAK_BC_MESH_KEYS)
+def weak_bc_mesh(request):
+    """The reduced mesh grid, for the tests of the weak boundary terms only.
+
+    Kept separate from the `mesh` fixture so that `test_stokes_symmetry` and
+    `test_internal_variable_symmetry`, which test the whole assembled matrix
+    and not only the boundary terms, keep the full ten-mesh grid.
+    """
+    return configure_mesh(request.param)
 
 
 @pytest.fixture(scope="module",
@@ -125,16 +175,23 @@ def approximation(request):
 
 @pytest.fixture(scope="module", params=["TaylorHood",])
 def solution_space(request, mesh):
-    # at the moment only P2-P1 is supported
-    # would like to test discontinuous velocity, but
-    # that requires the pressure gradient term to handle that
     match request.param:
         case "TaylorHood":
-            V = fd.VectorFunctionSpace(mesh, "CG", 2)
-            W = fd.FunctionSpace(mesh, "CG", 1)
-            return V * W
+            return taylor_hood(mesh)
         case _:
             raise ValueError("Unknown discretisation type")
+
+
+@pytest.fixture(scope="module")
+def weak_bc_solution_space(weak_bc_mesh):
+    """The mixed space on the reduced mesh grid.
+
+    A separate fixture from `solution_space` so that it depends on
+    `weak_bc_mesh`; asking for `solution_space` alongside `weak_bc_mesh` would
+    build the space on a mesh from the full grid and give the cross product of
+    the two grids.
+    """
+    return taylor_hood(weak_bc_mesh)
 
 
 def test_stokes_symmetry(approximation, mesh, solution_space):
@@ -181,7 +238,7 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
     gadopt.BoussinesqApproximation,
     gadopt.TruncatedAnelasticLiquidApproximation,
 ])
-def test_stokes_symmetry_nonlinear_viscosity(approx_class, mesh, solution_space):
+def test_stokes_symmetry_nonlinear_viscosity(approx_class, weak_bc_mesh, weak_bc_solution_space):
     """Test that the true Jacobian is symmetric with nonlinear viscosity.
 
     With a strain-rate-dependent viscosity the weak (SIPG) boundary terms use
@@ -197,9 +254,9 @@ def test_stokes_symmetry_nonlinear_viscosity(approx_class, mesh, solution_space)
     """
     compressible = approx_class is not gadopt.BoussinesqApproximation
 
-    z = fd.Function(solution_space)
+    z = fd.Function(weak_bc_solution_space)
     u_sub, p_sub = z.subfunctions
-    u_sub.interpolate(generic_velocity(mesh))
+    u_sub.interpolate(generic_velocity(weak_bc_mesh))
 
     u, _ = fd.split(z)
     mu = nonlinear_mu(u, compressible)
@@ -210,12 +267,12 @@ def test_stokes_symmetry_nonlinear_viscosity(approx_class, mesh, solution_space)
     else:
         approximation = approx_class(Ra, Di=1, mu=mu)
 
-    T = fd.Function(solution_space.sub(1))
-    boundary = gadopt.get_boundary_ids(mesh)
+    T = fd.Function(weak_bc_solution_space.sub(1))
+    boundary = gadopt.get_boundary_ids(weak_bc_mesh)
     bids = list(boundary)
     bcs = {bids[0]: {'un': 0}, bids[1]: {'normal_stress': 0}}
     if len(bids) > 2:
-        dim = mesh.geometric_dimension
+        dim = weak_bc_mesh.geometric_dimension
         zero_vec = fd.Constant([0] * dim)
         bcs[bids[2]] = {'stress': zero_vec}
         # weak "u" is converted to a strong DirichletBC here, so this does not
@@ -239,7 +296,7 @@ def test_stokes_symmetry_nonlinear_viscosity(approx_class, mesh, solution_space)
     gadopt.BoussinesqApproximation,
     gadopt.TruncatedAnelasticLiquidApproximation,
 ])
-def test_viscosity_term_weak_u_symmetry(approx_class, mesh):
+def test_viscosity_term_weak_u_symmetry(approx_class, weak_bc_mesh):
     """Symmetry of the weak "u" SIPG branch for nonlinear viscosity.
 
     StokesSolver converts a "u" boundary condition to a strong DirichletBC, so
@@ -251,9 +308,9 @@ def test_viscosity_term_weak_u_symmetry(approx_class, mesh):
     """
     compressible = approx_class is not gadopt.BoussinesqApproximation
 
-    V = fd.VectorFunctionSpace(mesh, "CG", 2)
+    V = fd.VectorFunctionSpace(weak_bc_mesh, "CG", 2)
     u = fd.Function(V)
-    u.interpolate(generic_velocity(mesh))
+    u.interpolate(generic_velocity(weak_bc_mesh))
     mu = nonlinear_mu(u, compressible)
 
     if approx_class is gadopt.BoussinesqApproximation:
@@ -261,9 +318,9 @@ def test_viscosity_term_weak_u_symmetry(approx_class, mesh):
     else:
         approximation = approx_class(1, Di=1, mu=mu)
 
-    dim = mesh.geometric_dimension
+    dim = weak_bc_mesh.geometric_dimension
     zero_vec = fd.Constant([0] * dim)
-    bids = list(gadopt.get_boundary_ids(mesh))
+    bids = list(gadopt.get_boundary_ids(weak_bc_mesh))
     # exercise both the weak "u" and weak "un" branches
     bcs = {bids[0]: {'u': zero_vec}, bids[1]: {'un': 0}}
 
