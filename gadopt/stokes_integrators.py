@@ -1067,10 +1067,8 @@ class InternalVariableSolver(StokesSolverBase):
             internal_variables = [internal_variables]
         self.internal_variables = internal_variables
 
-        # provide an `effective viscosity' to the approximation used
-        # for SIPG terms in the viscosity term of momentum_equation.py
-        # N.b. the potential for confusion as GIA modellers often use
-        # mu to represent the shear modulus.
+        # The substituted displacement operator has this effective shear
+        # coefficient, which also supplies its penalty and preconditioner scale.
         approximation.mu = approximation.effective_viscosity(dt)
 
         super().__init__(solution, approximation, dt=dt, **kwargs)
@@ -1229,11 +1227,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         **kwargs,
     ) -> None:
 
-        # provide an `effective viscosity' to the approximation used
-        # for SIPG terms in the viscosity term of momentum_equation.py
-        # N.b. the potential for confusion as GIA modellers often use
-        # mu to represent the shear modulus.
-        approximation.mu = approximation.effective_viscosity(dt)
+        # At fixed internal variables, the displacement block is elastic. Use
+        # `mu0` for its Nitsche penalty and preconditioner scale.
+        approximation.mu = approximation.mu0
         self.scaling_factor = scaling_factor
 
         super().__init__(solution, approximation, dt=dt, theta=self._theta, **kwargs)
