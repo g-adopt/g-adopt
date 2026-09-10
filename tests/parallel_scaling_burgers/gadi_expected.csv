@@ -1,0 +1,13 @@
+level,config,substituted_pc_setup,coupled_pc_setup,substituted_solve,coupled_solve
+5,multiplicative,5.296,4.166,11.011,103.290
+5,schur-a11,5.404,6.394,11.264,32.744
+5,schur-substituted,5.411,6.593,11.252,26.974
+5,static-condensation,5.343,6.835,11.072,16.819
+6,multiplicative,6.194,5.276,12.339,114.610
+6,schur-a11,6.274,7.152,12.406,34.478
+6,schur-substituted,6.220,7.377,12.338,29.002
+6,static-condensation,6.556,8.652,12.659,19.790
+7,multiplicative,8.497,7.389,15.750,131.480
+7,schur-a11,10.436,9.371,17.865,40.738
+7,schur-substituted,8.566,8.784,16.141,33.085
+7,static-condensation,8.999,11.290,15.901,23.819
