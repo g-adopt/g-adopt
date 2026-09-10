@@ -53,8 +53,17 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     # Spatial variation alone does not make `mu` solution-dependent.
     mu_nonlinear = any(depends_on(mu, c) for c in extract_coefficients(trial))
 
+    # The SIPG penalty carries the facet-to-cell size ratio, which is the
+    # 1/h of the Nitsche penalty. On an interior facet the cell volume is the
+    # average of the two cells; on an exterior facet there is one cell, and
+    # its volume is written without `avg`. Standard assembly evaluates
+    # `avg(CellVolume)` on an exterior facet as that one cell's volume, but
+    # Slate evaluates it as half of it, which doubles the boundary penalty in
+    # a statically condensed operator. Writing the exterior coefficient
+    # without `avg` gives the same matrix under both assembly paths.
     sigma = interior_penalty_factor(eq)
-    sigma *= FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
+    sigma_interior = sigma * FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
+    sigma_exterior = sigma * FacetArea(eq.mesh) / CellVolume(eq.mesh)
     if not is_continuous(eq.trial_space):
         if mu_nonlinear:
             raise NotImplementedError(
@@ -66,7 +75,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
         )
 
         F += (
-            sigma
+            sigma_interior
             * inner(tensor_jump(eq.n, eq.test), avg(mu) * trial_tensor_jump)
             * eq.dS
         )
@@ -118,7 +127,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # constrains, volumetric part included.
             F += (
                 2
-                * sigma
+                * sigma_exterior
                 * inner(
                     outer(eq.n, eq.test),
                     eq.approximation.stress_from_grad(jump_gradient),
@@ -139,7 +148,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 jump_tensor = eq.approximation.deviatoric_tensor_from_grad(jump_gradient)
-                F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
+                F += sigma_exterior * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "un" in bc:
             un_jump = dot(eq.n, trial) - bc["un"]
@@ -151,7 +160,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # normal jump volumetrically as well as deviatorically.
             F += (
                 2
-                * sigma
+                * sigma_exterior
                 * inner(
                     outer(eq.n, eq.test),
                     eq.approximation.stress_from_grad(jump_gradient),
@@ -169,7 +178,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 jump_tensor = eq.approximation.deviatoric_tensor_from_grad(jump_gradient)
-                F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
+                F += sigma_exterior * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "stress" in bc:  # a momentum flux, a.k.a. "force"
             # Here we need only the third term because we assume jump_u = 0
