@@ -204,6 +204,8 @@ ITERATIVE_GIA_HIP_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"]["
 ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE = deepcopy(ITERATIVE_GIA_HIP_PARAMS_TELESCOPE)
 ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
+# The test approximation is Newtonian (exponent 1), so the coupled solver
+# runs one linear solve per step (`ksponly`) instead of Newton.
 ITERATIVE_GIA_COUPLED_CPU_PARAMS = (
     {"snes_monitor": None}
     | coupled_gia_solver_parameters
@@ -212,7 +214,7 @@ ITERATIVE_GIA_COUPLED_CPU_PARAMS = (
         | {"ksp_converged_reason": None}
     }
     | deepcopy(ITERATIVE_FIELDSPLIT_0_CPU)
-    | newton_stokes_solver_parameters
+    | {"snes_type": "ksponly"}
 )
 
 ITERATIVE_GIA_COUPLED_HIP_PARAMS = (
@@ -223,14 +225,14 @@ ITERATIVE_GIA_COUPLED_HIP_PARAMS = (
         | {"ksp_converged_reason": None}
     }
     | deepcopy(ITERATIVE_FIELDSPLIT_0_GPU)
-    | newton_stokes_solver_parameters
+    | {"snes_type": "ksponly"}
 )
 
 ITERATIVE_GIA_COUPLED_CUDA_PARAMS = deepcopy(ITERATIVE_GIA_COUPLED_HIP_PARAMS)
 ITERATIVE_GIA_COUPLED_CUDA_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
 DIRECT_GIA_COUPLED_CPU_PARAMS = (
-    newton_stokes_solver_parameters | direct_stokes_solver_parameters
+    {"snes_type": "ksponly"} | direct_stokes_solver_parameters
 )
 
 # Section 2 - Test variants

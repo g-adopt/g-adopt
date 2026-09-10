@@ -296,6 +296,20 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     name = "MomentumSolver"
 
+    # Where `_configure_iterative_solver` puts the Krylov and GAMG options of
+    # the displacement (or velocity) block. `None` selects the historical
+    # rule: under `fieldsplit_0` when the top-level preconditioner is a
+    # fieldsplit, otherwise at the top level of the dictionary. A subclass
+    # whose displacement block lives elsewhere, for example the second split
+    # of a Schur fieldsplit or the condensed field of a static condensation,
+    # names that prefix here.
+    displacement_block_prefix: str | None = None
+    # `True` when the displacement block is a matrix-free operator and GAMG
+    # must run on a matrix that `SPDAssembledPC` assembles (options nested
+    # under `assembled_`). `False` when the block's operator is already an
+    # assembled matrix and the GAMG options apply to it directly.
+    displacement_block_assembled: bool = True
+
     def __init__(
         self,
         solution: fd.Function,
@@ -591,7 +605,10 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         """Configure iterative solver settings
 
         Add the appropriate parameter sets at the right nesting levels for iterative
-        solver settings with and without GPUs.
+        solver settings with and without GPUs. The nesting level is the prefix that
+        `displacement_block_prefix` names (see its comment on the class), and
+        `displacement_block_assembled` decides whether GAMG runs on a matrix that
+        `SPDAssembledPC` assembles or directly on the block's operator.
 
         Args:
             device_type: Target GPU device type (e.g., `CUDA`).
@@ -599,19 +616,30 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             telescope configuration.
         """
         top_pc = self.solver_parameters.get("pc_type")
-        # Early return if this set of solver parameters already has a fieldsplit_0 entry
-        if top_pc == "fieldsplit" and "fieldsplit_0" in self.solver_parameters:
+        prefix = self.displacement_block_prefix
+        if prefix is None:
+            prefix = "fieldsplit_0" if top_pc == "fieldsplit" else ""
+        # Early return if this set of solver parameters already configures the block
+        if prefix and prefix in self.solver_parameters:
             return
         if device_type is None:
-            additional_params = {
-                "assembled": cpu_gamg_parameters | gamg_common_parameters
-            } | spd_ksp_parameters
-            if top_pc == "fieldsplit":
-                additional_params = {
-                    "fieldsplit_0": additional_params | spd_pc_parameters
-                }
-            self.add_to_solver_config(additional_params)
+            if self.displacement_block_assembled:
+                block = {
+                    "assembled": cpu_gamg_parameters | gamg_common_parameters
+                } | spd_ksp_parameters
+                # A nested block has no preconditioner yet; the top-level presets
+                # already name theirs.
+                if prefix:
+                    block = block | spd_pc_parameters
+            else:
+                block = cpu_gamg_parameters | gamg_common_parameters | spd_ksp_parameters
+            self.add_to_solver_config({prefix: block} if prefix else block)
         else:
+            if not self.displacement_block_assembled:
+                raise NotImplementedError(
+                    "GPU offload is only configured for a matrix-free displacement "
+                    "block wrapped by SPDAssembledPC."
+                )
             additional_params = {
                 "assembled": dict(offload_parameters),
                 "ksp_type": "preonly",
@@ -622,11 +650,11 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             additional_params["assembled"]["offload"]["ksp"] = (
                 gamg_common_parameters | gpu_gamg_parameters | spd_ksp_parameters
             )
-            if top_pc == "fieldsplit":
+            if prefix:
                 additional_params = self._handle_gpu_settings(
                     gpu_extras, device_type, additional_params | spd_pc_parameters
                 )
-                additional_params = {"fieldsplit_0": additional_params}
+                additional_params = {prefix: additional_params}
             else:
                 additional_params = self._handle_gpu_settings(
                     gpu_extras, device_type, additional_params | {"ksp_type": "preonly"}
@@ -1287,27 +1315,59 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
         gpu_extras: ConfigType | None,
-        iterative_preset: ConfigType = coupled_gia_solver_parameters | newton_stokes_solver_parameters,
-        direct_preset: ConfigType = direct_stokes_solver_parameters | newton_stokes_solver_parameters
+        iterative_preset: ConfigType | None = None,
+        direct_preset: ConfigType | None = None,
     ) -> None:
         """Sets PETSc solver options for the coupled GIA system.
 
-        Overrides the base class to ensure SNES Newton is always active.
-        For Newtonian rheology (exponent=1) the power-law factor is identically
-        1 and the system is linear, so SNES converges in a single iteration.
-        For power-law rheology (exponent > 1) full Newton iteration is performed.
+        For power-law rheology (exponent > 1) the residual is nonlinear and the
+        presets carry Newton SNES. For Newtonian rheology (exponent = 1) the
+        residual is linear, so the presets are used with `snes_type ksponly`:
+        one linear solve per step. Newton on a linear residual is not free.
+        Its first step converges the linear solve to the inner tolerance, and
+        the outer `snes_rtol` of the same size then demands a second step, which
+        doubles the cost of every time step.
 
         When solver_preset is a Mapping it is honoured verbatim. The string
-        preset "direct" uses direct_stokes_solver_parameters plus Newton SNES.
-        The string preset "iterative" and the default None both use
-        coupled_gia_solver_parameters, which already includes Newton SNES and
-        the GIA-specific fieldsplit preconditioner. iterative_stokes_solver_parameters
-        is intentionally not used here: its Schur-complement structure is designed
-        for the standard Stokes system, not the larger coupled GIA block.
+        preset "direct" uses direct_stokes_solver_parameters. The string preset
+        "iterative" and the default None both use coupled_gia_solver_parameters,
+        which carries the GIA-specific fieldsplit preconditioner.
+        iterative_stokes_solver_parameters is intentionally not used here: its
+        Schur-complement structure is designed for the standard Stokes system,
+        not the larger coupled GIA block.
         """
+        # Only the default presets get the rheology-dependent SNES; a caller
+        # that passes its own preset keeps it.
+        snes = (
+            {"snes_type": "ksponly"}
+            if self._newtonian_rheology()
+            else newton_stokes_solver_parameters
+        )
+        if iterative_preset is None:
+            iterative_preset = coupled_gia_solver_parameters | snes
+        if direct_preset is None:
+            direct_preset = direct_stokes_solver_parameters | snes
         super().set_solver_options(
             solver_preset, solver_extras, gpu_extras, iterative_preset, direct_preset
         )
+        # Preconditioners that eliminate the internal variables inside the
+        # preconditioner (`gadopt.SubstitutedDisplacementPC`) rebuild the
+        # substituted displacement operator from the material parameters and
+        # the time step, so hand them over through the application context.
+        self.appctx["approximation"] = self.approximation
+        self.appctx["dt"] = self.dt
+        self.appctx["scaling_factor"] = self.scaling_factor
+
+    def _newtonian_rheology(self) -> bool:
+        """True when the power-law exponent is a constant equal to one.
+
+        A Function-valued exponent cannot be checked cheaply and is treated as
+        power-law, so Newton stays on.
+        """
+        try:
+            return float(self.approximation.exponent) == 1.0
+        except (TypeError, ValueError):
+            return False
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
