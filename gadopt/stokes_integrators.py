@@ -39,6 +39,44 @@ from .utility import (
     vertical_component,
 )
 
+
+def internal_variable_source_term(
+    eq: Equation, trial: fd.Argument | fd.Function
+) -> fd.Form:
+    """Return the history source and its weak-normal adjoint term.
+
+    The boundary term supplies the missing facet contribution. The exact
+    history Schur complement is then symmetric for Newtonian rheology with
+    elementwise-constant material fields.
+    """
+    residual = source_term(eq, trial)
+    dimension = eq.mesh.geometric_dimension
+    identity = fd.Identity(dimension)
+
+    for boundary_id, boundary_condition in eq.bcs.items():
+        if "un" not in boundary_condition:
+            continue
+        normal_error = (
+            fd.dot(eq.n, eq.source_displacement) - boundary_condition["un"]
+        )
+        normal_strain = normal_error * (
+            fd.outer(eq.n, eq.n) - identity / 3
+        )
+        residual += fd.inner(
+            eq.test, eq.source_coefficient * normal_strain
+        ) * eq.ds(boundary_id)
+
+    return residual
+
+
+internal_variable_source_term.required_attrs = {
+    "source",
+    "source_coefficient",
+    "source_displacement",
+}
+internal_variable_source_term.optional_attrs = set()
+
+
 iterative_stokes_solver_parameters = {
     "mat_type": "matfree",
     "ksp_type": "preonly",
@@ -141,8 +179,8 @@ coupled_gia_solver_parameters = {
     "snes_max_it": 100,
     "snes_atol": 1e-15,
     "snes_rtol": 1e-4,
-    "ksp_type": "gmres",
-    "ksp_rtol": 1e-3,
+    "ksp_type": "fgmres",
+    "ksp_rtol": 1e-5,
     "pc_type": "fieldsplit",
     "pc_fieldsplit_type": "symmetric_multiplicative",
     "fieldsplit_0_ksp_type": "cg",
@@ -158,13 +196,105 @@ coupled_gia_solver_parameters = {
 }
 """Default iterative solver parameters for CoupledInternalVariableSolver (GIA problems).
 
-Uses a Newton SNES outer loop with a GMRES/fieldsplit preconditioned inner solve. SNES
-is always active: for a Newtonian rheology (exponent=1) the power-law factor is
-identically 1 and the system is linear, so SNES converges in a single iteration at
-negligible extra cost. For power-law rheology (exponent > 1) the full Newton iteration
-is required. The snes_rtol is set looser than ksp_rtol so that the single-iteration
-Newtonian case is accepted without additional SNES iterations.
+Uses a GMRES/fieldsplit preconditioned inner solve. `CoupledInternalVariableSolver`
+selects the outer method from `approximation.exponent`: `ksponly` for a Newtonian
+rheology, where the power-law factor is identically 1 and the residual is linear, and
+`newtonls` for a power-law rheology, where it is not.
+
+**The outer method must be flexible.** The preconditioner is a multiplicative sweep
+whose blocks are themselves *inner CG solves* to a tolerance, and an inner Krylov solve
+is not the same linear operator on every application. Plain `gmres` assumes it is, and
+its recurrence residual then stops tracking the real one. Measured on the 3-D coupled
+box: over eleven `gmres` iterations the recurrence norm fell by a factor of 1.3e5 while
+the true residual stagnated at 2.7e-5 relative from iteration seven, and at iteration
+one the true residual *rose* to 1.58 times its starting value. Under `fgmres` the two
+agree to twelve digits and the same solve converges in seven iterations. So `ksp_rtol`
+means what it says here only because the method is flexible.
+
+`ksp_rtol` is tighter than `snes_rtol`, and that ordering matters. A Newton step cannot
+reduce the residual by more than its linear solve does, so a `ksp_rtol` looser than
+`snes_rtol` guarantees SNES rejects every step it is given and takes another one. The
+shipped values had that ordering inverted, and the docstring here used to claim the
+opposite of what the code did.
+
+The ordering is what the value is for. Measured on the 3-D coupled box under `fgmres`,
+surface displacement after two timesteps and cumulative Krylov iterations:
+
+    ksp_rtol    1e-3         1e-4         1e-5         1e-6
+    u_min      -0.39077274  -0.39081084  -0.39081025  -0.39080488
+    Krylov      16           16           22           61
+    SNES        3            3            3            4
+
+`1e-3` sits about 1e-4 away from the rest, which is *outside* the ball `snes_rtol = 1e-4`
+is supposed to guarantee: with the linear solve looser than the nonlinear target, SNES
+cannot attain its own tolerance, and the answer it returns is not the one it claims.
+Everything at `1e-4` or tighter agrees to ~1.5e-5, i.e. within that ball, so accuracy no
+longer distinguishes them and the remaining choice is margin. `1e-5` is one order below
+`snes_rtol` rather than exactly equal to it, and `1e-6` buys nothing for three times the
+Krylov work.
+
+This is *not* setup amortisation: on the same case `PCSetUp` was 2-3% of the solve, and
+HANDOVER 3.1's 16-57 s setup figure belongs to the *segregated* solver, where an outer
+iteration is one V-cycle rather than a full inner CG solve.
+
+Note:
+  The Newton count is 3 per timestep at every tolerance above, and no `ksp_rtol` removes
+  the extra steps. They are genuine nonlinearity: the only driver using this solver
+  (`tests/3d_weerdesteijn_coupled`) has an exponent field of `[1, 3, 3, 1]`, so two of
+  its four layers are power-law however it is invoked. Do not expect the tolerance fix
+  to buy a Newton step back there.
 """
+
+
+def coupled_internal_variable_exact_schur_parameters(
+    n_internal_variables: int,
+) -> dict[str, Any]:
+    """Return a solver configuration for an exact history Schur reference.
+
+    PETSc keeps the DG histories in the global system. The full factorization
+    eliminates them during the solve and recovers them after displacement.
+    """
+    if n_internal_variables not in (1, 2):
+        raise NotImplementedError(
+            "The exact history Schur reference supports one or two internal "
+            "variables. "
+            f"The requested system has {n_internal_variables}."
+        )
+
+    eliminated_fields = ",".join(
+        str(index) for index in range(1, n_internal_variables + 1)
+    )
+    return {
+        "mat_type": "aij",
+        "snes_type": "ksponly",
+        "ksp_type": "preonly",
+        "ksp_error_if_not_converged": None,
+        "pc_type": "fieldsplit",
+        "pc_fieldsplit_type": "schur",
+        "pc_fieldsplit_schur_fact_type": "full",
+        "pc_fieldsplit_schur_precondition": "selfp",
+        "pc_fieldsplit_0_fields": eliminated_fields,
+        "pc_fieldsplit_1_fields": "0",
+        "fieldsplit_0": {
+            "ksp_type": "preonly",
+            "ksp_error_if_not_converged": None,
+            "pc_type": "bjacobi",
+            "sub": {
+                "ksp_type": "preonly",
+                "pc_type": "lu",
+            },
+        },
+        "fieldsplit_1": {
+            "ksp_type": "gmres",
+            "ksp_error_if_not_converged": None,
+            "ksp_rtol": 1.0e-14,
+            "ksp_atol": 1.0e-16,
+            "ksp_max_it": 1000,
+            "ksp_norm_type": "unpreconditioned",
+            "pc_type": "lu",
+            "pc_factor_mat_solver_type": "mumps",
+        },
+    }
 
 
 class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
@@ -424,8 +554,8 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
         if self.constant_jacobian:
             warn(
-                "Constant Jacobian specified for the Stokes system; please ensure that"
-                "the viscosity does not vary in time."
+                "Constant Jacobian specified for the Stokes system. "
+                "The viscosity and time step must not change."
             )
 
             trial = fd.TrialFunction(self.solution_space)
@@ -444,6 +574,10 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 appctx=self.appctx,
                 options_prefix=self.name,
             )
+            try:
+                self._constant_jacobian_time_step = float(self.dt)
+            except (TypeError, ValueError):
+                self._constant_jacobian_time_step = None
         else:
             self.problem = fd.NonlinearVariationalProblem(
                 self.F, self.solution, bcs=self.strong_bcs, J=self.J
@@ -460,8 +594,29 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def solve(self) -> None:
         """Solves the system."""
+        self._check_solver_state()
+        reference_time_step = getattr(
+            self, "_constant_jacobian_time_step", None
+        )
+        if reference_time_step is not None:
+            try:
+                current_time_step = float(self.dt)
+            except (TypeError, ValueError):
+                current_time_step = reference_time_step
+            if current_time_step != reference_time_step:
+                raise RuntimeError(
+                    "constant_jacobian=True cannot use a changed time step. "
+                    "Rebuild the solver after the time-step change."
+                )
         self.solver.solve()
+        self._check_solver_convergence()
         self.solution_old.assign(self.solution)
+
+    def _check_solver_convergence(self) -> None:
+        """Check convergence conditions that the outer solver cannot see."""
+
+    def _check_solver_state(self) -> None:
+        """Check mutable inputs before the solver changes the solution."""
 
 
 class StokesSolver(StokesSolverBase):
@@ -740,6 +895,288 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         self.displacement.interpolate(self.displacement + u_sub)
 
 
+class HistoryFormulation(abc.ABC):
+    """Define the history part of internal-variable mechanics."""
+
+    name: str
+
+    def __init__(self) -> None:
+        self._solver: StokesSolverBase | None = None
+        self.history_spaces: tuple[fd.FunctionSpace, ...] = ()
+
+    def bind(self, solver: StokesSolverBase) -> None:
+        """Bind this component to one solver."""
+        if self._solver is not None and self._solver is not solver:
+            raise RuntimeError("A HistoryFormulation cannot be shared by two solvers.")
+        self._solver = solver
+
+    @abc.abstractmethod
+    def configure_approximation(
+        self, approximation: BaseGIAApproximation, dt: float
+    ) -> None:
+        """Set the mechanics coefficient that the Nitsche terms use."""
+
+    @abc.abstractmethod
+    def displacement(self, solver: StokesSolverBase) -> fd.Function | Expr:
+        """Return the displacement field for the mechanics residual."""
+
+    @abc.abstractmethod
+    def displacement_test(self, solver: StokesSolverBase) -> fd.Argument:
+        """Return the displacement test function."""
+
+    @abc.abstractmethod
+    def displacement_space(self, solver: StokesSolverBase) -> fd.FunctionSpace:
+        """Return the displacement function space."""
+
+    @abc.abstractmethod
+    def history_values(
+        self, mechanics: "InternalVariableMechanics", solver: StokesSolverBase
+    ) -> list[fd.Function | Expr]:
+        """Return the history values that enter the stress."""
+
+    @abc.abstractmethod
+    def add_history_equations(
+        self, mechanics: "InternalVariableMechanics", solver: StokesSolverBase
+    ) -> None:
+        """Add the history equations after the displacement equation."""
+
+    @abc.abstractmethod
+    def advance(self, solver: StokesSolverBase) -> None:
+        """Advance the stored history after a successful solve."""
+
+
+class PointwiseHistoryFormulation(HistoryFormulation):
+    """Substitute the backward-Euler history before discretisation."""
+
+    name = "pointwise"
+
+    def __init__(
+        self, internal_variables: fd.Function | list[fd.Function]
+    ) -> None:
+        super().__init__()
+        if not isinstance(internal_variables, list):
+            internal_variables = [internal_variables]
+        self.internal_variables = internal_variables
+        self.internal_variables_update: list[Expr] = []
+        self.history_spaces = tuple(
+            variable.function_space() for variable in self.internal_variables
+        )
+
+    def configure_approximation(
+        self, approximation: BaseGIAApproximation, dt: float
+    ) -> None:
+        exponent = getattr(approximation, "exponent", 1)
+        try:
+            is_newtonian = float(exponent) == 1.0
+        except (TypeError, ValueError):
+            is_newtonian = False
+        if not is_newtonian:
+            raise NotImplementedError(
+                "Pointwise history is implemented for Newtonian rheology only "
+                "(exponent = 1). Use mixed history for power-law rheology."
+            )
+        approximation.mu = approximation.effective_viscosity(dt)
+
+    def bind(self, solver: StokesSolverBase) -> None:
+        if solver.is_mixed_space:
+            raise ValueError("Pointwise history requires a displacement-only space.")
+        n_histories = len(self.internal_variables)
+        n_maxwell_times = len(solver.approximation.maxwell_times)
+        if n_histories != n_maxwell_times:
+            raise ValueError(
+                "The number of internal variables must equal the number of "
+                f"Maxwell times. Received {n_histories} and {n_maxwell_times}."
+            )
+        super().bind(solver)
+
+    def displacement(self, solver: StokesSolverBase) -> fd.Function | Expr:
+        if solver.is_mixed_space:
+            return solver.solution_split[0]
+        return solver.solution
+
+    def displacement_test(self, solver: StokesSolverBase) -> fd.Argument:
+        return solver.test
+
+    def displacement_space(self, solver: StokesSolverBase) -> fd.FunctionSpace:
+        return solver.solution_space
+
+    def history_values(
+        self, mechanics: "InternalVariableMechanics", solver: StokesSolverBase
+    ) -> list[Expr]:
+        self.internal_variables_update = [
+            (history + solver.dt / maxwell_time * mechanics.strain)
+            / (1 + solver.dt / maxwell_time)
+            for history, maxwell_time in zip(
+                self.internal_variables, solver.approximation.maxwell_times
+            )
+        ]
+        return self.internal_variables_update
+
+    def add_history_equations(
+        self, mechanics: "InternalVariableMechanics", solver: StokesSolverBase
+    ) -> None:
+        return None
+
+    def advance(self, solver: StokesSolverBase) -> None:
+        for history, update in zip(
+            self.internal_variables, self.internal_variables_update
+        ):
+            history.interpolate(update)
+
+
+class MixedHistoryFormulation(HistoryFormulation):
+    """Keep the weak DG history equations in the mixed system."""
+
+    name = "mixed"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.history_indices: tuple[int, ...] = ()
+
+    def configure_approximation(
+        self, approximation: BaseGIAApproximation, dt: float
+    ) -> None:
+        if os.environ.get("GADOPT_COUPLED_NITSCHE_EFFVISC") == "1":
+            approximation.mu = approximation.effective_viscosity(dt)
+            return
+        approximation.mu = (
+            getattr(approximation, "mu0", None)
+            or approximation.effective_viscosity(dt)
+        )
+
+    def bind(self, solver: StokesSolverBase) -> None:
+        if not solver.is_mixed_space:
+            raise ValueError("Mixed history requires a mixed function space.")
+        self.history_indices = tuple(range(1, len(solver.solution_split)))
+        n_histories = len(self.history_indices)
+        n_maxwell_times = len(solver.approximation.maxwell_times)
+        if n_histories != n_maxwell_times:
+            raise ValueError(
+                "The number of history fields must equal the number of Maxwell "
+                f"times. Received {n_histories} and {n_maxwell_times}."
+            )
+        history_spaces = tuple(
+            solver.solution_space[index] for index in self.history_indices
+        )
+        super().bind(solver)
+        self.history_spaces = history_spaces
+
+    def displacement(self, solver: StokesSolverBase) -> Expr:
+        return solver.solution_split[0]
+
+    def displacement_test(self, solver: StokesSolverBase) -> fd.Argument:
+        return solver.tests[0]
+
+    def displacement_space(self, solver: StokesSolverBase) -> fd.FunctionSpace:
+        return solver.solution_space[0]
+
+    def history_values(
+        self, mechanics: "InternalVariableMechanics", solver: StokesSolverBase
+    ) -> list[Expr]:
+        return [solver.solution_split[index] for index in self.history_indices]
+
+    def add_history_equations(
+        self, mechanics: "InternalVariableMechanics", solver: StokesSolverBase
+    ) -> None:
+        dev_stress = solver.approximation.deviatoric_stress(
+            mechanics.displacement, mechanics.internal_variables
+        )
+        viscous_factor = solver.approximation.power_law_factor(dev_stress)
+        maxwell_times = [
+            maxwell_time * viscous_factor
+            for maxwell_time in solver.approximation.maxwell_times
+        ]
+        history_terms = [mass_term, sink_term, internal_variable_source_term]
+
+        for index, maxwell_time in zip(self.history_indices, maxwell_times):
+            solver.equations.append(
+                Equation(
+                    solver.tests[index],
+                    solver.solution_space[index],
+                    history_terms,
+                    eq_attrs={
+                        "source": mechanics.strain / maxwell_time,
+                        "source_coefficient": 1 / maxwell_time,
+                        "source_displacement": mechanics.displacement,
+                        "sink_coeff": 1 / maxwell_time,
+                        "dt": solver.dt,
+                        "trial_old": solver.solution_old_split[index],
+                        "use_irksome": False,
+                    },
+                    approximation=solver.approximation,
+                    bcs=solver.weak_bcs,
+                    quad_degree=solver.quad_degree,
+                    scaling_factor=-solver._theta * solver.scaling_factor,
+                )
+            )
+
+    def advance(self, solver: StokesSolverBase) -> None:
+        return None
+
+
+class InternalVariableMechanics:
+    """Build mechanics with one selected history formulation."""
+
+    def __init__(self, history_formulation: HistoryFormulation) -> None:
+        if not isinstance(history_formulation, HistoryFormulation):
+            raise TypeError("history_formulation must be a HistoryFormulation.")
+        self.history_formulation = history_formulation
+        self._solver: StokesSolverBase | None = None
+        self.displacement: fd.Function | Expr | None = None
+        self.strain: Expr | None = None
+        self.internal_variables: list[fd.Function | Expr] = []
+
+    def configure_approximation(
+        self, approximation: BaseGIAApproximation, dt: float
+    ) -> None:
+        self.history_formulation.configure_approximation(approximation, dt)
+
+    def bind(self, solver: StokesSolverBase) -> None:
+        if self._solver is not None and self._solver is not solver:
+            raise RuntimeError("InternalVariableMechanics cannot serve two solvers.")
+        self.history_formulation.bind(solver)
+        self._solver = solver
+
+    def set_equations(self, solver: StokesSolverBase) -> None:
+        self.bind(solver)
+        self.displacement = self.history_formulation.displacement(solver)
+        self.strain = solver.approximation.deviatoric_strain(self.displacement)
+        self.internal_variables = self.history_formulation.history_values(self, solver)
+
+        stress = solver.approximation.stress(
+            self.displacement, internal_variables=self.internal_variables
+        )
+        source = solver.approximation.buoyancy(self.displacement) * solver.k
+        solver.equations.append(
+            Equation(
+                self.history_formulation.displacement_test(solver),
+                self.history_formulation.displacement_space(solver),
+                compressible_viscoelastic_terms,
+                eq_attrs={"stress": stress, "source": source},
+                approximation=solver.approximation,
+                bcs=solver.weak_bcs,
+                quad_degree=solver.quad_degree,
+                scaling_factor=getattr(solver, "scaling_factor", 1),
+            )
+        )
+        self.history_formulation.add_history_equations(self, solver)
+
+    def set_free_surface_boundary(
+        self,
+        solver: StokesSolverBase,
+        params_fs: dict[str, int | bool],
+    ) -> Expr:
+        displacement = self.history_formulation.displacement(solver)
+        normal_stress = params_fs.get("normal_stress", 0.0)
+        return normal_stress + solver.approximation.hydrostatic_prestress_advection(
+            vertical_component(displacement)
+        )
+
+    def advance_history(self, solver: StokesSolverBase) -> None:
+        if self._solver is solver:
+            self.history_formulation.advance(solver)
+
+
 class InternalVariableSolver(StokesSolverBase):
     """Solver for internal variable viscoelastic formulation.
 
@@ -754,6 +1191,9 @@ class InternalVariableSolver(StokesSolverBase):
         of viscosity and shear modulus fields provided to the approximation.
       dt:
         Float quantifying the time step used for time integration
+      history_formulation:
+        Internal pointwise history component or the string `"pointwise"`.
+        `None` selects pointwise history.
       additional_forcing_term:
         Firedrake form specifying an additional term contributing to the residual
       bcs:
@@ -787,68 +1227,57 @@ class InternalVariableSolver(StokesSolverBase):
         *,
         internal_variables: fd.Function | list[fd.Function],
         dt: float,
+        history_formulation: HistoryFormulation | str | None = None,
         **kwargs,
     ) -> None:
-
-        # Convert `internal_variables` to a list in the case
-        # for Maxwell Rheology where there is only one internal variable
         if not isinstance(internal_variables, list):
             internal_variables = [internal_variables]
-        self.internal_variables = internal_variables
+        if history_formulation is None or history_formulation == "pointwise":
+            selected_formulation = PointwiseHistoryFormulation(internal_variables)
+        elif isinstance(history_formulation, PointwiseHistoryFormulation):
+            configured_variables = history_formulation.internal_variables
+            same_variables = len(configured_variables) == len(
+                internal_variables
+            ) and all(
+                configured is supplied
+                for configured, supplied in zip(
+                    configured_variables, internal_variables
+                )
+            )
+            if not same_variables:
+                raise ValueError(
+                    "The pointwise HistoryFormulation and internal_variables "
+                    "must contain the same Function objects."
+                )
+            selected_formulation = history_formulation
+        elif isinstance(history_formulation, HistoryFormulation):
+            raise ValueError(
+                "InternalVariableSolver requires pointwise history."
+            )
+        else:
+            raise ValueError(
+                "history_formulation must be 'pointwise' or a "
+                "PointwiseHistoryFormulation."
+            )
 
-        # provide an `effective viscosity' to the approximation used
-        # for SIPG terms in the viscosity term of momentum_equation.py
-        # N.b. the potential for confusion as GIA modellers often use
-        # mu to represent the shear modulus.
-        approximation.mu = approximation.effective_viscosity(dt)
+        self.history_formulation = selected_formulation
+        self.mechanics = InternalVariableMechanics(selected_formulation)
+        self.mechanics.configure_approximation(approximation, dt)
+        self.internal_variables = selected_formulation.internal_variables
 
         super().__init__(solution, approximation, dt=dt, **kwargs)
 
     def set_equations(self) -> None:
-        self.strain = self.approximation.deviatoric_strain(self.solution)
-
-        if len(self.internal_variables) != len(self.approximation.maxwell_times):
-            raise ValueError(
-                "Number of internal variables and corresponding Maxwell times must be consistent"
-            )
-
-        self.internal_variables_update = [
-            self.update_m(m, maxwell_time)
-            for m, maxwell_time in zip(
-                self.internal_variables, self.approximation.maxwell_times
-            )
-        ]
-
-        stress = self.approximation.stress(
-            self.solution, internal_variables=self.internal_variables_update
-        )
-        source = self.approximation.buoyancy(self.solution) * self.k
-
-        eq_attrs = {"stress": stress, "source": source}
-
-        self.equations.append(
-            Equation(
-                self.test,
-                self.solution_space,
-                compressible_viscoelastic_terms,
-                eq_attrs=eq_attrs,
-                approximation=self.approximation,
-                bcs=self.weak_bcs,
-                quad_degree=self.quad_degree,
-            )
+        self.mechanics.set_equations(self)
+        self.strain = self.mechanics.strain
+        self.internal_variables_update = (
+            self.history_formulation.internal_variables_update
         )
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> Expr:
-        normal_stress = params_fs.get("normal_stress", 0.0)
-        # Add free surface stress term. This is also referred to as the Hydrostatic
-        # Prestress advection term in the GIA literature.
-        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
-            vertical_component(self.solution)
-        )
-
-        return combined_normal_stress
+        return self.mechanics.set_free_surface_boundary(self, params_fs)
 
     def update_m(
         self, m: fd.Function, maxwell_time: fd.Function | Expr
@@ -870,9 +1299,7 @@ class InternalVariableSolver(StokesSolverBase):
 
     def solve(self) -> None:
         super().solve()
-        # Update internal variable term for using as a RHS explicit forcing in the next timestep
-        for m, m_new in zip(self.internal_variables, self.internal_variables_update):
-            m.interpolate(m_new)
+        self.mechanics.advance_history(self)
 
 
 class CoupledInternalVariableSolver(StokesSolverBase):
@@ -907,6 +1334,14 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         Float quantifying the time step used for time integration
       scaling_factor:
         A constant factor used to rescale residual terms.
+      condense_internal_variables:
+        Compatibility setting that validates the enclosing history layout.
+        `False` selects mixed history.
+        `True` accepts only a condensed layout with external history functions.
+        It does not eliminate weak DG history equations.
+      history_formulation:
+        Internal history component or the string `"pointwise"` or `"mixed"`.
+        The selection must agree with `condense_internal_variables`.
       additional_forcing_term:
         Firedrake form specifying an additional term contributing to the residual
       bcs:
@@ -944,91 +1379,74 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         dt: float,
         scaling_factor: float = 1,
         condense_internal_variables: bool = False,
+        history_formulation: HistoryFormulation | str | None = None,
         **kwargs,
     ) -> None:
 
-        # provide an `effective viscosity' to the approximation used
-        # for SIPG terms in the viscosity term of momentum_equation.py
-        # N.b. the potential for confusion as GIA modellers often use
-        # mu to represent the shear modulus.
-        #
-        # In the COUPLED solver the internal variables are independent
-        # unknowns, so the u-tangent of the stress carries the instantaneous
-        # mu0 rather than effective_viscosity(dt). Handing the Nitsche pair
-        # anything else makes the (u,u) block asymmetric by ~1.2% and CG an
-        # illegal Krylov method for it. See
-        # NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md. Set
-        # GADOPT_COUPLED_NITSCHE_EFFVISC=1 to restore the old coefficient for
-        # comparison.
-        #
-        # **The choice flips back under static condensation**, and it flips for
-        # the same reason it moved in the first place. Condensing substitutes
-        # the backward-Euler update into the stress before differentiation, and
-        # that substitution takes the u-tangent from `mu0` to
-        #     sum_i eta_i / (tau_i + dt) = effective_viscosity(dt)
-        # exactly (the algebra is in the FINDING note). So a condensed coupled
-        # solver wants `effective_viscosity(dt)` and an uncondensed one wants
-        # `mu0`; using either coefficient in the other configuration
-        # reintroduces the same ~1.2% asymmetry, only with the opposite sign.
-        # This is why the flag is read here and not left to the caller.
-        self.condense_internal_variables = condense_internal_variables
-        if condense_internal_variables or (
-                os.environ.get("GADOPT_COUPLED_NITSCHE_EFFVISC") == "1"):
-            approximation.mu = approximation.effective_viscosity(dt)
+        pointwise_layout = getattr(self, "layout", None)
+        if condense_internal_variables and not getattr(
+            pointwise_layout, "condensed", False
+        ):
+            raise NotImplementedError(
+                "condense_internal_variables does not eliminate the weak DG "
+                "history equations in CoupledInternalVariableSolver. Keep the "
+                "mixed space and use solver_parameters='exact_history_schur'."
+            )
+
+        expected_name = "pointwise" if condense_internal_variables else "mixed"
+        if history_formulation is None or history_formulation == expected_name:
+            if condense_internal_variables:
+                external_histories = getattr(self, "internal_variables", None)
+                if external_histories is None:
+                    raise ValueError(
+                        "Pointwise history requires external internal_variables."
+                    )
+                selected_formulation = PointwiseHistoryFormulation(
+                    external_histories
+                )
+            else:
+                selected_formulation = MixedHistoryFormulation()
+        elif isinstance(history_formulation, HistoryFormulation):
+            if history_formulation.name != expected_name:
+                raise ValueError(
+                    "condense_internal_variables and history_formulation "
+                    f"conflict. The old setting selects {expected_name!r}, but "
+                    f"the component selects {history_formulation.name!r}."
+                )
+            if isinstance(history_formulation, PointwiseHistoryFormulation):
+                external_histories = getattr(self, "internal_variables", None)
+                configured_histories = history_formulation.internal_variables
+                same_histories = external_histories is not None and len(
+                    configured_histories
+                ) == len(external_histories) and all(
+                    configured is supplied
+                    for configured, supplied in zip(
+                        configured_histories, external_histories
+                    )
+                )
+                if not same_histories:
+                    raise ValueError(
+                        "The pointwise HistoryFormulation and internal_variables "
+                        "must contain the same Function objects."
+                    )
+            selected_formulation = history_formulation
         else:
-            approximation.mu = getattr(
-                approximation, "mu0", None) or approximation.effective_viscosity(dt)
+            raise ValueError(
+                "history_formulation must match the layout selected by "
+                "condense_internal_variables."
+            )
+
+        self.condense_internal_variables = condense_internal_variables
+        self.history_formulation = selected_formulation
+        self.mechanics = InternalVariableMechanics(selected_formulation)
+        self.mechanics.configure_approximation(approximation, dt)
         self.scaling_factor = scaling_factor
 
         super().__init__(solution, approximation, dt=dt, theta=self._theta, **kwargs)
 
     def set_equations(self) -> None:
-        u, *internal_variables = self.solution_split
-        stress = self.approximation.stress(
-            u, internal_variables=internal_variables)
-        source = self.approximation.buoyancy(u) * self.k
-        strain = self.approximation.deviatoric_strain(u)
-        dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
-        visc_factor = self.approximation.power_law_factor(dev_stress)
-        # Build a local list so that self.approximation.maxwell_times is never mutated.
-        # For n=1 (Newtonian) visc_factor is identically 1 and has no effect.
-        maxwell_times = [mt * visc_factor for mt in self.approximation.maxwell_times]
-
-        residual_terms = [compressible_viscoelastic_terms]
-        eqs_attrs = [{"stress": stress, "source": source}]
-        scaling_factors = [self.scaling_factor]
-
-        internal_variable_terms = [mass_term, sink_term, source_term]
-
-        # Each internal variable equation has the form:
-        #   (m_new - m_old)/dt + m_new/tau - strain(u_new)/tau = 0
-        # written as residual terms (mass + sink + source), then negated via
-        # scaling_factor so the sign convention matches the Stokes block.
-        # Loop over number of internal variables
-        for i, maxwell_time in enumerate(maxwell_times):
-            residual_terms.append(internal_variable_terms)
-            scaling_factors.append(-self._theta * self.scaling_factor)
-            eqs_attrs.append({
-                "source": strain / maxwell_time,
-                "sink_coeff": 1 / maxwell_time,
-                "dt": self.dt,
-                "trial_old": self.solution_old_split[i+1],
-                "use_irksome": False,
-            })
-
-        for i in range(len(self.tests)):
-            self.equations.append(
-                Equation(
-                    self.tests[i],
-                    self.solution_space[i],
-                    residual_terms[i],
-                    eq_attrs=eqs_attrs[i],
-                    approximation=self.approximation,
-                    bcs=self.weak_bcs,
-                    quad_degree=self.quad_degree,
-                    scaling_factor=scaling_factors[i],
-                )
-            )
+        self.mechanics.set_equations(self)
+        self.strain = self.mechanics.strain
 
     def set_solver_options(
         self,
@@ -1037,52 +1455,154 @@ class CoupledInternalVariableSolver(StokesSolverBase):
     ) -> None:
         """Sets PETSc solver options for the coupled GIA system.
 
-        Overrides the base class to ensure SNES Newton is always active.
-        For Newtonian rheology (exponent=1) the power-law factor is identically
-        1 and the system is linear, so SNES converges in a single iteration.
-        For power-law rheology (exponent > 1) full Newton iteration is performed.
+        Overrides the base class because the base class's linearity test cannot
+        see this system's nonlinearity. That test is
+        `depends_on(self.approximation.mu, self.solution)`, but `mu` holds a
+        *fixed* field, so it reads False even for a power-law rheology, where
+        the nonlinearity enters through `power_law_factor(dev_stress)` in
+        `set_equations`. `approximation.exponent` is the discriminator that
+        actually distinguishes the two, and `_is_newtonian` reads it.
+
+        An unconditional `newtonls` costs a Newton step that a linear residual
+        does not need, and an unconditional `ksponly` silently truncates a
+        genuine nonlinear solve - measured at 0.61% in the surface displacement
+        on `tests/3d_weerdesteijn_coupled`, whose exponent field is `[1, 3, 3, 1]`.
 
         When solver_preset is a Mapping it is honoured verbatim. The string
-        preset "direct" uses direct_stokes_solver_parameters plus Newton SNES.
+        preset "direct" uses direct_stokes_solver_parameters, with Newton added
+        only for a power-law rheology; for a Newtonian one the base class's
+        `ksponly` is already right, and a direct solve needs no second step.
         The string preset "iterative" and the default None both use
-        coupled_gia_solver_parameters, which already includes Newton SNES and
-        the GIA-specific fieldsplit preconditioner. iterative_stokes_solver_parameters
-        is intentionally not used here: its Schur-complement structure is designed
-        for the standard Stokes system, not the larger coupled GIA block.
+        coupled_gia_solver_parameters plus the SNES type chosen here.
+        iterative_stokes_solver_parameters is intentionally not used: its
+        Schur-complement structure is designed for the standard Stokes system,
+        not the larger coupled GIA block.
         """
         if isinstance(solver_preset, Mapping):
             super().set_solver_options(solver_preset, solver_extras)
             return
 
+        if solver_preset == "exact_history_schur":
+            if not self._is_newtonian():
+                raise NotImplementedError(
+                    "The exact history Schur reference requires Newtonian rheology "
+                    "with exponent = 1."
+                )
+            n_internal_variables = len(self.solution_space) - 1
+            self.appctx = {
+                "mu": self.approximation.mu / self.rho_continuity
+            }
+            self.add_to_solver_config(
+                coupled_internal_variable_exact_schur_parameters(
+                    n_internal_variables
+                )
+            )
+            if solver_extras:
+                self.add_to_solver_config(solver_extras)
+            self.register_update_callback(self.set_solver)
+            self._uses_exact_history_schur = True
+            return
+
         if solver_preset == "direct":
             # Delegate to base class for direct_stokes_solver_parameters and
-            # monitoring, then override SNES from ksponly to Newton.
+            # monitoring. The base class selects ksponly, which is correct for a
+            # Newtonian residual; override it only when the residual is not.
             super().set_solver_options(solver_preset, solver_extras)
-            self.add_to_solver_config(newton_stokes_solver_parameters)
+            if not self._is_newtonian():
+                self.add_to_solver_config(newton_stokes_solver_parameters)
+                # The base class already applied `solver_extras`, and the block
+                # above would otherwise overwrite whatever the caller set for
+                # `snes_rtol` and `snes_atol` - silently, and only for a
+                # power-law rheology, so the same call would honour the caller's
+                # tolerances or not depending on the exponent. Re-apply them so
+                # the caller wins either way.
+                self.add_to_solver_config(solver_extras)
             return
 
         if solver_preset not in (None, "iterative"):
-            raise ValueError("Solver type must be 'direct' or 'iterative'.")
+            raise ValueError(
+                "Solver type must be 'direct', 'iterative', or "
+                "'exact_history_schur'."
+            )
 
         # "iterative" or no preset: use the GIA-specific coupled solver defaults.
-        # Newton SNES is already included in coupled_gia_solver_parameters.
         self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
         self.add_to_solver_config(coupled_gia_solver_parameters)
+        self.add_to_solver_config(
+            {"snes_type": "ksponly"} if self._is_newtonian()
+            else {"snes_type": "newtonls"}
+        )
+        # The base class adds this at INFO; this branch never calls it, so a
+        # coupled run used to report no SNES iterations at all.
+        if INFO >= log_level:
+            self.add_to_solver_config({"snes_monitor": None})
         if solver_extras:
             self.add_to_solver_config(solver_extras)
         self.register_update_callback(self.set_solver)
 
+    def _check_solver_convergence(self) -> None:
+        """Reject a failed reduced solve before history advances."""
+        if getattr(self, "_uses_exact_history_schur", False):
+            outer_ksp = self.solver.snes.ksp
+            history_ksp, displacement_ksp = outer_ksp.pc.getFieldSplitSubKSP()
+            failures = [
+                (name, ksp.getConvergedReason())
+                for name, ksp in (
+                    ("history", history_ksp),
+                    ("displacement", displacement_ksp),
+                )
+                if ksp.getConvergedReason() <= 0
+            ]
+            if failures:
+                details = ", ".join(
+                    f"{name} reason {reason}" for name, reason in failures
+                )
+                raise fd.ConvergenceError(
+                    f"The exact history Schur solve failed: {details}."
+                )
+    def _check_solver_state(self) -> None:
+        """Reject a changed exponent in the exact history Schur reference."""
+        if (
+            getattr(self, "_uses_exact_history_schur", False)
+            and not self._is_newtonian()
+        ):
+            raise RuntimeError(
+                "History elimination cannot use a changed "
+                "power-law exponent. Rebuild the solver with exponent = 1."
+            )
+
+    def _is_newtonian(self) -> bool:
+        """True when the power-law factor is identically 1, so the residual is linear.
+
+        Mirrors `SelfGravitatingGIASolver.refuse_stale_preconditioner`. A
+        `Function` on a spatially varying space is what `float` refuses, and it
+        is then treated as non-Newtonian - the safe direction, since a Newtonian
+        problem solved with Newton is merely slow while a power-law problem
+        solved with `ksponly` is wrong.
+
+        Note:
+          `float` does NOT refuse every container. A `fd.Constant(1.0)`, or a
+          `Function` on a `Real` space holding 1.0, both read as Newtonian.
+          The solver method is selected at construction. The exact history
+          Schur reference repeats this check before each solve and rejects a
+          changed exponent. Other presets retain the selected method. Set the
+          exponent before building those solvers, or pass an explicit
+          `solver_parameters` dictionary.
+        """
+        exponent = getattr(self.approximation, "exponent", 1)
+        try:
+            return float(exponent) == 1.0
+        except (TypeError, ValueError):
+            return False
+
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int
     ) -> Expr:
-        normal_stress = params_fs.get("normal_stress", 0.0)
-        # Add free surface stress term. This is also referred to as the Hydrostatic
-        # Prestress advection term in the GIA literature.
-        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
-            vertical_component(self.solution_split[0])
-        )
+        return self.mechanics.set_free_surface_boundary(self, params_fs)
 
-        return combined_normal_stress
+    def solve(self) -> None:
+        super().solve()
+        self.mechanics.advance_history(self)
 
 
 class BoundaryNormalStressSolver(SolverConfigurationMixin):

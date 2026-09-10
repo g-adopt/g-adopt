@@ -398,6 +398,7 @@ def build_solver(parent, sub, *, dt, nmax=32, truncation=5,
     }
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=True,
+        fluid_core=fluid_core,
         self_gravity_number=LAMBDA, quad_degree=quad_degree)
     z = Function(Z)
     z.subfunctions[layout.displacement].rename("displacement")
@@ -681,6 +682,21 @@ def run_time_loop(parent, sub, args, epochs_kyr):
                 outer_rtol=args.ksp_rtol, u_pc=U_PC[args.u_pc]))
         if z_prev is not None:
             z.assign(z_prev)
+            # **`z.assign` alone loses the viscous history.** `solution_old` is
+            # deep-copied from `solution` in `StokesSolverBase.__init__`
+            # (stokes_integrators.py:307), i.e. from a ZERO `z`, and the
+            # backward-Euler internal variable reads `m_old` from it, not from
+            # `solution`. Without this line every dt segment restarts the
+            # internal variable from zero: the material is silently
+            # re-elasticised at each boundary, and with the graded ladder that
+            # is five times before 20 kyr. Measured directly: after
+            # `z.assign(z_prev)` with ||z_m|| = 7.0, ||solution_old_m|| = 0.0.
+            #
+            # THE |m| EPOCH SERIES MEASURED BEFORE THIS LINE EXISTED IS WRONG,
+            # and under-predicts relaxation. The module docstring's 23% deficit
+            # in |m|, attributed to a solver tolerance on the rotation rows, is
+            # a better fit to this than to that.
+            solver.solution_old.assign(z_prev)
         say(f"  {t0 / 1000:7.3f} -> {t1 / 1000:7.3f} kyr   dt {dt_yr:7.2f} yr"
             f"   {nsteps:4d} steps")
         for k in range(nsteps):

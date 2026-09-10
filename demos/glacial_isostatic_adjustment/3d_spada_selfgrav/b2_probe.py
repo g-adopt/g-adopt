@@ -264,6 +264,17 @@ MULT_PC = {
     "gadopt_diag": {"dtn_fieldsplit_1_pc_type": "python",
                     "dtn_fieldsplit_1_pc_python_type":
                         "gadopt.DtNMultiplierDiagPC"},
+    # **The shipped dense Schur, for the build-once ~3x confirmation.** The
+    # probe's `dense` above reads S off the operator too, but from
+    # `b2_pc.DtNMultiplierDenseSchurPC`, whose earlier form rebuilt every solve
+    # (STEP0-BLOCK1-PC.md). This one names `gadopt.DtNMultiplierDenseSchurPC`,
+    # which builds in `initialize` and never rebuilds -- so this arm is the
+    # shipped-code reproduction of the ~3x that STEP0 measured on the probe copy
+    # and explicitly never verified against the library. It needs no appctx and
+    # no module global; the class forms S from the MATSCHURCOMPLEMENT alone.
+    "gadopt_dense": {"dtn_fieldsplit_1_pc_type": "python",
+                     "dtn_fieldsplit_1_pc_python_type":
+                         "gadopt.DtNMultiplierDenseSchurPC"},
 }
 
 

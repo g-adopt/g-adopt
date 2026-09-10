@@ -32,6 +32,7 @@ from gadopt import (
     CoupledInternalVariableSolver,
     CylindricalDtN,
     SelfGravitatingGIASolver,
+    rigid_body_modes,
     rigid_rotation_nullspace,
     self_gravitating_gia_space,
 )
@@ -185,6 +186,40 @@ class TestSpaceLayout:
         # very end of the space.
         assert layout.multipliers == tuple(real[:len(layout.multipliers)])
         assert sorted(layout.rotation.values()) == real[len(layout.multipliers):]
+
+    @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+    @pytest.mark.parametrize("rotation", [False, True])
+    @pytest.mark.parametrize("condensed", [False, True])
+    def test_fluid_core_field_order(self, meshes, representation, rotation,
+                                    condensed):
+        """The core pressure stays between the DtN and rotation `Real` fields."""
+        parent, sub = meshes
+        Z, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
+            rotation=rotation, condense_internal_variables=condensed,
+            self_gravity_number=LAMBDA,
+            dtn_representation=representation)
+
+        assert layout.core_pressure is not None
+        assert Z[layout.core_pressure].mesh() is parent
+        assert Z[layout.core_pressure].ufl_element().family() == "Real"
+        assert layout.core_pressure == (
+            layout.multipliers[-1] + 1 if layout.multipliers
+            else layout.potential + 1)
+        if layout.rotation:
+            assert layout.core_pressure < min(layout.rotation.values())
+        real = tuple(i for i, V in enumerate(Z)
+                     if V.ufl_element().family() == "Real")
+        assert real == layout.real_fields
+        assert real == tuple(range(real[0], len(Z)))
+        assert len(Z) == layout.n_fields
+
+    def test_no_core_pressure_by_default(self, meshes):
+        parent, sub = meshes
+        _, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent),
+            self_gravity_number=LAMBDA)
+        assert layout.core_pressure is None
 
     def test_real_spaces_live_on_the_parent(self, meshes):
         """Spike S2's decision, and it is not cosmetic.
@@ -467,6 +502,21 @@ class TestConstruction:
         assert isinstance(solver.mesh, fd.MeshGeometry)
         assert solver.mesh is solver.layout.mechanics_mesh
         assert solver.mesh is not solver.potential_mesh
+
+    @pytest.mark.parametrize("space_has_core,solver_has_core", [(True, False),
+                                                                  (False, True)])
+    def test_fluid_core_space_and_solver_must_agree(
+            self, meshes, space_has_core, solver_has_core):
+        parent, sub = meshes
+        Z, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
+            fluid_core=space_has_core, self_gravity_number=LAMBDA)
+        core = (FluidCore(boundary=CURVE_RC, rho_core=2.0)
+                if solver_has_core else None)
+        with pytest.raises(ValueError, match="settings must agree"):
+            SelfGravitatingGIASolver(
+                fd.Function(Z), approximation(), layout=layout, dt=1.0,
+                bcs={}, fluid_core=core)
 
     def test_one_equation_per_mechanics_field(self, solved):
         """And not one per sub-field: the multipliers are not `Equation`s.
@@ -1330,6 +1380,28 @@ class TestBlockOneInThreeDimensions:
             rotation_moments={"C": C, "C_minus_A": 0.1 * C})
         return solver, z, layout
 
+    def test_b1_near_nullspace_composes_with_core_pressure(self):
+        """B1's per-field basis loop includes the new trailing Real field."""
+        solver, _, _ = self.build()
+        mesh = solver.mesh
+        from gadopt import SphericalDtN
+        Z, layout = self_gravitating_gia_space(
+            mesh, mesh,
+            gravity_bcs={"top": {"dtn": SphericalDtN(1)},
+                         "bottom": {"dtn": SphericalDtN(1)}},
+            rotation=True, fluid_core=True,
+            condense_internal_variables=True,
+            self_gravity_number=LAMBDA)
+        V = Z.sub(layout.displacement)
+        rbm = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
+        basis = fd.MixedVectorSpaceBasis(
+            Z, [rbm if i == layout.displacement else Z.sub(i)
+                for i in range(len(Z))])
+        entries = list(basis)
+        assert len(entries) == len(Z)
+        assert entries[layout.displacement] is rbm
+        assert entries[layout.core_pressure] == Z.sub(layout.core_pressure)
+
     def test_the_case_is_the_small_one(self):
         """A tripwire on the cost, not a statement about the discretisation.
 
@@ -1845,16 +1917,19 @@ class TestFluidCore:
         parent, sub = meshes
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
+            fluid_core=True,
             self_gravity_number=LAMBDA)
         z = fd.Function(Z)
         Xm = fd.SpatialCoordinate(sub)
         bcs = {CURVE_RE: {"normal_stress":
                           B_MU * SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0]))}}
         bcs.update(fluid_core_kwargs.pop("extra_bcs", {}))
+        approximation_kwargs = fluid_core_kwargs.pop("approximation_kwargs", {})
         settings = {"boundary": CURVE_RC, "rho_core": 2.0}
         settings.update(fluid_core_kwargs)
         solver = SelfGravitatingGIASolver(
-            z, approximation(), layout=layout, dt=1.0, bcs=bcs,
+            z, approximation(**approximation_kwargs), layout=layout, dt=1.0,
+            bcs=bcs,
             fluid_core=FluidCore(**settings))
         return solver, z, layout
 
@@ -1877,7 +1952,169 @@ class TestFluidCore:
         """No `fluid_core` means an empty form, not a zero-valued one."""
         solver, z, _ = build(meshes, rotation=False)
         assert solver.fluid_core is None
+        assert solver.core_pressure is None
+        assert solver.layout.core_pressure is None
         assert solver.fluid_core_residual().empty()
+
+    def test_core_pressure_is_a_parent_real_field(self, meshes):
+        solver, _, layout = self.build_fluid(meshes)
+        assert solver.core_pressure is not None
+        assert solver.core_pressure is solver.solution.subfunctions[
+            layout.core_pressure]
+        assert solver.core_pressure.function_space().mesh() is \
+            layout.potential_mesh
+        assert solver.core_pressure.function_space().ufl_element().family() \
+            == "Real"
+
+    @pytest.mark.skipif(
+        fd.COMM_WORLD.size > 1,
+        reason="the per-block instrument needs global dense blocks")
+    def test_core_pressure_blocks_form_an_exact_saddle_pair(self, meshes):
+        solver, z, layout = self.build_fluid(meshes)
+        A = fd.assemble(fd.derivative(solver.fluid_core_residual(), z),
+                        mat_type="nest").petscmat
+        iu, ic = layout.displacement, layout.core_pressure
+        up = A.getNestSubMatrix(iu, ic).convert("dense").getDenseArray()
+        pu = A.getNestSubMatrix(ic, iu).convert("dense").getDenseArray()
+        pp = A.getNestSubMatrix(ic, ic)
+        scale = max(np.abs(up).max(), np.abs(pu).max())
+        assert scale > 0.0
+        assert np.abs(up - pu.T).max() == 0.0
+        if pp is not None:
+            x, y = pp.createVecRight(), pp.createVecLeft()
+            x.set(1.0)
+            pp.mult(x, y)
+            assert y.norm() == 0.0
+
+    def test_constraint_row_has_the_documented_scale(self, meshes):
+        solver, z, layout = self.build_fluid(meshes)
+        X = fd.SpatialCoordinate(layout.mechanics_mesh)
+        z.subfunctions[layout.displacement].interpolate(
+            X / fd.sqrt(fd.dot(X, X)))
+        residual = fd.assemble(solver.fluid_core_residual())
+        row = float(residual.subfunctions[
+            layout.core_pressure].dat.data_ro[0])
+        flux = fd.assemble(
+            fd.dot(solver.displacement, fd.FacetNormal(solver.mesh))
+            * solver.fluid_core_measure()(CURVE_RC))
+        row_scale = (float(solver.scaling_factor)
+                     * float(solver._row_scale_B_mu))
+        assert row / row_scale == pytest.approx(flux, rel=1e-13)
+
+    def test_constraint_survives_at_zero_B_mu(self, meshes):
+        solver, z, layout = self.build_fluid(
+            meshes, approximation_kwargs={"B_mu": 0.0})
+        A = fd.assemble(fd.derivative(solver.fluid_core_residual(), z),
+                        mat_type="nest").petscmat
+        iu, ip, ic = (layout.displacement, layout.potential,
+                      layout.core_pressure)
+
+        def amax(i, j):
+            block = A.getNestSubMatrix(i, j)
+            if block is None:
+                return 0.0
+            return float(np.abs(
+                block.convert("dense").getDenseArray()).max())
+
+        assert amax(iu, ic) > 0.0
+        assert amax(ic, iu) > 0.0
+        assert amax(iu, ip) == 0.0
+        assert amax(iu, iu) == 0.0
+
+    def test_zero_B_mu_matches_independently_constrained_mechanics(
+            self, meshes):
+        """The zero-coupling solve keeps the physical core constraint."""
+        _, sub = meshes
+        X = fd.SpatialCoordinate(sub)
+        load = B_MU * SIGMA_HAT * (
+            fd.cos(2 * fd.atan2(X[1], X[0])) + fd.Constant(0.25))
+        surface_bcs = {CURVE_RE: {"normal_stress": load}}
+        solver, z, layout = self.build_fluid(
+            meshes, approximation_kwargs={"B_mu": 0.0},
+            extra_bcs=surface_bcs)
+        solver.solve()
+
+        V = fd.VectorFunctionSpace(sub, "CG", 2)
+        S = fd.TensorFunctionSpace(sub, "DG", 1)
+        Zm = fd.MixedFunctionSpace([V, S])
+        zm = fd.Function(Zm)
+        pressure = fd.Constant(0.0)
+        w = fd.TestFunctions(Zm)[0]
+        n = fd.FacetNormal(sub)
+        dss = fd.Measure("ds", domain=sub)(CURVE_RC)
+        reference = CoupledInternalVariableSolver(
+            zm, approximation(B_mu=0.0), dt=1.0, bcs=surface_bcs,
+            additional_forcing_term=pressure * fd.dot(w, n) * dss,
+            solver_parameters="direct")
+
+        def solve_at(value):
+            pressure.assign(value)
+            zm.assign(0.0)
+            reference.solution_old.assign(0.0)
+            reference.solve()
+            return zm.copy(deepcopy=True)
+
+        base = solve_at(0.0)
+        direction = solve_at(1.0)
+        direction -= base
+        base_flux = fd.assemble(fd.dot(base.subfunctions[0], n) * dss)
+        response_flux = fd.assemble(
+            fd.dot(direction.subfunctions[0], n) * dss)
+        assert abs(response_flux) > 1e-12
+        reference_pressure = -base_flux / response_flux
+        constrained = base.copy(deepcopy=True)
+        for target, base_field, direction_field in zip(
+                constrained.subfunctions, base.subfunctions,
+                direction.subfunctions):
+            with target.dat.vec_wo as target_vec, \
+                    base_field.dat.vec_ro as base_vec, \
+                    direction_field.dat.vec_ro as direction_vec:
+                target_vec.waxpy(
+                    reference_pressure, direction_vec, base_vec)
+
+        flux = fd.assemble(fd.dot(solver.displacement, n) * dss)
+        flux_ref = fd.assemble(
+            fd.dot(constrained.subfunctions[0], n) * dss)
+        assert abs(flux) < 1e-12
+        assert abs(flux_ref) < 1e-12
+        assert float(solver.core_pressure) == pytest.approx(
+            reference_pressure, rel=1e-11, abs=1e-13)
+
+        dxm = fd.Measure("dx", domain=sub)
+        displacement_error = solver.displacement - constrained.subfunctions[0]
+        error_strain = fd.sym(fd.grad(displacement_error))
+        reference_strain = fd.sym(fd.grad(constrained.subfunctions[0]))
+        relative_strain_error = np.sqrt(fd.assemble(
+            fd.inner(error_strain, error_strain) * dxm) / fd.assemble(
+                fd.inner(reference_strain, reference_strain) * dxm))
+        assert relative_strain_error < 1e-10
+        m = z.subfunctions[layout.internal_variables[0]]
+        m_ref = constrained.subfunctions[1]
+        assert fd.norm(fd.assemble(m - m_ref)) / fd.norm(m_ref) < 1e-10
+
+    def test_block1_diagonal_records_the_zero_constraint_entry(self, meshes):
+        solver, _, layout = self.build_fluid(meshes)
+        diagonal = solver.block1_diagonal()
+        position = layout.real_fields.index(layout.core_pressure)
+        assert diagonal[position] == 0.0
+
+    def test_rigid_rotation_nullspace_composes_with_core_pressure(self, meshes):
+        solver, z, layout = self.build_fluid(meshes)
+        basis = list(rigid_rotation_nullspace(z.function_space(), layout))
+        assert len(basis) == len(z.function_space())
+        assert isinstance(basis[layout.displacement], fd.VectorSpaceBasis)
+        assert not isinstance(basis[layout.core_pressure], fd.VectorSpaceBasis)
+
+    def test_solve_enforces_zero_integrated_cmb_displacement(self, meshes):
+        solver, _, _ = self.build_fluid(meshes)
+        solver.solve()
+        dss = solver.fluid_core_measure()(CURVE_RC)
+        un = fd.dot(solver.displacement, fd.FacetNormal(solver.mesh))
+        flux = fd.assemble(un * dss)
+        scale = np.sqrt(fd.assemble(un * un * dss)
+                        * fd.assemble(fd.Constant(1.0) * dss))
+        assert fd.norm(solver.displacement) > 0.0
+        assert abs(flux) <= 1e-10 * scale + 1e-13
 
     def test_the_pair_transposes_exactly(self, meshes):
         """One energy, two variations: the blocks are transposes by construction.
@@ -2027,6 +2264,7 @@ class TestFluidCore:
         parent, sub = meshes
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
+            fluid_core=True,
             self_gravity_number=LAMBDA)
         z = fd.Function(Z)
         Xm = fd.SpatialCoordinate(sub)

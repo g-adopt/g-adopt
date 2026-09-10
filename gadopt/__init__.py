@@ -21,6 +21,11 @@ from .gia_gravity import (
     rigid_rotation_nullspace,
     self_gravitating_gia_space,
     selfgrav_dtn_iterative_solver_parameters,
+    selfgrav_dtn_lowrank_direct_solver_parameters,
+)
+from .dtn_coupled_adjoint import (
+    CoupledLowRankDtNSolveBlock,
+    adopt_coupled_lowrank_block,
 )
 from .gravity_solver import CylindricalDtN, GravitySolver, SphericalDtN
 from .level_set_tools import (
@@ -34,7 +39,8 @@ from .level_set_tools import (
 from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import (create_stokes_nullspace, near_incompressible_modes,
                          rigid_body_modes, solenoidal_modes)
-from .preconditioners import (DtNMultiplierDiagPC,  # noqa: F401
+from .preconditioners import (DtNMultiplierDenseSchurPC,  # noqa: F401
+                              DtNMultiplierDiagPC,
                               DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
                               NearlyIncompressibleAssembledPC, SPDAssembledPC)
 from .solver_options_manager import (GAMG_PARAMETERS, DeleteParam,

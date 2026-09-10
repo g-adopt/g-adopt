@@ -5,8 +5,8 @@ Poisson solver. The solver computes the perturbation gravitational potential on
 a truncated domain. It uses a Dirichlet-to-Neumann map on the outer boundary,
 so the exterior problem stays exact.
 
-Three bodies of work use this directory. The list below gives the state of each
-one on 2026-08-11.
+Three bodies of work use this directory. The list below gives their state on
+2026-08-18.
 
 ## What is complete
 
@@ -19,9 +19,14 @@ by recursion. A parallel scaling study is in `tests/parallel_scaling_gravity/`.
 
 **The self-gravitating GIA solver.** `gadopt/gia_gravity.py` provides
 `SelfGravitatingGIASolver`. It solves displacement, the internal variable, the
-potential, the multipliers and the rotation scalars in one mixed space.
+potential, the multipliers, the fluid-core pressure, and the rotation scalars
+in one mixed space.
 `DtNTwoBlockSchurPC` preconditions that system. The 3-D Spada benchmark is in
 `demos/glacial_isostatic_adjustment/3d_spada_selfgrav/`.
+
+**The fluid-core volume constraint.** One uniform pressure multiplier enforces
+zero integrated CMB flux. It removes the degree-zero core-mass mode that broke
+the B5 march. The local implementation and review are complete.
 
 **A near-incompressible preconditioner.** `NearlyIncompressibleAssembledPC`
 gives GAMG the low-degree divergence-free modes together with the rigid-body
@@ -32,12 +37,24 @@ where plain GAMG fails.
 
 ## What is open
 
+**The branch migration.** The current branch contains gravity, coupled GIA,
+fluid-core physics, and mechanics preconditioning. The private migration plan
+is `NOTES/PLAN.md`.
+
+**Cartesian gravity.** The 2-D periodic rectangular and 3-D periodic Cartesian
+DtN maps do not exist. Both can use one Fourier-map implementation.
+
+**Formal convergence.** The radial and Cartesian cases need one consistent
+convergence campaign against independent `passess` references.
+
 **Cost study E6** in `ROADMAP-GRAVITY.md`. Nobody measured degrees of freedom,
 wall-clock time and Krylov counts for configuration A against configuration D.
 
-**Tangential displacement in the Spada benchmark.** The model puts the peak at
-71 degrees. The benchmark puts it at 8.78 degrees. The amplitude is about 5
-percent of the reference value. This is not a compressibility effect.
+**Coupled mechanics cost.** The P3 B5 result passes the accuracy gate. Its 351
+capped block-0 solves identify an open preconditioner problem.
+
+**Condensed history.** The condensed update differs from the uncondensed DG
+mass projection by approximately `7.3e-4`.
 
 **Monolithic Stokes-Poisson coupling for mantle convection**, described in
 `ROAD-MAP-STOKES-COUPLE.md`. That document is a plan, not a record. Do not
@@ -50,10 +67,10 @@ mantle-convection coupling is not started.
 |---|---|---|
 | `CLAUDE.md` | record | the submesh workflow, the cross-mesh form, and the mesh-conforming shell requirement |
 | `GRAVITY-LESSONS-LEARNED.md` | record | the error budget, the curved-mesh trick, Firedrake `Real`-space behaviour, and the validation record |
-| `ROADMAP-GRAVITY.md` | plan | the Dirichlet-to-Neumann mathematics and the benchmark matrix. Step 7 is complete. E6 is open |
+| `ROADMAP-GRAVITY.md` | design record | the radial DtN mathematics and benchmark matrix. Cartesian and E6 remain open |
 | `ROAD-MAP-STOKES-COUPLE.md` | plan | mean-free dynamic topography for mantle convection. Not started |
 | `exploration_*.md` | record | four investigations into submesh and cross-mesh options in Firedrake and PETSc |
-| `spikes/` | code | exploratory drivers, kept as a record. They need repair before they run |
+| `spikes/` | code | exploratory drivers and local diagnostic gates |
 
 Read the records for the reasoning behind a decision. Read the plans for work
 that is not complete.
@@ -71,5 +88,5 @@ discretisation can set the accuracy floor instead.
 ## The private record
 
 Measurements, campaign data and handover notes are in `NOTES/`, which stays out
-of the repository. `NOTES/HANDOVER.md` is the current record. It holds the
-corrections that supersede the older plans.
+of the repository. `NOTES/PLAN.md` is the current plan.
+`NOTES/HANDOVER.md` is the current evidence record.

@@ -176,6 +176,7 @@ def build_solver(parent, sub, *, rho_core, dt=1.0, truncation=3,
     }
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
+        fluid_core=True,
         self_gravity_number=LAMBDA)
     z = Function(Z)
 

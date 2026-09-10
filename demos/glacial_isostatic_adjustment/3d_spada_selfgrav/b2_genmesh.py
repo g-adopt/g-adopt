@@ -1,5 +1,29 @@
 """Generate A2 meshes with the anisotropy knobs varied, for the B2 probe.
 
+**THE PARAGRAPH BELOW DESCRIBES THE GENERATOR AS IT WAS, AND IT IS NO LONGER
+TRUE.** `generate_selfgrav_sphere.RESOLUTION_LADDER` now scales `litho_layers`
+and `min_cells_per_great_circle` with the configuration (2/32, 4/64, 8/128,
+12/192), precisely so that the aspect ratio is HELD down the ladder rather than
+improving -- a refinement pair whose aspect ratio changed froze three error
+components and nearly manufactured a false locking positive.
+
+So refining no longer relaxes anisotropy. Every rung is now design AR ~14:
+
+    coarse  500 km / 35.0 km = 14.3      medium  250 km / 17.5 km = 14.3
+    fine    120 km /  8.8 km = 13.7      production 78 km / 5.8 km = 13.4
+
+A low-anisotropy mesh must therefore be asked for HERE, explicitly, by holding
+`litho_layers` low while the lateral spacing refines:
+
+    --configuration medium --litho-layers 2   ->  design AR 7.1
+    --configuration fine   --litho-layers 4   ->  design AR 6.9
+
+This script prints the design aspect ratio it built. Check it before spending a
+service unit: a mesh tagged `ar7` that prints 14.3 is the pathological mesh that
+killed jobs 175498591 and 175498592.
+
+--- superseded, kept because HANDOVER.md 3.3 quotes these numbers ---
+
 A2's generator holds the lithosphere at 35 km radial spacing at every rung,
 because `litho_layers` and `min_cells_per_great_circle` are configuration-
 independent defaults while only lateral `h` changes. The cell aspect ratio in

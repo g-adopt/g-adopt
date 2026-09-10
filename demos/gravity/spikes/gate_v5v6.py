@@ -54,9 +54,9 @@ error.
 **V6 - the iteration count at `Lambda ~ 1`** (`--v6`). Measured on V5a's loop,
 where the iteration is a statement about the coupling strength alone and not
 about two discretisations disagreeing. It will not be 2. Reported: the count to
-a fixed tolerance, the observed contraction factor from the iterate sequence,
-and both against `Lambda` up to the production 1.361325 - the number that
-decides whether the segregated route can carry production at all.
+a fixed tolerance and the factor from the unnormalised iterate differences.
+V6 also solves the monolith at the production value. A divergent Picard route
+fails this gate but does not invalidate a converged monolithic solve.
 
 Serial. Rotation is off throughout: a third row with its own closure would
 answer a different question. Every comparison is made **modulo a rigid
@@ -133,6 +133,7 @@ def build_monolith(parent, sub, *, lam, fluid, dt=1.0, truncation=3,
     }
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=False,
+        fluid_core=fluid,
         self_gravity_number=lam)
     z = Function(Z)
     solver = SelfGravitatingGIASolver(
@@ -250,6 +251,8 @@ def solve_gravity_rows(solver, z, layout):
 
     b1 = -R.subfunctions[ip].dat.data_ro.copy()
     b2 = -np.array([float(R.subfunctions[i].dat.data_ro[0]) for i in ics])
+    core_rhs = ([] if layout.core_pressure is None else [
+        float(R.subfunctions[layout.core_pressure].dat.data_ro[0])])
 
     lu = spla.splu(Amat.tocsc())
     AinvB = np.column_stack([lu.solve(Bmat[:, a]) for a in range(nc)])
@@ -263,12 +266,16 @@ def solve_gravity_rows(solver, z, layout):
         z.subfunctions[ia].dat.data[:] += y[a]
 
     resid = assemble(F)
+    core_resid = ([] if layout.core_pressure is None else [float(
+        resid.subfunctions[layout.core_pressure].dat.data_ro[0])])
     rg = np.hstack([resid.subfunctions[ip].dat.data_ro,
-                    [float(resid.subfunctions[i].dat.data_ro[0]) for i in ics]])
-    return np.abs(rg).max(), np.abs(np.hstack([b1, b2])).max()
+                    [float(resid.subfunctions[i].dat.data_ro[0]) for i in ics],
+                    core_resid])
+    return np.abs(rg).max(), np.abs(np.hstack([b1, b2, core_rhs])).max()
 
 
-def forcing_terms(sub, w, u, psi, approx, *, fluid, rho_core=RHO_CORE):
+def forcing_terms(sub, w, u, psi, approx, *, fluid, rho_core=RHO_CORE,
+                  core_pressure=None):
     """The frozen-potential terms of the momentum residual, on the submesh.
 
     Residual convention throughout - every term as if on the left-hand side,
@@ -278,9 +285,12 @@ def forcing_terms(sub, w, u, psi, approx, *, fluid, rho_core=RHO_CORE):
       being `self_gravity_term`'s and forced by `psi` being *minus* the
       Newtonian potential;
     - with a fluid core, `+dot(w, tau n)` at Rc with
-      `tau = B_mu[rho_core psi + (rho_core - rho_0) g_0 (u.n)]`, which is
+      `tau = B_mu[rho_core psi + rho_core g_0 (u.n) + p_core]`, which is
       `normal_stress`'s own convention and is the `u`-variation of
       `SelfGravitatingGIASolver.fluid_core_energy`.
+
+    The volume prestress term supplies the mantle-side CMB stiffness. The
+    explicit spring therefore uses `rho_core`, not the density contrast.
 
     `u` is the mechanics solver's own unknown, so the buoyancy half of the
     traction stays **implicit**: only `psi` is frozen. Freezing `u` in it as
@@ -299,7 +309,8 @@ def forcing_terms(sub, w, u, psi, approx, *, fluid, rho_core=RHO_CORE):
         n = FacetNormal(sub)
         tau = approx.B_mu * (
             Constant(rho_core) * psi
-            + (Constant(rho_core) - rho0) * approx.g * dot(u, n))
+            + Constant(rho_core) * approx.g * dot(u, n)
+            + core_pressure)
         F += dot(w, tau * n) * Measure("ds", domain=sub)(gen.CURVE_RC)
     return F
 
@@ -325,6 +336,8 @@ class MechanicsStep:
                  rho_core=RHO_CORE):
         self.sub = sub
         self.segregated = segregated
+        self.fluid = fluid
+        self.core_pressure = Constant(0.0) if fluid else None
         self.rotation = rotation_mode(sub)
         V = VectorFunctionSpace(sub, "CG", 2)
         S = TensorFunctionSpace(sub, "DG", 1)
@@ -334,7 +347,7 @@ class MechanicsStep:
             self.internal = Function(S, name="m")
             forcing = forcing_terms(
                 sub, TestFunction(V), self.solution, psi, approx, fluid=fluid,
-                rho_core=rho_core)
+                rho_core=rho_core, core_pressure=self.core_pressure)
             self.solver = InternalVariableSolver(
                 self.solution, approx, internal_variables=[self.internal],
                 dt=dt, bcs=mechanics_bcs(sub, fluid),
@@ -345,7 +358,8 @@ class MechanicsStep:
             self.solution = Function(Zm, name="z_mech")
             forcing = forcing_terms(
                 sub, TestFunctions(Zm)[0], split(self.solution)[0], psi,
-                approx, fluid=fluid, rho_core=rho_core)
+                approx, fluid=fluid, rho_core=rho_core,
+                core_pressure=self.core_pressure)
             self.solver = CoupledInternalVariableSolver(
                 self.solution, approx, dt=dt, bcs=mechanics_bcs(sub, fluid),
                 additional_forcing_term=forcing, solver_parameters="direct")
@@ -355,19 +369,56 @@ class MechanicsStep:
         return (self.solution if self.segregated
                 else self.solution.subfunctions[0])
 
-    def solve(self):
+    def _reset_and_solve(self, core_pressure=0.0):
         self.solver.solution_old.assign(0.0)
+        self.solution.assign(0.0)
         if self.segregated:
             self.internal.assign(0.0)
-        else:
-            self.solution.assign(0.0)
+        if self.core_pressure is not None:
+            self.core_pressure.assign(core_pressure)
         self.solver.solve()
+
+    def _core_flux(self, u):
+        n = FacetNormal(self.sub)
+        dss = Measure("ds", domain=self.sub)(gen.CURVE_RC)
+        return float(assemble(dot(u, n) * dss))
+
+    def solve(self):
+        self._reset_and_solve(0.0)
+        if self.fluid:
+            base = self.solution.copy(deepcopy=True)
+            base_internal = (self.internal.copy(deepcopy=True)
+                             if self.segregated else None)
+            self._reset_and_solve(1.0)
+            direction = self.solution.copy(deepcopy=True)
+            direction -= base
+            base_u = base if self.segregated else base.subfunctions[0]
+            direction_u = (direction if self.segregated
+                           else direction.subfunctions[0])
+            response = self._core_flux(direction_u)
+            if abs(response) < 1.0e-14:
+                raise RuntimeError(
+                    "the unit core-pressure solve produced no CMB flux response")
+            pressure = -self._core_flux(base_u) / response
+            self.solution.assign(base + pressure * direction)
+            if self.segregated:
+                unit_internal = self.internal.copy(deepcopy=True)
+                unit_internal -= base_internal
+                self.internal.assign(
+                    base_internal + pressure * unit_internal)
+            self.core_pressure.assign(pressure)
+
         # Both operators have the rigid rotation in their kernel to
         # facet-geometry error, so the multiple each solve lands on is set by
         # nothing physical. Remove it, exactly as the monolith's
         # `project_out_nullspace` does after every solve.
         u = self.displacement
         u.assign(deflate_rotation(u, self.rotation))
+        if self.fluid:
+            flux = self._core_flux(u)
+            if abs(flux) > 1.0e-11:
+                raise RuntimeError(
+                    f"the constrained mechanics solve left CMB flux {flux:.3e}")
         return u
 
 
@@ -397,12 +448,17 @@ def picard(parent, sub, *, lam, fluid, segregated, dt=1.0, rtol=1e-12,
     error_mode = Function(z.function_space())
     gravity_residual = 0.0
     scale = None
+    first_u = None
     for k in range(1, max_iter + 1):
         u = step.solve()
+        if first_u is None:
+            first_u = u.copy(deepcopy=True)
         # Hand the displacement to the monolith's own mixed function and solve
         # its gravity rows exactly. The parent's CG2 space restricted to the
         # mantle IS the submesh's, so both transfers move nodal values only.
         z.subfunctions[layout.displacement].assign(u)
+        if layout.core_pressure is not None:
+            z.subfunctions[layout.core_pressure].assign(step.core_pressure)
         residual, rhs = solve_gravity_rows(solver, z, layout)
         # Normalised by the FIRST iterate's right-hand side and not by its own.
         # A converging Picard loop drives the gravity update's own right-hand
@@ -437,31 +493,38 @@ def picard(parent, sub, *, lam, fluid, segregated, dt=1.0, rtol=1e-12,
         # invisible at Re, so a loop stopped on `zeta` agrees with the monolith
         # at 1e-10 in the deflection and only 2.4e-06 in `u`.
         if previous is None:
+            difference_norm = float("inf")
             change = float("inf")
         else:
             delta = u.copy(deepcopy=True)
             delta -= previous
-            change = norm(delta) / max(norm(u), 1e-300)
-        history.append({"k": k, "zeta": zeta, "change": change})
+            difference_norm = norm(delta)
+            change = difference_norm / max(norm(u), 1e-300)
+        previous_difference = (history[-1]["difference_norm"]
+                               if history else float("inf"))
+        iteration_factor = (difference_norm / previous_difference
+                            if np.isfinite(previous_difference)
+                            and previous_difference > 0.0 else float("nan"))
+        history.append({"k": k, "zeta": zeta, "change": change,
+                        "difference_norm": difference_norm,
+                        "iteration_factor": iteration_factor})
         previous = u.copy(deepcopy=True)
         if verbose:
             print(f"    {k:3d}  zeta {zeta: .10e}  change {change:.3e}")
         if change < rtol:
             break
-        # Divergence, detected on the change rather than on the size. The
-        # fluid core's unstable mode is nearly invisible at the surface, so a
-        # test on the deflection lets a diverging run look converged for tens
-        # of iterations - which is exactly how the first version of this gate
-        # reported a fluid-core "agreement" at 1e-10 in the deflection and
-        # 2.4e-06 in the displacement, both of them meaningless.
-        if k > 10 and change > history[-6]["change"]:
+        # Detect divergence from the unnormalised difference. The relative
+        # change approaches a constant for a divergent linear iteration.
+        recent_factors = [h["iteration_factor"] for h in history[-5:]]
+        if (k > 10 and len(recent_factors) == 5
+                and all(np.isfinite(factor) and factor > 1.0
+                        for factor in recent_factors)):
             break
         if abs(zeta) > diverged_at:
             break
 
-    changes = [h["change"] for h in history[1:]]
-    ratios = [changes[i] / changes[i - 1]
-              for i in range(1, len(changes)) if changes[i - 1] > 0.0]
+    factors = [h["iteration_factor"] for h in history
+               if np.isfinite(h["iteration_factor"])]
     zetas = [h["zeta"] for h in history]
     growth = (abs(zetas[-1] / zetas[-2])
               if len(zetas) > 1 and zetas[-2] != 0.0 else float("nan"))
@@ -469,9 +532,10 @@ def picard(parent, sub, *, lam, fluid, segregated, dt=1.0, rtol=1e-12,
     return {"solver": solver, "z": z, "layout": layout, "u": step.displacement,
             "error_mode": error_mode,
             "history": history, "iterations": len(history),
-            "contraction": ratios[-1] if ratios else float("nan"),
+            "iteration_factor": factors[-1] if factors else float("nan"),
             "growth": growth,
             "gravity_residual": gravity_residual,
+            "first_u": first_u,
             "converged": converged,
             "diverged": not converged}
 
@@ -483,60 +547,10 @@ def monolithic_reference(parent, sub, *, lam, fluid, dt=1.0):
 
 
 # ---------------------------------------------------------------------------
-# Definiteness, which is what a divergent Picard loop is really telling us
-# ---------------------------------------------------------------------------
-def quadratic_form(solver, z, direction):
-    """`d^T A d` for the coupled Jacobian and a mixed direction `d`.
-
-    **Block Gauss-Seidel on a symmetric positive-definite operator converges
-    unconditionally.** That is a theorem, not a hope, and this project has
-    already measured the symmetry: 4.2e-15 for the shipped coupling and
-    1.5e-15 for the whole Jacobian with a fluid core (A4's FC-2). So a Picard
-    iteration that *diverges* on this system is not a statement about the
-    splitting at all - it proves the operator is **indefinite**, i.e. that the
-    equilibrium the monolith computes is a saddle of the energy rather than a
-    minimum, i.e. that the configuration is past a (self-)gravitational
-    instability.
-
-    This function supplies the direct evidence rather than leaving it as an
-    inference: contract the Jacobian with the direction the divergent iteration
-    ran away along. A negative value is a negative-energy direction, and one
-    such direction is a proof.
-    """
-    J = derivative(solver.F, z)
-    action_ = assemble(action(J, direction))
-    return sum(
-        float(np.dot(np.asarray(c.dat.data_ro).ravel(),
-                     np.asarray(f.dat.data_ro).ravel()))
-        for c, f in zip(action_.subfunctions, direction.subfunctions))
-
-
-def definiteness_probe(parent, sub, *, lam, fluid, rho_core=RHO_CORE):
-    """`d^T A d / |d|^2` along the divergent direction, and along a benign one.
-
-    The divergent direction is taken from the runaway iterate itself, which is
-    the cheapest possible eigenvector estimate for the offending mode: a power
-    iteration is exactly what a divergent fixed-point loop is.
-    """
-    run = picard(parent, sub, lam=lam, fluid=fluid, segregated=False,
-                 verbose=False, max_iter=30, rtol=1e-12, rho_core=rho_core)
-    solver, z = run["solver"], run["z"]
-    d = run["error_mode"]
-    scale = np.sqrt(sum(float(np.dot(np.asarray(s.dat.data_ro).ravel(),
-                                     np.asarray(s.dat.data_ro).ravel()))
-                        for s in d.subfunctions))
-    d /= scale
-    return quadratic_form(solver, z, d), run
-
-
-# ---------------------------------------------------------------------------
 # V5
 # ---------------------------------------------------------------------------
-#: Where each CMB treatment's Picard loop is asked to converge. `un = 0`
-#: converges at every `Lambda` measured; the fluid core does not (V6), so V5
-#: compares its fixed point at a subcritical coupling. A comparison can only be
-#: made where a fixed point is reached, and saying so is more honest than
-#: quietly picking a configuration that works.
+#: The low-coupling pair separates the boundary treatment from the coupling
+#: strength. The nominal rigid-core case retains the original production point.
 V5_CASES = (("fluid core", True, 0.1),
             #: `un = 0` at the fluid core's Lambda as well, so that the
             #: attribution of a V5b gap to the free-slip condition is made at
@@ -565,8 +579,8 @@ def gate_v5(dr, nazim, *, segregated, dt=1.0):
         print("  both CMB treatments   <= 1e-08 relative - the fixed point IS")
         print("                        the monolithic answer, so anything")
         print("                        larger is a defect and not segregation")
-    print("Each case runs at a Lambda where the loop has a fixed point at all;")
-    print("V6 is where the fluid core's critical Lambda is measured.")
+    print("The low-coupling pair separates the CMB treatment from Lambda.")
+    print("V6 measures both corrected iterations through production Lambda.")
 
     parent, sub = build_meshes(dr, nazim)
     r = rotation_mode(sub)
@@ -651,124 +665,78 @@ def gate_v5b_refinement(dr, nazim):
 # V6
 # ---------------------------------------------------------------------------
 def gate_v6(dr, nazim, *, dt=1.0):
-    """The Picard count against `Lambda`, and what its failure mode means."""
+    """Measure the stationary block-Picard convergence against `Lambda`.
+
+    The constrained mechanics block is a Lagrange saddle. Picard divergence
+    therefore does not imply a negative physical energy or a bad monolith.
+    It means that this stationary block iteration has spectral radius above one.
+    """
     print("\n" + "=" * 78)
-    print("V6  the Picard iteration count at Lambda ~ 1, and its limit")
+    print("V6  the constrained Picard iteration count at Lambda ~ 1")
     print("=" * 78)
-    print("Expected, before the run:")
-    print("  it is NOT 2 - the coupling moves the answer by tens of percent, so")
-    print("  the loop gain is O(0.1) at least;")
-    print("  the contraction factor should be roughly LINEAR in Lambda, since")
-    print("  the coupling enters each off-diagonal block once;")
-    print("  and the question that matters is whether it converges at the")
-    print(f"  production Lambda = {LAMBDA_PRODUCTION}.")
+    print("The fluid-core mechanics step includes the uniform pressure and")
+    print("enforces zero CMB flux. The old degree-zero instability is excluded.")
+    print(f"Both Picard routes must converge at Lambda = {LAMBDA_PRODUCTION}.")
+    print("A failed Picard route does not invalidate the coupled monolith.")
 
     parent, sub = build_meshes(dr, nazim)
-    ladders = {
-        "un = 0": [0.25, 0.5, 1.0, LAMBDA_NOMINAL, LAMBDA_PRODUCTION, 2.0],
-        # The fluid core's threshold is an order of magnitude lower, so its
-        # ladder is placed around it rather than around the production value.
-        "fluid core": [0.05, 0.1, 0.125, 0.15, 0.25, LAMBDA_NOMINAL],
-    }
+    ladder = [0.1, 0.25, 0.5, 1.0, LAMBDA_NOMINAL,
+              LAMBDA_PRODUCTION, 2.0]
     rows = {}
     for name, fluid in (("un = 0", False), ("fluid core", True)):
-        lams = ladders[name]
         print(f"\n  -- {name}")
-        print(f"  {'Lambda':>10s}{'iterations':>12s}{'contraction':>13s}"
+        print(f"  {'Lambda':>10s}{'iterations':>12s}{'factor':>13s}"
               f"{'growth':>11s}{'converged':>11s}")
         rows[name] = {}
-        for lam in lams:
+        for lam in ladder:
             run = picard(parent, sub, lam=lam, fluid=fluid, segregated=False,
                          dt=dt, rtol=1e-12, max_iter=60, verbose=False)
             rows[name][lam] = run
             print(f"  {lam:10.6f}{run['iterations']:12d}"
-                  f"{run['contraction']:13.4f}{run['growth']:11.4f}"
+                  f"{run['iteration_factor']:13.4f}{run['growth']:11.4f}"
                   f"{str(run['converged']):>11s}")
 
-    counts = rows["un = 0"]
-    ratios = [counts[lam]["contraction"] / lam for lam in ladders["un = 0"]
-              if counts[lam]["converged"]]
-    print(f"\n  `un = 0`: contraction / Lambda is "
-          f"{np.mean(ratios):.4f} +- {np.std(ratios):.4f} across every Lambda "
-          "that\n  converges, so the loop gain is linear in the coupling "
-          "exactly as predicted.\n  **The linear law does not set the "
-          "threshold, though**: extrapolating it\n  would put divergence at "
-          f"Lambda ~ {1.0 / np.mean(ratios):.2f}, and the sweep above "
-          "diverges by Lambda = 2\n  instead. A second mode goes unstable "
-          "first, which is the same kind of\n  event the fluid core meets at "
-          "Lambda ~ 0.14 - the road map's §2.5 records\n  the fluid-limit "
-          "configuration going supercritical near Lambda = 1 for the same\n"
-          "  reason. What the linear law does establish is that nothing about "
-          "the\n  *splitting* degrades before then.")
+    print("\n  -- production monolith")
+    monolith = {}
+    for name, fluid in (("un = 0", False), ("fluid core", True)):
+        solver, z, layout = monolithic_reference(
+            parent, sub, lam=LAMBDA_PRODUCTION, fluid=fluid, dt=dt)
+        # `solve()` advances `solution_old` after it solves. Restore this
+        # one-step gate's zero history before reassembling the solved residual.
+        solver.solution_old.assign(0.0)
+        residual = assemble(solver.F)
+        with residual.dat.vec_ro as residual_vec:
+            residual_norm = residual_vec.norm()
+        with z.dat.vec_ro as solution_vec:
+            finite_solution = np.isfinite(solution_vec.norm())
+        flux = 0.0
+        if fluid:
+            n = FacetNormal(sub)
+            dss = Measure("ds", domain=sub)(gen.CURVE_RC)
+            flux = float(assemble(dot(solver.displacement, n) * dss))
+        first_gap = compare(
+            rows[name][LAMBDA_PRODUCTION]["first_u"],
+            z.subfunctions[layout.displacement], rotation_mode(sub))
+        monolith[name] = {"residual": residual_norm, "flux": flux,
+                          "finite": finite_solution,
+                          "first_gap": first_gap}
+        print(f"  {name:<12s} residual {residual_norm:.3e}"
+              f"   CMB flux {flux:.3e}   first gap {first_gap:.3e}")
 
-    first = counts[LAMBDA_PRODUCTION]["history"][0]["zeta"]
-    last = counts[LAMBDA_PRODUCTION]["history"][-1]["zeta"]
-    print(f"\n  It is not 2: at Lambda = {LAMBDA_PRODUCTION} the uncoupled "
-          f"first iterate is\n  {first:.6e} and the converged answer "
-          f"{last:.6e}, a change of "
-          f"{abs(last - first) / abs(last) * 100:.1f} %,\n  reached in "
-          f"{counts[LAMBDA_PRODUCTION]['iterations']} iterations.")
-
-    # The fluid core's failure, and what it is really about.
-    print("\n  -- the fluid core's divergence is the operator, not the split")
-    print("  Block Gauss-Seidel on a symmetric positive-definite operator")
-    print("  converges unconditionally. The coupled Jacobian IS symmetric -")
-    print("  1.5e-15 with a fluid core, measured by A4's FC-2 - so a divergent")
-    print("  loop proves the operator is INDEFINITE and the equilibrium is a")
-    print("  saddle of the energy: the configuration is past a gravitational")
-    print("  instability of the CMB. Expected: d^T A d < 0 along the runaway")
-    print("  direction where the loop diverges, and > 0 where it converges.")
-    probes = {}
-    print(f"    {'Lambda':>10s}{'converged':>11s}{'d^T A d':>16s}")
-    for lam in (0.05, 0.1, 0.125, 0.15, 0.25):
-        q, run = definiteness_probe(parent, sub, lam=lam, fluid=True)
-        probes[lam] = (q, run["converged"])
-        print(f"    {lam:10.4f}{str(run['converged']):>11s}{q:16.6e}")
-    print("    The quadratic form crosses zero between Lambda = 0.125 and")
-    print("    0.150 - which is exactly where the iteration stops converging.")
-    print("    The two are the same event, and it is a property of the")
-    print("    operator: the CMB equilibrium ceases to be a minimum of the")
-    print("    energy. No splitting, damping or acceleration recovers a")
-    print("    fixed point that is a saddle.")
-
-    print("\n  -- and it is the CMB self-attraction loop, not the buoyancy")
-    print("  At a Lambda where the rigid core is comfortable, walking the")
-    print("  core's density up crosses the same threshold: the loop gain of")
-    print("  the CMB pair is the sheet's density against the interface's")
-    print("  buoyancy, and the buoyancy is what grows with the contrast.")
-    print(f"  {'rho_core':>10s}{'iterations':>12s}{'contraction':>13s}"
-          f"{'converged':>11s}")
-    rho_rows = {}
-    for rc in (0.0, 0.25, 0.5, 1.0, 2.0):
-        run = picard(parent, sub, lam=0.25, fluid=True,
-                     segregated=False, rho_core=rc, rtol=1e-12, max_iter=40,
-                     verbose=False)
-        rho_rows[rc] = run
-        print(f"  {rc:10.2f}{run['iterations']:12d}"
-              f"{run['contraction']:13.4f}{str(run['converged']):>11s}")
-
-    print("\n  -- under-relaxation cannot rescue it, and that is predictable")
-    print("  Damping maps an eigenvalue `l` of the iteration to "
-          "`1 + omega(l - 1)`,")
-    print("  so for a real `l > 1` every omega in (0, 1] leaves it outside the")
-    print("  unit disc. Measured, at the divergent point:")
-    print(f"  {'omega':>10s}{'final change':>24s}{'converged':>11s}")
-    for om in (1.0, 0.5, 0.2, 0.1):
-        run = picard(parent, sub, lam=0.25, fluid=True, segregated=False,
-                     omega=om, rtol=1e-12, max_iter=40, verbose=False)
-        print(f"  {om:10.2f}{run['history'][-1]['change']:24.4e}"
-              f"{str(run['converged']):>11s}")
-
-    ok = (counts[LAMBDA_PRODUCTION]["converged"]
-          and counts[LAMBDA_PRODUCTION]["iterations"] > 2
-          and all((q > 0.0) == conv for q, conv in probes.values()))
-    print(f"\nV6 {'PASS' if ok else 'FAIL'}   (PASS means the iteration "
-          "converges at the production\n    Lambda with `un = 0`, that its "
-          "count is a real number rather than 2, and\n    that the fluid "
-          "core's failure is identified as indefiniteness rather than\n    "
-          "left as a property of the splitting. It says nothing about "
-          "affordability.)")
-    return ok, {"lambda": rows, "definiteness": probes, "rho_core": rho_rows}
+    production = [rows[name][LAMBDA_PRODUCTION]
+                  for name in ("un = 0", "fluid core")]
+    picard_ok = all(run["converged"]
+                    and run["iteration_factor"] < 1.0 for run in production)
+    monolith_ok = all(item["finite"] and item["residual"] < 1e-10
+                      and abs(item["flux"]) < 1e-11
+                      and item["first_gap"] > 1e-3
+                      for item in monolith.values())
+    ok = picard_ok and monolith_ok
+    print(f"\nV6 {'PASS' if ok else 'FAIL'}")
+    if not picard_ok and monolith_ok:
+        print("The coupled monolith passes. The production fluid Picard route "
+              "is rejected.")
+    return ok, {"lambda": rows, "monolith": monolith}
 
 
 def main():

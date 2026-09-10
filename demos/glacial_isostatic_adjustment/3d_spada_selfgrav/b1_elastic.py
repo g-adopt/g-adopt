@@ -262,11 +262,26 @@ def curve(mesh, untangle=False, enabled=True):
 
 
 def build_meshes(configuration, reuse=True, h=None, untangle=False,
-                 curve_enabled=True):
-    tag = configuration if h is None else f"h{h:g}"
-    path = os.path.join(HERE, f"b1_{tag}.msh")
-    if not (reuse and os.path.exists(path)):
-        gen.generate(path, configuration=configuration, h=h)
+                 curve_enabled=True, path=None):
+    """The parent sphere and its mantle submesh, curved, in that order.
+
+    `path` names an existing .msh to read instead of generating one -- a
+    `b2_genmesh` low-anisotropy mesh, for instance. It is read, curved,
+    submeshed and curved again by exactly the same steps in exactly the same
+    order as a generated one, so the fixture still matches `b2_probe` and
+    `b1_pc_sweep`. When `path` is given, `configuration` no longer selects a
+    mesh; it is still read elsewhere for the load degree.
+    """
+    if path is None:
+        tag = configuration if h is None else f"h{h:g}"
+        path = os.path.join(HERE, f"b1_{tag}.msh")
+        if not (reuse and os.path.exists(path)):
+            gen.generate(path, configuration=configuration, h=h)
+    elif not os.path.exists(path):
+        raise FileNotFoundError(
+            f"--mesh {path!r} does not exist. Generate it with b2_genmesh.py "
+            "first; this driver will not silently fall back to the generated "
+            "mesh, because the aspect ratio is the whole reason for passing one.")
     t0 = time.perf_counter()
     parent = curve(Mesh(path), untangle=untangle, enabled=curve_enabled)
     parent.cartesian = False
@@ -419,13 +434,62 @@ def dseries_at(coeffs, theta):
     return coeffs @ dP
 
 
+def surface_spectra(solver, parent, sub, nproj, quad_degree=None,
+                    project_out_nullspace=True):
+    """`U_n`, `V_n`, `N_n` in metres, from a solved state.
+
+    Extracted so the viscoelastic driver (`b5_viscoelastic.py`) reads the answer
+    with EXACTLY the instrument B1's own reporting path uses, rather than a
+    second implementation that could drift from it. B1's main path is left
+    alone; this duplicates its three projections and nothing else.
+
+    `V` is the *tangential* displacement, not `dU/dtheta`. Its natural basis is
+    `dP_n/dtheta`, and the measured denominator is used so the surface's own
+    discretisation error cancels.
+
+    The geoid is built from PARENT coordinates deliberately. `solver.geoid()`
+    forms `psi / g_0` from `approximation.g`, which this driver builds from the
+    *submesh* coordinates because the momentum equation lives there, while `psi`
+    lives on the parent -- the quotient then mixes meshes and TSFC rejects it
+    with `MismatchingDomainError`.
+    """
+    if project_out_nullspace:
+        solver.project_out_nullspace()
+
+    ds_sub = ds(gen.SURF_RE, domain=sub)
+    dS_par = solver.form.dS(gen.SURF_RE)
+
+    u = solver.displacement
+    Xm = SpatialCoordinate(sub)
+    rm = sqrt(dot(Xm, Xm))
+
+    U_n = project_surface(dot(u, Xm / rm), sub, nproj, ds_sub, interior=False,
+                          quad_degree=quad_degree)
+
+    e_theta = as_vector((Xm[2] * Xm[0], Xm[2] * Xm[1], -(Xm[0]**2 + Xm[1]**2)))
+    rho_cyl = sqrt(Xm[0]**2 + Xm[1]**2)
+    u_theta = dot(u, e_theta) / (rm * conditional(rho_cyl > 1e-12, rho_cyl,
+                                                  Constant(1e-12)))
+    V_n = project_surface(u_theta, sub, nproj, ds_sub, interior=False,
+                          basis="dP", quad_degree=quad_degree)
+
+    Xp = SpatialCoordinate(parent)
+    geoid = solver.potential / refstate.gravity_exact_ufl(sqrt(dot(Xp, Xp)))
+    N_n = project_surface(geoid, parent, nproj, dS_par, interior=True,
+                          quad_degree=quad_degree)
+
+    return U_n * D_M, V_n * D_M, N_n * D_M
+
+
 # --------------------------------------------------------------------------
 # the solve
 # --------------------------------------------------------------------------
 
 def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
                                 block0_max_it=200,
-                                u_pc="gadopt.RigidBodyAssembledPC"):
+                                u_pc="gadopt.RigidBodyAssembledPC",
+                                snes_type="ksponly",
+                                multiplier_pc="none"):
     """`gadopt.selfgrav_dtn_iterative_solver_parameters`, condensed.
 
     **This used to be a hand-copy of that dictionary and the comment above the
@@ -436,6 +500,16 @@ def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
     and three drivers; this is now a thin wrapper that names only the two
     values B1 genuinely wants different from the library defaults, so a reader
     can see the whole of the difference in one place.
+
+    `snes_type` defaults to `"ksponly"` here, where the library defaults to
+    `"newtonls"`. B1 sets no `exponent`, so the rheology is Newtonian, the
+    residual is linear, and Newton spends a second linear solve, a Jacobian
+    assembly and a full GAMG setup per solve to rediscover that. Measured on the
+    2-D annulus, `ksponly` and `newtonls` agree to 0.000e+00
+    (`NOTES/selfgravity/measurements/step3_nearnull_attach.py`, Q2); the library
+    keeps `newtonls` because its dictionary is also reachable by a power-law
+    caller, and B1 is not one. With `ksponly`, `outer_rtol` alone controls the
+    accuracy and `snes_rtol` is inert.
 
     Both remaining differences are B1's own, deliberately:
 
@@ -457,7 +531,8 @@ def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
     """
     return selfgrav_dtn_iterative_solver_parameters(
         condensed=True, outer_rtol=outer_rtol, block0_rtol=block0_rtol,
-        block0_max_it=block0_max_it, u_pc=u_pc)
+        block0_max_it=block0_max_it, u_pc=u_pc, snes_type=snes_type,
+        multiplier_pc=multiplier_pc)
 
 
 BLOCK0 = {
@@ -481,11 +556,13 @@ BLOCK0 = {
 
 def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  drop_ice_from_poisson=False, solver_parameters=None,
-                 solver_parameters_extra=None, ivdeg=1, block0=None,
+                 solver_parameters_extra=None, udeg=2, ivdeg=1, block0=None,
                  near_nullspace=True, declare_nullspace=True,
                  outer_rtol=1e-10, block0_max_it=200, condense=False,
                  cmb_buoyancy="core", rigid_core=False,
-                 bulk_shear_ratio=BULK_SHEAR_RATIO):
+                 bulk_shear_ratio=BULK_SHEAR_RATIO,
+                 u_pc="gadopt.RigidBodyAssembledPC", snes_type="ksponly",
+                 dt=None, block0_rtol=1e-2, multiplier_pc="none"):
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
     sigma_sub = load_field(sub, nmax, sigma_n)
@@ -500,7 +577,9 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
 
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-        self_gravity_number=LAMBDA, internal_variable_degree=ivdeg,
+        fluid_core=not rigid_core,
+        self_gravity_number=LAMBDA, displacement_degree=udeg,
+        internal_variable_degree=ivdeg,
         condense_internal_variables=condense)
     z = Function(Z)
     z.subfunctions[layout.displacement].rename("displacement")
@@ -568,7 +647,12 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  else None)
 
     solver = SelfGravitatingGIASolver(
-        z, approx, layout=layout, dt=DT_ELASTIC, bcs=bcs, fluid_core=core,
+        # `dt` is baked into the operator here: `CoupledInternalVariableSolver`
+        # sets `approximation.mu = effective_viscosity(dt)` in `__init__`, so it
+        # cannot be changed on a live solver. A viscoelastic run therefore needs
+        # one solver per dt segment. `None` keeps B1's elastic snapshot.
+        z, approx, layout=layout,
+        dt=DT_ELASTIC if dt is None else dt, bcs=bcs, fluid_core=core,
         # A3's constants, imported. The literals that used to stand here were
         # `C = 72.226893` (a rounded copy of 72.2269347) and
         # `C_minus_A = 2.362822e-01`, which is the SECONDARY prescribed value;
@@ -585,12 +669,17 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                            or (None if block0 else
                                condensed_solver_parameters(
                                    outer_rtol=outer_rtol,
-                                   block0_max_it=block0_max_it)
+                                   block0_rtol=block0_rtol,
+                                   block0_max_it=block0_max_it,
+                                   u_pc=u_pc, snes_type=snes_type,
+                                   multiplier_pc=multiplier_pc)
                                if condense else b2_solver_parameters(
                                outer_rtol=outer_rtol,
                                # `jacobi` on the Real block raises
-                               # MatGetDiagonal in PCSetUp_Jacobi: the 75 Real
-                               # sub-fields have no assembled diagonal. B2's
+                               # MatGetDiagonal in PCSetUp_Jacobi: the Real
+                               # sub-fields have no assembled diagonal.
+                               # The fluid core adds one pressure constraint
+                               # to the DtN and rotation fields. B2's
                                # write-up specifies `none` here and the default
                                # in its factory does not match it.
                                multiplier_pc="none",
@@ -611,11 +700,16 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                                # displacement block, which a
                                # MixedVectorSpaceBasis on the outer space does
                                # not (see the near_nullspace comment above).
-                               u_pc="gadopt.RigidBodyAssembledPC",
+                               u_pc=u_pc,
                                block0_max_it=block0_max_it))),
-        solver_parameters_extra=({**BLOCK0[block0],
-                                  **(solver_parameters_extra or {})}
-                                 if block0 else solver_parameters_extra))
+        # `b2_solver_parameters` (gate_b2_solver.solver_parameters) hard-codes
+        # `snes_type: newtonls` and takes no argument for it, so without this the
+        # `--snes-type` flag would apply on the condensed path and be silently
+        # dropped on the uncondensed one -- the same flag, honoured or not
+        # depending on `--condense`. Override it here instead.
+        solver_parameters_extra={"snes_type": snes_type,
+                                 **(BLOCK0[block0] if block0 else {}),
+                                 **(solver_parameters_extra or {})})
     return solver, z, layout, sigma_n, sigma_parent, sigma_sub
 
 
@@ -875,7 +969,7 @@ def run_mechanics_only(nmax, nproj, sig_dim, ref, U_ref, Vf, imax,
     print("  coupled answer, because self-gravity stiffens the low degrees")
     print("  that dominate U(0).  This is an upper bound, not B1.")
 
-    parent, sub, _, _ = build_meshes(args.configuration, h=args.h,
+    parent, sub, _, _ = build_meshes(args.configuration, h=args.h, path=args.mesh,
                                      untangle=args.untangle,
                                      curve_enabled=not args.no_curve)
     sigma_n = cap_sigma_hat(nmax)
@@ -1074,8 +1168,8 @@ def main():
                         "in the quadrature degree, against the KNOWN cap "
                         "coefficients. No solve.")
     p.add_argument("--condense", action="store_true",
-                   help="statically condense the internal variables out of "
-                        "the mixed space; removes 85%% of block 0")
+                   help="use pointwise history substitution outside the "
+                        "mixed space; removes 85%% of block 0")
     p.add_argument("--mechanics-only", action="store_true",
                    help="NOT B1: mechanics with self-gravity OFF, to confirm "
                         "the load, the units and B_mu against the benchmark's "
@@ -1090,6 +1184,23 @@ def main():
     p.add_argument("--rigid-core", action="store_true",
                    help="replace the fluid core with un=0 at Rc (rigid-core "
                         "discriminator arm; no FluidCore, no buoyancy spring)")
+    p.add_argument("--mesh", default=None,
+                   help="Explicit .msh path, e.g. a b2_genmesh low-anisotropy "
+                        "mesh. When given, --configuration is used only for the "
+                        "load degree, not for choosing the mesh. The production "
+                        "coarse mesh is aspect ratio 24 and two jobs died on it; "
+                        "the AR-7 mesh is what runs.")
+    p.add_argument("--u-pc", default="gadopt.RigidBodyAssembledPC",
+                   help="Preconditioner on the displacement split. "
+                        "gadopt.NearlyIncompressibleAssembledPC adds the "
+                        "divergence-free modes and is what a near-incompressible "
+                        "run needs; the rigid modes alone do not span the slow "
+                        "space once the volumetric penalty dominates.")
+    p.add_argument("--snes-type", default="ksponly",
+                   choices=["ksponly", "newtonls"],
+                   help="B1 sets no exponent, so the residual is linear and "
+                        "ksponly is exact here; newtonls costs a second linear "
+                        "solve, Jacobian assembly and GAMG setup per solve.")
     p.add_argument("--bulk-shear-ratio", type=float, default=BULK_SHEAR_RATIO,
                    help="K/mu everywhere; default 1.9394 (nu=0.28). Large values "
                         "(100->nu=0.495, 1000->nu=0.4998) approach the "
@@ -1154,8 +1265,9 @@ def main():
     # --- meshes ----------------------------------------------------------
     t0 = time.perf_counter()
     parent, sub, t_parent, t_sub = build_meshes(args.configuration, h=args.h,
+                                                path=args.mesh,
                                                 untangle=args.untangle,
-                                     curve_enabled=not args.no_curve)
+                                                curve_enabled=not args.no_curve)
     # `num_cells()` is RANK-LOCAL. At 64 ranks the first run of this printed
     # "parent 2242 cells" for a 113 653-cell mesh and looked like the wrong
     # mesh had been read.
@@ -1174,7 +1286,8 @@ def main():
         near_nullspace=not args.no_near_nullspace, condense=args.condense,
         declare_nullspace=not args.no_declare_nullspace,
         cmb_buoyancy=args.cmb_buoyancy, rigid_core=args.rigid_core,
-        bulk_shear_ratio=args.bulk_shear_ratio)
+        bulk_shear_ratio=args.bulk_shear_ratio,
+        u_pc=args.u_pc, snes_type=args.snes_type)
     print(f"  solver built in {time.perf_counter() - t0:.1f}s; "
           f"mixed space {z.function_space().dim()} dofs in "
           f"{len(z.subfunctions)} fields")
@@ -1205,7 +1318,7 @@ def main():
         # object passed in, so this verifies what the solver actually stored.
         # Degree-2 weighted, because a difference in shape rather than scale
         # would not show in the totals.
-        parent, sub, _, _ = build_meshes(args.configuration, h=args.h,
+        parent, sub, _, _ = build_meshes(args.configuration, h=args.h, path=args.mesh,
                                          untangle=args.untangle,
                                      curve_enabled=not args.no_curve)
         solver, z, layout, sigma_n, sigma_parent, sigma_sub = build_solver(
@@ -1248,7 +1361,7 @@ def main():
         # that decides), and the deviation from the exact sigma_n (which also
         # contains the CG2 interpolation error and therefore plateaus at a
         # nonzero floor rather than at zero).
-        parent, sub, _, _ = build_meshes(args.configuration, h=args.h,
+        parent, sub, _, _ = build_meshes(args.configuration, h=args.h, path=args.mesh,
                                          untangle=args.untangle,
                                      curve_enabled=not args.no_curve)
         sigma_n = cap_sigma_hat(nmax)

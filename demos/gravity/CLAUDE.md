@@ -3,9 +3,9 @@
 > On branch `sghelichkhani/selfgravity` the work has moved past gravity alone.
 > This document and `GRAVITY-LESSONS-LEARNED.md` remain the record of the
 > standalone Poisson/DtN development and are still accurate for it, but the
-> active design is `ROADMAP-GIA-SELFGRAV.md`: the shipped `GravitySolver`
-> coupled to the viscoelastic GIA solvers, with rotational feedback and a
-> time-varying geoid feeding sea level. One position below is superseded there —
+> historical coupled design is
+> `NOTES/poisson/HISTORICAL-ROADMAP-GIA-SELFGRAV.md`. The current extraction
+> design is `NOTES/PLAN.md`. One position below is superseded —
 > the "DtN degree vs buffer" trade in `ROADMAP-GRAVITY.md` uses the wrong
 > exponent for the far-field residual, and §1.2 of the new road map corrects it.
 > The coupled solver now exists in 2-D and is verified; **"The monolithic
@@ -400,7 +400,7 @@ mesh. This class stays as the validated 2D reference.
 
 Added 2026-07-30, on branch `sghelichkhani/selfgravity`. Everything above this
 line is the gravity-alone record and is still accurate for it. What follows is
-Track 2 of `ROADMAP-GIA-SELFGRAV.md`: the viscoelastic mechanics, the
+Track 2 of `NOTES/poisson/HISTORICAL-ROADMAP-GIA-SELFGRAV.md`: the viscoelastic mechanics, the
 gravitational Poisson equation with its DtN treatment, and the rotational
 closure, solved together in one mixed space and one Newton solve. The 2-D
 prototype exists and has passed ten verification gates; the road map's §9.5

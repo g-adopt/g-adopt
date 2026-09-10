@@ -6,6 +6,12 @@ import sys
 
 import firedrake as fd
 import numpy as np
+
+try:
+    from scipy.linalg import lu_factor as _lu_factor, lu_solve as _lu_solve
+    _HAVE_SCIPY = True
+except ImportError:  # pragma: no cover - scipy ships in the firedrake venv
+    _HAVE_SCIPY = False
 from ufl.indexed import Indexed
 from firedrake.dmhooks import get_function_space
 from firedrake.petsc import PETSc
@@ -48,20 +54,129 @@ class FreeSurfaceMassInvPC(fd.MassInvPC):
         return a, bcs
 
 
-class SPDAssembledPC(fd.AssembledPC):
-    """Version of AssembledPC that sets the SPD flag for the matrix.
+def near_nullspace_basis(V, modes: str, *, max_degree: int = 1,
+                         divfree_tol: float = 1e-8):
+    """The near-nullspace named by `modes`, on the function space `V`.
 
-    For use in a fieldsplit_0 block (the Stokes velocity block, or the gravity
-    potential block) in combination with gamg. Setting PETSc MatOption MAT_SPD
-    (for Symmetric Positive Definite matrices) switches the Krylov method used
-    for eigenvalue estimates to CG - both in the Chebyshev smoothers and in
-    GAMG's smoothed-aggregation setup - and propagates the SPD flag to the
-    coarse-grid operators. All of these are benign for a genuinely SPD block.
+    Split out of `SPDAssembledPC.initialize` so that the name can be validated
+    without a PETSc `PC` in hand. That matters because a `ValueError` raised
+    inside a python PC callback does not reach the caller as itself - see
+    `_RealBlockPCBase._loud`.
 
-    Users can provide this class as a `pc_python_type`
-    entry to a PETSc solver option dictionary.
+    Args:
+      V: the function space the modes are built on.
+      modes: ``"rigid"`` for the six rigid-body modes, or ``"incompressible"``
+        for those plus the low-degree divergence-free fields.
+      max_degree, divfree_tol: passed to `near_incompressible_modes`; ignored
+        for ``"rigid"``.
 
+    Returns:
+      A Firedrake `VectorSpaceBasis`.
+
+    Raises:
+      ValueError: if `modes` is not a recognised name. ``"none"`` is handled by
+        the caller, which skips this function entirely.
     """
+    if modes == "rigid":
+        return rigid_body_modes(
+            V, rotational=True, translations=list(range(V.value_size)))
+    if modes == "incompressible":
+        return near_incompressible_modes(
+            V, max_degree=max_degree, divfree_tol=divfree_tol)
+    raise ValueError(
+        f"near_nullspace must be 'none', 'rigid' or 'incompressible', "
+        f"not {modes!r}")
+
+
+class _AssembledBlockPC(fd.AssembledPC):
+    """`AssembledPC` with an SPD flag and a selectable near-nullspace.
+
+    This class carries two settings that are **independent of each other**, and
+    it exists in this shape because they used to be tangled together.
+
+    **The SPD flag.** Setting the PETSc MatOption MAT_SPD (for Symmetric
+    Positive Definite matrices) switches the Krylov method used for eigenvalue
+    estimates to CG - both in the Chebyshev smoothers and in GAMG's
+    smoothed-aggregation setup - and propagates the SPD flag to the coarse-grid
+    operators. All of these are benign for a genuinely SPD block, and wrong for
+    a block that is not. Use it on a fieldsplit_0 block: the Stokes velocity
+    block, or the gravity potential block.
+
+    **The near-nullspace.** GAMG builds coarse spaces that reproduce whatever
+    near-nullspace it is handed, so the choice must match the block's slow
+    modes:
+
+    ``"none"``
+        Smoothed aggregation alone.
+    ``"rigid"``
+        The six rigid-body modes. The correct choice for an elasticity block at
+        a moderate bulk/shear ratio.
+    ``"incompressible"``
+        The rigid-body modes **and** the low-degree divergence-free fields, from
+        `near_incompressible_modes`. A strict superset of ``"rigid"``. Use it
+        when the volumetric penalty
+        $\\lambda\\int(\\nabla\\cdot u)(\\nabla\\cdot v)$ makes the
+        divergence-free space the slow one, which happens as the bulk/shear
+        ratio grows and equally at any large $dt/\\tau$.
+
+    **Why the modes are built here and not passed in.** A `near_nullspace`
+    supplied on an outer mixed space never reaches GAMG underneath
+    `DtNTwoBlockSchurPC`, and nothing says so. Firedrake composes the basis onto
+    the outer space's field index sets and `PCFIELDSPLIT` reads it back by
+    querying those index sets
+    (`src/ksp/pc/impls/fieldsplit/fieldsplit.c:721`, in `PCSetUp_FieldSplit`).
+    `DtNTwoBlockSchurPC` registers *merged* index sets of its own, and the
+    nested split inside block 0 builds fresh ones from a sub-DM, so the query
+    matches nothing and the modes are silently dropped: no error, no warning,
+    and the only symptom is GAMG coarsening an elasticity block on smoothed
+    aggregation alone. This class stops relying on propagation. It asks its own
+    DM for its own function space, builds the modes there *after* `AssembledPC`
+    has assembled the block, and hangs them on the assembled matrix where GAMG
+    will actually look.
+
+    Both settings are read as PETSc options under this PC's prefix, so a driver
+    can now ask for **any** combination::
+
+        "..._pc_python_type": "gadopt.SPDAssembledPC",
+        "..._spd": True,                    # default for this class
+        "..._near_nullspace": "rigid",      # "none" | "rigid" | "incompressible"
+
+    and the ``"incompressible"`` mode set takes two more::
+
+        "..._solenoidal_max_degree": 1      # the default (before filtering)
+        "..._solenoidal_divfree_tol": 1e-8  # relative L2 divergence cut
+
+    Degree 1 already spans the complete space of linear divergence-free fields;
+    raising it saturates GAMG's aggregates and can drive a `DIVERGED_NANORINF`
+    unless the aggregate size is raised too - see `near_incompressible_modes`.
+
+    `SPDAssembledPC`, `RigidBodyAssembledPC` and `NearlyIncompressibleAssembledPC`
+    are siblings that only change the defaults below. They are siblings rather
+    than a chain because a name asserting a property must not be a base for a
+    class that switches it off: `RigidBodyAssembledPC` does not set MAT_SPD, and
+    inheriting it from something called `SPDAssembledPC` would say otherwise.
+    Keep using all three by name; every caller reaches them through the *string*
+    in a solver-options dictionary, and a broken name there surfaces as
+    `PETSc.Error: error code 101` naming nothing.
+
+    Note:
+      The two mode-carrying names default to ``spd = False``, which is what they
+      did before this class absorbed them. That is deliberate: the
+      published iteration counts for the near-incompressible arms were measured
+      without the flag, and turning it on by default would silently invalidate
+      them. Setting ``"..._spd": True`` on those subclasses is now a one-line
+      change, and is expected to help on a genuinely symmetric block. Check that
+      the block *is* symmetric first - a Nitsche or prestress-advection term can
+      break the symmetry that MAT_SPD asserts.
+    """
+
+    #: Default for the MAT_SPD flag; overridden by the ``spd`` PETSc option.
+    _spd = True
+    #: Default mode set; overridden by the ``near_nullspace`` PETSc option.
+    _near_nullspace = "none"
+    _default_max_degree = 1
+    _default_divfree_tol = 1e-8
+
     def initialize(self, pc: PETSc.PC):
         """Initialises the preconditioner.
 
@@ -69,28 +184,75 @@ class SPDAssembledPC(fd.AssembledPC):
           pc: PETSc preconditioner.
         """
         super().initialize(pc)
+        opts = PETSc.Options(pc.getOptionsPrefix() or "")
         mat = self.P.petscmat
-        mat.setOption(mat.Option.SPD, True)
+
+        self._spd_wanted = opts.getBool("spd", self._spd)
+        if self._spd_wanted:
+            mat.setOption(mat.Option.SPD, True)
+
+        modes = opts.getString("near_nullspace", self._near_nullspace)
+        if modes == "none":
+            return
+
+        try:
+            basis = near_nullspace_basis(
+                get_function_space(pc.getDM()).collapse(), modes,
+                max_degree=opts.getInt(
+                    "solenoidal_max_degree", self._default_max_degree),
+                divfree_tol=opts.getReal(
+                    "solenoidal_divfree_tol", self._default_divfree_tol),
+            )
+        except ValueError as exc:
+            # PETSc flattens a Python exception raised inside a python PC, so
+            # the message has to be printed before it is raised - see
+            # `_RealBlockPCBase._loud`, which measured that behaviour.
+            raise _RealBlockPCBase._loud(exc)
+        mat.setNearNullSpace(basis.nullspace())
+
+    def update(self, pc: PETSc.PC):
+        """Re-assembles the block, then puts the SPD flag back.
+
+        **`MatAssemblyEnd` clears MAT_SPD** unless MAT_SPD_ETERNAL was set --
+        PETSc `src/mat/interface/matrix.c:6345`,
+        `if (!mat->spd_eternal) mat->spd = PETSC_BOOL3_UNKNOWN;`. The base class
+        re-assembles into the same matrix on every update, so without this the
+        flag is live for the first solve and absent from every one after it, and
+        nothing says so. petsc4py exposes no `SPD_ETERNAL` option, so the flag is
+        simply set again.
+
+        The near-nullspace needs no such repair: it is an attribute of the
+        matrix rather than a state flag, so re-assembly leaves it in place, and
+        rebuilding the modes here would pay for them on every timestep.
+        """
+        super().update(pc)
+        if getattr(self, "_spd_wanted", False):
+            mat = self.P.petscmat
+            mat.setOption(mat.Option.SPD, True)
 
 
-class RigidBodyAssembledPC(fd.AssembledPC):
-    """`AssembledPC` that builds the near-nullspace from its OWN block.
+class SPDAssembledPC(_AssembledBlockPC):
+    """`_AssembledBlockPC` with the MAT_SPD flag and no near-nullspace.
 
-    **A `near_nullspace` supplied on the outer mixed space never reaches GAMG
-    underneath `DtNTwoBlockSchurPC`, and nothing says so.** Firedrake composes
-    the basis onto the outer space's field index sets and `PCFIELDSPLIT` reads
-    it back by querying those index sets
-    (`src/ksp/pc/impls/fieldsplit/fieldsplit.c:721`, in `PCSetUp_FieldSplit`).
-    `DtNTwoBlockSchurPC` registers *merged* index sets of its own, and the
-    nested split inside block 0 builds fresh ones from a sub-DM, so the query
-    matches nothing and the modes are silently dropped: no error, no warning,
-    and the only symptom is GAMG coarsening an elasticity block on smoothed
-    aggregation alone.
+    The historical name, and the defaults it always had. Equivalent to
+    ``spd = True``, ``near_nullspace = "none"``. See `_AssembledBlockPC` for both
+    settings and for how to override either from a solver-options dictionary.
 
-    The fix is to stop relying on propagation. This subclass asks its own DM
-    for its own function space, builds the rigid modes there *after*
-    `AssembledPC` has assembled the block, and hangs them on the assembled
-    matrix where GAMG will actually look.
+    Use it on a block that is genuinely symmetric positive definite: the Stokes
+    velocity block, or the gravity potential block, whose shift makes it
+    strictly SPD.
+    """
+
+    _spd = True
+    _near_nullspace = "none"
+
+
+class RigidBodyAssembledPC(_AssembledBlockPC):
+    """`SPDAssembledPC` defaulting to the six rigid-body modes, without MAT_SPD.
+
+    Equivalent to `_AssembledBlockPC` with ``near_nullspace = "rigid"`` and
+    ``spd = False``. See that class for why the modes are built from this PC's
+    own block rather than propagated in, and for how to override either setting.
 
     Select it by name on whichever split holds the displacement::
 
@@ -102,20 +264,11 @@ class RigidBodyAssembledPC(fd.AssembledPC):
     the near-nullspace the caller declared is simply absent from GAMG's setup.
     """
 
-    def initialize(self, pc: PETSc.PC):
-        """Initialises the preconditioner.
-
-        Args:
-          pc: PETSc preconditioner.
-        """
-        super().initialize(pc)
-        V = get_function_space(pc.getDM()).collapse()
-        basis = rigid_body_modes(
-            V, rotational=True, translations=list(range(V.value_size)))
-        self.P.petscmat.setNearNullSpace(basis.nullspace())
+    _spd = False
+    _near_nullspace = "rigid"
 
 
-class NearlyIncompressibleAssembledPC(fd.AssembledPC):
+class NearlyIncompressibleAssembledPC(_AssembledBlockPC):
     r"""`AssembledPC` seeding GAMG with rigid-body *and* divergence-free modes.
 
     The compressible internal-variable stress carries a volumetric penalty
@@ -170,24 +323,8 @@ class NearlyIncompressibleAssembledPC(fd.AssembledPC):
     `gadopt.RigidBodyAssembledPC`.
     """
 
-    _default_max_degree = 1
-    _default_divfree_tol = 1e-8
-
-    def initialize(self, pc: PETSc.PC):
-        """Initialises the preconditioner.
-
-        Args:
-          pc: PETSc preconditioner.
-        """
-        super().initialize(pc)
-        V = get_function_space(pc.getDM()).collapse()
-        opts = PETSc.Options(pc.getOptionsPrefix() or "")
-        max_degree = opts.getInt("solenoidal_max_degree", self._default_max_degree)
-        divfree_tol = opts.getReal("solenoidal_divfree_tol", self._default_divfree_tol)
-        basis = near_incompressible_modes(
-            V, max_degree=max_degree, divfree_tol=divfree_tol
-        )
-        self.P.petscmat.setNearNullSpace(basis.nullspace())
+    _spd = False
+    _near_nullspace = "incompressible"
 
 
 class DtNTwoBlockSchurPC(fd.PCBase):
@@ -291,22 +428,25 @@ class DtNTwoBlockSchurPC(fd.PCBase):
         _, subdm = pc.getDM().createSubDM(list(range(i_R)))
         ksp_potential.setDM(subdm)
         ksp_potential.setDMActive(PETSc.KSP.DMActive.ALL, False)
-        # **And the same for the multiplier KSP**, which had none. Without it
-        # anything on block 1 that resolves a DM - any `PCBase` subclass, since
-        # `get_appctx` goes through `pc.getDM()` - has no context to resolve.
-        # The recorded symptom is `AttributeError: 'NoneType' object has no
-        # attribute 'appctx'`, which names neither this preconditioner nor the
-        # block it came from. **Measured here it is worse than that: reverting
-        # these three lines and running
+        # **And the same for the multiplier KSP when its PC uses the DM.** A
+        # `PCBase` subclass resolves its appctx through `pc.getDM()` and needs
+        # the split context. `pc_type: none` does not use a DM and must not ask
+        # Firedrake to split one: a taped linear residual can contain
+        # `Action(MatrixBase, u)`, which Firedrake cannot split when `u` is a
+        # cross-mesh Real field. Both shipped low-rank presets use `none` here.
+        #
+        # Without the DM on an active block-1 PC, the recorded symptom is
+        # `AttributeError: 'NoneType' object has no attribute 'appctx'`. It does
+        # not name this preconditioner or the faulty block. Reverting these
+        # three lines and running
         # `tests/unit/test_dtn_multiplier_pc.py::TestTheSolveAgrees` gives a
-        # SEGMENTATION FAULT (exit 139), not a Python exception** - so there is
-        # not even a traceback to read. That is why the four options-file
-        # routes to this block all dead-end, and why `DtNMultiplierDiagPC`
-        # below could not exist as shipped code until now. Three lines, and
-        # they unlock the whole family.
-        _, subdm_real = pc.getDM().createSubDM(list(range(i_R, len(W))))
-        ksp_real.setDM(subdm_real)
-        ksp_real.setDMActive(PETSc.KSP.DMActive.ALL, False)
+        # SEGMENTATION FAULT (exit 139), not a Python exception**. This DM makes
+        # `DtNMultiplierDiagPC` available when the caller selects it.
+        if ksp_real.getPC().getType() != PETSc.PC.Type.NONE:
+            _, subdm_real = pc.getDM().createSubDM(
+                list(range(i_R, len(W))))
+            ksp_real.setDM(subdm_real)
+            ksp_real.setDMActive(PETSc.KSP.DMActive.ALL, False)
 
         self.pc = inner
 
@@ -427,17 +567,38 @@ class _RealBlockPCBase(fd.preconditioners.base.PCBase):
         return out
 
     def apply(self, pc, x, y):
+        self._apply(pc, x, y, self._solve)
+
+    def applyTranspose(self, pc, x, y):
+        """Precondition with S^T, not S.
+
+        The adjoint inner solve calls `applyTranspose`. For a symmetric block --
+        the exact diagonal -- S^T = S and the default forwards to `_solve`. A PC
+        whose block is asymmetric -- the dense Schur complement, whose relative
+        asymmetry is ~0.34 by construction -- must override `_solve_transpose` to
+        solve S^T x = b. If it does not, the adjoint solve is preconditioned by
+        the wrong operator: still a valid preconditioner in the sense that it
+        changes no residual, but a poor one, so the outer Krylov pays for it.
+        """
+        self._apply(pc, x, y, self._solve_transpose)
+
+    def _apply(self, pc, x, y, solve):
         comm = pc.comm.tompi4py()
         rhs = self._gather(comm, x, self._n)
-        sol = self._solve(rhs)
+        sol = solve(rhs)
         lo, hi = y.owner_range
         y.array_w[:] = sol[lo:hi]
 
-    def applyTranspose(self, pc, x, y):
-        self.apply(pc, x, y)
-
     def _solve(self, rhs):
         raise NotImplementedError
+
+    def _solve_transpose(self, rhs):
+        """Solve S^T x = rhs. A symmetric block inherits the forward solve.
+
+        Backward-compatible default: `DtNMultiplierDiagPC`'s block is diagonal,
+        hence symmetric, so its transpose solve is its forward solve unchanged.
+        """
+        return self._solve(rhs)
 
     def view(self, pc, viewer=None):
         super().view(pc, viewer)
@@ -525,7 +686,8 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
                 "appctx under 'dtn_block1_diagonal'. SelfGravitatingGIASolver "
                 "supplies it; a caller assembling this system by hand must "
                 "pass appctx={'dtn_block1_diagonal': ...} with one entry per "
-                "Real sub-field, multipliers first then any rotation rows.\n"
+                "Real sub-field: DtN multipliers, optional core pressure, then "
+                "any rotation rows.\n"
                 "Two common causes, and the second is not a mistake in your "
                 "options:\n"
                 "  * this is GravitySolver, which supplies no diagonal and "
@@ -542,15 +704,183 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
         if diag.size != self._n:
             raise self._loud(ValueError(
                 f"the multiplier block is {self._n} wide but the supplied "
-                f"diagonal has {diag.size} entries. If rotation is on, the "
-                "three closure rows must be included; if it is off, they must "
-                "not be."))
+                f"diagonal has {diag.size} entries. Include the optional core "
+                "pressure and rotation rows exactly when they are in the mixed "
+                "space."))
         if np.any(diag == 0.0):
+            zero = np.flatnonzero(diag == 0.0).tolist()
             raise self._loud(ValueError(
-                "the block-1 diagonal contains a zero entry, so it cannot be "
-                "inverted; a mode with zero scale or a boundary with zero "
-                "discrete area would do that, and both are bugs upstream."))
+                f"the block-1 diagonal contains a zero entry at positions "
+                f"{zero}, so DtNMultiplierDiagPC cannot invert it. A fluid-core "
+                "pressure row has a physical zero diagonal; use pc_type none or "
+                "gadopt.DtNMultiplierDenseSchurPC for that saddle system. A "
+                "zero DtN or rotation diagonal is a bug upstream."))
         self._d = diag
 
     def _solve(self, rhs):
         return rhs / self._d
+
+
+class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
+    r"""Form the whole multiplier Schur complement once at setup and factor it.
+
+    **Opt-in, exactly like `DtNMultiplierDiagPC`. This is not any preset's
+    default and must not be made one** -- both shipped presets run block 1 at
+    `pc_type: none`, and flipping that would silently move every number the
+    current campaign is producing. Select it by name on the multiplier block::
+
+        "dtn_fieldsplit_1_pc_type": "python",
+        "dtn_fieldsplit_1_pc_python_type": "gadopt.DtNMultiplierDenseSchurPC",
+
+    with a full Schur factorisation above it
+    (`dtn_pc_fieldsplit_schur_fact_type: full`), so that the `Amat` this PC is
+    handed is PETSc's `MATSCHURCOMPLEMENT`. **One `A.mult(e_k)` is then one
+    application of the Schur complement S**, and the block is only 72 columns
+    wide at L = 5 (75 with rotation), so that many `MatMult`s build S entirely,
+    each costing one block-0 solve. Contract the columns into a dense array on
+    every rank, factor it once, and apply the factors from then on. No Firedrake
+    assembly is involved anywhere, which is why this works where `jacobi`,
+    `selfp`, `AssembledPC` and `-pc_fieldsplit_schur_precondition full` all fail
+    on the `Real` block -- the same reason `DtNMultiplierDiagPC` above works.
+
+    Unlike the diagonal PC, this one reads **nothing** from the appctx. It needs
+    no `dtn_block1_diagonal`, no module global and no per-solver wiring: it forms
+    S purely from the operator handed to it. That is the design rule this project
+    settled on -- a preconditioner that reads its data off the operator has no
+    appctx failure mode, so it survives a `pyadjoint` replay (which drops appctx)
+    where the diagonal PC does not.
+
+    ## Build once per time-step value
+
+    The first build runs in `initialize`. Fixed-step solves keep that factor.
+    `SelfGravitatingGIASolver` puts its live `dt` in the application context.
+    If `dt.assign(...)` changes the value, `update` builds a new complement.
+    A normal matrix reassembly with unchanged `dt` does not rebuild it.
+
+    ## Two correctness conditions, and the second is not what the design assumed
+
+    - The coupled Jacobian must stay constant while the time step stays fixed.
+      A new time-step value changes the mechanics block and triggers a rebuild.
+    - S must be *linear*, and it is only as linear as the block-0 solve inside
+      it. With `dtn_fieldsplit_0_ksp_type: preonly` (a fixed LU) that solve is a
+      linear operator and the complement is exact to roundoff. With an iterative
+      block-0 KSP -- the configuration that runs at production -- FGMRES to a
+      relative tolerance is **not** a linear operator, so each column is built
+      with a slightly different effective inverse and S is approximate. Harmless
+      for a preconditioner, fatal for "apply it exactly forever": the honest
+      description is a very good preconditioner built once.
+
+    ## Transpose
+
+    S is **structurally asymmetric** (relative asymmetry ~0.34): the constraint
+    row carries `theta_psi * u_k^T` while the feedback column carries
+    `theta_psi * (lam_k - alpha/R) * u_k`, so S is a symmetric matrix times a
+    diagonal spanning 0..L/R. `applyTranspose` -- which the adjoint inner solve
+    calls -- must therefore solve S^T x = b, not S x = b. `_solve_transpose`
+    below does exactly that; the base default (forward = transpose) would be
+    silently wrong here.
+    """
+
+    _prefix = "dtn_multiplier_dense_schur_"
+
+    def initialize(self, pc):
+        self._time_step = self._current_time_step(pc)
+        self._build(pc)
+
+    def update(self, pc):
+        """Rebuild the complement only after the time-step value changes."""
+        time_step = self._current_time_step(pc)
+        if time_step is None or self._time_step is None:
+            return
+        if time_step != self._time_step:
+            self._time_step = time_step
+            self._build(pc)
+
+    def _current_time_step(self, pc):
+        """Return the live GIA time-step value, if the solver supplies it."""
+        value = self.get_appctx(pc).get("gia_time_step")
+        return None if value is None else float(value)
+
+    def _build(self, pc):
+        A, _ = pc.getOperators()
+        # getSizes returns ((local_rows, GLOBAL_rows), (local_cols, GLOBAL_cols)).
+        # Take the GLOBAL sizes. Every Real dof sits on one rank, so the LOCAL
+        # column count is the whole block (72) on that rank and 0 on every other.
+        # This PC builds S redundantly on every rank -- `_gather` Allreduces a
+        # buffer of length `self._n`, and `_solve` runs the dense factor on all
+        # ranks -- so `n` must be the global size everywhere. Keying it on the
+        # local size makes the off-rank processes build a 0x0 S, skip the
+        # (collective) MatMult loop, and raise "zero-size array to reduction" at
+        # `np.abs(S).max()`. Measured on a 104-rank Gadi run: an Unhandled Python
+        # Exception on every rank but 0, invisible to any serial unit test.
+        ((_lm, m), (_ln, n)) = A.getSizes()
+        if m != n:
+            raise self._loud(ValueError(
+                f"DtNMultiplierDenseSchurPC needs a square operator to form the "
+                f"Schur complement, but its Amat is {m}x{n}. The block-1 PC must "
+                "be handed the MATSCHURCOMPLEMENT of a full Schur factorisation "
+                "(dtn_pc_fieldsplit_schur_fact_type: full)."))
+        comm = pc.comm.tompi4py()
+        e = A.createVecRight()
+        col = A.createVecLeft()
+        S = np.zeros((n, n))
+        for k in range(n):
+            e.set(0.0)
+            lo, hi = e.owner_range
+            if lo <= k < hi:
+                e.setValue(k, 1.0)
+            e.assemble()
+            # One MatMult of the MATSCHURCOMPLEMENT is one application of S, so
+            # column k of S is S e_k, gathered redundantly onto every rank.
+            A.mult(e, col)
+            S[:, k] = self._gather(comm, col, n)
+        e.destroy()
+        col.destroy()
+        self._n = n
+        self._S = S
+        self._factorise(S)
+        scale = max(np.abs(S).max(), 1e-300)
+        PETSc.Sys.Print(
+            f"    [dense Schur] {n}x{n} built in {n} block-0 applications; "
+            f"cond {np.linalg.cond(S):.3e}  "
+            f"relative asymmetry {np.abs(S - S.T).max() / scale:.3e}")
+
+    def _factorise(self, S):
+        """Factor S so that both S x = b and S^T x = b are cheap from here on.
+
+        Prefer an LU factorisation (scipy `lu_factor`/`lu_solve`), which does the
+        forward and the transpose solve off one factoring; fall back to storing
+        the inverse and its transpose when scipy is absent.
+        """
+        n = S.shape[0]
+        if _HAVE_SCIPY:
+            lu = _lu_factor(S)
+            # lu_factor never raises on a singular matrix -- it returns a U with
+            # a zero pivot and a LinAlgWarning. Catch the zero pivot here so the
+            # failure is a NAMED ValueError above the eventual PETSc 101, never a
+            # silent NaN solve.
+            if not np.all(np.abs(np.diag(lu[0])) > 0.0):
+                raise self._loud(ValueError(
+                    f"the {n}x{n} multiplier Schur complement is singular: a "
+                    "zero pivot appeared in its LU factorisation. A mode with "
+                    "zero scale or a boundary with zero discrete area would do "
+                    "that, and both are bugs upstream."))
+            self._lu = lu
+        else:  # pragma: no cover - scipy ships in the firedrake venv
+            try:
+                self._inv = np.linalg.inv(S)
+            except np.linalg.LinAlgError as exc:
+                raise self._loud(ValueError(
+                    f"the {n}x{n} multiplier Schur complement is singular: "
+                    f"{exc}")) from None
+            self._invT = self._inv.T.copy()
+
+    def _solve(self, rhs):
+        if _HAVE_SCIPY:
+            return _lu_solve(self._lu, rhs, trans=0)
+        return self._inv @ rhs
+
+    def _solve_transpose(self, rhs):
+        if _HAVE_SCIPY:
+            return _lu_solve(self._lu, rhs, trans=1)
+        return self._invT @ rhs

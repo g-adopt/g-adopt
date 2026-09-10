@@ -1,15 +1,16 @@
 # Road map: boundary treatment for the gravitational Poisson equation — Dirichlet-to-Neumann maps, extended domains, and how to combine them
 
-> **Status note, 2026-08-11.** The checkpoint below is still correct for this
-> solver: E6 is the only open experiment. Two things happened after it.
+> **Status note, 2026-08-18.** This file is the radial DtN design record. E6
+> remains open, and the Cartesian implementation does not exist.
 > `GravitySolver` became a component of `SelfGravitatingGIASolver`
 > (`gadopt/gia_gravity.py`), so the potential block now sits inside a larger
 > mixed system with its own preconditioner. And the low-rank representation
 > stayed an opt-in path, because it removes unknowns from the residual and so
 > needs the hand-written adjoint in `gadopt/dtn_adjoint.py`. For the state of
-> the work that consumed this solver, read `NOTES/HANDOVER.md`.
+> the work that consumed this solver, read `NOTES/HANDOVER.md`. Read
+> `NOTES/PLAN.md` for the current package design and tests.
 
-## 0. Progress checkpoint (solver shipped into gadopt; only E6 outstanding)
+## 0. Progress checkpoint: radial solver shipped; E6 and Cartesian remain open
 
 Status as of the gadopt integration pass (2026-07-21). Every validation
 experiment except the cost study E6 is done, and the generalised solver of

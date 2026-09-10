@@ -66,7 +66,7 @@ TWO CASES, ONE INSTRUMENT
     --case annulus2d  A small 2-D annulus. Runs on a laptop in about a minute.
                       It establishes that the instrument works and that its
                       numbers move. It establishes NOTHING about whether
-                      anything helps: see rule 2 of NOTES/fastdtn/PLAN.md.
+                      anything helps: see rule 2 of NOTES/fastdtn/HISTORICAL-PLAN.md.
     --case spada3d    The B1/B5 configuration, through `b1_elastic.build_solver`,
                       so the harness measures the driver's own solver rather
                       than a second one built to look like it. Every 3-D number
@@ -395,7 +395,7 @@ def measure(args):
 def check_floors(rec):
     """The floors, checked rather than described.
 
-    Rule 7 of `NOTES/fastdtn/PLAN.md`: a measurement must be able to come back
+    Rule 7 of `NOTES/fastdtn/HISTORICAL-PLAN.md`: a measurement must be able to come back
     negative. Each of these is a way for the instrument to be silently blind,
     and each has a value that a blind instrument would produce.
     """

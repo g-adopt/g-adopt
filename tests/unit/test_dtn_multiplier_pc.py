@@ -319,7 +319,7 @@ class TestTheSolveAgrees:
 
 class TestTheGuardRefusesWhatItCannotDescribe:
     """`block1_diagonal` must raise, not silently mis-describe, if the Real
-    block ever stops being 'multipliers then rotation rows'.
+    block ever stops being 'multipliers, core pressure, then rotation rows'.
 
     Exercised against a stand-in rather than a coupled solver, because the
     thing under test is the accounting, and building a 2-D coupled solver here
@@ -327,7 +327,7 @@ class TestTheGuardRefusesWhatItCannotDescribe:
     """
 
     @staticmethod
-    def _fake(real_in_space, multipliers, rotation):
+    def _fake(real_in_space, multipliers, rotation, core_pressure=None):
         """A stand-in whose Real block can be laid out arbitrarily."""
         from gadopt.gia_gravity import SelfGravitatingGIASolver
 
@@ -368,27 +368,41 @@ class TestTheGuardRefusesWhatItCannotDescribe:
         class _Layout:
             gravity_form = _Form()
             rotation_names = ("m1", "m2", "m3")
+            # The solver reads layout.dtn_representation (gia_gravity.py); this
+            # double represents the multiplier layout the diagonal PC serves.
+            dtn_representation = "multiplier"
 
             def __init__(self):
                 self.multipliers = tuple(multipliers)
+                self.core_pressure = core_pressure
                 self.rotation = dict(rotation)
 
             @property
             def real_fields(self):
-                return tuple(self.multipliers) + tuple(
+                core = (() if self.core_pressure is None
+                        else (self.core_pressure,))
+                return tuple(self.multipliers) + core + tuple(
                     self.rotation[n] for n in self.rotation_names
                     if n in self.rotation)
 
         class _Fake(SelfGravitatingGIASolver):
+            # The CURRENT mechanism: `block1_diagonal` reads `theta_psi_value`,
+            # which the solver computes from its live factors
+            # (`scaling_factor * B_mu / Lambda`). The double drives it through
+            # `scaling_factor` so a test can vary one factor and watch the
+            # diagonal scale, rather than overriding the composite property that
+            # no longer feeds the diagonal.
+            scaling_factor = 1.0
+
             def __init__(self):
                 pass
 
             @property
-            def theta_psi(self):
-                return 1.0
+            def theta_psi_value(self):
+                return self.scaling_factor
 
             def _theta_rot(self, i):
-                return 1.0
+                return self.scaling_factor
 
             def _closure_constant(self, i):
                 return 2.0
@@ -432,6 +446,14 @@ class TestTheGuardRefusesWhatItCannotDescribe:
         assert np.allclose(d[:2], 1.0)
         assert np.isclose(d[2], 2.0)
 
+    def test_core_pressure_has_its_physical_zero_diagonal(self):
+        obj = self._fake(real_in_space=(1, 2, 3, 4), multipliers=(1, 2),
+                         core_pressure=3, rotation={"m3": 4})
+        diagonal = obj.block1_diagonal()
+        assert np.allclose(diagonal[:2], 1.0)
+        assert diagonal[2] == 0.0
+        assert diagonal[3] == 2.0
+
     def test_rotation_and_multiplier_rows_scale_together(self):
         """`scaling_factor` is structurally covered, not merely documented.
 
@@ -442,40 +464,23 @@ class TestTheGuardRefusesWhatItCannotDescribe:
         as least-resolved.
 
         It cannot happen by construction, because `scaling_factor` sits inside
-        **both** properties: `theta_psi` is `scaling_factor * B_mu / Lambda`
-        and `_theta_rot` is `s_i * scaling_factor * B_mu * Omega_sq`. Changing
-        it moves both rows by the same factor. This asserts that explicitly, so
-        the coverage is visible rather than inferred from reading two
-        properties.
+        **both** the multiplier prefactor `theta_psi = scaling_factor * B_mu /
+        Lambda` and the rotation prefactor `_theta_rot = s_i * scaling_factor *
+        B_mu * Omega_sq`. Changing it moves both rows by the same factor. The
+        double drives both off one `scaling_factor` attribute, so varying that
+        one factor and asserting the whole diagonal scales proves the coverage
+        rather than inferring it from reading two properties.
         """
-        class _Scaled(type(self._fake(real_in_space=(1, 2, 3),
-                                      multipliers=(1, 2),
-                                      rotation={"m3": 3}))):
-            pass
-
         base = self._fake(real_in_space=(1, 2, 3), multipliers=(1, 2),
                           rotation={"m3": 3})
         d1 = base.block1_diagonal()
 
-        # the same object with BOTH scalings multiplied by one factor, which is
-        # what a different `scaling_factor` does
+        # A different `scaling_factor` multiplies the multiplier rows (through
+        # `theta_psi_value`) and the rotation row (through `_theta_rot`) by the
+        # same factor, so the whole diagonal scales.
         factor = 3.0
-
-        class _F2(type(base)):
-            @property
-            def theta_psi(self):
-                return 1.0 * factor
-
-            def _theta_rot(self, i):
-                return 1.0 * factor
-
-            def _closure_constant(self, i):
-                return 2.0
-
-        obj2 = _F2()
-        obj2.solution = base.solution
-        obj2.layout = base.layout
-        d2 = obj2.block1_diagonal()
+        base.scaling_factor = factor
+        d2 = base.block1_diagonal()
         assert np.allclose(d2, factor * d1, rtol=1e-14), (d1, d2)
 
     def test_it_returns_none_on_an_empty_real_block(self):
@@ -508,6 +513,24 @@ class TestItIsScopedToTheCoupledSolver:
         pc.get_appctx = staticmethod(lambda _pc: {"mu": 1.0})
         with pytest.raises(ValueError, match="dtn_block1_diagonal"):
             pc.initialize(None)
+
+    def test_the_pc_refuses_a_core_pressure_zero_diagonal(self):
+        class _Operator:
+            @staticmethod
+            def getSizes():
+                return ((2, 2), (2, 2))
+
+        class _PC:
+            @staticmethod
+            def getOperators():
+                operator = _Operator()
+                return operator, operator
+
+        pc = DtNMultiplierDiagPC()
+        pc.get_appctx = staticmethod(
+            lambda _pc: {"dtn_block1_diagonal": np.array([1.0, 0.0])})
+        with pytest.raises(ValueError, match="fluid-core pressure row"):
+            pc.initialize(_PC())
 
     def test_the_gravity_solver_module_never_supplies_the_key(self):
         """If it ever does, the scoping decision has been reversed silently.
@@ -621,8 +644,12 @@ class TestTheNullCouplingConfiguration:
         class _Layout:
             gravity_form = form
             multipliers = tuple(range(1, 1 + n))
+            core_pressure = None
             rotation = {}
             rotation_names = ("m1", "m2", "m3")
+            # The solver reads layout.dtn_representation (gia_gravity.py); this
+            # double represents the multiplier layout the diagonal PC serves.
+            dtn_representation = "multiplier"
 
             @property
             def real_fields(self):
@@ -635,7 +662,12 @@ class TestTheNullCouplingConfiguration:
                 pass
 
             @property
-            def theta_psi(self):
+            def theta_psi_value(self):
+                # `block1_diagonal` reads `theta_psi_value`, which the solver
+                # computes from its factors and floors through `_row_scale_B_mu`
+                # at `B_mu = 0`. The double stands in for whatever number that
+                # returns, floored value included, so the test measures that the
+                # diagonal is proportional to it and never recomputes it.
                 return self.theta
 
         obj = _Fake()

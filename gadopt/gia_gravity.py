@@ -1,5 +1,5 @@
 r"""The monolithic self-gravitating GIA system: displacement, internal
-variables, potential, DtN multipliers and rotation, in one mixed space.
+variables, potential, DtN multipliers, core pressure, and rotation.
 
 `SelfGravitatingGIASolver` solves the viscoelastic momentum equation, the
 internal-variable evolution, the gravitational Poisson equation with its
@@ -153,6 +153,11 @@ from ufl import Form
 from .approximations import BaseGIAApproximation
 from .preconditioners import RigidBodyAssembledPC
 from .dtn_form import DtNGravityForm
+from pyadjoint.tape import annotate_tape, get_working_tape
+
+from .dtn_coupled import (CoupledLowRankDtN, install_augmented_context,
+                          taped_coupled_trace_coefficients)
+from .dtn_lowrank import apply_dirichlet_to_rows
 from .equations import Equation
 from .gravity_solver import real_scalar_solver_parameters
 from .momentum_equation import (
@@ -161,10 +166,11 @@ from .momentum_equation import (
     rotational_potential_term,
     self_gravity_term,
 )
-from .scalar_equation import mass_term, sink_term, source_term
+from .scalar_equation import mass_term, sink_term
 from .solver_options_manager import ConfigType, gamg_parameters
 from .stokes_integrators import (
     CoupledInternalVariableSolver,
+    internal_variable_source_term,
     newton_stokes_solver_parameters,
 )
 from .utility import ensure_constant
@@ -179,6 +185,7 @@ __all__ = [
     "rigid_rotation_nullspace",
     "self_gravitating_gia_space",
     "selfgrav_dtn_iterative_solver_parameters",
+    "selfgrav_dtn_lowrank_direct_solver_parameters",
     "selfgrav_dtn_schur_solver_parameters",
 ]
 
@@ -293,15 +300,43 @@ for. That preset is **not** transferable and must not be copied across.
 
 This has no 3-D successor and is not a fallback there: at production size
 block 0 is tens of millions of displacement dofs plus hundreds of millions of
-DG1 tensor dofs plus the potential. The candidates, neither yet measured, are
-static condensation of the internal variables (the `(m, m)` block is
-block-diagonal per cell, so it inverts exactly and for free) and using the
-segregated Picard iteration as the preconditioner. The 2-D prototype is the
-last cheap place to find out.
+DG1 tensor dofs plus the potential. The pointwise history layout removes those
+unknowns, but it is not exact elimination of the mixed weak DG formulation on
+curved cells. Slate local condensation cannot represent the general weak and
+facet forms required by GIA and must not be retried. The remaining candidate is
+the segregated Picard iteration as the preconditioner.
 
 Note also that reaching for a plain `fieldsplit` while debugging brings back
 PETSc's 128-field cap, which registering the two blocks as index sets is what
 avoids.
+"""
+
+
+selfgrav_dtn_lowrank_direct_solver_parameters = {
+    "mat_type": "matfree",
+    "ksp_type": "fgmres",
+    "ksp_rtol": 1e-11,
+    # No `Real` sub-fields, so there is nothing for `DtNTwoBlockSchurPC` to
+    # split off and no two-block Schur. The whole matrix-free operator `A + B`
+    # goes to `firedrake.AssembledPC`, which assembles the STOCK form `A` out of
+    # the operator context (the low-rank `B` is a `Python` update that carries
+    # no form and is left out of the assembly), LU-factorises it, and lets the
+    # flexible outer Krylov take up the rank-`k` difference in a few iterations.
+    "pc_type": "python",
+    "pc_python_type": "firedrake.AssembledPC",
+    "assembled_pc_type": "lu",
+    "assembled_pc_factor_mat_solver_type": "mumps",
+    "ksp_converged_reason": None,
+    "snes_converged_reason": None,
+}
+"""The 2-D direct preset for the low-rank DtN path with NO `Real` sub-fields.
+
+The low-rank representation eliminates the DtN multiplier `Real` fields, so with
+rotation off the mixed space carries no `Real` block at all. `DtNTwoBlockSchurPC`
+then has nothing to split off and refuses, which is correct: the whole operator
+assembles as one block. This preset LU-factorises that block through
+`firedrake.AssembledPC` and takes the low-rank `B` on the outer FGMRES. With one
+or more `Real` fields (rotation on) the two-block Schur presets still apply.
 """
 
 
@@ -330,7 +365,9 @@ def selfgrav_dtn_iterative_solver_parameters(
     *, condensed: bool = True, block0_rtol: float = 1e-2,
     outer_rtol: float = 1e-6, block0_max_it: int = 60,
     snes_rtol: float = 1e-4,
+    snes_type: str = "newtonls",
     u_pc: str = "gadopt.RigidBodyAssembledPC",
+    multiplier_pc: str = "none",
 ) -> dict:
     r"""The 3-D configuration that works, and the only one that does.
 
@@ -407,6 +444,24 @@ def selfgrav_dtn_iterative_solver_parameters(
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
         are converged to correspondingly fewer digits, which is a live question
         for the rotational closure.
+      snes_type: the outer method. `"newtonls"` is kept as the default because
+        this dictionary reaches the solver as a Mapping, and the Mapping path is
+        deliberately the one place `refuse_stale_preconditioner` does *not*
+        fire, so a caller may legitimately be running a power-law rheology here.
+        **For `exponent = 1` pass `"ksponly"`.** The residual is then linear -
+        which is the same fact that lets `DtNTwoBlockSchurPC.update` be a no-op -
+        and Newton spends a second linear solve, a Jacobian assembly and a full
+        GAMG setup per timestep to rediscover that. Note that `snes_rtol` is then
+        inert and `outer_rtol` alone controls the accuracy.
+      multiplier_pc: the preconditioner on the block-1 (`Real`) split. The
+        default `"none"` is the historical behaviour. Pass
+        `"gadopt.DtNMultiplierDenseSchurPC"` for the build-once dense Schur
+        complement, **and tighten `block0_rtol` to 1e-4 when you do**: `S` is
+        only as linear as the block-0 solve that builds it, and at the default
+        1e-2 the dense arm STAGNATES (measured: 642+ non-convergent block-0
+        calls, worse than no block-1 PC at all). At 1e-4 it is 19 block-0 calls
+        and 69 s per marching step against `none`'s 354 and 1036 s -- Gadi job
+        176103130, medium rung, L = 5, 104 ranks. See NOTES/fastdtn/HANDOVER.md.
       u_pc: the preconditioner on the displacement split. The default builds
         the rigid-body near-nullspace on the block itself; see
         `gadopt.RigidBodyAssembledPC` for why a `near_nullspace` declared on
@@ -425,7 +480,7 @@ def selfgrav_dtn_iterative_solver_parameters(
     """
     p = {
         "mat_type": "matfree",
-        "snes_type": "newtonls",
+        "snes_type": snes_type,
         "snes_linesearch_type": "l2",
         "snes_max_it": 100,
         "snes_atol": 1e-15,
@@ -453,7 +508,9 @@ def selfgrav_dtn_iterative_solver_parameters(
         "dtn_fieldsplit_1_ksp_rtol": 1e-4,
         "dtn_fieldsplit_1_ksp_max_it": 200,
         "dtn_fieldsplit_1_ksp_converged_reason": None,
-        "dtn_fieldsplit_1_pc_type": "none",
+        **({"dtn_fieldsplit_1_pc_type": "none"} if multiplier_pc == "none"
+           else {"dtn_fieldsplit_1_pc_type": "python",
+                 "dtn_fieldsplit_1_pc_python_type": multiplier_pc}),
     }
 
     def inner(pc_python, extra=None):
@@ -508,7 +565,13 @@ class FluidCore:
     Everything is the variation of one energy on the CMB facet,
     `SelfGravitatingGIASolver.fluid_core_energy`:
 
-        E = B_mu [ rho_core (u.n) psi + 0.5 rho_core g_0 (u.n)^2 ] ds
+        E = [ B_mu rho_core (u.n) psi
+              + 0.5 B_mu rho_core g_0 (u.n)^2
+              + beta_core p_core (u.n) ] ds
+
+    Here `p_core` is one uniform pressure multiplier and `beta_core` is a
+    nonzero row scale. Its variation enforces `int_CMB u.n ds = 0`, so the
+    eliminated incompressible core cannot change volume or mass.
 
     with `n` the **mantle's outward facet normal**, which at its inner boundary
     points *inward*, so `dot(u, n) = -u_r` there. `vertical_component(u)` - the
@@ -606,16 +669,18 @@ class GIASpaceLayout:
     of the dimension, so the indices of the later blocks are not knowable
     without both.
 
-    The `Real` sub-fields - multipliers then rotation - are **contiguous and
-    last**, which `DtNTwoBlockSchurPC.initialize` asserts and which is worth
-    keeping: anything else would leave sub-fields out of both of its blocks,
-    which is a silently wrong split rather than an error.
+    The `Real` sub-fields - DtN multipliers, core pressure, then rotation - are
+    **contiguous and last**, which `DtNTwoBlockSchurPC.initialize` asserts and
+    which is worth keeping: anything else would leave sub-fields out of both of
+    its blocks, which is a silently wrong split rather than an error.
 
     Attributes:
       displacement: index of the CG vector displacement block.
       internal_variables: indices of the DG tensor internal-variable blocks.
       potential: index of the potential block, which is on the *parent* mesh.
       multipliers: indices of the DtN multiplier `Real` blocks.
+      core_pressure: index of the fluid-core pressure `Real` block, or `None`
+        for a system without a fluid core.
       rotation: `{}` with rotation off; otherwise `{"m3": i}` in 2-D and
         `{"m1": i, "m2": i+1, "m3": i+2}` in 3-D. Keyed by name and never by
         position, because the 2-D field is `m_3` - index **2** of the rotation
@@ -636,6 +701,7 @@ class GIASpaceLayout:
     internal_variables: tuple[int, ...]
     potential: int
     multipliers: tuple[int, ...]
+    core_pressure: int | None
     rotation: dict[str, int]
     gravity_form: DtNGravityForm
     mechanics_mesh: Any
@@ -648,8 +714,16 @@ class GIASpaceLayout:
     #: condensation `internal_variables` is empty and the variables are stored
     #: `Function`s outside the mixed space, so this is the only record of it.
     internal_variable_space: Any = None
-    #: Whether the internal variables were condensed out of the mixed space.
+    #: Whether pointwise history substitution omits the variables from the space.
     condensed: bool = False
+    #: Which DtN representation the space was SIZED for, `"multiplier"` or
+    #: `"lowrank"`. Recorded because the space and the solver take it as
+    #: independent arguments and a disagreement is otherwise invisible: a
+    #: `"lowrank"` space handed to a `"multiplier"` solver has no `Real` fields
+    #: for the constraint rows to be written into, and the reverse leaves
+    #: `n_multipliers` unknowns in the space with nothing constraining them.
+    #: `SelfGravitatingGIASolver` refuses the mismatch rather than running it.
+    dtn_representation: str = "multiplier"
 
     @property
     def cross_mesh(self) -> bool:
@@ -658,16 +732,11 @@ class GIASpaceLayout:
     @property
     def n_fields(self) -> int:
         return (2 + len(self.internal_variables) + len(self.multipliers)
-                + len(self.rotation))
+                + (self.core_pressure is not None) + len(self.rotation))
 
     @property
     def real_fields(self) -> tuple[int, ...]:
-        """Every `Real` sub-field index, in space order."""
-        return tuple(self.multipliers) + tuple(sorted(self.rotation.values()))
-
-    @property
-    def real_fields(self) -> tuple[int, ...]:
-        """Every `Real` sub-field index, multipliers then rotation, in order.
+        """All `Real` field indices, in their mixed-space order.
 
         **The one place the `Real` block's composition is written down.**
         Anything that needs to describe that block per row -- a diagonal
@@ -678,7 +747,8 @@ class GIASpaceLayout:
         run to be contiguous and last, and `block1_diagonal` asserts that this
         tuple is exactly that run.
         """
-        return tuple(self.multipliers) + tuple(
+        core = (() if self.core_pressure is None else (self.core_pressure,))
+        return tuple(self.multipliers) + core + tuple(
             self.rotation[name] for name in self.rotation_names
             if name in self.rotation)
 
@@ -692,6 +762,34 @@ class GIASpaceLayout:
         return tuple(self.rotation.get(name) for name in self.rotation_names)
 
 
+def scalar_value(value) -> float:
+    """`float()` of one scalar carrier, whatever kind it is.
+
+    **Never call `float()` on a composite UFL expression.** `theta_psi` is
+    `scaling_factor * B_mu / Lambda`, a UFL `Division`, and
+    `Division.__float__` raises
+
+        TypeError: Division.__float__ returned non-float (type NotImplementedType)
+
+    the moment any factor is a `Real` `Function` rather than a `Constant`. That
+    makes control family 4 - `Lambda`, `B_mu`, `G` - unbuildable, and family 4
+    is the only one that separates the correct five-override adjoint from the
+    self-consistent, 93.65%-wrong three-override one. Plan rule 6 says a
+    `float()` must never touch a taped value; taking it of the *composite* is
+    how that rule was violated in shipped code.
+
+    Each factor on its own is a scalar carrier and converts. So compute from
+    the parts and multiply in Python.
+    """
+    try:
+        return float(value)
+    except (TypeError, NotImplementedError):
+        pass
+    # A `Real` `Function` holds its one number in `dat`, and reaching it that
+    # way works identically for a `Constant`.
+    return float(np.asarray(value.dat.data_ro, dtype=float).reshape(-1)[0])
+
+
 def self_gravitating_gia_space(
     mechanics_mesh,
     potential_mesh,
@@ -699,6 +797,7 @@ def self_gravitating_gia_space(
     *,
     gravity_bcs: dict[int | str, dict[str, Any]],
     n_internal_variables: int = 1,
+    fluid_core: bool = False,
     rotation: bool = False,
     self_gravity_number: Number | Constant | None = None,
     displacement_degree: int = 2,
@@ -707,10 +806,12 @@ def self_gravitating_gia_space(
     quad_degree: int | None = None,
     alpha: Number | Constant | None = None,
     condense_internal_variables: bool = False,
+    dtn_representation: str = "multiplier",
 ) -> tuple[MixedFunctionSpace, GIASpaceLayout]:
     r"""Builds the coupled mixed space and the layout that describes it.
 
-        Z = [ V(sub), S_1..S_N(sub), Psi(parent), R x n_mult, R x n_rot ]
+        Z = [ V(sub), S_1..S_N(sub), Psi(parent),
+              R x n_mult, R_core, R x n_rot ]
 
     The multiplier count depends on the boundary conditions - a
     `CylindricalDtN(M)` contributes `2M` multipliers on an exterior boundary and
@@ -742,6 +843,8 @@ def self_gravitating_gia_space(
         `DtNGravityForm`'s dictionary form.
       n_internal_variables: number of viscoelastic internal variables, matching
         the approximation's `maxwell_times`.
+      fluid_core: add one uniform core-pressure field and its constraint row.
+        The solver must receive a matching `FluidCore` object.
       rotation: whether to carry the rotational closure.
       self_gravity_number: `Lambda`. The sheets carry an explicit `4 pi G` while
         the volume source has `4 pi G` absorbed into `Lambda`, so the form's
@@ -792,24 +895,36 @@ def self_gravitating_gia_space(
     if rotation:
         n_rot = 1 if potential_mesh.geometric_dimension == 2 else 3
 
-    # Static condensation: the (m, m) block is `mass + sink` with DG test and
-    # trial over volume integrals only, so it is block-diagonal per cell and
-    # eliminating `m` is exact and local. Doing it is not an optimisation -
-    # measured on the 3-D benchmark mesh the internal variable is **85 % of the
-    # whole system** (2 860 092 dofs of 3 348 411 at the coarse rung), so every
-    # Krylov vector, residual evaluation and reduction in the uncondensed
-    # system spends most of its traffic on a variable that never needed to be
-    # an unknown. The elimination is exactly the backward-Euler substitution
-    # `InternalVariableSolver` already performs; see
-    # `SelfGravitatingGIASolver.set_equations`.
+    # Pointwise history layout: omit `m` from the mixed space and substitute the
+    # same backward-Euler expression that `InternalVariableSolver` uses. This is
+    # not exact elimination of the mixed weak DG formulation on curved cells.
+    # It is important in 3-D because the history field is 85 percent of the
+    # coarse benchmark system: 2 860 092 of 3 348 411 degrees of freedom.
     spaces = [V] + ([] if condense_internal_variables
                     else [S] * n_internal_variables) + [Psi]
     i_potential = len(spaces) - 1
     i_R = len(spaces)
-    spaces.extend([R] * (form.n_multipliers + n_rot))
 
-    multipliers = tuple(range(i_R, i_R + form.n_multipliers))
-    i_rot = i_R + form.n_multipliers
+    # **The low-rank path carries no multiplier unknowns at all.** They are
+    # eliminated by hand into `form.build_mode_rows()` and applied as a rank-n
+    # update, so the space stops growing with the DtN truncation: `L = 20` costs
+    # the same fields as `L = 2`. `form.n_multipliers` keeps the true count,
+    # because the form still knows how many modes it treats.
+    #
+    # The core-pressure and rotation scalars are unaffected and stay. The
+    # low-rank path therefore still has a `Real` block when either feature is
+    # active. With neither feature there is no `Real` block.
+    if dtn_representation not in ("multiplier", "lowrank"):
+        raise ValueError(
+            f"dtn_representation must be 'multiplier' or 'lowrank', got "
+            f"{dtn_representation!r}.")
+    n_mult = 0 if dtn_representation == "lowrank" else form.n_multipliers
+    n_core = int(fluid_core)
+    spaces.extend([R] * (n_mult + n_core + n_rot))
+
+    multipliers = tuple(range(i_R, i_R + n_mult))
+    core_pressure = i_R + n_mult if fluid_core else None
+    i_rot = i_R + n_mult + n_core
     # Named, and named `m3` in 2-D: the 2-D component is index *2* of the
     # rotation triple, and a layout that recorded it as "the first rotation
     # field" would silently change meaning on promotion to 3-D.
@@ -824,7 +939,9 @@ def self_gravitating_gia_space(
         condensed=condense_internal_variables,
         potential=i_potential,
         multipliers=multipliers,
+        core_pressure=core_pressure,
         rotation=rotation_map,
+        dtn_representation=dtn_representation,
         gravity_form=form,
         mechanics_mesh=mechanics_mesh,
         potential_mesh=potential_mesh,
@@ -1000,11 +1117,38 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         Omega_sq: Number | Constant = OMEGA_SQ_EARTH,
         fluid_core: "FluidCore | Mapping | None" = None,
         internal_variables: "list | None" = None,
+        dtn_representation: str = "multiplier",
         **kwargs,
     ) -> None:
+        if dtn_representation not in ("multiplier", "lowrank"):
+            raise ValueError(
+                f"dtn_representation must be 'multiplier' or 'lowrank', got "
+                f"{dtn_representation!r}. The default is 'multiplier', which "
+                "is the shipped path; 'lowrank' is opt-in and under "
+                "construction.")
+        self.dtn_representation = dtn_representation
+        # The space and the solver take the representation as INDEPENDENT
+        # arguments, exactly as `condense_internal_variables` and the preset's
+        # `condensed` are, and a disagreement between those two cost a run
+        # before `_check_block0_split_matches_layout` existed. Refuse it here
+        # for the same reason: a `"lowrank"` space in a `"multiplier"` solver
+        # has no `Real` fields for the constraint rows, and the reverse leaves
+        # `n_multipliers` unknowns that nothing constrains - a singular system
+        # rather than a wrong one, but neither says which argument was wrong.
+        if layout.dtn_representation != dtn_representation:
+            raise ValueError(
+                f"The space was built for dtn_representation="
+                f"{layout.dtn_representation!r} but the solver was given "
+                f"{dtn_representation!r}. They are independent arguments and "
+                f"must agree. Change ONE of:\n"
+                f"  - the space, via self_gravitating_gia_space("
+                f"dtn_representation={dtn_representation!r}), or\n"
+                f"  - the solver, via SelfGravitatingGIASolver("
+                f"dtn_representation={layout.dtn_representation!r}).")
         self.layout = layout
+        self._check_fluid_core_matches_layout(fluid_core)
         self._check_block0_split_matches_layout(kwargs.get("solver_parameters"))
-        # Under static condensation the internal variables are not unknowns:
+        # In the pointwise history layout the internal variables are not unknowns:
         # they are stored `Function`s carried between steps, exactly as the
         # segregated `InternalVariableSolver` carries them.
         if layout.condensed:
@@ -1054,6 +1198,34 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self.form.warn_on_quadrature_rule_limits()
         self.set_monopole_datum()
         super().__init__(solution, approximation, dt=dt, **kwargs)
+        #: The low-rank DtN operator, or `None` on the multiplier path.
+        self.dtn_operator = None
+        #: The adopted low-rank solve block (route 1.5b), set on every annotated
+        #: solve and `None` before the first one; only on the low-rank path.
+        self.adjoint_block = None
+        #: Whether the adjoint and tangent carry the `(d theta_psi/dm) B0 psi`
+        #: term. Read at EACH use so a caller can flip it between gradient
+        #: evaluations on one solver. With three overrides only, the adjoint and
+        #: tangent agree with each other and are 93.65% wrong; this term is the
+        #: difference (REVIEW-ADJOINT L11b).
+        self._include_theta_derivative = True
+        if self.dtn_representation == "lowrank":
+            self.build_dtn_operator()
+
+    def _check_fluid_core_matches_layout(self, fluid_core) -> None:
+        """Refuses a fluid-core field without its equation, or the reverse."""
+        space_has_core = self.layout.core_pressure is not None
+        solver_has_core = fluid_core is not None
+        if space_has_core == solver_has_core:
+            return
+        raise ValueError(
+            "The space was built with fluid_core="
+            f"{space_has_core}, but the solver received fluid_core="
+            f"{'a FluidCore object' if solver_has_core else 'None'}. "
+            "These settings must agree. Pass fluid_core=True to "
+            "self_gravitating_gia_space() exactly when the solver receives a "
+            "FluidCore object. A missing Real field omits the core-volume "
+            "constraint. An unused Real field makes the Jacobian singular.")
 
     def _check_block0_split_matches_layout(self, solver_parameters) -> None:
         """Refuses a block-0 fieldsplit that disagrees with the space it acts on.
@@ -1144,11 +1316,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                     "`self_gravity_number=Lambda` to "
                     "`self_gravitating_gia_space`.")
             return
-        if not np.isclose(float(declared), float(self.Lambda)):
+        if not np.isclose(scalar_value(declared), scalar_value(self.Lambda)):
             raise ValueError(
                 f"self_gravity_number disagrees between the space factory "
-                f"({float(declared)!r}) and the approximation "
-                f"({float(self.Lambda)!r}). The first scales the mass sheets "
+                f"({scalar_value(declared)!r}) and the approximation "
+                f"({scalar_value(self.Lambda)!r}). The first scales the mass sheets "
                 "and the second the volume source; they must be the same "
                 "number.")
 
@@ -1494,8 +1666,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
     def fluid_core_energy(self) -> Form:
         r"""The CMB energy whose variation is the whole fluid-core condition.
 
-            c B_mu int_Rc [ rho_core (u.n) psi
-                            + 0.5 rho_core g_0 (u.n)^2 ] ds
+            c int_Rc [ B_mu rho_core (u.n) psi
+                       + 0.5 B_mu rho_core g_0 (u.n)^2
+                       + beta_core p_core (u.n) ] ds
 
         **One energy and not three additions**, which is what makes the three
         blocks it produces - `(u, psi)`, `(psi, u)` and `(u, u)` - symmetric by
@@ -1507,25 +1680,36 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         `-Lambda int rho_0 u.grad(v)`, scaled by `theta_psi = c B_mu / Lambda`,
         is that same energy's `psi`-variation.
 
+        `p_core` is a `Real` field. Its variation gives the zero-volume row,
+        and the displacement variation gives the uniform pressure traction.
+        The two blocks are transposes because both come from this energy.
+
         `FluidCore` documents the physics, the density contrast and the sign
-        trap in `dot(u, n)`. Two implementation notes belong here instead:
+        trap in `dot(u, n)`. Three implementation notes belong here instead:
 
         - **The `c` is `scaling_factor`**, which
           `CoupledInternalVariableSolver` multiplies the whole momentum residual
           by and which `theta_psi` carries as well. Omitting it here would make
           the coupled Jacobian asymmetric by exactly `c` on any run that used
           one, and that reads as a sign error in new code.
-        - **At `B_mu = 0` this term disappears entirely**, body force and sheet
-          together, while the potential row keeps its floored `theta_psi` and
-          its volume source. That is the honest consequence of writing the pair
-          as one energy, and it is not a configuration worth patching around: a
-          fluid core whose traction is `B_mu` times something is not present at
-          `B_mu = 0` in the first place. The null-coupling gate switches off the
-          body forces, and with a fluid core it switches off the core with them.
+        - **At `B_mu = 0` the gravity and spring terms disappear, but the volume
+          constraint remains.** Core incompressibility does not depend on
+          gravity. `beta_core = _row_scale_B_mu` equals `B_mu` for every nonzero
+          value and uses its nonzero floor at zero. Any nonzero common factor
+          gives the same constrained displacement and only rescales `p_core`.
+          Using zero would leave an empty `Real` row and column in the Jacobian.
+        - The constraint uses `fluid_core_measure`, exactly as the other CMB
+          terms do. A second measure could use different geometry or quadrature
+          and break the transpose relation on a cross-mesh system.
+        - `p_core` follows the algebraic row scale and the CMB normal. To report
+          pressure from an assembled traction coefficient, divide that
+          coefficient by `scaling_factor * B_mu`. This conversion applies only
+          when `B_mu` is nonzero. The mantle normal points inward at the CMB.
         """
         fc = self.fluid_core
         u = self.solution_split[self.layout.displacement]
         psi = self.solution_split[self.layout.potential]
+        p_core = self.solution_split[self.layout.core_pressure]
         # The mantle's OUTWARD normal. At its inner boundary this points inward,
         # so `dot(u, n) = -u_r`, and `vertical_component(u)` is the wrong vector
         # here - see `FluidCore`.
@@ -1565,6 +1749,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"FluidCore.buoyancy_density must be 'core' or 'contrast', "
                 f"not {fc.buoyancy_density!r}")
         E += 0.5 * B_mu * spring_rho * g0 * un * un * dss
+        # The incompressible core's missing uniform pressure. `_row_scale_B_mu`
+        # is exactly `B_mu` for every nonzero value. Its floor at zero keeps the
+        # physical volume constraint without leaving a structurally empty Real
+        # row and column. The common scale changes only the multiplier value.
+        E += self._row_scale_B_mu * p_core * un * dss
         return self.scaling_factor * E
 
     def fluid_core_rotational_traction(self) -> Form:
@@ -1706,6 +1895,21 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """
         return self.scaling_factor * self._row_scale_B_mu / self.Lambda
 
+    @property
+    def theta_psi_value(self) -> float:
+        """`theta_psi` as a number, computed from its factors, never as a whole.
+
+        `float(self.theta_psi)` raises on a `Real` `Function` control; see
+        `scalar_value`. This is the only thing that should ever be used where a
+        number is genuinely needed - the low-rank operator's per-application
+        read, and the preconditioner diagonal. The UFL `theta_psi` stays the
+        thing that goes into the residual, so `Lambda`, `B_mu` and
+        `scaling_factor` remain live coefficients on the tape.
+        """
+        return (scalar_value(self.scaling_factor)
+                * scalar_value(self._row_scale_B_mu)
+                / scalar_value(self.Lambda))
+
     def _theta_rot(self, i: int):
         r"""`s_i * scaling_factor * B_mu * Omega_sq`: the `i`th rotation row's scaling.
 
@@ -1779,6 +1983,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """The gravitational potential sub-function, on the parent mesh."""
         return self.solution.subfunctions[self.layout.potential]
 
+    @property
+    def core_pressure(self) -> Function | None:
+        """The uniform fluid-core pressure, or `None` without a fluid core."""
+        index = self.layout.core_pressure
+        return None if index is None else self.solution.subfunctions[index]
+
     def rotation_values(self) -> dict[str, float]:
         """The solved rotation scalars, by name.
 
@@ -1793,12 +2003,46 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         The spectrum of `psi` on each boundary; at the surface, the geoid
         coefficients. Same contract as `GravitySolver.coefficients`.
+
+        **The two paths get the same numbers from different places.** On the
+        multiplier path each `c_k` IS a solved unknown and is read straight out
+        of its `Real` sub-field. On the low-rank path there is no such unknown:
+        `c = C psi / (scale_k A_h)` is recovered from the trace, which is what
+        `gadopt.dtn_adjoint.taped_trace_coefficients` does for the scalar
+        solver. B5 reports `N(0)` and `N(180)` against TABOO, so this is on the
+        critical path and not a diagnostic.
+
+        **The old body zipped `form.multiplier_keys` against
+        `layout.multipliers` and that is silent on the low-rank path.** The
+        form still lists all 21 modes it treats while the layout has 0 unknowns,
+        so `zip` truncates to nothing and every boundary comes back `{}` - no
+        error, no warning, and a geoid of zero. `gravity_solver.py:648-652`
+        records the same trap from the other side: `n_multipliers` on the form
+        and in the space are two different numbers with one name. Every pairing
+        below is length-checked rather than zipped.
         """
-        out = {bc_id: {} for bc_id, _ in self.form.dtn_boundaries}
-        for (bc_id, key), i in zip(
-                self.form.multiplier_keys, self.layout.multipliers):
-            out[bc_id][key] = float(self.solution.subfunctions[i])
-        return out
+        if self.dtn_representation != "lowrank":
+            keys, fields = self.form.multiplier_keys, self.layout.multipliers
+            if len(keys) != len(fields):
+                raise RuntimeError(
+                    f"the form lists {len(keys)} multiplier keys but the "
+                    f"layout has {len(fields)} multiplier fields; a zip here "
+                    "would silently return the shorter of the two.")
+            out = {bc_id: {} for bc_id, _ in self.form.dtn_boundaries}
+            for (bc_id, key), i in zip(keys, fields):
+                out[bc_id][key] = float(self.solution.subfunctions[i])
+            return out
+
+        # **Taped, and not read off a numpy array.** An earlier version of this
+        # branch did `float()` of `dtn_operator.coefficients(...)`, which is
+        # correct in value and severs the tape by construction: `geoid()` reads
+        # this, B5 reports `N(0)` and `N(180)` through `geoid()`, and the method
+        # that returned a geoid of exactly zero before the `zip` fix would then
+        # have returned correct numbers with a gradient of exactly zero. The
+        # scalar solver already solved this; `taped_coupled_trace_coefficients`
+        # is the port of `gadopt.dtn_adjoint.taped_trace_coefficients` and the
+        # maths is not re-derived here.
+        return taped_coupled_trace_coefficients(self)
 
     def geoid(self, *, include_rotation: bool = True):
         r"""The geoid height as UFL on the parent mesh, `N = +(psi + psi_rot)/g_0`.
@@ -1958,22 +2202,23 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         psi = self.solution_split[self.layout.potential]
 
         if self.layout.condensed:
-            # The backward-Euler update substituted into the stress *before*
-            # differentiation, which is what makes the elimination exact:
+            # This legacy path substitutes the backward-Euler update into the
+            # stress before differentiation:
             #   m_new = (m_old + (dt/tau) d(u)) / (1 + dt/tau)
-            # This is `InternalVariableSolver.update_m` verbatim. Two
-            # consequences worth stating because both are silent if wrong.
+            # This is `InternalVariableSolver.update_m` verbatim. It is a
+            # pointwise reduction, not exact elimination of the weak DG history
+            # block on a curved mesh. Two consequences remain important.
             # The u-tangent of the stress becomes
             # `sum_i eta_i/(tau_i + dt) = effective_viscosity(dt)`, which is why
             # `CoupledInternalVariableSolver.__init__` hands the Nitsche pair
             # that coefficient rather than `mu0` in this configuration. And the
             # power-law factor would become a function of `u` alone rather than
             # of an independent `m`, which is a different Newton linearisation,
-            # so condensation is refused for `exponent != 1`.
+            # so pointwise substitution is refused for `exponent != 1`.
             strain_u = self.approximation.deviatoric_strain(u)
             if float(getattr(self.approximation, "exponent", 1)) != 1:
                 raise NotImplementedError(
-                    "Static condensation of the internal variables is "
+                    "Pointwise substitution of the internal variables is "
                     "implemented for Newtonian rheology only (exponent = 1). "
                     "For a power law the Maxwell times depend on the deviatoric "
                     "stress, hence on m, and substituting m(u) changes the "
@@ -2027,9 +2272,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    [mass_term, sink_term, source_term],
+                    [mass_term, sink_term, internal_variable_source_term],
                     eq_attrs={
                         "source": strain / maxwell_time,
+                        "source_coefficient": 1 / maxwell_time,
+                        "source_displacement": u,
                         "sink_coeff": 1 / maxwell_time,
                         "dt": self.dt,
                         "trial_old": self.solution_old_split[i],
@@ -2097,8 +2344,19 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         u = self.solution_split[self.layout.displacement]
         rho0 = self.approximation.density
 
-        multipliers = [(self.solution_split[i], self.tests[i])
-                       for i in self.layout.multipliers]
+        # **`None`, not an empty list, on the low-rank path.**
+        # `boundary_residual` reads `multipliers is None` as "write the Robin
+        # shift alone"; an empty *list* means "write the modal rows too, and
+        # here are zero pairs for them", which raises a length mismatch. The
+        # DtN feedback the modal rows would have supplied is then added as
+        # `theta_psi * B0 psi` by the two callbacks, never here, because a form
+        # cannot express a dense rank-n update without one term per mode -
+        # which is the cost this path exists to remove.
+        if self.dtn_representation == "lowrank":
+            multipliers = None
+        else:
+            multipliers = [(self.solution_split[i], self.tests[i])
+                           for i in self.layout.multipliers]
 
         F = dot(grad(psi), grad(v)) * self.dx_g
         F -= self.Lambda * rho0 * dot(u, grad(v)) * self.dx_m
@@ -2312,8 +2570,17 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """
         if not self.monopole_boundaries:
             return 0.0
-        return (float(self.source_mass) + float(self.cavity_flux)
-                / (4.0 * np.pi * float(self.form.G)))
+        # `scalar_value`, not `float()`, on `self.form.G`. The form's `G` is
+        # `self_gravity_number / (4 pi)` built at `self_gravitating_gia_space`
+        # BEFORE any `ensure_constant`, and `ensure_constant` wraps only `float`
+        # and `int` - everything else passes through. So with a `Function`
+        # control this attribute is a UFL `Division` and `float()` of it raises
+        # `Division.__float__ returned non-float`, on the solve path, via
+        # `update_total_mass` -> `check_net_mass`. Reachable only in 2-D with an
+        # exterior DtN boundary, since `monopole_boundaries` is empty otherwise -
+        # which is why a direct conversion test could not see it.
+        return (scalar_value(self.source_mass) + scalar_value(self.cavity_flux)
+                / (4.0 * np.pi * scalar_value(self.form.G)))
 
     def check_net_mass(self) -> None:
         """Refuses a doubly-anchored gauge; scales the leakage test on the sheets.
@@ -2462,6 +2729,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 self.appctx = {
                     "mu": self.approximation.mu / self.rho_continuity}
             self.appctx["dtn_block1_diagonal"] = self.block1_diagonal()
+            # Keep the live Constant, not its current float value. A caller can
+            # change the time step with ``dt.assign(...)``. The dense Schur PC
+            # uses this entry to rebuild its cached complement only after such
+            # a change. Fixed-step solves keep the build-once path.
+            self.appctx["gia_time_step"] = self.dt
 
         if isinstance(solver_preset, Mapping):
             super().set_solver_options(solver_preset, solver_extras)
@@ -2491,7 +2763,15 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # not name the key and so inherits the trap, which is recorded in
         # `demos/gravity/CLAUDE.md` and is not fixed here.
         self.add_to_solver_config(newton_stokes_solver_parameters)
-        if solver_preset == "direct":
+        if (self.dtn_representation == "lowrank"
+                and not self.layout.real_fields):
+            # The low-rank path with rotation and fluid core off has no `Real`
+            # sub-field, so the two-block Schur presets have nothing to split
+            # and refuse. Both requests map to the single-block LU preset here.
+            # A core-pressure or rotation field selects the two-block preset.
+            self.add_to_solver_config(
+                selfgrav_dtn_lowrank_direct_solver_parameters)
+        elif solver_preset == "direct":
             self.add_to_solver_config(selfgrav_dtn_schur_solver_parameters)
         else:
             self.add_to_solver_config(selfgrav_dtn_iterative_solver_parameters(
@@ -2534,6 +2814,142 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """
         return self.form.check_boundary_quadrature(*args, **kwargs)
 
+    # -- The low-rank DtN operator ------------------------------------------
+
+    def build_dtn_operator(self) -> CoupledLowRankDtN:
+        """`B = theta_psi * C^T W C` on the psi rows, built and returned.
+
+        **This builds an operator and changes nothing else.** The space, the
+        form, the residual, the Jacobian and the preconditioner are exactly
+        what the multiplier path produces, so a solver constructed with
+        `dtn_representation="lowrank"` today solves the multiplier system and
+        carries `B` alongside it. That is deliberate: if `B` is wrong, finding
+        out here means finding out as an operator problem rather than as a
+        solver problem.
+
+        Three things this method must get right, all previously paid for:
+
+        1. **The index shift.** `build_mode_rows` returns owned local indices
+           into the potential space; the coupled operator acts on the
+           monolithic mixed vector. `CoupledLowRankDtN` shifts them with
+           `psi_local_offset`, which reads the field index sets. Summing
+           `subfunctions[i].dat` sizes instead is wrong on every rank above 0.
+        2. **`apply_dirichlet_to_rows` is not optional.** `A` has its
+           constrained rows and columns eliminated, so a `B` that still couples
+           to a prescribed degree of freedom is inconsistent with it and is not
+           symmetric either. Writing into a constrained row violates the
+           boundary condition by exactly the amount written, silently.
+        3. **`theta_psi` is not folded in.** It multiplies the whole potential
+           row, the DtN constraint and feedback rows included, so it multiplies
+           `B`. It is passed as a callable and read at every application, since
+           `scaling_factor`, `B_mu` and `Lambda` are all `Constant`s that an
+           adjoint can control, and a frozen product cannot be corrected at
+           replay time.
+
+        Returns:
+          The `CoupledLowRankDtN`, also stored as `self.dtn_operator`.
+        """
+        mode_rows = self.form.build_mode_rows()
+
+        # **This guard used to compare the rebuilt `multiplier_keys` against
+        # the ones `boundary_bilinear` left behind, and on this path that list
+        # is always empty - so the check never executed.** It read as
+        # protection and was decoration. What matters here is the alignment the
+        # operator and `coefficients()` actually rely on: `mode_rows[i]` must
+        # belong to `dtn_boundaries[i]`, and within it `keys[k]` must be the
+        # k-th mode of that boundary's own descriptor. Recomputed from the
+        # descriptor below, which is an independent source, so this runs and
+        # can fail.
+        boundaries = self.form.dtn_boundaries
+        if len(mode_rows) != len(boundaries):
+            raise RuntimeError(
+                f"build_mode_rows returned {len(mode_rows)} row sets for "
+                f"{len(boundaries)} DtN boundaries; they are paired by "
+                "position everywhere downstream.")
+        for (bc_id, dtn), rows in zip(boundaries, mode_rows):
+            side, radius = self.form.boundary_geometry[bc_id]
+            expected = [mode.key for mode in dtn.mode_metadata(side, radius)]
+            if list(rows.keys) != expected:
+                raise RuntimeError(
+                    f"boundary {bc_id}: the mode rows are ordered "
+                    f"{list(rows.keys)} but the descriptor's own order is "
+                    f"{expected}. Every trace coefficient would be attributed "
+                    "to the wrong mode, and the weights would be applied to "
+                    "the wrong functionals.")
+
+        # Rebuilt from the form rather than filtered out of `self.strong_bcs`,
+        # so this cannot pick up a mechanics condition and cannot miss a
+        # potential one; `set_form` builds them from exactly this list.
+        psi_space = self.solution_space.sub(self.layout.potential)
+        constrained = set()
+        for bc_id, val in self.form.dirichlet_bcs:
+            constrained.update(np.asarray(
+                DirichletBC(psi_space, val, bc_id).nodes, dtype=np.int64
+            ).tolist())
+        apply_dirichlet_to_rows(mode_rows, constrained)
+        self.dtn_constrained_dofs = constrained
+
+        self.dtn_operator = CoupledLowRankDtN(
+            self.solution_space, self.layout.potential, mode_rows,
+            # A callable, not a float. See point 3 above.
+            lambda: self.theta_psi_value, self.potential_mesh.comm)
+        return self.dtn_operator
+
+    # -- The two augmentations, which must stay consistent -------------------
+
+    def augment_residual(self, X, F) -> None:
+        """`post_function_callback`: add `theta_psi * B0 psi` to the psi rows.
+
+        `X` is the current iterate and `F` the residual, both as monolithic
+        PETSc vectors. The callback receives `ctx._F`'s vec **writable** and the
+        copy-out happens afterwards, so modifying it in place is correct.
+
+        The constrained psi rows are safe: `_assemble_residual` zeroes them and
+        `apply_dirichlet_to_rows` zeroed `B`'s rows there, so nothing is written
+        into a row whose value is prescribed. Writing into one violates the
+        boundary condition by exactly the amount written, silently.
+        """
+        self.dtn_operator.apply_local(X.array_r, F.array_w)
+
+    def augment_jacobian(self, X, Jmat) -> None:
+        """`post_jacobian_callback`: give the matrix-free action the same `B`.
+
+        **Both augmentations or neither.** Under `snes_type: "ksponly"`, which
+        `selfgrav_dtn_iterative_solver_parameters` recommends for the
+        production `exponent = 1`, augmenting the residual alone is inert from a
+        zero initial guess - `B z` is zero, one Newton step reproduces the
+        un-augmented answer, and PETSc reports CONVERGED - and simply wrong from
+        any other guess. Measured `||z_cb - z_plain|| = 0.000e+00` at every eps
+        (`NOTES/fastdtn/REVIEW-FORWARD.md` section 1.2). So under production
+        settings this callback **is** the correctness, not an optimisation.
+        """
+        install_augmented_context(Jmat, self.dtn_operator)
+
+    def set_solver(self) -> None:
+        """The base solver, rebuilt with the two callbacks on the low-rank path.
+
+        Rebuilt rather than patched: `post_function_callback` and
+        `post_jacobian_callback` are public constructor arguments of both
+        `NonlinearVariationalSolver` and `LinearVariationalSolver`, and reaching
+        into `solver._ctx` afterwards would be a private-API dependency for no
+        gain. Constructing a solver assembles nothing, so the discarded first
+        object costs no work.
+        """
+        super().set_solver()
+        if self.dtn_representation != "lowrank":
+            return
+        self.solver = type(self.solver)(
+            self.problem,
+            solver_parameters=self.solver_parameters,
+            nullspace=self.nullspace,
+            transpose_nullspace=self.transpose_nullspace,
+            near_nullspace=self.near_nullspace,
+            appctx=self.appctx,
+            options_prefix=self.name,
+            post_function_callback=self.augment_residual,
+            post_jacobian_callback=self.augment_jacobian,
+        )
+
     def block1_diagonal(self):
         """The exact diagonal of the `Real` block, or `None` if there is none.
 
@@ -2543,11 +2959,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         shipped presets, so this is inert unless a caller selects the
         preconditioner by name.
 
-        Two contributions:
+        Three contributions:
 
         * the **multipliers**, `theta_psi * (-scale_k * A_h)`, from
           `DtNGravityForm.multiplier_diagonal`, which derives the sign and
           explains why the *discrete* boundary measure is the right one;
+        * the **core pressure**, whose diagonal is exactly zero because it is a
+          Lagrange multiplier rather than a compressibility law;
         * the **rotation closure rows**, `theta_rot_i * K_i`, present only when
           rotation is on -- one row in 2-D (`m_3` alone) and three in 3-D. Not
           guessed: verified against the assembled diagonal to 1.5e-15 relative
@@ -2573,12 +2991,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         a week*.
 
         The count check stays as the tripwire for a **foreign** `Real`
-        sub-field -- one added for something that is neither a multiplier nor a
-        rotation row, which no accounting here could describe. Today none
-        exists: `self_gravitating_gia_space` does
-        `spaces.extend([R] * (form.n_multipliers + n_rot))`, and the 2-D
-        monopole datum deliberately builds its `Real` space **outside** the
-        mixed space.
+        sub-field -- one added for something that is not a DtN multiplier, core
+        pressure, or rotation row. The 2-D monopole datum deliberately builds
+        its `Real` space **outside** the mixed space.
 
         Returns `None` when the block is empty, so building a solver never
         fails on account of a preconditioner nobody selected.
@@ -2605,19 +3020,31 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"{expected}, and a contiguous trailing run would be "
                 f"{tuple(range(i_R, len(space)))}. The diagonal read requires "
                 "all three to agree: it assumes the Real block is exactly the "
-                "DtN multipliers followed by the rotation closure rows, in "
-                "that order and last. A Real field added for anything else, or "
-                "a reordering, invalidates it. Fix the accounting here before "
+                "DtN multipliers, the optional core pressure, then the rotation "
+                "closure rows, in that order and last. Another Real field or a "
+                "reordering invalidates it. Fix the accounting here before "
                 "using DtNMultiplierDiagPC on this configuration.")
 
         by_index = {}
-        if form is not None and getattr(form, "multiplier_keys", None):
-            mult = float(self.theta_psi) * form.multiplier_diagonal()
+        # **`multiplier_keys` is NOT the test for whether multiplier rows
+        # exist, on the low-rank path.** `build_mode_rows` fills that list with
+        # every treated mode, because the form still knows what it treats -
+        # while `layout.multipliers` is empty, because none of them is an
+        # unknown. Keying off the form here would then find `n_multipliers`
+        # diagonal entries for zero `Real` rows and raise the length mismatch
+        # below. The layout is the authority on what is in the space.
+        has_multiplier_rows = (self.layout.dtn_representation == "multiplier"
+                               and bool(self.layout.multipliers))
+        if form is not None and has_multiplier_rows and getattr(
+                form, "multiplier_keys", None):
+            mult = self.theta_psi_value * form.multiplier_diagonal()
             if len(mult) != len(self.layout.multipliers):
                 raise RuntimeError(
                     f"the form describes {len(mult)} multiplier rows but the "
                     f"layout has {len(self.layout.multipliers)}.")
             by_index.update(zip(self.layout.multipliers, mult))
+        if self.layout.core_pressure is not None:
+            by_index[self.layout.core_pressure] = 0.0
         for k, name in enumerate(self.layout.rotation_names):
             idx = self.layout.rotation.get(name)
             if idx is not None:
@@ -2628,8 +3055,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if missing:
             raise RuntimeError(
                 f"no diagonal entry was derived for Real sub-fields {missing}; "
-                "they are in the layout but neither a multiplier nor a "
-                "rotation row described it.")
+                "they are in the layout but no DtN multiplier, core-pressure, "
+                "or rotation row described them.")
         return np.array([by_index[i] for i in expected])
 
     def project_out_nullspace(self) -> bool:
@@ -2674,7 +3101,20 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
     def solve(self) -> None:
         """Refreshes the enclosed mass, solves, then projects out the kernel."""
         self.update_total_mass()
+        # Route 1.5b: on the low-rank path, let the stock annotated solve run,
+        # then take its solve block off the tape and re-class it so the adjoint
+        # and tangent carry `A + B` and the theta derivative. Record the block
+        # count BEFORE the solve; `update_total_mass` has already added its own
+        # block, and `project_out_nullspace` adds more after, so the block is
+        # found by output identity among what the solve itself added.
+        adopt = self.dtn_representation == "lowrank" and annotate_tape()
+        if adopt:
+            tape = get_working_tape()
+            n0 = len(tape.get_blocks())
         super().solve()
+        if adopt:
+            from .dtn_coupled_adjoint import adopt_coupled_lowrank_block
+            adopt_coupled_lowrank_block(self, tape, n0)
         if self.project_out_nullspace():
             # `StokesSolverBase.solve` has already copied the solution into
             # `solution_old`; the projection happens afterwards, so the old
@@ -2683,6 +3123,23 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.solution_old.assign(self.solution)
         if self.layout.condensed:
             self.recover_internal_variables()
+
+    def require_controls_reach_residual(self, *controls) -> None:
+        """D1: raise if a control never enters the low-rank solve's residual.
+
+        A control absent from the residual gives a silent `0.0` gradient with
+        only a `WARNING:root:Adjoint value is None` on stderr. The solver cannot
+        discover its own controls (pyadjoint does not mark a `Control` on the
+        tape), so a caller that knows them passes them here after an annotated
+        solve, and an unreachable one raises before any wrong number is produced
+        (REVIEW-ADJOINT S6.5 D1).
+        """
+        if self.adjoint_block is None:
+            raise RuntimeError(
+                "require_controls_reach_residual needs an adopted low-rank "
+                "adjoint block; run one annotated solve first.")
+        from .dtn_coupled_adjoint import require_controls_reach_block
+        require_controls_reach_block(self.adjoint_block, controls)
 
     def recover_internal_variables(self) -> None:
         """Rebuild the eliminated `m` from the solved displacement.
