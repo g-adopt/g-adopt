@@ -13,6 +13,7 @@ import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
+from firedrake.utils import get_device_type as fd_get_device_type
 from functools import cached_property
 from mpi4py import MPI
 import numpy as np
@@ -29,6 +30,8 @@ except ImportError:
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
 log_level = logging.getLevelName(os.environ.get("GADOPT_LOGLEVEL", "INFO").upper())
+
+valid_devices = ("HOST", "CUDA", "HIP")
 
 
 def log(*args, level=None):
@@ -141,6 +144,48 @@ def ensure_constant(f):
         return Constant(f)
     else:
         return f
+
+
+def get_device_type(gpu_options: dict | None) -> str | None:
+    """Determine the available GPU device type.
+
+    Checks for a GPU device in the following order of priority:
+    1. The `GADOPT_DEVICE_OVERRIDE` environment variable.
+    2. The `device_type` key in the `gpu_options` dictionary.
+    3. Firedrake's `get_device_type()` function.
+
+    Returns:
+        The detected device type (e.g., `CUDA`, `HIP`). Returns `None` if the `HOST`
+        device is detected (i.e. no GPU) or if the device set in `gpu_options` or
+        returned by Firedrake's `get_device_type()` is `None`.
+
+    Raises:
+        ValueError: If `GADOPT_DEVICE_OVERRIDE` or `gpu_options["device_type"]`
+        specifies a device type not in `valid_devices`.
+    """
+    if "GADOPT_DEVICE_OVERRIDE" in os.environ:
+        device_type = os.environ["GADOPT_DEVICE_OVERRIDE"]
+        if device_type not in valid_devices:
+            raise ValueError(
+                f"Invalid device specified in GADOPT_DEVICE_OVERRIDE. Valid values are {','.join(valid_devices)}"
+            )
+    elif gpu_options is not None and "device_type" in gpu_options:
+        device_type = gpu_options["device_type"]
+        if device_type is not None and device_type not in valid_devices:
+            raise ValueError(
+                f"Invalid device specified in 'device_type' key. Valid values are {','.join(valid_devices)} or None"
+            )
+    else:
+        # Set the PETSc error handler so that Firedrake can correctly intercept the
+        # exception from PETSc if a GPU-enabled build calls this on a non-GPU enabled
+        # system - add this to Firedrake. This function returns None for a GPU-enabled
+        # build or HOST on a non-GPU enabled build when GPUs are not available.
+        PETSc.Sys.pushErrorHandler("python")
+        device_type = fd_get_device_type()
+        PETSc.Sys.popErrorHandler()
+    if device_type == "HOST":
+        return None
+    return device_type
 
 
 class CombinedSurfaceMeasure(ufl.Measure):

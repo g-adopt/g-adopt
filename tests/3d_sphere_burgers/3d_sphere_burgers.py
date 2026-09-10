@@ -312,24 +312,6 @@ approximation = approx(
     bulk_shear_ratio=args.bulk_shear_ratio)
 
 
-iterative_parameters = {"mat_type": "matfree",
-                        "snes_monitor": None,
-                        "snes_converged_reason": None,
-                        "snes_type": "ksponly",
-                        "ksp_type": "cg",
-                        "ksp_rtol": 1e-5,
-                        "ksp_converged_reason": None,
-                        "ksp_monitor": None,
-                        "pc_type": "python",
-                        "pc_python_type": "gadopt.SPDAssembledPC",
-                        "assembled_pc_type": "gamg",
-                        "assembled_mg_levels_pc_type": "sor",
-                        "assembled_pc_gamg_threshold": 0.01,
-                        "assembled_pc_gamg_square_graph": 100,
-                        "assembled_pc_gamg_coarse_eq_limit": 1000,
-                        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-                        }
-
 Z_nullspace = rigid_body_modes(V, rotational=True)
 Z_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
 
@@ -339,7 +321,7 @@ coupled_solver = InternalVariableSolver(
     dt=dt,
     internal_variables=m_list,
     bcs=stokes_bcs,
-    solver_parameters=iterative_parameters,
+    solver_parameters_extra={"snes_converged_reason": None},
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,

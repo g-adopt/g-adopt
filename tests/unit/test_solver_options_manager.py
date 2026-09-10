@@ -18,8 +18,8 @@ from gadopt.gia_gravity import selfgrav_dtn_iterative_solver_parameters
 from gadopt.gravity_solver import (iterative_gravity_solver_parameters,
                                    lowrank_gravity_solver_parameters)
 from gadopt.solver_options_manager import GAMG_PARAMETERS, gamg_parameters
-from gadopt.stokes_integrators import (coupled_gia_solver_parameters,
-                                       iterative_stokes_solver_parameters)
+from gadopt.stokes_integrators import (cpu_gamg_parameters,
+                                       gamg_common_parameters)
 
 
 def gamg_keys_of(parameters, prefix):
@@ -48,14 +48,16 @@ def uses_gamg(parameters, prefix):
 SHIPPED = [
     ("iterative_gravity", iterative_gravity_solver_parameters, "assembled_"),
     ("lowrank_gravity", lowrank_gravity_solver_parameters, ""),
-    ("iterative_stokes", iterative_stokes_solver_parameters["fieldsplit_0"],
-     "assembled_"),
-    ("coupled_gia", coupled_gia_solver_parameters,
-     "fieldsplit_0_assembled_"),
 ]
 
 
 class TestOneDefinition:
+    def test_stokes_integrators_carries_the_same_six_settings(self):
+        """The Stokes and GIA presets take their GAMG block from two module
+        constants in `stokes_integrators` that `_configure_iterative_solver`
+        nests at run time. They must not drift from `GAMG_PARAMETERS`."""
+        assert dict(gamg_common_parameters | cpu_gamg_parameters) == GAMG_PARAMETERS
+
     @pytest.mark.parametrize("name,parameters,prefix", SHIPPED,
                              ids=[row[0] for row in SHIPPED])
     def test_shipped_preset_uses_the_shared_settings(

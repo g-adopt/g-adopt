@@ -55,8 +55,103 @@ class Gravity:
         return self.background + self.perturbation
 
 
-class BaseApproximation(abc.ABC):
-    """Base class to provide expressions for the coupled Stokes and Energy system.
+class DeviatoricStressMixin:
+    r"""Provides the single definition of the deviatoric part of a gradient.
+
+    All logic about how the deviatoric part is taken lives in
+    `deviatoric_tensor_from_grad`, keyed off the `compressible` property.
+    `stress_from_grad` multiplies that tensor by the shear coefficient and adds
+    whatever volumetric part the approximation carries. The full stress and the
+    weak (SIPG) boundary terms in the momentum equation build on these two
+    methods, so a subclass that changes the stress form (for example a true 2D
+    compressible model, or one with a bulk modulus) overrides here.
+
+    We note that `deviatoric_tensor_from_grad` is purely kinematic and carries no material
+    coefficient, so the same expression serves:
+        1 - the velocity gradient of a Stokes problem
+        2 - the incremental displacement gradient of a viscoelastic one
+        3 - the boundary jump tensor of the SIPG penalty.
+
+    Every caller supplies its own coefficient, for example `self.mu`,
+    `effective_viscosity(dt)` in `IncompressibleMaxwellApproximation.stress`,
+    $\mu_0$ in `MaxwellApproximation.deviatoric_stress`.
+    """
+
+    def deviatoric_tensor_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+        r"""Twice the deviatoric symmetric part of a gradient-like tensor.
+
+        For a gradient-like tensor $G$ this returns
+
+        $$ 2\,\mathrm{sym}(G) $$
+
+        in the incompressible case, and
+
+        $$ 2\,\mathrm{sym}(G) - \tfrac{2}{3}\,\mathrm{tr}(G)\,I
+           = 2\,\mathrm{dev}(\mathrm{sym}(G)) $$
+
+        in the compressible case, where $\mathrm{dev}(A) = A -
+        \tfrac{1}{3}\mathrm{tr}(A) I$. The two branches agree only where
+        $\mathrm{tr}(G) = 0$.
+
+        Note that the physical meaning of what is returned here depends on what the caller
+        passes in. Cases are:
+
+            - With $G = \nabla u$ and $u$ a *velocity*, as in the Stokes problems,
+              the result is twice the strain rate, with units of 1/s, and the
+              caller multiplies it by a viscosity in Pa s.
+            - With $G = \nabla u$ and $u$ an *incremental displacement*, as in the
+              viscoelastic and GIA approximations, the result is twice the strain
+              and is dimensionless, and the caller multiplies it by a shear
+              modulus in Pa.
+            - With $G = n \otimes w$, the outer product of the boundary normal
+              with a jump in the weakly imposed solution, the result is the
+              boundary jump tensor of the SIPG penalty and is neither a strain nor
+              a strain rate.
+
+        The returned tensor therefore has no fixed units. Only the first two
+        cases combine with a coefficient to give a stress, and only where that
+        coefficient is $\mu$ is the result $\sigma(u)/\mu$.
+
+        Note: The factor $\tfrac{2}{3}$ is fixed regardless of dimension,
+        matching the stress in the geodynamics community. In 2D the deviator
+        of a $2 \times 2$ tensor subtracts $\tfrac{1}{2}\mathrm{tr}(A) I$, so
+        with the fixed $\tfrac{2}{3}$ the compressible branch does not return
+        a trace-free tensor in 2D.
+
+        Returns:
+          A UFL expression for twice the deviatoric symmetric part of
+          `gradient`.
+
+        """
+        # Twice the symmetric part of the gradient: $2 sym(G)$.
+        deviatoric_tensor = 2 * sym(gradient)
+        if self.compressible:
+            # Remove the volumetric part, giving $2 dev(sym(G))$.
+            deviatoric_tensor -= 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
+        return deviatoric_tensor
+
+    def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+        r"""The stress a gradient-like tensor produces, including any bulk part.
+
+        For a gradient-like tensor $G$ this returns $\mu\,A(G)$, with
+        $A = $ `deviatoric_tensor_from_grad`. An approximation that also carries a
+        volumetric response adds it by overriding this method.
+
+        There are two callers. With $G = \nabla u$ this is the stress itself.
+        With $G = n \otimes w$, the outer product of the boundary normal with
+        the jump in the weakly imposed velocity, it is the response the SIPG
+        penalty term pairs against the test function, which is how the penalty
+        picks up the same material coefficients as the stress it penalises.
+
+        Returns:
+          A UFL expression for the stress produced by `gradient`.
+
+        """
+        return self.mu * self.deviatoric_tensor_from_grad(gradient)
+
+
+class BaseApproximation(DeviatoricStressMixin, abc.ABC):
+    r"""Base class to provide expressions for the coupled Stokes and Energy system.
 
     The basic assumption is that we are solving (to be extended when needed)
 
@@ -72,8 +167,10 @@ class BaseApproximation(abc.ABC):
     - kappa() is diffusivity or conductivity depending on rhocp()
     - Tbar is 0 or reference temperature profile (ALA)
     - dev_stress depends on the compressible property (False or True):
-        - if compressible then dev_stress = mu * [sym(grad(u) - 2/3 div(u)]
-        - if not compressible then dev_stress = mu * sym(grad(u)) and
+        - if compressible then
+          $\sigma = 2\mu\,\mathrm{sym}(\nabla u)
+          - \tfrac{2}{3}\mu\,(\nabla\cdot u)\,I$
+        - if not compressible then $\sigma = 2\mu\,\mathrm{sym}(\nabla u)$ and
           rho_continuity is assumed to be 1
 
     """
@@ -89,15 +186,20 @@ class BaseApproximation(abc.ABC):
         """
         pass
 
-    @abc.abstractmethod
     def stress(self, u: Function) -> ufl.core.expr.Expr:
-        """Defines the deviatoric stress.
+        r"""Defines the deviatoric stress $\sigma(u)$.
+
+        Built from the single definition of the stress produced by a
+        gradient-like tensor, so the incompressible form
+        $\sigma = 2\mu\,\mathrm{sym}(\nabla u)$ and the compressible form
+        $\sigma = 2\mu\,\mathrm{dev}(\mathrm{sym}(\nabla u))$ differ only
+        through the `compressible` property.
 
         Returns:
           A UFL expression for the deviatoric stress.
 
         """
-        pass
+        return self.stress_from_grad(grad(u))
 
     @abc.abstractmethod
     def buoyancy(self, p: Function, T: Function) -> ufl.core.expr.Expr:
@@ -250,9 +352,6 @@ class BoussinesqApproximation(BaseApproximation):
         self.delta_rho = ensure_constant(delta_rho)
         self.H = ensure_constant(H)
 
-    def stress(self, u):
-        return 2 * self.mu * sym(grad(u))
-
     def buoyancy(self, p, T):
         return (
             self.Ra * self.rho * self.alpha * (T - self.T0) * self.g
@@ -385,11 +484,6 @@ class TruncatedAnelasticLiquidApproximation(ExtendedBoussinesqApproximation):
         self.Tbar = Tbar
         self.cp = cp
 
-    def stress(self, u):
-        stress = super().stress(u)
-        dim = len(u)  # Geometric dimension, i.e. 2D or 3D
-        return stress - 2/3 * self.mu * Identity(dim) * div(u)
-
     def rho_continuity(self):
         return self.rho
 
@@ -451,7 +545,7 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         return pressure_part + temperature_part
 
 
-class BaseGIAApproximation:
+class BaseGIAApproximation(DeviatoricStressMixin):
     """Base class for viscoelasticity assuming small displacements.
 
     By assuming a small displacement with respect to mantle thickness
@@ -708,7 +802,14 @@ class IncompressibleMaxwellApproximation(BaseGIAApproximation):
             raise KeyError(
                 f"The stress_old kwarg must be provided for stress() in {self.__class__.__name__}"
             )
-        return 2 * self.effective_viscosity(dt) * sym(grad(u)) + stress_old
+        # In the incompressible case the deviatoric tensor is $2\,sym(\nabla u)$,
+        # and the coefficient this approximation pairs it with is the effective
+        # viscosity, so this is $2 \eta_{eff} sym(\nabla u)$ plus the scaled
+        # stress carried over from the previous step.
+        return (
+            self.effective_viscosity(dt) * self.deviatoric_tensor_from_grad(grad(u))
+            + stress_old
+        )
 
     def free_surface_terms(self, eta, *, delta_rho_fs=1):
         return delta_rho_fs * self.g * eta
@@ -812,6 +913,10 @@ class InternalVariableApproximation(BaseGIAApproximation):
             ensure_constant(visc / mu)
             for visc, mu in zip(self.viscosity, self.shear_modulus)
         ]
+        # GIA literature uses `mu` for the shear modulus. Here, `mu` is the
+        # solver-selected shear scale for the Nitsche penalty and solver context.
+        # The material lists contain one entry per Maxwell element, and `mu0` is
+        # their total elastic shear modulus.
         self.mu0 = ensure_constant(sum(self.shear_modulus))
 
         # Power law arguments
@@ -820,24 +925,101 @@ class InternalVariableApproximation(BaseGIAApproximation):
         self.background_stress = background_stress
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
-        dim = len(u)
-        e = sym(grad(u))
-        # N.b. for 2d simulations dividing by 1/3 (instead of 1/2) may be slightly
-        # inconsistent but analytical tests in tests/viscoelastic_internal_variable/
-        # are setup assuming 3D geometry.
-        return e - 1 / 3 * tr(e) * Identity(dim)
+        r"""The deviatoric strain $\mathrm{dev}(\mathrm{sym}(\nabla u))$.
+
+        This is half of `deviatoric_tensor_from_grad`, which for this
+        compressible approximation is $2\,\mathrm{sym}(\nabla u)
+        - \tfrac{2}{3}(\nabla \cdot u) I$. Sharing that one definition keeps
+        the strain the internal variables relax towards and the stress the
+        momentum equation assembles from the same expression. Here $u$ is an
+        incremental displacement, so the result is a strain and is
+        dimensionless.
+
+        N.b. the fixed $\tfrac{2}{3}$ makes this slightly inconsistent in 2D,
+        for the reason given in `DeviatoricStressMixin`. The analytical tests
+        in tests/viscoelastic_internal_variable/ are set up assuming 3D
+        geometry.
+
+        Returns:
+          A UFL expression for the deviatoric strain.
+
+        """
+        return 0.5 * self.deviatoric_tensor_from_grad(grad(u))
 
     def effective_viscosity(self, dt: float) -> ufl.core.expr.Expr:
-        """Effective viscosity used to impose boundary conditions on displacement
-        weakly through a Nitsche penalty term in the viscosity_term of
-        momentum_equation.py"""
+        r"""Shear coefficient of the time-step problem after substitution.
+
+        The backward-Euler substitution of the internal variables gives a
+        displacement problem with shear coefficient
+
+        $$ \eta_{eff} = \sum_i \frac{\eta_i}{\tau_i + \Delta t}
+                     = \sum_i \frac{\mu_i}{1 + \Delta t/\tau_i}, $$
+
+        a modulus despite the name. `InternalVariableSolver` uses this value for
+        its substituted displacement operator. `CoupledInternalVariableSolver`
+        uses `mu0` for its elastic displacement block.
+
+        Arguments:
+          dt: the time step.
+
+        Returns:
+          A UFL expression for the effective shear coefficient.
+
+        """
 
         eta_eff = 0
         for eta, maxwell_time in zip(self.viscosity, self.maxwell_times):
             eta_eff += eta / (maxwell_time + dt)
         return eta_eff
 
+    def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+        r"""The stress a gradient-like tensor produces, deviatoric plus bulk.
+
+        This approximation is compressible with a finite bulk modulus, so the
+        response to a gradient-like tensor $G$ has a volumetric part on top of
+        the deviatoric one,
+
+        $$ \mu\,A(G) + \kappa_r\,\kappa\,\mathrm{tr}(G)\,I, $$
+
+        with $\kappa$ the bulk modulus and $\kappa_r$ the bulk-to-shear ratio.
+        With $G = \nabla u$ the volumetric part is
+        $\kappa_r \kappa (\nabla \cdot u) I$. With $G = n \otimes w$ it is the
+        volumetric part of the SIPG penalty, which the boundary jump in the
+        normal displacement must feel for the same reason the interior
+        divergence does.
+
+        The solver assigns $\mu$ before assembly. `InternalVariableSolver` uses
+        the effective shear coefficient of its substituted problem.
+        `CoupledInternalVariableSolver` uses $\mu_0$ to match its elastic
+        displacement block.
+
+        Returns:
+          A UFL expression for the stress produced by `gradient`.
+
+        """
+        volumetric = self.bulk_shear_ratio * self.bulk_modulus * tr(gradient)
+        return (
+            super().stress_from_grad(gradient)
+            + volumetric * Identity(gradient.ufl_shape[0])
+        )
+
     def stress(self, u, **kwargs) -> ufl.core.expr.Expr:
+        r"""The full stress, volumetric part plus relaxing deviatoric part.
+
+        $$ \sigma = \kappa_r\,\kappa\,(\nabla \cdot u)\,I
+           + 2\mu_0\,\mathrm{dev}\,\varepsilon(u)
+           - \sum_i 2\mu_i m_i. $$
+
+        The shear coefficient of the deviatoric part is the elastic modulus
+        $\mu_0 = \sum_i \mu_i$; the internal variables $m_i$ carry the
+        relaxation away from that elastic response. This is deliberately not
+        written through `stress_from_grad`, whose shear coefficient is the
+        solver-selected scale `mu`, not always $\mu_0$.
+
+        Returns:
+          A UFL expression for the full stress.
+
+        """
         internal_variables = kwargs.get("internal_variables", None)
         if internal_variables is None:
             raise KeyError(
@@ -850,8 +1032,20 @@ class InternalVariableApproximation(BaseGIAApproximation):
         return stress
 
     def deviatoric_stress(self, u, internal_variables):
-        d = self.deviatoric_strain(u)
-        dev_stress = 2 * self.mu0 * d
+        r"""The deviatoric stress, elastic response minus the relaxed part.
+
+        $$ 2\mu_0\,\mathrm{dev}\,\varepsilon(u) - \sum_i 2\mu_i m_i $$
+
+        Built on `deviatoric_tensor_from_grad`, which supplies
+        $2\,\mathrm{dev}\,\varepsilon(u)$, so the elastic part of the stress
+        and the strain the internal variables relax towards share one
+        definition.
+
+        Returns:
+          A UFL expression for the deviatoric stress.
+
+        """
+        dev_stress = self.mu0 * self.deviatoric_tensor_from_grad(grad(u))
         for mu, m in zip(self.shear_modulus, internal_variables):
             dev_stress -= 2 * mu * m
         return dev_stress

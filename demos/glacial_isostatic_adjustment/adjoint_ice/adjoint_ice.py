@@ -216,7 +216,8 @@ surface_mesh = CircleManifoldMesh(ncells, radius=rmax, degree=1, name='surface_m
 # Define control on surface mesh
 P1_surf = FunctionSpace(surface_mesh, "CG", 1)  # Function space on surface mesh for control
 ice_thickness_control = Function(P1_surf, name="Ice thickness (control)")  # What we optimise
-control = Control(ice_thickness_control, riesz_map="L2")
+riesz_map = RieszMap(P1_surf, "L2", constant_jacobian=True)
+control = Control(ice_thickness_control, riesz_map=riesz_map)
 # -
 
 # In the cell above, when we initialised the control field, we also specified the option

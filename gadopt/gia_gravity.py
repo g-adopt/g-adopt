@@ -2650,8 +2650,17 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self,
         solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
+        gpu_extras: ConfigType | None = None,
+        iterative_preset: ConfigType | None = None,
+        direct_preset: ConfigType | None = None,
     ) -> None:
         """PETSc options; both presets are two-block DtN Schur splits.
+
+        `gpu_extras`, `iterative_preset` and `direct_preset` exist because the
+        base class signature carries them. The two-block DtN presets have no
+        GPU variant, and the Real-field splits are built here, so the two
+        presets are ignored and `gpu_extras` is only forwarded on the
+        `Mapping` path.
 
         `"direct"` gives `selfgrav_dtn_schur_solver_parameters` and `"iterative"`
         gives `selfgrav_dtn_iterative_solver_parameters`, and **the default is
@@ -2736,7 +2745,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.appctx["gia_time_step"] = self.dt
 
         if isinstance(solver_preset, Mapping):
-            super().set_solver_options(solver_preset, solver_extras)
+            super().set_solver_options(solver_preset, solver_extras, gpu_extras)
             _attach_block1_diagonal()
             return
         if solver_preset not in (None, "direct", "iterative"):
