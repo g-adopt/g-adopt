@@ -1,9 +1,10 @@
 """Convergence of the coupled iterative preset with weak "un" boundaries.
 
-The preset preconditions the displacement block with CG inside a fieldsplit. CG
-is defined only for a symmetric operator, so an asymmetric displacement block is
-a solver-level defect and not only an aesthetic one. A large ratio of the time
-step to the Maxwell time makes the asymmetry largest, so that is what runs here.
+The preset eliminates the internal variables by static condensation and solves
+the condensed displacement operator with CG. CG is defined only for a symmetric
+operator, so an asymmetric condensed operator is a solver-level defect and not
+only an aesthetic one. A large ratio of the time step to the Maxwell time makes
+the asymmetry largest, so that is what runs here.
 
 Usage:
     python3 gia_iterative.py
@@ -25,9 +26,9 @@ def converged_reasons():
     """Solve the coupled system with the iterative preset and report convergence.
 
     Returns:
-      A single row: the PETSc converged reason of the outer Newton solve, and
-      that of the inner CG solve on the displacement block. Both are positive
-      when the solve converged, and zero or negative otherwise.
+      A single row: the PETSc converged reason of the outer solve, and that
+      of the CG solve on the condensed displacement operator. Both are
+      positive when the solve converged, and zero or negative otherwise.
     """
     mesh = fd.UnitSquareMesh(RESOLUTION, RESOLUTION)
     mesh.cartesian = True
@@ -52,7 +53,7 @@ def converged_reasons():
     solver.solve()
 
     snes = solver.solver.snes
-    displacement_ksp = snes.getKSP().getPC().getFieldSplitSubKSP()[0]
+    displacement_ksp = snes.getKSP().getPC().getPythonContext().condensed_ksp
     return np.array([[float(snes.getConvergedReason()),
                       float(displacement_ksp.getConvergedReason())]])
 

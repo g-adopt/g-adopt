@@ -22,6 +22,7 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import create_stokes_nullspace, rigid_body_modes
+from .internal_variable_equation import internal_variable_space
 from .preconditioners import (
     FreeSurfaceMassInvPC,
     InternalVariableSCPC,

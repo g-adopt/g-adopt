@@ -9,18 +9,26 @@ dictionaries live in ``solver_configs.py``, which needs no Firedrake.
 The five configurations are:
 
 - ``substituted``: `InternalVariableSolver`, the displacement-only reference.
-- ``multiplicative``: `CoupledInternalVariableSolver` with the shipped preset
-  (symmetric multiplicative fieldsplit over displacement and internal
-  variables). The baseline this work started from; it needs many sweeps and
-  can fail, so it runs with an outer iteration cap.
+- ``multiplicative``: `CoupledInternalVariableSolver` with the symmetric
+  multiplicative fieldsplit over displacement and internal variables that was
+  the shipped preset before static condensation
+  (`multiplicative_gia_solver_parameters`). The baseline this work started
+  from; it needs many sweeps and can fail, so it runs with an outer iteration
+  cap.
 - ``schur-a11``: Schur fieldsplit that eliminates the internal variables
   exactly and preconditions the displacement Schur complement with GAMG on
   the elastic block. PETSc options only.
 - ``schur-substituted``: same layout, with GAMG on the substituted
   (``eta_eff``) operator assembled by `gadopt.SubstitutedDisplacementPC`.
 - ``static-condensation``: Slate static condensation of the internal variables
-  through `gadopt.InternalVariableSCPC`, then GMRES and GAMG on the exact
-  condensed displacement operator.
+  through `gadopt.InternalVariableSCPC`, then CG and GAMG on the exact
+  condensed displacement operator. This is the shipped preset of
+  `CoupledInternalVariableSolver`; the subclass here only exposes the Krylov
+  method and the nullspace callables of the comparison.
+
+Every coupled configuration keeps both Maxwell elements in one internal-variable
+field of shape ``(2, 3, 3)`` (see `gadopt.internal_variable_equation`), so the
+internal variables are always field 1 of the mixed space.
 
 Every solver modifies its configuration through `add_to_solver_config` and
 `DeleteParam`, never by assigning `solver_parameters` directly, so that the
@@ -44,7 +52,6 @@ from gadopt import (
     InternalVariableSolver,
     MixedVectorSpaceBasis,
     SpatialCoordinate,
-    TensorFunctionSpace,
     VectorFunctionSpace,
     atan2,
     get_boundary_ids,
@@ -53,7 +60,9 @@ from gadopt import (
     sqrt,
     tanh,
 )
+from gadopt.internal_variable_equation import internal_variable_space
 from gadopt.stokes_integrators import (
+    multiplicative_gia_solver_parameters,
     newton_stokes_solver_parameters,
 )
 from gadopt.utility import extruded_layer_heights, initialise_background_field
@@ -75,7 +84,7 @@ def _material_field(space, values, radii, coordinate, name):
     return field
 
 
-def burgers_problem(reflevel, dg0_layers, dt_years=1000.0, symmetric_tensor=False):
+def burgers_problem(reflevel, dg0_layers, dt_years=1000.0, symmetric_tensor=True):
     """Build the Burgers sphere problem of ``3d_sphere_burgers.py``.
 
     Args:
@@ -86,7 +95,8 @@ def burgers_problem(reflevel, dg0_layers, dt_years=1000.0, symmetric_tensor=Fals
       dt_years: time step in years. The Maxwell times of the mantle shells are
         290 to 1270 years, so this sets ``dt/tau`` and with it the difficulty of
         the coupled solve.
-      symmetric_tensor: store the internal variables as symmetric tensors.
+      symmetric_tensor: store the internal variables as symmetric tensors
+        (the default of `internal_variable_space`).
 
     Returns:
       ``(mesh, V, S, dt, bcs, make_approximation)`` where ``make_approximation``
@@ -113,8 +123,8 @@ def burgers_problem(reflevel, dg0_layers, dt_years=1000.0, symmetric_tensor=Fals
     boundary = get_boundary_ids(mesh)
 
     V = VectorFunctionSpace(mesh, "CG", 2)
-    tensor_kwargs = {"symmetry": True} if symmetric_tensor else {}
-    S = TensorFunctionSpace(mesh, "DQ", 1, **tensor_kwargs)
+    # One field for both Maxwell elements, shape (2, 3, 3).
+    S = internal_variable_space(mesh, 2, symmetric=symmetric_tensor)
     DG0 = FunctionSpace(mesh, "DG", 0)
     DG1 = FunctionSpace(mesh, "DG", 1)
     X = SpatialCoordinate(mesh)
@@ -203,24 +213,40 @@ def _rigid_body_near_nullspace(V):
     return rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
 
 
-def _rigid_body_nullspace(V):
-    return rigid_body_modes(V, rotational=True)
+class MultiplicativeCoupledInternalVariableSolver(CoupledInternalVariableSolver):
+    """The symmetric multiplicative fieldsplit that preceded static condensation.
+
+    Kept as the baseline of the comparison. The displacement block is
+    `fieldsplit_0`, a matrix-free block that `SPDAssembledPC` assembles for
+    GAMG; the internal-variable block is `fieldsplit_1`, whose options the
+    driver supplies.
+    """
+
+    displacement_block_prefix = "fieldsplit_0"
+    displacement_block_assembled = True
+
+    def set_solver_options(self, solver_preset, solver_extras, gpu_extras):
+        snes = {"snes_type": "ksponly"} if self._newtonian_rheology() else newton_stokes_solver_parameters
+        super().set_solver_options(
+            solver_preset, solver_extras, gpu_extras,
+            iterative_preset=multiplicative_gia_solver_parameters | snes,
+        )
 
 
 class SchurCoupledInternalVariableSolver(CoupledInternalVariableSolver):
     """Schur fieldsplit that eliminates the internal variables exactly.
 
-    Split 0 holds every internal variable; its block is a cell-local DG mass
-    matrix and is inverted exactly. Split 1 is the displacement, whose KSP sees
-    the exact Schur complement. ``schur_precondition`` selects the matrix
-    GAMG runs on: ``a11`` (the elastic block, shear coefficient ``mu0``) or
-    ``substituted`` (`gadopt.SubstitutedDisplacementPC`, coefficient
-    ``eta_eff``).
+    Split 0 holds the internal-variable field; its block is cell-local (a DG
+    mass matrix per Maxwell element) and is inverted exactly. Split 1 is the
+    displacement, whose KSP sees the exact Schur complement.
+    ``schur_precondition`` selects the matrix GAMG runs on: ``a11`` (the
+    elastic block, shear coefficient ``mu0``) or ``substituted``
+    (`gadopt.SubstitutedDisplacementPC`, coefficient ``eta_eff``).
 
-    The exact Schur complement is nonsymmetric at weak-normal boundaries (the
-    displacement row carries the Nitsche consistency term with the internal
-    variables; the internal-variable rows carry no transpose), so the Schur
-    field uses GMRES. The outer method is ``preonly`` by default: with the
+    The history equations carry the boundary term that makes the exact Schur
+    complement symmetric at weak-normal boundaries, so the Schur field can
+    run CG; GMRES stays the default of the comparison so that old and new
+    runs read the same. The outer method is ``preonly`` by default: with the
     internal-variable block inverted exactly, one application of the full
     Schur factorisation is the whole linear solve, which is the same
     accounting as the substituted solver's single CG solve.
@@ -236,6 +262,9 @@ class SchurCoupledInternalVariableSolver(CoupledInternalVariableSolver):
     """
 
     displacement_block_prefix = "fieldsplit_1"
+    # The displacement split is a matrix-free block that `SPDAssembledPC`
+    # (or `SubstitutedDisplacementPC`) assembles for GAMG.
+    displacement_block_assembled = True
 
     def __init__(
         self,
@@ -266,7 +295,6 @@ class SchurCoupledInternalVariableSolver(CoupledInternalVariableSolver):
         ``displacement_block_prefix``) with the Krylov and GAMG options, so it
         must be absent here or the base class treats the block as configured.
         """
-        n_internal = len(self.solution_space) - 1
         internal = _internal_variable_options(self.internal_solver, self.internal_rtol)
         snes = {"snes_type": "ksponly"} if self._newtonian_rheology() else newton_stokes_solver_parameters
         return {
@@ -276,14 +304,9 @@ class SchurCoupledInternalVariableSolver(CoupledInternalVariableSolver):
             "pc_fieldsplit_type": "schur",
             "pc_fieldsplit_schur_fact_type": "full",
             "pc_fieldsplit_schur_precondition": "a11",
-            "pc_fieldsplit_0_fields": ",".join(str(i) for i in range(1, n_internal + 1)),
+            "pc_fieldsplit_0_fields": "1",
             "pc_fieldsplit_1_fields": "0",
-            "fieldsplit_0": {
-                "ksp_type": "preonly",
-                "pc_type": "fieldsplit",
-                "pc_fieldsplit_type": "additive",
-                **{f"fieldsplit_{i}": internal for i in range(n_internal)},
-            },
+            "fieldsplit_0": internal,
         } | snes
 
     def set_solver_options(self, solver_preset, solver_extras, gpu_extras):
@@ -319,43 +342,22 @@ class StaticCondensationCoupledInternalVariableSolver(CoupledInternalVariableSol
     operator as a sparse matrix and solves it with the options under
     ``condensed_field``, then recovers the internal variables locally. The
     outer KSP is ``preonly``: the condensation is the whole linear solve.
+    This is the shipped preset of `CoupledInternalVariableSolver`.
 
     Args:
-      condensed_ksp: Krylov method on the condensed displacement operator. It
-        is nonsymmetric at weak-normal boundaries, so GMRES by default.
+      condensed_ksp: Krylov method on the condensed displacement operator.
+        The operator is symmetric, so CG by default.
 
     The remaining arguments are those of `CoupledInternalVariableSolver`.
     """
 
-    displacement_block_prefix = "condensed_field"
-    # The condensed operator is assembled by Slate, so GAMG runs on it directly.
-    displacement_block_assembled = False
-
-    def __init__(self, solution, approximation, /, *, condensed_ksp="gmres", **kwargs):
+    def __init__(self, solution, approximation, /, *, condensed_ksp="cg", **kwargs):
         self.condensed_ksp = condensed_ksp
         super().__init__(solution, approximation, **kwargs)
 
-    def _iterative_preset(self):
-        n_internal = len(self.solution_space) - 1
-        snes = {"snes_type": "ksponly"} if self._newtonian_rheology() else newton_stokes_solver_parameters
-        return {
-            "mat_type": "matfree",
-            "ksp_type": "preonly",
-            "pc_type": "python",
-            "pc_python_type": "gadopt.InternalVariableSCPC",
-            "pc_sc_eliminate_fields": ",".join(str(i) for i in range(1, n_internal + 1)),
-        } | snes
-
-    def set_solver_options(self, solver_preset, solver_extras, gpu_extras):
-        super().set_solver_options(
-            solver_preset, solver_extras, gpu_extras, iterative_preset=self._iterative_preset()
-        )
-        self.appctx["condensed_field_nullspace"] = _rigid_body_nullspace
-        self.appctx["condensed_field_near_nullspace"] = _rigid_body_near_nullspace
-
     def _configure_iterative_solver(self, device_type, gpu_extras):
         super()._configure_iterative_solver(device_type, gpu_extras)
-        updates = {"mat_type": "aij", "ksp_type": self.condensed_ksp}
+        updates = {"ksp_type": self.condensed_ksp}
         if self.condensed_ksp != "cg":
             updates["ksp_gmres_restart"] = 50
         self.add_to_solver_config({self.displacement_block_prefix: updates})
@@ -401,14 +403,12 @@ def construct_solver(
     if config == "multiplicative":
         internal = _internal_variable_options(internal_solver, internal_rtol)
         # The outer GMRES must converge as tightly as the reference's CG for
-        # the comparison to be fair; the shipped preset stops at 1e-3. One
-        # split per field; the preset only configures fieldsplit_1. The block
-        # sweep can need dozens of full elastic solves per step, so cap the
-        # outer iterations instead of letting a job run out.
+        # the comparison to be fair. The block sweep can need dozens of full
+        # elastic solves per step, so cap the outer iterations instead of
+        # letting a job run out.
         extras |= {
             "ksp_rtol": outer_rtol,
             "fieldsplit_1": internal,
-            "fieldsplit_2": internal,
             "ksp_max_it": multiplicative_max_it,
         }
     common = dict(
@@ -422,7 +422,7 @@ def construct_solver(
 
     if config == "substituted":
         u = Function(V, name="substituted displacement")
-        internal = [Function(S, name=f"substituted internal variable {i}") for i in (1, 2)]
+        internal = Function(S, name="substituted internal variables")
         exact, near = make_nullspaces(V)
         solver = InternalVariableSolver(
             u,
@@ -435,14 +435,14 @@ def construct_solver(
         )
         return solver, u
 
-    Z = V * S * S
+    Z = V * S
     z = Function(Z, name=f"{config} solution")
     exact, near = make_nullspaces(V, Z)
     common |= dict(nullspace=exact, transpose_nullspace=exact, near_nullspace=near)
     approximation = make_approximation()
 
     if config == "multiplicative":
-        solver = CoupledInternalVariableSolver(z, approximation, **common)
+        solver = MultiplicativeCoupledInternalVariableSolver(z, approximation, **common)
     elif config.startswith("schur-"):
         solver = SchurCoupledInternalVariableSolver(
             z,

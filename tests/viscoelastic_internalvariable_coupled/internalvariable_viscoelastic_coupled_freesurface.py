@@ -80,13 +80,12 @@ def viscoelastic_model(
     # Set up function spaces - currently using P2P1 element pair:
     V = VectorFunctionSpace(mesh, "CG", 2)  # Displacement function space (vector)
     Q = FunctionSpace(mesh, "CG", 2)  # P2 function space (scalar)
-    TP1 = TensorFunctionSpace(mesh, "DG", 1)
+    # One discontinuous tensor field holds every Maxwell element: two for
+    # the Burgers rheology, one otherwise.
+    S = internal_variable_space(mesh, 2 if burgers_test else 1)
     R = FunctionSpace(mesh, "R", 0)
 
-    if burgers_test:
-        Z = MixedFunctionSpace([V, TP1, TP1])  # Mixed function space.
-    else:
-        Z = MixedFunctionSpace([V, TP1])  # Mixed function space.
+    Z = MixedFunctionSpace([V, S])  # Mixed function space.
 
     z = Function(Z)  # A field over the mixed function space Z.
 

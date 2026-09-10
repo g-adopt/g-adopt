@@ -12,10 +12,10 @@ the names and the option layout are in `solver_configs.py` next to it):
 | name | solver |
 |---|---|
 | `substituted` | `InternalVariableSolver`, the reference. Runs in every job. |
-| `multiplicative` | `CoupledInternalVariableSolver` with the shipped preset, outer iterations capped at 40. |
+| `multiplicative` | `CoupledInternalVariableSolver` with the symmetric multiplicative fieldsplit that preceded static condensation (`multiplicative_gia_solver_parameters`), outer iterations capped at 40. |
 | `schur-a11` | Schur fieldsplit, internal variables eliminated exactly, GAMG on the elastic block. |
 | `schur-substituted` | Same layout, GAMG on the substituted operator (`gadopt.SubstitutedDisplacementPC`). |
-| `static-condensation` | Slate static condensation (`gadopt.InternalVariableSCPC`), GMRES and GAMG on the condensed operator. |
+| `static-condensation` | Slate static condensation (`gadopt.InternalVariableSCPC`), CG and GAMG on the condensed operator. This is the shipped preset of `CoupledInternalVariableSolver`. |
 
 ## Running
 
@@ -70,33 +70,38 @@ V-cycles per step in brackets:
 Static condensation matches the reference's V-cycle count within a few
 cycles and costs 1.5 to 1.6 times its wall time at every level. Its extra
 cost is the Slate condensation assembly, the elimination and back
-substitution, and the residual evaluation of the full three-field form.
+substitution, and the residual evaluation of the full coupled form.
+
+Every coupled configuration keeps both Maxwell elements in one
+internal-variable field of shape `(2, 3, 3)`, so the internal variables are
+field 1 of the mixed space whatever the number of elements. The numbers in
+`expected.csv` and `gadi_expected.csv` were measured with the earlier
+per-element layout, GMRES on the condensed operator and a condensed operator
+whose boundary penalty was doubled by a Slate defect (see
+`gadopt.momentum_equation.viscosity_term`); they have not been re-measured
+since.
 
 ## Open items
 
-- **The shipped preset is still the multiplicative fieldsplit.** The
-  static-condensation configuration should become the iterative preset of
-  `CoupledInternalVariableSolver`. Its option set is
-  `StaticCondensationCoupledInternalVariableSolver._iterative_preset` in the
-  variants module; moving it changes the default for every user of the
-  coupled solver and the expectations in
-  `tests/unit/test_stokes_solver_configuration.py`.
-- **No tests cover the new preconditioners.** `gadopt.InternalVariableSCPC`
-  overrides `condensed_system` and `local_solver_calls` of Firedrake's
-  `SCPC` and reads its private attributes, and
-  `gadopt.SubstitutedDisplacementPC` reads the elastic block's form from the
-  matrix-free context. Both need a small test (level 1, serial, a few
-  steps) that checks the V-cycle count against the reference, so that a
-  Firedrake update that breaks them is caught.
+- **Re-measure on Gadi.** The shipped preset now runs CG on a symmetric
+  condensed operator with the corrected boundary penalty, and reuses the
+  condensed operator across fixed-`dt` steps. The level-3 one-node job and
+  the level-5 four-step job are the gates of the transition plan; their
+  numbers replace `expected.csv` and `gadi_expected.csv`.
+- **`gadopt.SubstitutedDisplacementPC` has no unit test.** It reads the
+  elastic block's form from the matrix-free context; a Firedrake change
+  there would only show up in this scaling test. `InternalVariableSCPC` is
+  covered by `tests/unit/test_internal_variable_history.py`.
 - **Two timing loops.** `burgers_sphere.model` and
   `benchmark_internal_variable_solvers.main` contain the same solve loop,
   failure handling, L2 difference and JSON summary. One
   `run_comparison(problem, configs, steps)` in the variants module would
   serve both.
-- **Power-law rheology is not covered.** `InternalVariableSCPC` drops the
-  cross coupling between internal variables that the power-law Jacobian
-  introduces, and the Schur layout inverts each internal-variable block on
-  its own. Both are exact only for a Newtonian rheology.
+- **Power-law rheology is not measured here.** With every Maxwell element
+  in one field, the cross coupling that the power-law Jacobian introduces
+  sits inside the internal-variable block, so both the Schur layout and
+  static condensation invert it exactly; the unit tests cover a small
+  power-law solve under Newton. The cost on the sphere is unmeasured.
 - **GPU path untested** for the Schur and static-condensation layouts.
-  `StokesSolverBase._configure_iterative_solver` refuses the GPU offload
-  when the displacement block is an assembled matrix (static condensation).
+  `StokesSolverBase._configure_iterative_solver` now offloads the condensed
+  matrix directly through `OffloadPC`; nobody has run it.

@@ -205,31 +205,35 @@ ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE = deepcopy(ITERATIVE_GIA_HIP_PARAMS_TELESCOP
 ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
 # The test approximation is Newtonian (exponent 1), so the coupled solver
-# runs one linear solve per step (`ksponly`) instead of Newton.
+# runs one linear solve per step (`ksponly`) instead of Newton. Its preset
+# eliminates the internal variables with static condensation, so the Krylov
+# and GAMG options of the displacement block sit under `condensed_field` and
+# apply to the condensed matrix directly (no `SPDAssembledPC` wrapper).
+CONDENSED_FIELD_CPU = (
+    deepcopy(ITERATIVE_FIELDSPLIT_0_CPU["fieldsplit_0"]["assembled"])
+    | {"ksp_type": "cg", "ksp_rtol": 1e-5, "ksp_max_it": 1000}
+    | {"ksp_converged_reason": None}
+)
+
 ITERATIVE_GIA_COUPLED_CPU_PARAMS = (
     {"snes_monitor": None}
     | coupled_gia_solver_parameters
-    | {
-        "fieldsplit_1": coupled_gia_solver_parameters["fieldsplit_1"]
-        | {"ksp_converged_reason": None}
-    }
-    | deepcopy(ITERATIVE_FIELDSPLIT_0_CPU)
-    | {"snes_type": "ksponly"}
+    | {"snes_type": "ksponly", "condensed_field": CONDENSED_FIELD_CPU}
 )
+
+# On a GPU the condensed matrix is offloaded directly, so the offload options
+# that the matrix-free layouts keep under `assembled` sit at the block level.
+CONDENSED_FIELD_HIP = deepcopy(ITERATIVE_FIELDSPLIT_0_GPU["fieldsplit_0"]["assembled"])
+CONDENSED_FIELD_HIP["offload"]["ksp"]["ksp_converged_reason"] = None
 
 ITERATIVE_GIA_COUPLED_HIP_PARAMS = (
     {"snes_monitor": None}
     | coupled_gia_solver_parameters
-    | {
-        "fieldsplit_1": coupled_gia_solver_parameters["fieldsplit_1"]
-        | {"ksp_converged_reason": None}
-    }
-    | deepcopy(ITERATIVE_FIELDSPLIT_0_GPU)
-    | {"snes_type": "ksponly"}
+    | {"snes_type": "ksponly", "condensed_field": CONDENSED_FIELD_HIP}
 )
 
 ITERATIVE_GIA_COUPLED_CUDA_PARAMS = deepcopy(ITERATIVE_GIA_COUPLED_HIP_PARAMS)
-ITERATIVE_GIA_COUPLED_CUDA_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
+ITERATIVE_GIA_COUPLED_CUDA_PARAMS["condensed_field"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
 DIRECT_GIA_COUPLED_CPU_PARAMS = (
     {"snes_type": "ksponly"} | direct_stokes_solver_parameters
@@ -330,6 +334,16 @@ def case_configurations(request):
             tol_dict = {"fieldsplit_0": tol_dict}
         tol_dict["fieldsplit_1"] = {"ksp_rtol": 1e-3}
         iterative_different_tolerance["fieldsplit_1"]["ksp_rtol"] = 1e-3
+    elif "condensed_field" in iterative_base:
+        # Static condensation: the displacement Krylov solve sits under
+        # `condensed_field`, offloaded directly on a GPU.
+        block = iterative_different_tolerance["condensed_field"]
+        if block["ksp_type"] == "preonly":
+            block["offload"]["ksp"] |= tol_dict
+            tol_dict = {"condensed_field": {"offload": {"ksp": tol_dict}}}
+        else:
+            block |= tol_dict
+            tol_dict = {"condensed_field": tol_dict}
     else:
         # Indicates GPU solve
         if iterative_base["ksp_type"] == "preonly":

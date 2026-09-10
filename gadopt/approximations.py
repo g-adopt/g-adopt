@@ -774,6 +774,34 @@ class InternalVariableApproximation(BaseGIAApproximation):
         self.transition_stress = transition_stress
         self.background_stress = background_stress
 
+    def internal_variable_space(
+        self, mesh, degree: int = 1, symmetric: bool = True
+    ):
+        r"""The discontinuous tensor space that holds every internal variable.
+
+        One field of shape `(n, d, d)` for the `n` Maxwell elements of this
+        rheology, built by `gadopt.internal_variable_equation.internal_variable_space`
+        with `n = len(self.maxwell_times)`. The solvers slice it per element;
+        `stress` and `deviatoric_stress` keep taking the list of slices.
+
+        Args:
+          mesh: the mesh to build the space on.
+          degree: polynomial degree of the discontinuous element (default 1).
+          symmetric: store only the independent components of each
+            `(d, d)` block (default True).
+
+        Returns:
+          A Firedrake `TensorFunctionSpace`.
+
+        """
+        # Imported here: `internal_variable_equation` imports `equations`,
+        # which imports this module.
+        from .internal_variable_equation import internal_variable_space
+
+        return internal_variable_space(
+            mesh, len(self.maxwell_times), degree=degree, symmetric=symmetric
+        )
+
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         r"""The deviatoric strain $\mathrm{dev}(\mathrm{sym}(\nabla u))$.
 
