@@ -562,7 +562,16 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  cmb_buoyancy="core", rigid_core=False,
                  bulk_shear_ratio=BULK_SHEAR_RATIO,
                  u_pc="gadopt.RigidBodyAssembledPC", snes_type="ksponly",
-                 dt=None, block0_rtol=1e-2, multiplier_pc="none"):
+                 dt=None, block0_rtol=1e-2, multiplier_pc="none",
+                 solver_kwargs_extra=None):
+    """Build the Spada self-gravity solver of B1 and B5.
+
+    `solver_kwargs_extra` is merged into the keywords handed to
+    `SelfGravitatingGIASolver` last, so a driver can pass a keyword this
+    builder does not know (for example `condensed_near_nullspace`, which
+    only acts when `near_nullspace=False` here, because a declared outer
+    near-nullspace wins over it).
+    """
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
     sigma_sub = load_field(sub, nmax, sigma_n)
@@ -628,6 +637,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
         solver_kwargs["near_nullspace"] = MixedVectorSpaceBasis(
             Z, [rbm if i == layout.displacement else Z.sub(i)
                 for i in range(len(Z))])
+    solver_kwargs.update(solver_kwargs_extra or {})
     # `rho_mantle=None` takes `approximation.density`, which is right for a
     # layered rho_0: the mechanics mesh has only mantle cells, so the facet
     # trace at Rc is already the mantle value. `cmb_buoyancy` selects the spring

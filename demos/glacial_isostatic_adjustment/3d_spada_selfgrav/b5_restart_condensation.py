@@ -265,6 +265,19 @@ def main():
     parser.add_argument("--bulk-shear-ratio", type=float, default=100.0)
     parser.add_argument("--outer-rtol", type=float, default=1.0e-6)
     parser.add_argument("--block0-rtol", type=float, default=1.0e-4)
+    parser.add_argument("--block0-max-it", type=int, default=200)
+    # The displacement preconditioner inside block 0, on every arm. The
+    # modes GAMG is seeded with: `rigid` (the P3 march) or `incompressible`
+    # (rigid plus the low-degree divergence-free fields, which is what made
+    # the standalone solver converge at bulk/shear 100 and 1000). And the
+    # Krylov method on the displacement split: 0 is one GAMG V-cycle per
+    # block-0 iteration (`preonly`, the P3 march); N > 0 is CG with at most N
+    # iterations to the given relative tolerance, counted as converged at
+    # the cap so the block-0 FGMRES keeps going.
+    parser.add_argument("--near-nullspace",
+                        choices=("rigid", "incompressible"), default="rigid")
+    parser.add_argument("--displacement-ksp-max-it", type=int, default=0)
+    parser.add_argument("--displacement-ksp-rtol", type=float, default=1.0e-2)
     parser.add_argument("--ablation",
                         choices=("none", "gravity-feedback",
                                  "gravity-volume-feedback",
@@ -302,7 +315,10 @@ def main():
         f"block0={args.block0 if not condense else 'condensed-layout'}")
     say(f"ablation={args.ablation}")
     say(f"outer_rtol={args.outer_rtol:g} "
-        f"block0_rtol={args.block0_rtol:g}")
+        f"block0_rtol={args.block0_rtol:g} block0_max_it={args.block0_max_it}")
+    say(f"near_nullspace={args.near_nullspace} "
+        f"displacement_ksp_max_it={args.displacement_ksp_max_it} "
+        f"displacement_ksp_rtol={args.displacement_ksp_rtol:g}")
 
     parent, sub, _, _ = b1.build_meshes(
         "coarse", path=args.mesh)
@@ -314,29 +330,63 @@ def main():
         say("RESULT load_only=pass")
         return
 
-    solver_parameters = None
-    if not condense and args.block0 == "sweep":
+    solver_kwargs_extra = {}
+    if condense:
+        # The condensed layout's own preset, built here so that its block-0
+        # cap and displacement options can be set below.
+        solver_parameters = b1.condensed_solver_parameters(
+            outer_rtol=args.outer_rtol, block0_rtol=args.block0_rtol,
+            block0_max_it=args.block0_max_it, snes_type="ksponly",
+            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
+        displacement_prefix = "dtn_fieldsplit_0_fieldsplit_0_"
+    elif args.block0 == "sweep":
         solver_parameters = b1.b2_solver_parameters(
             multiplier_pc="none",
             block0_rtol=args.block0_rtol,
             outer_rtol=args.outer_rtol,
-            block0_max_it=200,
+            block0_max_it=args.block0_max_it,
             u_pc="gadopt.RigidBodyAssembledPC")
         solver_parameters.update({
             "dtn_fieldsplit_1_pc_type": "python",
             "dtn_fieldsplit_1_pc_python_type":
                 "gadopt.DtNMultiplierDenseSchurPC",
         })
-    elif not condense:
+        # In the three-way sweep `u` is split 1 (`m` is split 0).
+        displacement_prefix = "dtn_fieldsplit_0_fieldsplit_1_"
+    else:
         # Static condensation of the (u, M) pair inside block 0, the dense
         # Schur complement on the Real block, one linear solve per step.
         solver_parameters = selfgrav_dtn_iterative_solver_parameters(
             condensed=False,
             block0_rtol=args.block0_rtol,
             outer_rtol=args.outer_rtol,
-            block0_max_it=200,
+            block0_max_it=args.block0_max_it,
             snes_type="ksponly",
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
+        displacement_prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
+
+    # The displacement preconditioner, on whichever split carries it. For
+    # the assembled-block classes the modes are a PETSc option they read at
+    # setup; for the condensation class they come from the solver keyword,
+    # which acts only when no outer near-nullspace is declared, so the
+    # builder's rigid-body basis is switched off in that case.
+    if condense or args.block0 == "sweep":
+        solver_parameters[displacement_prefix + "near_nullspace"] = \
+            args.near_nullspace
+        near_nullspace_kw = {}
+    else:
+        solver_kwargs_extra["condensed_near_nullspace"] = args.near_nullspace
+        near_nullspace_kw = {"near_nullspace": args.near_nullspace == "rigid"}
+    if args.displacement_ksp_max_it > 0:
+        solver_parameters.update({
+            displacement_prefix + "ksp_type": "cg",
+            displacement_prefix + "ksp_max_it": args.displacement_ksp_max_it,
+            displacement_prefix + "ksp_rtol": args.displacement_ksp_rtol,
+            displacement_prefix + "ksp_converged_maxits": None,
+            displacement_prefix + "ksp_converged_reason": None,
+        })
+    else:
+        solver_parameters[displacement_prefix + "ksp_type"] = "preonly"
 
     original_solver_class = b1.SelfGravitatingGIASolver
     ablated_solvers = {
@@ -353,9 +403,10 @@ def main():
         condense=condense, outer_rtol=args.outer_rtol,
         bulk_shear_ratio=args.bulk_shear_ratio,
         u_pc="gadopt.RigidBodyAssembledPC", snes_type="ksponly",
-        block0_rtol=args.block0_rtol,
+        block0_rtol=args.block0_rtol, block0_max_it=args.block0_max_it,
         multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
-        solver_parameters=solver_parameters, dt=dt)
+        solver_parameters=solver_parameters, dt=dt,
+        solver_kwargs_extra=solver_kwargs_extra, **near_nullspace_kw)
     b1.SelfGravitatingGIASolver = original_solver_class
     assign_restart(solver, z, layout, displacement, potential, history)
 
