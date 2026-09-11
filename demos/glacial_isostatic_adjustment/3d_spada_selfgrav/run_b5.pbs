@@ -1,0 +1,81 @@
+#!/bin/bash
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=06:00:00
+#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l wd
+# B5, the viscoelastic Spada benchmark with fields written out.
+#
+#   qsub -v EPOCHS="0 1",LABEL=probe run_b5.pbs                 # the timing probe
+#   qsub -v EPOCHS="0 0.1 1 2",LABEL=gate2 run_b5.pbs           # the 2 kyr gate
+#   qsub -v EPOCHS="0 0.1 1 2 5 10 20",LABEL=full run_b5.pbs    # the full run
+#   qsub -l walltime=10:00:00 -v UDEG=3,IVDEG=2,EPOCHS="0 0.1 1 2 5 10 20",LABEL=p3-full run_b5.pbs
+#
+# Copied from run_pc_sweep.pbs, which is the tested template in this directory.
+# The P2 full march used 1:53:45 and 82.05 GB. The P3 full march used 5:56:06
+# and 105.7 GB. Set the PBS wall time for the selected element degree.
+#
+# Cost note: dt grows down the graded ladder, 10 yr to 500 yr, i.e. 0.032 to 1.58
+# Maxwell times. The effective bulk/shear ratio is nominal x (1 + dt/tau), so the
+# last segment's tangent behaves like K/mu ~ 258 rather than 100 and is the
+# dearest part of the run. A probe that stops at 1 kyr never sees it, so scale its
+# per-step time UP, not linearly.
+source /etc/profile
+module use /g/data/fp50/modules
+module load firedrake/main-20260716
+ulimit -s unlimited 2>/dev/null || true
+W=/scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/gia-preconditioner
+D=$W/demos/glacial_isostatic_adjustment/3d_spada_selfgrav
+export PYTHONPATH=$W:$D:$PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OMPI_MCA_io=ompio
+# The kernel caches. They used to sit on $PBS_JOBFS alone, which PBS deletes
+# with the job, so every submission repaid the full compile -- 7 min at L = 5
+# and 23 min at L = 10. `pbs_kernel_cache.sh` keeps them on $PBS_JOBFS during
+# the run, which is the configuration that has already run, and stages a
+# persistent copy in and out around it.
+#   qsub -v CACHE_MODE=cold ...   forces a cold compile (the pc-sweep case)
+#   qsub -v CACHE_MODE=off  ...   restores the pre-2026-08-12 behaviour exactly
+source $D/pbs_kernel_cache.sh
+# Overridable, so an outer KSP monitor can be added at submit time without
+# editing this file. Without one, `ksp_converged_reason` alone cannot tell a
+# slowly-converging outer solve from a stagnant one -- which is the whole
+# question when the near-incompressible conditioning is the suspect.
+: ${PETSCOPTS:=-log_view}
+export PETSC_OPTIONS="$PETSCOPTS"
+cd $D
+
+: ${NRANK:=96}
+: ${MESH:=b2_coarse_ar7.msh}
+: ${NMAX:=10}
+: ${LMAX:=5}
+: ${RATIO:=100}
+: ${UDEG:=2}
+: ${IVDEG:=1}
+: ${EPOCHS:=0 1}
+: ${LABEL:=probe}
+: ${OUTPUT:=$D}
+: ${EXTRA:=}
+
+# The editable gadopt install points at ONE fixed worktree. Print what actually
+# resolved: a run against the wrong branch's code is otherwise invisible, and
+# this directory has a sibling `poisson` worktree on a different branch.
+echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
+echo "=== git:    $(git -C $W rev-parse --short HEAD) $(git -C $W status --porcelain | wc -l) dirty files ==="
+echo "=== b5 LABEL=$LABEL MESH=$MESH NMAX=$NMAX LMAX=$LMAX RATIO=$RATIO UDEG=$UDEG IVDEG=$IVDEG EPOCHS=[$EPOCHS] NRANK=$NRANK ==="
+echo "=== started $(date) on $(hostname) ==="
+
+kernel_cache_begin
+
+# shellcheck disable=SC2086
+mpiexec -np $NRANK --map-by ppr:$NRANK:node python3 -u b5_viscoelastic.py \
+    --mesh $MESH --nmax $NMAX --dtn-degree $LMAX --bulk-shear-ratio $RATIO \
+    --displacement-degree $UDEG --internal-variable-degree $IVDEG \
+    --epochs $EPOCHS --label $LABEL --output $OUTPUT $EXTRA 2>&1
+RC=$?
+
+kernel_cache_end
+
+echo "=== finished $(date), exit $RC ==="

@@ -1,0 +1,92 @@
+#!/bin/bash
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=03:00:00
+#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l wd
+
+# Shipped-code confirmation of the build-once dense Schur block-1 PC.
+#
+# WHY THIS JOB EXISTS
+#   STEP0-BLOCK1-PC.md measured, on the MEDIUM rung, steady marching step:
+#       none            72 block-0 calls   852 sweeps   188.1 s   1.00x
+#       diagonal        32 block-0 calls   415 sweeps    93.8 s   2.00x
+#       dense (once)    17 block-0 calls   282 sweeps   ~62   s  ~3.00x
+#   but the dense figure came from the PROBE copy b2_pc.DtNMultiplierDenseSchurPC,
+#   and STEP0 states it was "not yet reproduced by a shipped-code verification
+#   run". This job is that run: it drives the SHIPPED gadopt.DtNMultiplierDenseSchurPC
+#   (MULT_PC["gadopt_dense"]), which builds S in `initialize` and never rebuilds,
+#   against the same none/diagonal baselines in one node allocation.
+#
+# WHAT TO READ OUT OF THE LOGS (sweeps, NOT invocations -- house rule)
+#   - The '[dense Schur] NxN built in N block-0 applications' line prints ONCE,
+#     on the warm-up solve, and NEVER again across the 5 timed solves. If it
+#     prints on a timed solve, build-once is broken and the number is a 1.3x, not
+#     a 3x (that was the whole probe defect).
+#   - Per-arm RESULT line: block-0 calls, sweeps, wall per steady step.
+#   - The confirmation is a RATIO: gadopt_dense sweeps/step ~= 0.68 x gadopt_diag,
+#     and gadopt_diag ~= 0.49 x none. Wall time tracks sweeps (STEP0: ~4.5
+#     sweeps/s across all arms). Ratios are the deliverable; absolute seconds
+#     differ from STEP0 because this is a full 104-rank node, not STEP0's 64.
+#
+# RESOURCE requests inherited from run_b1.pbs; walltime is a guess for three
+# marching arms with a warm cache. Correct it against the first run.
+
+# Do the profile/module setup BEFORE `set -eu`. Gadi's /etc/profile.d/lang.sh
+# references an unbound $LANG, which is fatal under `set -u` (nounset). This bug
+# is inherited from run_b1.pbs, which the handover flags as never having run as
+# written. Enable errexit/nounset only after, to guard this script's own logic.
+source /etc/profile
+module use /g/data/fp50/modules
+module load firedrake/main-20260716
+set -eu
+
+ulimit -s unlimited 2>/dev/null || ulimit -s 1048576 2>/dev/null || true
+
+W=/scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/gia-preconditioner
+export PYTHONPATH=$W:${PYTHONPATH:-}
+export PYTHONDONTWRITEBYTECODE=1
+export OMP_NUM_THREADS=1
+export OMPI_MCA_io=ompio
+
+# Warm cache so the three arms share the compiled kernels; the dense arm must
+# not pay a cold compile that the others already amortised.
+: ${CACHE_MODE:=warm}
+export CACHE_MODE
+source $W/demos/glacial_isostatic_adjustment/3d_spada_selfgrav/pbs_kernel_cache.sh
+
+cd "${PBS_O_WORKDIR:-$PWD}"
+
+CONFIGURATION=${CONFIGURATION:-medium}
+SOLVES=${SOLVES:-5}
+DTN_DEGREE=${DTN_DEGREE:-5}
+COMMON="--config preset --condense --nullspace --outer-rtol 1e-6 \
+        --dtn-degree ${DTN_DEGREE} --configuration ${CONFIGURATION} --solves ${SOLVES}"
+# Item 2: tighten block 0 so the dense complement is consistent enough to
+# converge. Pass with `qsub -v BLOCK0_RTOL=1e-4,...`. Unset keeps the shipped
+# default (1e-2), which is the baseline run 176078939 where dense stagnated.
+if [ -n "${BLOCK0_RTOL:-}" ]; then
+    COMMON="$COMMON --extra dtn_fieldsplit_0_ksp_rtol=${BLOCK0_RTOL}"
+    echo "BLOCK0_RTOL override = ${BLOCK0_RTOL}"
+fi
+
+echo "started $(date -Is) on $(hostname)"
+echo "CONFIGURATION=${CONFIGURATION}  SOLVES=${SOLVES}  DTN_DEGREE=${DTN_DEGREE}"
+
+kernel_cache_begin
+
+for ARM in none gadopt_diag gadopt_dense; do
+    echo "=========================================================="
+    echo "=== ARM ${ARM}  $(date -Is)"
+    echo "=========================================================="
+    # shellcheck disable=SC2086
+    mpiexec -n $PBS_NCPUS python3 b2_probe.py ${COMMON} --mult-pc ${ARM} \
+        2>&1 | tee "b2dense-${CONFIGURATION}-${ARM}.log"
+done
+
+kernel_cache_end
+
+echo "finished $(date -Is)"

@@ -1,0 +1,34 @@
+#!/bin/bash
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l wd
+# Preconditioner sweep. qsub -v CONFIG=coarse,MESH=b2_coarse_ar7.msh,MAXIT=5000,NRANK=96 run_pc_sweep.pbs
+source /etc/profile
+module use /g/data/fp50/modules
+module load firedrake/main-20260716
+ulimit -s unlimited 2>/dev/null || true
+W=/scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/gia-preconditioner
+D=$W/demos/glacial_isostatic_adjustment/3d_spada_selfgrav
+export PYTHONPATH=$W:$D:$PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OMPI_MCA_io=ompio
+export PYOP2_CACHE_DIR=$PBS_JOBFS/pyop2 FIREDRAKE_TSFC_KERNEL_CACHE_DIR=$PBS_JOBFS/tsfc
+export XDG_CACHE_HOME=$PBS_JOBFS/xdg-cache MPLCONFIGDIR=$PBS_JOBFS/matplotlib
+export PETSC_OPTIONS="-log_view"
+cd $D
+declare -A NMAXMAP=( [coarse]=20 [medium]=40 [fine]=80 )
+: ${CONFIG:=coarse}
+: ${NRANK:=96}
+: ${MAXIT:=5000}
+: ${NMAX:=${NMAXMAP[$CONFIG]}}
+: ${MESH:=}
+ARGS="$CONFIG $NMAX $MAXIT"
+[ -n "$MESH" ] && ARGS="$ARGS $MESH"
+echo "=== gadopt: $(python3 -c "import gadopt.preconditioners as p; print(p.__file__)") ==="
+echo "=== pc_sweep ARGS=[$ARGS] NRANK=$NRANK started $(date) on $(hostname) ==="
+mpiexec -np $NRANK --map-by ppr:$NRANK:node python3 -u b1_pc_sweep.py $ARGS 2>&1
+echo "=== finished $(date), exit $? ==="

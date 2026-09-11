@@ -1,0 +1,75 @@
+#!/bin/bash
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=05:00:00
+#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l wd
+
+# One B1 case. Driven entirely by two variables passed with `qsub -v`:
+#
+#   LABEL   a name for the output file, so two cases in one directory do not
+#           overwrite each other.
+#   ARGS    the b1_elastic.py command line.
+#
+# Both SUBMIT-*.sh scripts in this directory call this file and both refer to it
+# by this name. It did not exist until 2026-08-11, so neither of them could ever
+# have run as written; that is worth knowing before trusting anything either of
+# them claims to have measured.
+#
+# RESOURCE REQUESTS ARE INHERITED FROM THE POISSON SCALING STUDY
+# (NOTES/poisson/campaign2/results/**/run.pbs) AND HAVE NOT BEEN CALIBRATED FOR
+# THIS DRIVER. The two jobs that motivated the near-incompressible work,
+# 175498591 and 175498592, died differently: one ground ~158k inner iterations
+# in 2h25m, the other was walltime-killed at 3 h. The 5 h here is a guess that
+# the walltime kill does not simply repeat; check it against the first run and
+# correct it rather than resubmitting blind.
+
+# Do the profile/module setup BEFORE `set -eu`. Gadi's /etc/profile.d/lang.sh
+# references an unbound $LANG, which is fatal under `set -u` (nounset) -- a job
+# that dies in 1 second with "LANG: unbound variable". Enable errexit/nounset
+# only after, to guard this script's own logic.
+source /etc/profile
+module use /g/data/fp50/modules
+module load firedrake/main-20260716
+set -eu
+
+# Form processing at high DtN truncation recurses to a depth that grows with the
+# number of mixed sub-fields, so the model lifts Python's recursion limit. Lift
+# the stack limit to match: a job that dies of stack exhaustion an hour into
+# compilation is an expensive way to learn that.
+ulimit -s unlimited 2>/dev/null || ulimit -s 1048576 2>/dev/null || true
+
+# The editable gadopt install points at ONE fixed worktree, so without this the
+# job silently runs a different branch's code. Symptom: an ImportError naming a
+# path that is not this worktree.
+W=/scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/gia-preconditioner
+export PYTHONPATH=$W:${PYTHONPATH:-}
+export PYTHONDONTWRITEBYTECODE=1
+# One BLAS thread per rank; threaded BLAS underneath MPI thrashes the node and
+# makes the wall times meaningless.
+export OMP_NUM_THREADS=1
+export OMPI_MCA_io=ompio
+# The kernel caches, and a persistent store behind them. They used to live on
+# $PBS_JOBFS alone, which PBS deletes with the job, so every submission repaid
+# the full compile. See `pbs_kernel_cache.sh`.
+#   qsub -v CACHE_MODE=cold ...   forces a cold compile (the pc-sweep case)
+#   qsub -v CACHE_MODE=off  ...   restores the pre-2026-08-12 behaviour exactly
+source $W/demos/glacial_isostatic_adjustment/3d_spada_selfgrav/pbs_kernel_cache.sh
+
+cd "${PBS_O_WORKDIR:-$PWD}"
+
+echo "LABEL   = ${LABEL}"
+echo "ARGS    = ${ARGS}"
+echo "started $(date -Is) on $(hostname)"
+
+kernel_cache_begin
+
+# shellcheck disable=SC2086
+mpiexec -n $PBS_NCPUS python3 b1_elastic.py ${ARGS} 2>&1 | tee "b1-${LABEL}.log"
+
+kernel_cache_end
+
+echo "finished $(date -Is)"

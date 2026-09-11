@@ -1,0 +1,51 @@
+#!/bin/bash
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=04:00:00
+#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l wd
+
+source /etc/profile
+module use /g/data/fp50/modules
+# The module the Burgers static-condensation campaign ran under
+# (2026-09-11); `gadopt.InternalVariableSCPC` was tested against it.
+module load "${FIREDRAKE_MODULE:-firedrake/main-20260902}"
+ulimit -s unlimited 2>/dev/null || true
+
+W=/scratch/xd2/sg8812/g-adopt-worktrees/sghelichkhani/gia-preconditioner
+D=$W/demos/glacial_isostatic_adjustment/3d_spada_selfgrav
+export PYTHONPATH=$W:$D:$PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OMPI_MCA_io=ompio
+source $D/pbs_kernel_cache.sh
+
+: ${ARM:?Set ARM to condensed or uncondensed.}
+: ${NRANK:=96}
+# The P3 20 kyr march: seven epochs, index 6 is 20 kyr. The driver's degree
+# defaults (CG3, DG2) are this file's. For a P2 file pass
+# EXTRA="--displacement-degree 2 --internal-variable-degree 1".
+: ${CHECKPOINT:=$D/b5-p3-full-20260817.h5}
+: ${CHECKPOINT_INDEX:=6}
+# Uncondensed arm only: condensed-pair (static condensation of (u, M) inside
+# block 0, the T2 route) or sweep (the three-way sweep the P3 march used).
+: ${BLOCK0:=condensed-pair}
+: ${EXTRA:=}
+: ${PETSCOPTS:=-SelfGravitatingGIA_ksp_monitor -ksp_error_if_not_converged}
+export PETSC_OPTIONS="$PETSCOPTS"
+
+cd $D
+echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
+echo "=== arm=$ARM checkpoint=$CHECKPOINT index=$CHECKPOINT_INDEX block0=$BLOCK0 ranks=$NRANK ==="
+echo "=== started $(date) on $(hostname) ==="
+
+kernel_cache_begin
+mpiexec -np $NRANK --map-by ppr:$NRANK:node python3 -u \
+    b5_restart_condensation.py --arm "$ARM" --checkpoint "$CHECKPOINT" \
+    --checkpoint-index "$CHECKPOINT_INDEX" --block0 "$BLOCK0" \
+    $EXTRA 2>&1
+RC=$?
+kernel_cache_end
+echo "=== finished $(date), exit $RC ==="
+exit "$RC"
