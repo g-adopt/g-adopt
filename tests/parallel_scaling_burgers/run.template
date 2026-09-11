@@ -1,0 +1,16 @@
+{header}
+
+{prescript}
+
+# Same two runs as pbs_job.sh: a one-step warmup that pays the compilation
+# cost, then the measured run with a PETSc log. RUN_TAG and LOG_FORMAT are
+# optional and mean the same as in pbs_job.sh.
+SUFFIX="${RUN_TAG:+_$RUN_TAG}"
+case "${LOG_FORMAT:-}" in
+    ascii_xml) EXT=xml ;;
+    *) EXT=txt ;;
+esac
+
+{executor} {command} -n 1 2> level_${LEVEL}_${CONFIG}${SUFFIX}_warmup.err > level_${LEVEL}_${CONFIG}${SUFFIX}_warmup.out
+export PETSC_OPTIONS="-log_view :profile_${LEVEL}_${CONFIG}${SUFFIX}.${EXT}${LOG_FORMAT:+:$LOG_FORMAT}"
+{executor} {command} 2> level_${LEVEL}_${CONFIG}${SUFFIX}_full.err > level_${LEVEL}_${CONFIG}${SUFFIX}_full.out

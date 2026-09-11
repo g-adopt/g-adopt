@@ -166,14 +166,74 @@ from .momentum_equation import (
     rotational_potential_term,
     self_gravity_term,
 )
-from .scalar_equation import mass_term, sink_term
+from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import ConfigType, gamg_parameters
 from .stokes_integrators import (
     CoupledInternalVariableSolver,
-    internal_variable_source_term,
     newton_stokes_solver_parameters,
 )
 from .utility import ensure_constant
+
+
+def internal_variable_source_term(
+    eq: Equation, trial: Argument | Function
+) -> Form:
+    """Return the history source and its weak-normal boundary term.
+
+    This is the per-field form of the history equation's source that the
+    self-gravity solver still writes, one DG tensor field per Maxwell element.
+    The standalone coupled solver builds the same equation on one combined
+    field through `gadopt.internal_variable_equation.history_strain_term`,
+    whose boundary term covers weak `u` and `un` boundaries; the self-gravity
+    space moves onto that layout in T2 of `NOTES/PLAN-COUPLED-TRANSITION.md`,
+    and this function goes with it.
+
+    The boundary term is the transpose of the internal-variable part of the
+    Nitsche consistency term on a weak-normal (`un`) boundary. Without it the
+    `(u, m)` and `(m, u)` blocks of the coupled Jacobian differ, and the
+    displacement operator obtained by eliminating `m` is not symmetric. With
+    it, and a Newtonian rheology with elementwise-constant material fields,
+    the eliminated operator is symmetric and CG applies to it.
+
+    Args:
+      eq: the history equation, carrying `source`, `source_coefficient`
+        (`1 / tau` for the Maxwell time of this element) and
+        `source_displacement` (the displacement expression) as attributes.
+      trial: the trial argument or the current internal-variable function.
+
+    Returns:
+      The source residual plus the boundary term, as a UFL form.
+    """
+    residual = source_term(eq, trial)
+    dimension = eq.mesh.geometric_dimension
+    identity = Identity(dimension)
+
+    # On every weak-normal boundary, the normal displacement error times the
+    # deviatoric part of `n (x) n` enters the history rows, scaled by the
+    # same `1 / tau` as the volume source.
+    for boundary_id, boundary_condition in eq.bcs.items():
+        if "un" not in boundary_condition:
+            continue
+        normal_error = (
+            dot(eq.n, eq.source_displacement) - boundary_condition["un"]
+        )
+        normal_strain = normal_error * (
+            outer(eq.n, eq.n) - identity / 3
+        )
+        residual += inner(
+            eq.test, eq.source_coefficient * normal_strain
+        ) * eq.ds(boundary_id)
+
+    return residual
+
+
+# `Equation` reads these to validate the attributes a term needs.
+internal_variable_source_term.required_attrs = {
+    "source",
+    "source_coefficient",
+    "source_displacement",
+}
+internal_variable_source_term.optional_attrs = set()
 
 __all__ = [
     "FluidCore",
@@ -1161,7 +1221,6 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 raise ValueError(
                     f"{len(internal_variables)} internal variables for "
                     f"{len(approximation.maxwell_times)} Maxwell times.")
-            kwargs["condense_internal_variables"] = True
         elif internal_variables is not None:
             raise ValueError(
                 "`internal_variables` is only meaningful when the space was "
@@ -2202,6 +2261,19 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         psi = self.solution_split[self.layout.potential]
 
         if self.layout.condensed:
+            # `CoupledInternalVariableSolver.__init__` configures the
+            # approximation for the mixed formulation, where the displacement
+            # block at fixed internal variables is elastic and the Nitsche
+            # penalty and the preconditioner scale are `mu0`. The condensed
+            # layout substitutes the history into the stress, so its
+            # displacement tangent is the effective viscosity
+            # `sum_i eta_i / (tau_i + dt)`, and that is the coefficient the
+            # Nitsche pair must carry (the same choice
+            # `PointwiseHistoryFormulation.configure_approximation` makes for
+            # the substituted solver). Set it here, before the momentum terms
+            # read `approximation.mu` below.
+            self.approximation.mu = self.approximation.effective_viscosity(
+                self.dt)
             # This legacy path substitutes the backward-Euler update into the
             # stress before differentiation:
             #   m_new = (m_old + (dt/tau) d(u)) / (1 + dt/tau)
@@ -2210,7 +2282,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             # block on a curved mesh. Two consequences remain important.
             # The u-tangent of the stress becomes
             # `sum_i eta_i/(tau_i + dt) = effective_viscosity(dt)`, which is why
-            # `CoupledInternalVariableSolver.__init__` hands the Nitsche pair
+            # the assignment above hands the Nitsche pair
             # that coefficient rather than `mu0` in this configuration. And the
             # power-law factor would become a function of `u` alone rather than
             # of an independent `m`, which is a different Newton linearisation,

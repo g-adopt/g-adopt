@@ -136,11 +136,12 @@ def test_coupled_matches_pointwise_under_refinement(dt_over_tau):
 def test_coupled_iterative_preset_converges():
     """The coupled iterative preset converges with weak "un" boundaries.
 
-    The preset preconditions the displacement block with CG inside a fieldsplit,
-    and CG is defined only for a symmetric operator. A PETSc converged reason is
-    positive when the solve converged.
+    The preset eliminates the internal variables by static condensation and
+    solves the condensed displacement operator with CG, which is defined only
+    for a symmetric operator. A PETSc converged reason is positive when the
+    solve converged.
     """
     (snes_reason, ksp_reason), = load("iterative_preset.dat")
     assert snes_reason > 0, f"SNES diverged, reason {int(snes_reason)}"
     assert ksp_reason > 0, (
-        f"fieldsplit displacement CG diverged, reason {int(ksp_reason)}")
+        f"condensed displacement CG diverged, reason {int(ksp_reason)}")
