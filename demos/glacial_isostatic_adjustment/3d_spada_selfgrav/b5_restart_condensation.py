@@ -238,6 +238,11 @@ def main():
                         choices=("condensed", "uncondensed"))
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--checkpoint-index", type=int, default=1)
+    # The model time of the checkpoint index, used only to label the STEP,
+    # STATE and SPECTRUM lines and to pick the reference epoch they compare
+    # against. The P3 20 kyr march wrote indices 0 to 6 at 0, 0.1, 1, 2, 5,
+    # 10 and 20 kyr; index 1 of the P2 gate files is 1 kyr.
+    parser.add_argument("--checkpoint-time-kyr", type=float, default=1.0)
     parser.add_argument("--mesh", default="b2_coarse_ar7.msh")
     parser.add_argument("--steps", type=int, default=2)
     parser.add_argument("--dt-yr", type=float, default=100.0)
@@ -346,7 +351,7 @@ def main():
     b1.SelfGravitatingGIASolver = original_solver_class
     assign_restart(solver, z, layout, displacement, potential, history)
 
-    report_state(tag, 1.0, solver, z, layout, ref, sigma_dim,
+    report_state(tag, args.checkpoint_time_kyr, solver, z, layout, ref, sigma_dim,
                  args.nmax, args.nmax, theta_fine)
     previous_u_norm = state_norms(solver, z, layout)[0]
     for step in range(1, args.steps + 1):
@@ -357,7 +362,7 @@ def main():
         u_norm = state_norms(solver, z, layout)[0]
         weak_abs, weak_rel = weak_history_residual(
             solver, z, layout, m_old)
-        t_kyr = 1.0 + step * args.dt_yr / 1000.0
+        t_kyr = args.checkpoint_time_kyr + step * args.dt_yr / 1000.0
         say(f"STEP arm={tag} step={step} t_kyr={t_kyr:.1f} "
             f"wall_s={elapsed:.6f} u_amplification={u_norm / previous_u_norm:.16e} "
             f"weak_history_abs={weak_abs:.16e} "

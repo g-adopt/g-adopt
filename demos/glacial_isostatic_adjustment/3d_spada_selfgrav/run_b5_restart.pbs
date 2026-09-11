@@ -28,6 +28,7 @@ source $D/pbs_kernel_cache.sh
 # EXTRA="--displacement-degree 2 --internal-variable-degree 1".
 : ${CHECKPOINT:=$D/b5-p3-full-20260817.h5}
 : ${CHECKPOINT_INDEX:=6}
+: ${CHECKPOINT_TIME_KYR:=20.0}
 # Uncondensed arm only: condensed-pair (static condensation of (u, M) inside
 # block 0, the T2 route) or sweep (the three-way sweep the P3 march used).
 : ${BLOCK0:=condensed-pair}
@@ -43,7 +44,8 @@ echo "=== started $(date) on $(hostname) ==="
 kernel_cache_begin
 mpiexec -np $NRANK --map-by ppr:$NRANK:node python3 -u \
     b5_restart_condensation.py --arm "$ARM" --checkpoint "$CHECKPOINT" \
-    --checkpoint-index "$CHECKPOINT_INDEX" --block0 "$BLOCK0" \
+    --checkpoint-index "$CHECKPOINT_INDEX" \
+    --checkpoint-time-kyr "$CHECKPOINT_TIME_KYR" --block0 "$BLOCK0" \
     $EXTRA 2>&1
 RC=$?
 kernel_cache_end
