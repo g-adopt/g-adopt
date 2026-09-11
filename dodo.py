@@ -1,4 +1,5 @@
 import importlib
+import shutil
 import sys
 import uuid
 
@@ -282,6 +283,9 @@ def make_run_task(
     if "mesh" in cfg:
         file_deps.append(case_dir / cfg["mesh"]["msh"])
 
+    for item in cfg.get("data", []):
+        file_deps.append(case_dir / item["file"])
+
     targets = [case_dir / out for out in cfg["outputs"]]
 
     return {
@@ -324,6 +328,7 @@ def normalise_meta(meta: CaseMeta) -> dict[str, CaseMetaDict]:
         ("notebook", None),
         ("notebook_outputs", None),
         ("mesh", None),
+        ("data", []),
         ("args", None),
         ("launcher_args", None),
         ("cores", 1),
@@ -656,3 +661,79 @@ def task_mesh() -> Iterator[DoitTask]:
                 "file_dep": [geo],
                 "targets": [msh],
             }
+
+
+def fetch_data_file(url: str, dest: Path):
+    """Download `url` to `dest` unless it is already there.
+
+    Kept idempotent on purpose. `longtest.yml` invokes doit with
+    `--always-execute`, which defeats doit's own up-to-date check, so the
+    action has to decline the work itself rather than rely on `targets`.
+
+    The download must happen before the job is submitted: compute nodes
+    on the target systems have no outbound network, and a parallel run
+    would otherwise have every rank racing on the same file.
+
+    Args:
+      url: Source URL.
+      dest: Destination path.
+
+    """
+
+    if dest.is_file():
+        return
+
+    from urllib.request import urlopen
+
+    # Download beside the destination and rename once complete, so an
+    # interrupted transfer cannot leave a truncated file that later runs
+    # would mistake for a good one.
+    tmp = dest.with_suffix(dest.suffix + ".partial")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Time out rather than hang the whole doit run on a stalled connection:
+    # this executes on a login node before any job is submitted, so a wedged
+    # download blocks every case behind it.
+    with urlopen(url, timeout=60) as response, tmp.open("wb") as out:
+        shutil.copyfileobj(response, out)
+    tmp.rename(dest)
+
+
+def task_fetch_data() -> Iterator[DoitTask]:
+    """Top level doit fetch_data task.
+
+    Retrieves any read-only input bundle a case declares through a `data`
+    meta key, as a list of `{"url": ..., "file": ...}` entries. The file
+    is a target, so a case that names it in its own dependencies pulls
+    the download in automatically.
+
+    One bundle is typically shared by every step of a case, and doit
+    forbids two tasks sharing a target, so destinations are deduplicated
+    into a single subtask per file.
+
+    Yields:
+      fetch_data subtasks.
+
+    """
+
+    seen: dict[Path, str] = {}
+
+    for case_dir, meta in cases():
+        for cfg in normalise_meta(meta).values():
+            for item in cfg.get("data", []):
+                dest = case_dir / item["file"]
+                if dest in seen:
+                    if seen[dest] != item["url"]:
+                        raise ValueError(
+                            f"{dest} is declared with two different URLs: "
+                            f"{seen[dest]} and {item['url']}"
+                        )
+                    continue
+                seen[dest] = item["url"]
+
+                case_path = case_dir.relative_to(REPO_ROOT).as_posix()
+                yield {
+                    "name": f"{case_path}:{item['file']}",
+                    "actions": [(fetch_data_file, [item["url"], dest])],
+                    "targets": [dest],
+                    "uptodate": [dest.is_file()],
+                }

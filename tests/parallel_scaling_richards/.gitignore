@@ -1,0 +1,8 @@
+*.out
+*.err
+*.pvd
+*.vtu
+*.pvtu
+profile_*.txt
+murrumbidgee_data.npz
+murrumbidgee_data.npz.partial
