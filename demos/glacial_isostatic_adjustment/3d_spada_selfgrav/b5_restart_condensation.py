@@ -19,8 +19,8 @@ sys.path.insert(0, HERE)
 import gadopt  # noqa: E402,F401  (import gadopt before firedrake)
 import numpy as np  # noqa: E402
 from firedrake import (CheckpointFile, COMM_WORLD, Constant, FacetNormal,  # noqa: E402
-                       Function, SpatialCoordinate, assemble, avg, dot, ds,
-                       dx, grad, norm, sqrt)
+                       Function, SpatialCoordinate, TensorFunctionSpace,
+                       assemble, avg, dot, ds, dx, grad, norm, sqrt)
 from gadopt.gia_gravity import selfgrav_dtn_iterative_solver_parameters  # noqa: E402
 from gadopt.internal_variable_equation import (  # noqa: E402
     assign_history_slices, history_slices)
@@ -197,15 +197,23 @@ def core_flux(solver, z, layout):
 
 def weak_history_residual(solver, z, layout, m_old):
     """Return the relative DG Riesz norm of the Maxwell weak residual."""
-    m = history_slice(internal_variable(solver, z, layout))
+    stored = internal_variable(solver, z, layout)
+    m = history_slice(stored)
     m_old = history_slice(m_old)
     u = z.subfunctions[layout.displacement]
     strain = solver.approximation.deviatoric_strain(u)
     maxwell_time = solver.approximation.maxwell_times[0]
     residual = ((m - m_old) / solver.dt
                 + (m - strain) / maxwell_time)
-    riesz = Function(m.function_space()).project(residual)
-    scale = Function(m.function_space()).project(strain / maxwell_time)
+    # On the uncondensed layout `m` is a (d, d) slice of the combined
+    # (1, d, d) field, a UFL expression without a function space, so the
+    # Riesz representative is projected into a plain (d, d) DG space of the
+    # stored field's degree; on the condensed layout that is the stored
+    # field's own space.
+    degree = stored.function_space().ufl_element().embedded_superdegree
+    riesz_space = TensorFunctionSpace(solver.mesh, "DG", degree)
+    riesz = Function(riesz_space).project(residual)
+    scale = Function(riesz_space).project(strain / maxwell_time)
     denominator = max(norm(scale), 1.0e-300)
     return norm(riesz), norm(riesz) / denominator
 
