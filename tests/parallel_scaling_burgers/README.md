@@ -74,20 +74,32 @@ substitution, and the residual evaluation of the full coupled form.
 
 Every coupled configuration keeps both Maxwell elements in one
 internal-variable field of shape `(2, 3, 3)`, so the internal variables are
-field 1 of the mixed space whatever the number of elements. The numbers in
-`expected.csv` and `gadi_expected.csv` were measured with the earlier
-per-element layout, GMRES on the condensed operator and a condensed operator
-whose boundary penalty was doubled by a Slate defect (see
-`gadopt.momentum_equation.viscosity_term`); they have not been re-measured
-since.
+field 1 of the mixed space whatever the number of elements.
+
+Measured on 2026-09-11 (jobs 178727788 to 178728386, module
+`firedrake/main-20260902`), warm steps 2 to 4, seconds per step:
+
+| level | ranks | substituted | static-condensation | ratio | schur-substituted | schur-a11 | multiplicative |
+|---|---|---|---|---|---|---|---|
+| 5 | 104 | 1.78 | 1.75 | 0.98 | 3.98 | 5.19 | 22 |
+| 6 | 832 | 2.05 | 1.78 | 0.87 | 4.32 | 5.56 | 26 |
+| 7 | 6656 | 2.55 | 2.16 | 0.85 | 5.07 | 6.55 | 30 |
+
+V-cycles per step on the condensed field (CG): 21, 22, 25 against 19, 20,
+22 for the substituted solver. The condensed operator and its GAMG hierarchy
+are built once per job (fixed time step, Newtonian rheology); the substituted
+solver rebuilds its operator every step. `expected.csv` and
+`gadi_expected.csv` hold this campaign's numbers, read from the nested log.
+The figure `results/breakdown.pdf` is regenerated with
+`python plot_breakdown.py --tag ""` once the jobs' outputs are in `results/`
+(`--tag nested` for jobs submitted with `RUN_TAG=nested`).
 
 ## Open items
 
-- **Re-measure on Gadi.** The shipped preset now runs CG on a symmetric
-  condensed operator with the corrected boundary penalty, and reuses the
-  condensed operator across fixed-`dt` steps. The level-3 one-node job and
-  the level-5 four-step job are the gates of the transition plan; their
-  numbers replace `expected.csv` and `gadi_expected.csv`.
+- **The scaling test's time tolerance is 10 percent** at levels 6 and 7;
+  the rerun of 2026-09-11 reproduced the 2026-09-09 stage times of the
+  unchanged routes to within 3 to 10 percent, so a failure at that margin
+  is noise until more campaigns exist.
 - **`gadopt.SubstitutedDisplacementPC` has no unit test.** It reads the
   elastic block's form from the matrix-free context; a Firedrake change
   there would only show up in this scaling test. `InternalVariableSCPC` is

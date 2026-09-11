@@ -72,12 +72,75 @@ def _stage_events(profile_path):
     return stages
 
 
+def _stage_events_nested(profile_path):
+    """Per-stage event table of a nested PETSc XML log (``ascii_xml``).
+
+    Returns the same structure as `_stage_events`, ``{stage name: {event
+    name: (calls, seconds)}}``, so that `get_data` can read either format.
+    The nested log stores the inclusive time of every node as a percentage
+    of the run's total time, averaged over ranks. When an event nests
+    inside itself (``PCSetUp`` of GAMG inside ``PCSetUp`` of the
+    fieldsplit), only the outermost occurrence counts. So the times here
+    are rank averages of inclusive times, where the flat log gives rank
+    maxima: the two agree to within the load imbalance of the run.
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(profile_path).getroot()
+    tree = root.find(".//timertree")
+    total_seconds = float(tree.findtext("totaltime"))
+    scale = total_seconds / 100.0
+
+    def name(node):
+        return node.findtext("name") or ""
+
+    def own_time(node):
+        timer = node.find("time")
+        if timer is None:
+            return 0.0
+        return float(timer.findtext("value") or timer.findtext("avgvalue") or 0.0)
+
+    def calls(node):
+        # A node stores one value, or an average with a range over ranks.
+        ncalls = node.find("ncalls")
+        if ncalls is None:
+            return 0
+        text = ncalls.findtext("value") or ncalls.findtext("avgvalue") or "0"
+        return int(round(float(text)))
+
+    def children(node):
+        events = node.find("events")
+        return [] if events is None else events.findall("event")
+
+    def collect(node, table, ancestors):
+        label = name(node)
+        if label not in ancestors:
+            n, seconds = table.get(label, (0, 0.0))
+            table[label] = (n + calls(node), seconds + own_time(node) * scale)
+        for kid in children(node):
+            collect(kid, table, ancestors | {label})
+
+    stages = {}
+    # The timer tree's top level holds the stages; each stage is an event
+    # whose children are the events timed inside it.
+    for stage in tree.iter("event"):
+        label = name(stage)
+        if not label.startswith("burgers_"):
+            continue
+        table = stages.setdefault(label, {})
+        for kid in children(stage):
+            collect(kid, table, set())
+    return stages
+
+
 def get_data(level, config, base_path=None, tag=""):
     """Timing and iteration metrics of one (level, config) job.
 
-    Reads ``level_L_CONFIG[_TAG]_full.out`` and ``profile_L_CONFIG[_TAG].txt``
-    under ``base_path``. Needs no Firedrake. Returns a dict with, for ``name``
-    in ``substituted`` and ``config``:
+    Reads ``level_L_CONFIG[_TAG]_full.out`` and the PETSc log
+    ``profile_L_CONFIG[_TAG].txt`` (flat text) or, when that is absent,
+    ``profile_L_CONFIG[_TAG].xml`` (the nested log that the cost breakdown
+    uses) under ``base_path``. Needs no Firedrake. Returns a dict with, for
+    ``name`` in ``substituted`` and ``config``:
 
     - ``{name}_displacement_iterations``: mean GAMG V-cycles per step, and
       ``..._per_step`` the list. For ``multiplicative`` the KSP runs once per
@@ -93,6 +156,9 @@ def get_data(level, config, base_path=None, tag=""):
     suffix = f"_{tag}" if tag else ""
     output_path = base_path / f"level_{level}_{config}{suffix}_full.out"
     profile_path = base_path / f"profile_{level}_{config}{suffix}.txt"
+    nested_path = base_path / f"profile_{level}_{config}{suffix}.xml"
+    if not profile_path.exists():
+        profile_path = nested_path
     if not (output_path.exists() and profile_path.exists()):
         raise FileNotFoundError(f"outputs for level {level} {config} not found")
 
@@ -130,7 +196,10 @@ def get_data(level, config, base_path=None, tag=""):
         data[f"{name}_displacement_iterations_per_step"] = counts.tolist()
         data[f"{name}_outer_iterations"] = outer[name]
 
-    stages = _stage_events(profile_path)
+    if profile_path.suffix == ".xml":
+        stages = _stage_events_nested(profile_path)
+    else:
+        stages = _stage_events(profile_path)
     for name in prefixes:
         events = stages.get(f"burgers_{name}_solve", {})
         data[f"{name}_solve"] = events.get("SNESSolve", (0, np.nan))[1]

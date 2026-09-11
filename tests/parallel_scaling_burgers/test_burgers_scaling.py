@@ -4,7 +4,11 @@ Every (level, configuration) job runs the substituted reference solver and one
 coupled configuration on the same mesh. The tests check, per job, the GAMG
 V-cycles per step of both solvers against ``expected.csv`` and the PCSetUp
 and stage times against ``<system>_expected.csv``. The expected values are
-from the 2026-09-09 campaign (jobs 178561569 to 178562020 on Gadi).
+from the 2026-09-11 campaign (jobs 178727788 to 178728386 on Gadi), read
+from PETSc's nested log, which the jobs write (``LOG_FORMAT=ascii_xml`` in
+``meta.py``). Times from that log are rank averages of inclusive times; the
+flat text log gives rank maxima, which differ by up to 25 percent, so the
+two must not be mixed.
 
 The jobs are launched by ``gadopt_hpc_helper`` from ``meta.py`` and
 ``run.template``. Run the checks with ``pytest -m longtest`` in this directory
