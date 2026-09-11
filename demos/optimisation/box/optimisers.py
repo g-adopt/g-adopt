@@ -1,0 +1,717 @@
+"""Optimiser back-ends for the box benchmark: ROL Lin-More and PETSc TAO.
+
+Every runner takes an ``InverseProblem`` from ``problem.py`` and returns a
+``Recorder`` with the run history. The tape is never annotated here: each solve is
+wrapped in ``stop_annotating()``, and every callback runs inside a pyadjoint call that
+already carries ``no_annotations``.
+
+Cost is counted at the tape level, through the reduced functional callbacks:
+
+- one forward replay per ``eval_cb_post``,
+- one adjoint sweep per ``derivative_cb_post``,
+- one tangent-linear plus one second-order adjoint sweep per ``hessian_cb_post``.
+
+These are the counts that carry over to any solver configuration. Wall time is
+recorded too, but it is the secondary measure.
+
+Optimiser variants, selected by name:
+
+ROL, all through ``ROL.TypeB.LinMoreAlgorithm`` with an L-BFGS secant:
+
+    rol-lbfgs          secant used as the Hessian (what g-adopt runs today)
+    rol-newton         true Hessian-vector products, secant as the CG preconditioner
+    rol-newton-noprec  true Hessian-vector products, no preconditioner
+
+TAO, through ``pyadjoint.TAOSolver``:
+
+    tao-blmvm          bounded L-BFGS, initial inverse Hessian = the Riesz map
+    tao-bqnktr         bounded quasi-Newton-Krylov trust region: Krylov on the LMVM
+                       matrix, which replaces the Hessian (bqnk.c sets
+                       ``tao->hessian = B``), so no true Hessian-vector products
+    tao-bqnkls         the same with a line search
+    tao-bntr           bounded Newton trust region, true Hessian, LMVM preconditioner
+    tao-bntr-noprec    the same with no preconditioner
+    tao-bnls           bounded Newton line search, true Hessian, LMVM preconditioner
+
+Any TAO option can be added or overridden with ``extra_options`` in the usual PETSc
+form, for example ``{"tao_bnk_ksp_max_it": 20, "tao_ksp_ew": None}``.
+"""
+
+import json
+import os
+import time
+from dataclasses import dataclass, field
+
+import numpy as np
+from mpi4py import MPI
+from petsc4py import PETSc
+
+from gadopt import *
+from gadopt.inverse import ROLSolver, minimisation_parameters
+import pyadjoint.optimization.rol_solver as pyadjoint_rol
+from pyadjoint import MinimizationProblem, stop_annotating
+from pyadjoint.optimization.tao_solver import PETScVecInterface, RieszMapMat, TAOConvergenceError, TAOSolver
+from riesz_hessian import build_preconditioner_matrix
+import ROL
+
+class WorkBudgetReached(Exception):
+    """Raised inside the TAO monitor when the work budget is spent.
+
+    TAO has no option for a budget of this kind, and a monitor cannot end a solve by
+    setting the converged reason, because the convergence test that runs after the
+    monitor overwrites it. Raising is the way to stop.
+
+    petsc4py does not pass the exception through: it turns any Python exception
+    raised inside a callback into ``PETSc.Error`` with code 101, which is
+    ``PETSC_ERR_PYTHON``, and the original type is gone by the time ``TAO.solve``
+    returns. So the recorder also carries a flag, and ``run_tao`` reads the flag to
+    tell a deliberate stop from a real PETSc failure.
+
+    ROL is stopped through its status test and needs none of this.
+    """
+
+
+ROL_VARIANTS = ("rol-lbfgs", "rol-newton", "rol-newton-noprec")
+TAO_VARIANTS = ("tao-blmvm", "tao-bqnktr", "tao-bqnkls", "tao-bntr", "tao-bntr-noprec",
+                "tao-bntr-riesz", "tao-bnls", "tao-bnls-riesz")
+VARIANTS = ROL_VARIANTS + TAO_VARIANTS
+
+
+# ---------------------------------------------------------------------------------
+# Recording
+# ---------------------------------------------------------------------------------
+
+@dataclass
+class Recorder:
+    """Counts tape sweeps and records the state at every gradient evaluation.
+
+    The recorder attaches to the reduced functional's callbacks. ``gradients`` gets one
+    row per adjoint sweep, which is every point where an optimiser looked at the
+    gradient, accepted or not. ``iterations`` gets one row per optimiser iteration,
+    added by the optimiser's own monitor, and refers to the sweep counts at that
+    moment.
+
+    Attributes:
+        problem: the ``InverseProblem``.
+        output: path of the JSON file, or None. When it is set, the record is
+            rewritten after every optimiser iteration, so a run that is stopped by a
+            wall-clock limit still leaves its history on disk.
+        metadata: the run settings, written into every dump.
+        work_budget: stop when the forward-equivalent work passes this number. Zero
+            removes the limit. Every method gets the same budget, so that a method
+            which spends little per iteration and one which spends a lot are read at
+            the same total cost. The test runs at the end of an optimiser iteration,
+            so a run can pass the budget by up to the cost of one iteration: about
+            two forward calls for a gradient-only method and about 2 + 2k for a
+            Newton-Krylov method with k Krylov iterations.
+        hessian_price: cost of one Hessian-vector product in forward calls, used to
+            convert the counts into work. It is replaced by this run's own measured
+            value as soon as there is one.
+        forward_times: wall time of every call to the reduced functional.
+        gradient_times: wall time of every adjoint sweep.
+        hessian_times: wall time of every Hessian-vector product.
+        forward: number of forward replays so far.
+        adjoint: number of adjoint sweeps so far.
+        hessian: number of Hessian-vector products so far.
+        gradients: list of dict, one per gradient evaluation.
+        iterations: list of dict, one per optimiser iteration.
+    """
+
+    problem: object
+    forward: int = 0
+    adjoint: int = 0
+    hessian: int = 0
+    gradients: list = field(default_factory=list)
+    iterations: list = field(default_factory=list)
+    t0: float = field(default_factory=time.perf_counter)
+    output: object = None
+    metadata: dict = field(default_factory=dict)
+    _chained: dict = field(default_factory=dict)
+    stop_reason: str = ""
+    work_budget: float = 0.0
+    hessian_price: float = 1.96
+    budget_hit: bool = False
+    forward_times: list = field(default_factory=list)
+    gradient_times: list = field(default_factory=list)
+    hessian_times: list = field(default_factory=list)
+    _call_start: dict = field(default_factory=dict)
+
+    def attach(self):
+        """Install the callbacks on the reduced functional.
+
+        pyadjoint calls a ``_pre`` callback before each operation and a ``_post``
+        callback after it, so a pair of them times the operation itself. This is the
+        only way to separate the cost of one call from the number of calls; the
+        cumulative time per iteration cannot tell a slow call from many calls.
+        """
+        rf = self.problem.reduced_functional
+        # The callbacks already on the reduced functional are kept and called after
+        # the recorder's own. ``problem.build_problem`` installs a garbage collection
+        # on ``hessian_cb_post``, and replacing it here would remove the one thing
+        # that keeps the memory of a long run flat.
+        self._chained = {
+            "eval_cb_post": rf.eval_cb_post,
+            "derivative_cb_post": rf.derivative_cb_post,
+            "hessian_cb_post": rf.hessian_cb_post,
+        }
+        rf.eval_cb_pre = self._start("forward")
+        rf.eval_cb_post = self._eval_cb
+        rf.derivative_cb_pre = self._start("gradient", passthrough=True)
+        rf.derivative_cb_post = self._derivative_cb
+        rf.hessian_cb_pre = self._start("hessian")
+        rf.hessian_cb_post = self._hessian_cb
+
+    def _chain(self, name, *args):
+        """Call the callback that was on the reduced functional before ``attach``.
+
+        pyadjoint installs a no-op lambda by default, so there is always something to
+        call. The return value of the ``_post`` callbacks is not used by pyadjoint,
+        except for ``derivative_cb_post``, which the recorder handles itself.
+        """
+        callback = self._chained.get(name)
+        if callback is not None:
+            return callback(*args)
+
+    def _start(self, kind, passthrough=False):
+        """Build a ``_pre`` callback that stamps the start time of one operation.
+
+        Args:
+            kind: ``forward``, ``gradient`` or ``hessian``.
+            passthrough: ``derivative_cb_pre`` must return the controls it is given,
+                because pyadjoint passes the return value on.
+
+        Returns:
+            the callback.
+        """
+        def callback(*args):
+            self._call_start[kind] = time.perf_counter()
+            if passthrough:
+                return args[0] if len(args) == 1 else args
+        return callback
+
+    def _elapsed(self, kind):
+        """Time since the matching ``_pre`` callback, or None if there was none."""
+        start = self._call_start.pop(kind, None)
+        return None if start is None else time.perf_counter() - start
+
+    def call_cost_summary(self):
+        """Mean time of each operation and the ratios that price a Hessian product.
+
+        The ratio of a Hessian-vector product to a forward call is what converts a
+        Hessian count into forward-equivalent work, which is the only axis on which
+        a Newton method and a quasi-Newton method can be compared honestly.
+
+        Returns:
+            dict
+        """
+        def mean(values):
+            return float(sum(values) / len(values)) if values else None
+
+        f, g, h = mean(self.forward_times), mean(self.gradient_times), mean(self.hessian_times)
+        return {
+            "mean_forward_time": f,
+            "mean_gradient_time": g,
+            "mean_hessian_time": h,
+            "gradient_per_forward": None if not (f and g) else g / f,
+            "hessian_per_forward": None if not (f and h) else h / f,
+        }
+
+    def _eval_cb(self, J, values):
+        self.forward += 1
+        dt = self._elapsed("forward")
+        if dt is not None:
+            self.forward_times.append(dt)
+        self._chain("eval_cb_post", J, values)
+
+    def _hessian_cb(self, J, r, values):
+        # The time is taken before the chained callback runs, because that callback is
+        # the garbage collection and its cost belongs to neither the product nor the
+        # next one.
+        dt = self._elapsed("hessian")
+        self.hessian += 1
+        if dt is not None:
+            self.hessian_times.append(dt)
+        self._chain("hessian_cb_post", J, r, values)
+
+    def _derivative_cb(self, J, dJ, values):
+        """Record the gradient norm and the twin-experiment error, then pass dJ on.
+
+        ``dJ`` is a Cofunction when the optimiser asked for the dual derivative
+        (TAO) and a Function when it asked for the Riesz representative (ROL). Both
+        norms below are the norm in the control inner product.
+        """
+        self.adjoint += 1
+        dt = self._elapsed("gradient")
+        if dt is not None:
+            self.gradient_times.append(dt)
+        ip = self.problem.inner_product
+        g = dJ[0] if isinstance(dJ, (list, tuple)) else dJ
+        if isinstance(g, Cofunction):
+            gnorm = ip.dual_norm(g)
+        else:
+            gnorm = ip.norm(g)
+        m = values[0] if isinstance(values, (list, tuple)) else values
+        # The two misfits of Ghelichkhan et al. (2024, GMD) Fig. 5: the initial misfit
+        # against the reference initial condition, and the final misfit against Tobs.
+        # Both are taken here, at the point where the adjoint was just computed, so
+        # the forward state on the tape belongs to ``m``.
+        row = {
+            "J": float(J),
+            "gradient_norm": float(gnorm),
+            "forward": self.forward,
+            "adjoint": self.adjoint,
+            "hessian": self.hessian,
+            "cost": self.forward + self.adjoint,
+            "time": time.perf_counter() - self.t0,
+        }
+        row.update(self.problem.measures(m))
+        self.gradients.append(row)
+        self._chain("derivative_cb_post", J, dJ, values)
+        return dJ
+
+    def mark_iteration(self, k, **extra):
+        """Record one optimiser iteration. Called by the optimiser's monitor."""
+        row = {"iteration": int(k), "forward": self.forward, "adjoint": self.adjoint,
+               "hessian": self.hessian, "cost": self.forward + self.adjoint,
+               "work": self.work(),
+               "time": time.perf_counter() - self.t0}
+        if self.gradients:
+            # Carry the measures of the most recent gradient evaluation, which is the
+            # accepted iterate for every optimiser used here.
+            row.update({key: self.gradients[-1][key]
+                        for key in ("J", "gradient_norm", "control_error",
+                                    "initial_misfit", "final_misfit",
+                                    "relative_final_misfit")})
+        row.update(extra)
+        self.iterations.append(row)
+        self.write()
+        if MPI.COMM_WORLD.rank == 0:
+            log(f"iter {k:3d}  J {row.get('J', float('nan')):.6e}  "
+                f"|g| {row.get('gradient_norm', float('nan')):.3e}  "
+                f"IC {row.get('initial_misfit', float('nan')):.4e}  "
+                f"FIN {row.get('final_misfit', float('nan')):.4e}  "
+                f"err {row.get('control_error', float('nan')):.4e}  "
+                f"fwd {self.forward} adj {self.adjoint} hvp {self.hessian}")
+
+    def write(self):
+        """Write the record to ``self.output``, if there is one. Rank 0 only.
+
+        The whole record is rewritten each time. It holds a few hundred rows, so the
+        cost is far below one tape sweep, and a whole file is always valid JSON even
+        if the process is killed during the next write.
+        """
+        if self.output is None or MPI.COMM_WORLD.rank != 0:
+            return
+        record = dict(self.metadata)
+        record.update(self.summary())
+        tmp = f"{self.output}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(record, f, indent=1)
+        os.replace(tmp, self.output)
+
+    def work(self):
+        """Forward-equivalent work spent so far.
+
+        A Hessian-vector product is priced at its measured cost, so the number is
+        what the run has actually paid and not a count of sweeps.
+
+        Returns:
+            float
+        """
+        price = self.hessian_price
+        measured = self.call_cost_summary()["hessian_per_forward"]
+        if measured:
+            price = measured
+        return self.forward + self.adjoint + price * self.hessian
+
+    def over_budget(self):
+        """Whether the work budget is set and has been passed."""
+        return self.work_budget > 0.0 and self.work() >= self.work_budget
+
+    def summary(self):
+        """Dictionary for JSON output."""
+        return {
+            "forward": self.forward,
+            "adjoint": self.adjoint,
+            "hessian": self.hessian,
+            "wall_time": time.perf_counter() - self.t0,
+            "forward_times": self.forward_times,
+            "gradient_times": self.gradient_times,
+            "hessian_times": self.hessian_times,
+            "call_cost": self.call_cost_summary(),
+            "work": self.work(),
+            "work_budget": self.work_budget,
+            "stop_reason": self.stop_reason,
+            "gradients": self.gradients,
+            "iterations": self.iterations,
+        }
+
+
+# ---------------------------------------------------------------------------------
+# ROL
+# ---------------------------------------------------------------------------------
+
+class FormROLVector(pyadjoint_rol.ROLVector):
+    """A ROL vector whose inner product is a user bilinear form on the control space.
+
+    pyadjoint's ``ROLVector`` accepts only the strings ``l2``, ``L2`` and ``H1`` for
+    the inner product, because ``Function._ad_dot`` accepts only those. This class
+    takes an ``InnerProduct`` instead, so that the regularisation operator can be the
+    metric. ROL's algorithms are only consistent if ``dot`` and the Riesz map that
+    produced the gradient agree, so the same ``InnerProduct`` must be on the Control.
+
+    Args:
+        dat: list of Functions (the pyadjoint convention).
+        ip: an ``InnerProduct`` from ``problem.py``.
+        inner_product: ignored; accepted because ``ROLSolver`` passes it by keyword.
+    """
+
+    def __init__(self, dat, ip, inner_product=None):
+        # ``gadopt.inverse.ROLSolver`` calls ``vector_class(x, *vector_args,
+        # inner_product=...)``, so the string arrives as a keyword. The base class
+        # stores it for its own ``dot`` and ``riesz_map``; both are overridden here,
+        # so the stored value is only a tag.
+        super().__init__(dat, inner_product=ip.name)
+        self.ip = ip
+
+    def dot(self, yy):
+        return sum(float(assemble(self.ip.form(x, y))) for x, y in zip(self.dat, yy.dat))
+
+    def riesz_map(self, derivs):
+        derivs = derivs if isinstance(derivs, (list, tuple)) else [derivs]
+        return [self.ip.riesz_map(d) for d in derivs]
+
+    def clone(self):
+        res = FormROLVector([x._ad_copy() for x in self.dat], self.ip)
+        res.scale(0.0)
+        return res
+
+
+def rol_parameters(variant, max_it, initial_radius=1e-2, secant_storage=10,
+                   krylov_max_it=20, krylov_rtol=1e-2, krylov_atol=1e-4):
+    """ROL parameter list for one variant, from g-adopt's ``minimisation_parameters``.
+
+    Args:
+        variant: one of ``ROL_VARIANTS``.
+        max_it: iteration limit.
+        initial_radius: initial trust-region radius.
+        secant_storage: L-BFGS memory.
+        krylov_max_it: truncated CG iteration limit. Each iteration is one
+            Hessian-vector product when the true Hessian is used.
+        krylov_rtol, krylov_atol: truncated CG tolerances.
+
+    Returns:
+        dict, a deep copy with the variant applied.
+    """
+    import copy
+    params = copy.deepcopy(minimisation_parameters)
+    params["Status Test"]["Iteration Limit"] = max_it
+    params["Status Test"]["Gradient Tolerance"] = 0.0
+    params["Step"]["Trust Region"]["Initial Radius"] = initial_radius
+    params["General"]["Secant"]["Maximum Storage"] = secant_storage
+    params["General"]["Krylov"]["Iteration Limit"] = krylov_max_it
+    params["General"]["Krylov"]["Relative Tolerance"] = krylov_rtol
+    params["General"]["Krylov"]["Absolute Tolerance"] = krylov_atol
+    # ``Use as Hessian`` routes every model Hessian-vector product to the secant.
+    # ``Use as Preconditioner`` applies the inverse secant inside truncated CG.
+    if variant == "rol-lbfgs":
+        params["General"]["Secant"]["Use as Hessian"] = True
+        params["General"]["Secant"]["Use as Preconditioner"] = False
+    elif variant == "rol-newton":
+        params["General"]["Secant"]["Use as Hessian"] = False
+        params["General"]["Secant"]["Use as Preconditioner"] = True
+    elif variant == "rol-newton-noprec":
+        params["General"]["Secant"]["Use as Hessian"] = False
+        params["General"]["Secant"]["Use as Preconditioner"] = False
+    else:
+        raise ValueError(f"unknown ROL variant {variant!r}")
+    params["General"]["Print Verbosity"] = 1 if MPI.COMM_WORLD.rank == 0 else 0
+    params["General"]["Output Level"] = 1 if MPI.COMM_WORLD.rank == 0 else 0
+    return params
+
+
+def run_rol(problem, variant, max_it=20, output=None, metadata=None,
+            gradient_rtol=0.0, work_budget=0.0, **kwargs):
+    """Run one ROL Lin-More variant on the problem.
+
+    This mirrors ``gadopt.inverse.LinMoreOptimiser`` without the ROL checkpointing,
+    and with the control inner product as the vector metric. The status test is
+    replaced so that every iteration is recorded before the default test decides
+    whether to stop.
+
+    Args:
+        problem: an ``InverseProblem``.
+        variant: one of ``ROL_VARIANTS``.
+        max_it: iteration limit.
+        output: JSON file to rewrite after every iteration, or None.
+        metadata: run settings written into every dump.
+        work_budget: stop when the forward-equivalent work passes this number.
+        gradient_rtol: stop when the gradient norm falls to this fraction of its
+            value at the first iteration. Zero runs to the iteration limit. ROL's
+            own ``Gradient Tolerance`` is an absolute number, and the starting norm
+            is not known before the run, so the test is applied here instead.
+        **kwargs: forwarded to ``rol_parameters``.
+
+    Returns:
+        Recorder
+    """
+    recorder = Recorder(problem, output=output, metadata=metadata or {},
+                        work_budget=work_budget)
+    recorder.attach()
+
+    params = rol_parameters(variant, max_it, **kwargs)
+    rol_params = ROL.ParameterList(params, "Parameters")
+    minimisation_problem = MinimizationProblem(problem.reduced_functional, bounds=problem.bounds)
+    solver = ROLSolver(minimisation_problem, params, inner_product=problem.inner_product.name,
+                       vector_class=FormROLVector, vector_args=[problem.inner_product])
+    secant = ROL.lBFGS(params["General"]["Secant"]["Maximum Storage"])
+    algorithm = ROL.LinMoreAlgorithm(rol_params, secant)
+
+    class StatusTest(ROL.StatusTest):
+        """Record the iterate, apply the relative gradient test, then defer to ROL.
+
+        ROL's ``gnorm`` is the norm of the projected gradient in the vector's own
+        inner product, which is the control inner product here. The first value seen
+        is the reference for the relative test.
+        """
+        iteration = 0
+        gnorm0 = None
+
+        def check(inner_self, status):
+            gnorm = float(status.gnorm)
+            if inner_self.gnorm0 is None and gnorm > 0.0:
+                inner_self.gnorm0 = gnorm
+            recorder.mark_iteration(inner_self.iteration, rol_gnorm=gnorm,
+                                    snorm=float(status.snorm))
+            inner_self.iteration += 1
+            if (gradient_rtol > 0.0 and inner_self.gnorm0
+                    and gnorm <= gradient_rtol * inner_self.gnorm0):
+                recorder.stop_reason = (
+                    f"gradient fell to {gnorm / inner_self.gnorm0:.2e} of its "
+                    f"starting value")
+                return False
+            if recorder.over_budget():
+                recorder.stop_reason = (
+                    f"work budget of {recorder.work_budget:.0f} forward-equivalents "
+                    f"spent")
+                return False
+            return super().check(status)
+
+    algorithm.setStatusTest(StatusTest(rol_params), False)
+
+    with stop_annotating():
+        algorithm.run(solver.rolvector, solver.rolobjective, solver.bounds)
+    return recorder
+
+
+# ---------------------------------------------------------------------------------
+# TAO
+# ---------------------------------------------------------------------------------
+
+class InnerProductMatCtx:
+    """PETSc Mat context applying the control inner-product operator, primal to dual.
+
+    For a Function ``x`` in the control space the action is the Cofunction
+    ``a(x, .)``. This is the forward operator whose inverse is the Riesz map, and it
+    is what an LMVM matrix needs as ``J0`` (its initial Hessian approximation).
+
+    Args:
+        problem: an ``InverseProblem``, for the control and the inner product.
+    """
+
+    def __init__(self, problem):
+        self.ip = problem.inner_product
+        self.interface = PETScVecInterface((problem.control.control,))
+        self.x = problem.control.control._ad_init_zero()
+        self.v = TestFunction(problem.control.control.function_space())
+
+    def mult(self, mat, x, y):
+        self.interface.from_petsc(x, (self.x,))
+        out = assemble(self.ip.form(self.x, self.v))
+        self.interface.to_petsc(y, (out,))
+
+
+def _set_lmvm_initial_hessian(tao, problem):
+    """Give a BQNK solver's LMVM matrix the control inner product as ``J0``.
+
+    pyadjoint sets the Riesz map as initial inverse Hessian for ``lmvm`` and ``blmvm``
+    only. For the quasi-Newton-Krylov types the LMVM matrix is the Krylov
+    preconditioner, and its initial guess is the identity in nodal coordinates unless
+    this is done. The forward ``J0`` is the inner-product operator; its inverse is
+    applied through a KSP that only calls the Riesz map.
+    """
+    from petsc4py import PETSc
+
+    B = tao.getLMVMMat()
+    n, N = B.getSizes()[0]
+    comm = B.getComm()
+
+    J0 = PETSc.Mat().createPython(((n, N), (n, N)), InnerProductMatCtx(problem), comm=comm)
+    J0.setOption(PETSc.Mat.Option.SYMMETRIC, True)
+    J0.setUp()
+
+    Minv = RieszMapMat(problem.reduced_functional.controls, comm=comm)
+
+    class RieszPC:
+        def apply(self, pc, x, y):
+            Minv.mult(x, y)
+
+    pc = PETSc.PC().createPython(RieszPC(), comm=comm)
+    pc.setOperators(J0)
+    pc.setUp()
+    ksp = PETSc.KSP().create(comm=comm)
+    ksp.setType(PETSc.KSP.Type.PREONLY)
+    ksp.setOperators(J0)
+    ksp.setPC(pc)
+    ksp.setTolerances(rtol=0.0, atol=0.0, divtol=None, max_it=1)
+    ksp.setUp()
+
+    B.setLMVMJ0(J0)
+    B.setLMVMJ0KSP(ksp)
+    # The caller keeps these alive for the life of the solve; a petsc4py TAO object
+    # cannot carry Python attributes.
+    return (J0, Minv, pc, ksp)
+
+
+def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
+                   gradient_rtol=0.0):
+    """TAO options dictionary for one variant.
+
+    Args:
+        variant: one of ``TAO_VARIANTS``.
+        max_it: iteration limit.
+        initial_radius: initial trust-region radius, and the radius is held to it
+            instead of being estimated, so that the cost of the first iteration is
+            comparable with ROL.
+        extra_options: dict of PETSc options merged last.
+        gradient_rtol: value for ``tao_gttol``, the ratio of the current convergence
+            measure to its starting value. A relative test is used because the
+            absolute one is not comparable between the TAO types: ``blmvm`` measures
+            the gradient norm through ``setGradientNorm``, which is the control inner
+            product, while the bounded Newton types report the Fischer-Burmeister
+            residual of the bound-constrained conditions in the plain Euclidean norm
+            (``bnk.c:69-72``). Those two differ by a mesh-dependent factor, near 150
+            on a 150-cell mesh, so one ``tao_gatol`` would mean two different things.
+
+    Returns:
+        dict of PETSc options.
+    """
+    _, tao_type, *flags = variant.split("-")
+    params = {
+        "tao_type": tao_type,
+        "tao_max_it": max_it,
+        "tao_gatol": 0.0,
+        "tao_grtol": 0.0,
+        "tao_gttol": gradient_rtol,
+        "tao_monitor": None,
+        "tao_converged_reason": None,
+        "tao_trust0": initial_radius,
+    }
+    if tao_type.startswith("bn") or tao_type.startswith("bq"):
+        # Newton and quasi-Newton-Krylov share the BNK options.
+        params["tao_bnk_init_type"] = "constant"
+        params["tao_bnk_ksp_max_it"] = 20
+        params["tao_bnk_ksp_rtol"] = 1e-2
+    if "noprec" in flags:
+        # The default BNK preconditioner is an LMVM matrix built from the gradient
+        # history, with the identity as its initial guess. This variant removes it,
+        # so the two measure what the quasi-Newton memory adds to Newton-Krylov.
+        params["tao_bnk_pc_type"] = "none"
+    if "riesz" in flags:
+        # The Riesz map of the control inner product as the Krylov preconditioner.
+        # PETSc builds the class by name, and it reads everything it needs from the
+        # preconditioning matrix that ``run_tao`` passes to ``TAOSolver``.
+        params["tao_bnk_pc_type"] = "python"
+        params["tao_bnk_pc_python_type"] = "riesz_hessian.RieszPC"
+    if extra_options:
+        params.update(extra_options)
+    return params
+
+
+def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None,
+            riesz_initial_hessian=True, output=None, metadata=None,
+            gradient_rtol=0.0, work_budget=0.0):
+    """Run one TAO variant on the problem.
+
+    Args:
+        problem: an ``InverseProblem``.
+        variant: one of ``TAO_VARIANTS``.
+        max_it: iteration limit.
+        initial_radius: initial trust-region radius.
+        extra_options: dict of PETSc options merged over the defaults.
+        riesz_initial_hessian: for the ``bqnk*`` types, set the control inner product
+            as the LMVM initial Hessian. pyadjoint already does the equivalent for
+            ``blmvm``.
+        output: JSON file to rewrite after every iteration, or None.
+        metadata: run settings written into every dump.
+
+    Returns:
+        Recorder
+    """
+    recorder = Recorder(problem, output=output, metadata=metadata or {},
+                        work_budget=work_budget)
+    recorder.attach()
+
+    params = tao_parameters(variant, max_it, initial_radius, extra_options,
+                            gradient_rtol=gradient_rtol)
+    minimisation_problem = MinimizationProblem(problem.reduced_functional, bounds=problem.bounds)
+
+    # The ``riesz`` variants precondition the Newton-Krylov solve with the control
+    # inner product. That needs a separate preconditioning matrix, because the
+    # Hessian matrix of pyadjoint carries no Riesz map and cannot be restricted to
+    # the inactive set of the bounds. See ``riesz_hessian``.
+    pmat = pmat_context = None
+    if variant.endswith("-riesz"):
+        pmat, pmat_context = build_preconditioner_matrix(problem)
+
+    solver = TAOSolver(minimisation_problem, params, Pmat=pmat)
+    tao = solver.tao
+
+    j0_refs = None
+    if riesz_initial_hessian and tao.getType() in ("bqnktr", "bqnkls", "bqnktl", "bqnls"):
+        j0_refs = _set_lmvm_initial_hessian(tao, problem)
+
+    def monitor(tao_obj):
+        its = tao_obj.getIterationNumber()
+        _, f, gnorm, cnorm, xdiff, reason = tao_obj.getSolutionStatus()
+        recorder.mark_iteration(its, tao_gnorm=float(gnorm), radius=float(xdiff))
+        if recorder.over_budget():
+            recorder.stop_reason = (
+                f"work budget of {recorder.work_budget:.0f} forward-equivalents spent")
+            recorder.budget_hit = True
+            raise WorkBudgetReached(recorder.stop_reason)
+
+    tao.setMonitor(monitor)
+
+    # ``TAOSolver.solve`` carries no annotation guard of its own.
+    with stop_annotating():
+        try:
+            solver.solve()
+        except WorkBudgetReached as e:
+            # Kept for the case where petsc4py ever passes the exception through.
+            log(f"TAO stopped: {e}")
+        except PETSc.Error as e:
+            # petsc4py reports a Python exception from a callback as error code 101.
+            # The flag says whether that exception was the budget stop.
+            if not recorder.budget_hit:
+                raise
+            log(f"TAO stopped: {recorder.stop_reason}")
+        except TAOConvergenceError as e:
+            # Hitting the iteration limit counts as divergence for TAO, and pyadjoint
+            # raises on any non-positive reason. The history up to there is the result.
+            log(f"TAO stopped: {e}")
+    if not recorder.budget_hit:
+        recorder.stop_reason = f"TAO converged reason {tao.getConvergedReason()}"
+    # Both references were only kept alive for the solve; a petsc4py TAO cannot hold
+    # Python attributes, so the Python side has to own them until here.
+    del j0_refs, pmat, pmat_context
+    return recorder
+
+
+def run(problem, variant, **kwargs):
+    """Dispatch on the variant name."""
+    if variant in ROL_VARIANTS:
+        return run_rol(problem, variant, **kwargs)
+    if variant in TAO_VARIANTS:
+        return run_tao(problem, variant, **kwargs)
+    raise ValueError(f"unknown optimiser {variant!r}; choose from {VARIANTS}")
