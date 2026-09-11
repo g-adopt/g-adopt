@@ -40,8 +40,10 @@ from gadopt.gia_gravity import (
     NULL_COUPLING_ROW_SCALE,
     OMEGA_SQ_EARTH,
     FluidCore,
+    selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_schur_solver_parameters,
 )
+from gadopt.internal_variable_equation import history_slices
 from gadopt.momentum_equation import rotational_potential
 
 # Road-map §2.2 with the production constants.
@@ -159,11 +161,14 @@ class TestSpaceLayout:
             n_internal_variables=2, self_gravity_number=LAMBDA)
 
         assert layout.displacement == 0
-        assert layout.internal_variables == (1, 2)
-        assert layout.potential == 3
+        # One combined field holds both Maxwell elements, shape (n, d, d).
+        assert layout.internal_variables == (1,)
+        assert layout.internal_variable_field == 1
+        assert layout.potential == 2
         assert len(Z) == layout.n_fields
         assert Z[layout.displacement].mesh() is sub
-        assert Z[layout.internal_variables[0]].mesh() is sub
+        assert Z[layout.internal_variable_field].mesh() is sub
+        assert Z[layout.internal_variable_field].value_shape == (2, 2, 2)
         assert Z[layout.potential].mesh() is parent
 
     def test_real_fields_are_contiguous_and_last(self, meshes):
@@ -1618,26 +1623,58 @@ class TestPresetWiring:
         block-0 field count for free.
         """
         solver, _, layout = build(meshes, solver_parameters="iterative")
-        n_split = sum(
-            1 for k in solver.solver_parameters
+        # A split may name a comma-separated pair (the condensed `(u, M)`
+        # split), so count the fields named, not the splits.
+        n_fields = sum(
+            len(str(v).split(","))
+            for k, v in solver.solver_parameters.items()
             if k.startswith("dtn_fieldsplit_0_pc_fieldsplit_")
             and k.endswith("_fields"))
-        assert n_split == 2 + len(layout.internal_variables)
+        assert n_fields == 2 + len(layout.internal_variables)
 
     def test_the_displacement_split_gets_the_rigid_body_pc(self, meshes):
         """Naming `firedrake.AssembledPC` here is the defect, not a milder choice.
 
         A `near_nullspace` declared on the outer mixed space never reaches
         GAMG underneath `DtNTwoBlockSchurPC`; the modes are dropped with no
-        error and no warning. `b4_polar_motion` shipped exactly that.
+        error and no warning. `b4_polar_motion` shipped exactly that. On the
+        condensed layout the displacement split carries the class that builds
+        the modes itself.
         """
-        solver, _, _ = build(meshes, solver_parameters="iterative")
+        solver, _, _ = build(meshes, condensed=True,
+                             solver_parameters="iterative")
         p = solver.solver_parameters
         u_split = next(
             s for s in range(3)
             if p.get(f"dtn_fieldsplit_0_pc_fieldsplit_{s}_fields") == "0")
         assert p[f"dtn_fieldsplit_0_fieldsplit_{u_split}_pc_python_type"] \
             == "gadopt.RigidBodyAssembledPC"
+
+    def test_the_uncondensed_split_condenses_the_pair_and_seeds_rigid_modes(
+            self, meshes):
+        """On the uncondensed layout `(u, M)` is one split under condensation.
+
+        The condensed displacement operator is an assembled matrix, so no
+        `AssembledPC` wraps it; GAMG is seeded through the near-nullspace
+        provider the solver publishes, whose modes come from
+        `condensed_near_nullspace`.
+        """
+        solver, _, _ = build(meshes, solver_parameters="iterative")
+        p = solver.solver_parameters
+        assert p["dtn_fieldsplit_0_pc_fieldsplit_0_fields"] == "0,1"
+        assert p["dtn_fieldsplit_0_pc_fieldsplit_1_fields"] == "2"
+        assert p["dtn_fieldsplit_0_fieldsplit_0_pc_python_type"] \
+            == "gadopt.InternalVariableSCPC"
+        assert p["dtn_fieldsplit_0_fieldsplit_0_pc_sc_eliminate_fields"] == "1"
+        assert p["dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"] == "cg"
+        assert solver.condensed_near_nullspace == "rigid"
+        assert callable(solver.appctx["condensed_field_near_nullspace"])
+        assert solver.appctx["operator_version"] == 0
+
+    def test_u_pc_is_refused_on_the_uncondensed_layout(self):
+        with pytest.raises(ValueError, match="u_pc has no meaning"):
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, u_pc="firedrake.AssembledPC")
 
     def test_the_iterative_preset_solves_the_same_system(self, meshes, solved):
         """The one that is not about dictionaries: does the new path solve?
@@ -1827,10 +1864,13 @@ class TestNullCoupling:
         ur = zm.subfunctions[0]
         assert fd.norm(ur) > 0.0
         assert fd.norm(fd.assemble(uc - ur)) / fd.norm(ur) < 1e-11
-        for k, i in enumerate(layout.internal_variables):
+        # The gravity space stores the history as one (n, d, d) field with
+        # symmetric storage; the reference holds a (d, d) field. Compare
+        # slice by slice as expressions.
+        stored = history_slices(z.subfunctions[layout.internal_variable_field])
+        for k, m in enumerate(stored):
             mr = zm.subfunctions[1 + k]
-            assert fd.norm(
-                fd.assemble(z.subfunctions[i] - mr)) / fd.norm(mr) < 1e-11
+            assert fd.norm(m - mr) / fd.norm(mr) < 1e-11
         # ... and psi is still driven, so the test is not vacuous.
         assert fd.norm(solver.potential) > 0.0
 
@@ -2105,9 +2145,9 @@ class TestFluidCore:
             fd.inner(error_strain, error_strain) * dxm) / fd.assemble(
                 fd.inner(reference_strain, reference_strain) * dxm))
         assert relative_strain_error < 1e-10
-        m = z.subfunctions[layout.internal_variables[0]]
+        m, = history_slices(z.subfunctions[layout.internal_variable_field])
         m_ref = constrained.subfunctions[1]
-        assert fd.norm(fd.assemble(m - m_ref)) / fd.norm(m_ref) < 1e-10
+        assert fd.norm(m - m_ref) / fd.norm(m_ref) < 1e-10
 
     def test_block1_diagonal_records_the_zero_constraint_entry(self, meshes):
         solver, _, layout = self.build_fluid(meshes)

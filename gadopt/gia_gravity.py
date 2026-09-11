@@ -151,7 +151,7 @@ from firedrake import *
 from ufl import Form
 
 from .approximations import BaseGIAApproximation
-from .preconditioners import RigidBodyAssembledPC
+from .preconditioners import RigidBodyAssembledPC, near_nullspace_basis
 from .dtn_form import DtNGravityForm
 from pyadjoint.tape import annotate_tape, get_working_tape
 
@@ -166,74 +166,21 @@ from .momentum_equation import (
     rotational_potential_term,
     self_gravity_term,
 )
-from .scalar_equation import mass_term, sink_term, source_term
+from .internal_variable_equation import (
+    assign_history_slices,
+    history_slices,
+    internal_variable_history_terms,
+    internal_variable_space,
+)
 from .solver_options_manager import ConfigType, gamg_parameters
 from .stokes_integrators import (
     CoupledInternalVariableSolver,
+    _basis_provider,
+    _displacement_basis,
     newton_stokes_solver_parameters,
 )
 from .utility import ensure_constant
 
-
-def internal_variable_source_term(
-    eq: Equation, trial: Argument | Function
-) -> Form:
-    """Return the history source and its weak-normal boundary term.
-
-    This is the per-field form of the history equation's source that the
-    self-gravity solver still writes, one DG tensor field per Maxwell element.
-    The standalone coupled solver builds the same equation on one combined
-    field through `gadopt.internal_variable_equation.history_strain_term`,
-    whose boundary term covers weak `u` and `un` boundaries; the self-gravity
-    space moves onto that layout in T2 of `NOTES/PLAN-COUPLED-TRANSITION.md`,
-    and this function goes with it.
-
-    The boundary term is the transpose of the internal-variable part of the
-    Nitsche consistency term on a weak-normal (`un`) boundary. Without it the
-    `(u, m)` and `(m, u)` blocks of the coupled Jacobian differ, and the
-    displacement operator obtained by eliminating `m` is not symmetric. With
-    it, and a Newtonian rheology with elementwise-constant material fields,
-    the eliminated operator is symmetric and CG applies to it.
-
-    Args:
-      eq: the history equation, carrying `source`, `source_coefficient`
-        (`1 / tau` for the Maxwell time of this element) and
-        `source_displacement` (the displacement expression) as attributes.
-      trial: the trial argument or the current internal-variable function.
-
-    Returns:
-      The source residual plus the boundary term, as a UFL form.
-    """
-    residual = source_term(eq, trial)
-    dimension = eq.mesh.geometric_dimension
-    identity = Identity(dimension)
-
-    # On every weak-normal boundary, the normal displacement error times the
-    # deviatoric part of `n (x) n` enters the history rows, scaled by the
-    # same `1 / tau` as the volume source.
-    for boundary_id, boundary_condition in eq.bcs.items():
-        if "un" not in boundary_condition:
-            continue
-        normal_error = (
-            dot(eq.n, eq.source_displacement) - boundary_condition["un"]
-        )
-        normal_strain = normal_error * (
-            outer(eq.n, eq.n) - identity / 3
-        )
-        residual += inner(
-            eq.test, eq.source_coefficient * normal_strain
-        ) * eq.ds(boundary_id)
-
-    return residual
-
-
-# `Equation` reads these to validate the attributes a term needs.
-internal_variable_source_term.required_attrs = {
-    "source",
-    "source_coefficient",
-    "source_displacement",
-}
-internal_variable_source_term.optional_attrs = set()
 
 __all__ = [
     "FluidCore",
@@ -428,6 +375,8 @@ def selfgrav_dtn_iterative_solver_parameters(
     snes_type: str = "newtonls",
     u_pc: str = "gadopt.RigidBodyAssembledPC",
     multiplier_pc: str = "none",
+    condensed_field_rtol: float = 1e-5,
+    condensed_field_max_it: int = 1000,
 ) -> dict:
     r"""The 3-D configuration that works, and the only one that does.
 
@@ -493,12 +442,20 @@ def selfgrav_dtn_iterative_solver_parameters(
 
     Args:
       condensed: whether the caller passes `condense_internal_variables=True`.
-        The internal variable is ~85 % of block 0, so condensing is what makes
-        it affordable; when it is condensed there is no `m` field to sweep and
-        including one would index the splits wrongly.  (It is *not* what takes
-        any count in this preset to 3 - see the attribution above.) **Keep this argument and
-        the solver's flag in step** - that is the whole reason it is an
+        The internal variable is ~85 % of block 0. On the condensed layout it
+        is not in the space, and block 0 is a two-way sweep over `u` (through
+        `u_pc`) and `psi`. On the uncondensed layout it is field 1, and block
+        0 is a two-way sweep over the pair `(u, M)` and `psi`: the pair is
+        handed to `gadopt.InternalVariableSCPC`, which eliminates `M` cell by
+        cell with Slate and runs CG with GAMG on the exact condensed
+        displacement operator (options under `condensed_field_`), so the
+        block-0 count no longer pays the `1 - eta_eff/mu0` contraction of a
+        sweep that treats `m` and `u` as separate splits. **Keep this argument
+        and the solver's flag in step** - that is the whole reason it is an
         argument rather than an assumption.
+      condensed_field_rtol, condensed_field_max_it: the Krylov tolerance and
+        iteration cap on the condensed displacement operator; uncondensed
+        layout only.
       block0_rtol, outer_rtol, block0_max_it, snes_rtol: the tolerances.
         `snes_rtol` is relative to the norm of the **whole** mixed residual,
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
@@ -522,14 +479,18 @@ def selfgrav_dtn_iterative_solver_parameters(
         calls, worse than no block-1 PC at all). At 1e-4 it is 19 block-0 calls
         and 69 s per marching step against `none`'s 354 and 1036 s -- Gadi job
         176103130, medium rung, L = 5, 104 ranks. See NOTES/fastdtn/HANDOVER.md.
-      u_pc: the preconditioner on the displacement split. The default builds
-        the rigid-body near-nullspace on the block itself; see
-        `gadopt.RigidBodyAssembledPC` for why a `near_nullspace` declared on
-        the outer mixed space never reaches GAMG here. **The only reason to
-        pass `"firedrake.AssembledPC"` is to reproduce a run that predates
-        that class**, which is a measurement of the defect and not a
+      u_pc: the preconditioner on the displacement split, condensed layout
+        only. The default builds the rigid-body near-nullspace on the block
+        itself; see `gadopt.RigidBodyAssembledPC` for why a `near_nullspace`
+        declared on the outer mixed space never reaches GAMG here. **The only
+        reason to pass `"firedrake.AssembledPC"` is to reproduce a run that
+        predates that class**, which is a measurement of the defect and not a
         configuration - a driver that names it is silently coarsening the
-        elasticity block with no rigid modes.
+        elasticity block with no rigid modes. On the uncondensed layout the
+        displacement operator is the condensed matrix and GAMG runs on it
+        directly, so this argument has no meaning there and a non-default
+        value raises: the near-nullspace is chosen by the solver's
+        `condensed_near_nullspace` argument instead.
 
     Every sub-KSP reports `ksp_converged_reason`. That is not optional
     instrumentation: block 0 and block 1 are preconditioner applications inside
@@ -586,17 +547,40 @@ def selfgrav_dtn_iterative_solver_parameters(
     # the space has no `m` field and the indices shift, which is why this list
     # is built rather than written out.
     if condensed:
-        sweep = [(0, inner(u_pc)),
-                 (1, inner("gadopt.SPDAssembledPC"))]
+        sweep = [("0", inner(u_pc)),
+                 ("1", inner("gadopt.SPDAssembledPC"))]
     else:
-        sweep = [(1, inner("firedrake.AssembledPC",
-                           {"pc_type": "bjacobi", "sub_pc_type": "ilu"})),
-                 (0, inner(u_pc)),
-                 (2, inner("gadopt.SPDAssembledPC"))]
-    # `field_index` and not `field`: `dataclasses.field` is imported above and
-    # a loop variable would shadow it.
-    for split, (field_index, opts) in enumerate(sweep):
-        p[f"dtn_fieldsplit_0_pc_fieldsplit_{split}_fields"] = str(field_index)
+        if u_pc != "gadopt.RigidBodyAssembledPC":
+            raise ValueError(
+                "u_pc has no meaning on the uncondensed layout: the "
+                "displacement operator there is the condensed matrix that "
+                "gadopt.InternalVariableSCPC assembles, and GAMG runs on it "
+                "directly. Choose the near-nullspace with "
+                "SelfGravitatingGIASolver(condensed_near_nullspace=...) "
+                f"instead; got u_pc={u_pc!r}.")
+        # Split 0 is the pair `(u, M)`, fields 0 and 1, under static
+        # condensation. The Krylov method on the condensed operator is set
+        # here as CG; `SelfGravitatingGIASolver.set_solver_options` switches
+        # it to GMRES when `condensed_operator_symmetric` says the operator is
+        # not symmetric (a power law under weak displacement boundaries).
+        condensation = {
+            "ksp_type": "preonly",
+            "pc_type": "python",
+            "pc_python_type": "gadopt.InternalVariableSCPC",
+            "pc_sc_eliminate_fields": "1",
+            "condensed_field_ksp_type": "cg",
+            "condensed_field_ksp_rtol": condensed_field_rtol,
+            "condensed_field_ksp_max_it": condensed_field_max_it,
+            "condensed_field_ksp_converged_reason": None,
+            "condensed_field_pc_type": "gamg",
+            **_prefixed(gamg_parameters(), "condensed_field_"),
+        }
+        sweep = [("0,1", condensation),
+                 ("2", inner("gadopt.SPDAssembledPC"))]
+    # `fields` is the PETSc field string of the split: one index, or a
+    # comma-separated pair for the condensed `(u, M)` block.
+    for split, (fields, opts) in enumerate(sweep):
+        p[f"dtn_fieldsplit_0_pc_fieldsplit_{split}_fields"] = fields
         p.update(_prefixed(opts, f"dtn_fieldsplit_0_fieldsplit_{split}_"))
     return p
 
@@ -736,7 +720,14 @@ class GIASpaceLayout:
 
     Attributes:
       displacement: index of the CG vector displacement block.
-      internal_variables: indices of the DG tensor internal-variable blocks.
+      internal_variables: the index of the DG tensor internal-variable block,
+        as a tuple of length one, or `()` on the condensed layout. One block
+        holds every Maxwell element: the field has shape `(n, d, d)` and is
+        built by `internal_variable_space`, so the number of elements never
+        appears in a field index or a fieldsplit option. The tuple form is
+        kept so that `n_fields`, `set_form` and the block-0 layout check read
+        it the same way whether the block exists or not;
+        `internal_variable_field` gives the bare index.
       potential: index of the potential block, which is on the *parent* mesh.
       multipliers: indices of the DtN multiplier `Real` blocks.
       core_pressure: index of the fluid-core pressure `Real` block, or `None`
@@ -769,10 +760,11 @@ class GIASpaceLayout:
     self_gravity_number: Any = None
     #: Names of the rotation components, in the fixed 3-D order.
     rotation_names: tuple[str, ...] = field(default=("m1", "m2", "m3"))
-    #: The DG tensor space the internal variables live on. Normally this is
-    #: `Z.sub(i)` for `i` in `internal_variables` and is redundant; under static
-    #: condensation `internal_variables` is empty and the variables are stored
-    #: `Function`s outside the mixed space, so this is the only record of it.
+    #: The combined DG tensor space, shape `(n, d, d)`, the internal
+    #: variables live on. On the uncondensed layout this is
+    #: `Z.sub(internal_variable_field)` and is redundant; on the condensed
+    #: layout the variables are a stored `Function` outside the mixed space,
+    #: and this is the only record of the space they are built on.
     internal_variable_space: Any = None
     #: Whether pointwise history substitution omits the variables from the space.
     condensed: bool = False
@@ -788,6 +780,11 @@ class GIASpaceLayout:
     @property
     def cross_mesh(self) -> bool:
         return self.mechanics_mesh is not self.potential_mesh
+
+    @property
+    def internal_variable_field(self) -> int | None:
+        """Index of the combined internal-variable block, `None` when condensed."""
+        return self.internal_variables[0] if self.internal_variables else None
 
     @property
     def n_fields(self) -> int:
@@ -901,8 +898,9 @@ def self_gravitating_gia_space(
       potential_mesh: the parent, carrying the buffer and the DtN boundaries.
       gravity_bcs: boundary conditions for the potential, in
         `DtNGravityForm`'s dictionary form.
-      n_internal_variables: number of viscoelastic internal variables, matching
-        the approximation's `maxwell_times`.
+      n_internal_variables: number of Maxwell elements, matching the length of
+        the approximation's `maxwell_times`. They share one DG tensor field of
+        shape `(n, d, d)`, symmetric on the last two indices.
       fluid_core: add one uniform core-pressure field and its constraint row.
         The solver must receive a matching `FluidCore` object.
       rotation: whether to carry the rotational closure.
@@ -948,20 +946,25 @@ def self_gravitating_gia_space(
         quad_degree=quad_degree, alpha=alpha)
 
     V = VectorFunctionSpace(mechanics_mesh, "CG", displacement_degree)
-    S = TensorFunctionSpace(mechanics_mesh, "DG", internal_variable_degree)
+    # One field for every Maxwell element, shape (n, d, d), symmetric on the
+    # last two indices. Static condensation then always eliminates field 1,
+    # whatever `n`, and the `Real` fields keep one fixed offset.
+    S = internal_variable_space(
+        mechanics_mesh, n_internal_variables, internal_variable_degree)
     R = FunctionSpace(potential_mesh, "R", 0)
 
     n_rot = 0
     if rotation:
         n_rot = 1 if potential_mesh.geometric_dimension == 2 else 3
 
-    # Pointwise history layout: omit `m` from the mixed space and substitute the
+    # Pointwise history layout: omit `M` from the mixed space and substitute the
     # same backward-Euler expression that `InternalVariableSolver` uses. This is
     # not exact elimination of the mixed weak DG formulation on curved cells.
     # It is important in 3-D because the history field is 85 percent of the
-    # coarse benchmark system: 2 860 092 of 3 348 411 degrees of freedom.
-    spaces = [V] + ([] if condense_internal_variables
-                    else [S] * n_internal_variables) + [Psi]
+    # coarse benchmark system: 2 860 092 of 3 348 411 degrees of freedom. The
+    # uncondensed layout carries `M` as field 1 and eliminates it inside the
+    # preconditioner instead (`selfgrav_dtn_iterative_solver_parameters`).
+    spaces = [V] + ([] if condense_internal_variables else [S]) + [Psi]
     i_potential = len(spaces) - 1
     i_R = len(spaces)
 
@@ -993,8 +996,7 @@ def self_gravitating_gia_space(
 
     layout = GIASpaceLayout(
         displacement=0,
-        internal_variables=(() if condense_internal_variables
-                            else tuple(range(1, 1 + n_internal_variables))),
+        internal_variables=(() if condense_internal_variables else (1,)),
         internal_variable_space=S,
         condensed=condense_internal_variables,
         potential=i_potential,
@@ -1148,6 +1150,18 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         alternatives and the constructor refuses both on one boundary; keeping
         `un = 0` reachable is what makes the difference between the treatments a
         measured quantity rather than an inherited approximation.
+      internal_variables: the stored history on the condensed layout, in any
+        layout `gadopt.internal_variable_equation.history_slices` accepts: one
+        combined `(n, d, d)` `Function` on `layout.internal_variable_space`
+        (the default, built here when `None`), one `(d, d)` `Function` for a
+        single Maxwell element, or a list of `(d, d)` `Function`s, one per
+        element, which is the layout the B5 restart checkpoints hold. On the
+        uncondensed layout the history is field 1 of the mixed space and this
+        argument must be `None`.
+      condensed_near_nullspace: what GAMG is seeded with on the condensed
+        displacement operator of the uncondensed iterative preset: `"rigid"`,
+        `"incompressible"` or `"none"`, the axis `gadopt.near_nullspace_basis`
+        takes. A `near_nullspace` passed to the solver wins over it.
       Any remaining keyword goes to `CoupledInternalVariableSolver`, notably
       `bcs`, `scaling_factor`, `quad_degree`, `solver_parameters` and
       `solver_parameters_extra`.
@@ -1176,7 +1190,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         rotation_moments: dict[str, Any] | None = None,
         Omega_sq: Number | Constant = OMEGA_SQ_EARTH,
         fluid_core: "FluidCore | Mapping | None" = None,
-        internal_variables: "list | None" = None,
+        internal_variables: "Function | list | None" = None,
+        condensed_near_nullspace: str = "rigid",
         dtn_representation: str = "multiplier",
         **kwargs,
     ) -> None:
@@ -1213,13 +1228,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # segregated `InternalVariableSolver` carries them.
         if layout.condensed:
             if internal_variables is None:
-                internal_variables = [
-                    Function(layout.internal_variable_space,
-                             name=f"internal_variable_{k}")
-                    for k in range(len(approximation.maxwell_times))]
-            if len(internal_variables) != len(approximation.maxwell_times):
+                internal_variables = Function(
+                    layout.internal_variable_space, name="internal_variables")
+            n_stored = len(history_slices(internal_variables))
+            if n_stored != len(approximation.maxwell_times):
                 raise ValueError(
-                    f"{len(internal_variables)} internal variables for "
+                    f"{n_stored} stored internal variable(s) for "
                     f"{len(approximation.maxwell_times)} Maxwell times.")
         elif internal_variables is not None:
             raise ValueError(
@@ -1227,6 +1241,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "built with `condense_internal_variables=True`; without it the "
                 "internal variables are sub-fields of the mixed space.")
         self.internal_variables = internal_variables
+        if condensed_near_nullspace not in ("rigid", "incompressible", "none"):
+            raise ValueError(
+                "condensed_near_nullspace must be 'rigid', 'incompressible' "
+                f"or 'none', got {condensed_near_nullspace!r}.")
+        self.condensed_near_nullspace = condensed_near_nullspace
         if isinstance(fluid_core, Mapping):
             fluid_core = FluidCore(**fluid_core)
         self.fluid_core = fluid_core
@@ -1301,20 +1320,26 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         caller to keep the two in step is not enough, because the two are set in
         different places by different people.
 
-        The number of `dtn_fieldsplit_0_pc_fieldsplit_N_fields` entries is the
-        preset's own statement of how many fields it thinks block 0 has, so it
-        is compared against how many the space actually has. Anything that does
-        not set those keys - a hand-written dictionary, a string preset - is not
-        making a claim and is left alone.
+        The field indices named across the `dtn_fieldsplit_0_pc_fieldsplit_N_fields`
+        entries (a split may name a comma-separated pair, as the condensed
+        `(u, M)` split does) are the preset's own statement of how many fields
+        it thinks block 0 has, so their count is compared against how many the
+        space actually has. Anything that does not set those keys - a
+        hand-written dictionary, a string preset - is not making a claim and
+        is left alone.
         """
         if not isinstance(solver_parameters, Mapping):
             return
         prefix = "dtn_fieldsplit_0_pc_fieldsplit_"
-        n_split = sum(1 for k in solver_parameters
-                      if k.startswith(prefix) and k.endswith("_fields"))
-        if n_split == 0:
+        named = [
+            index.strip()
+            for k, v in solver_parameters.items()
+            if k.startswith(prefix) and k.endswith("_fields")
+            for index in str(v).split(",")]
+        if not named:
             return
-        n_space = 2 + len(self.layout.internal_variables)  # u, psi, and any m
+        n_split = len(named)
+        n_space = 2 + len(self.layout.internal_variables)  # u, psi, and any M
         if n_split == n_space:
             return
         condensed = self.layout.condensed
@@ -2298,19 +2323,18 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                     "block.")
             internal_variables = [
                 (m + self.dt / mt * strain_u) / (1 + self.dt / mt)
-                for m, mt in zip(self.internal_variables,
+                for m, mt in zip(history_slices(self.internal_variables),
                                  self.approximation.maxwell_times)]
-            self._internal_variables_update = internal_variables
         else:
-            internal_variables = [self.solution_split[i]
-                                  for i in self.layout.internal_variables]
+            # One `(d, d)` slice per Maxwell element of the combined field.
+            internal_variables = history_slices(
+                self.solution_split[self.layout.internal_variable_field])
 
         intersect = self.potential_mesh if self.layout.cross_mesh else None
 
         stress = self.approximation.stress(
             u, internal_variables=internal_variables)
         source = self.approximation.buoyancy(u) * self.k
-        strain = self.approximation.deviatoric_strain(u)
         dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
         visc_factor = self.approximation.power_law_factor(dev_stress)
         maxwell_times = [mt * visc_factor
@@ -2337,22 +2361,29 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             )
         )
 
-        for k, maxwell_time in enumerate([] if self.layout.condensed
-                                          else maxwell_times):
-            i = self.layout.internal_variables[k]
+        if not self.layout.condensed:
+            # One history equation for every Maxwell element, on the combined
+            # field: the same three terms and the same sign convention as
+            # `MixedHistoryFormulation.add_history_equations`. The residual
+            # (mass + relaxation - strain) is negated through the scaling
+            # factor so that the `(u, M)` and `(M, u)` blocks are transposes
+            # of each other; `history_strain_term` carries the boundary term
+            # on the weak `un` boundary (the CMB) that keeps that true, and
+            # the condensed displacement operator is then symmetric for a
+            # Newtonian rheology. `maxwell_times` carries the power-law
+            # factor, so the relaxation is nonlinear in `u` for `exponent != 1`
+            # exactly as the old per-field equations were.
+            i = self.layout.internal_variable_field
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    [mass_term, sink_term, internal_variable_source_term],
+                    internal_variable_history_terms,
                     eq_attrs={
-                        "source": strain / maxwell_time,
-                        "source_coefficient": 1 / maxwell_time,
-                        "source_displacement": u,
-                        "sink_coeff": 1 / maxwell_time,
+                        "maxwell_times": maxwell_times,
+                        "displacement": u,
                         "dt": self.dt,
                         "trial_old": self.solution_old_split[i],
-                        "use_irksome": False,
                     },
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -2367,10 +2398,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         The parent's `set_form` zips `self.equations` against
         `self.solution_split`, one `Equation` per sub-field. Here there are
-        `1 + N` equations and `2 + N + n_mult + n_rot` sub-fields, and `zip`
-        would truncate to the shorter - which happens to pair correctly, and is
-        exactly the kind of accident that stops being true when somebody
-        reorders the space. Write it out.
+        one or two mechanics equations (displacement, and the combined
+        internal-variable field on the uncondensed layout) against
+        `n_fields` sub-fields, and `zip` would truncate to the shorter - which
+        happens to pair correctly, and is exactly the kind of accident that
+        stops being true when somebody reorders the space. Write it out.
         """
         mechanics = zip(self.equations,
                         (self.solution_split[self.layout.displacement],
@@ -2819,6 +2851,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if isinstance(solver_preset, Mapping):
             super().set_solver_options(solver_preset, solver_extras, gpu_extras)
             _attach_block1_diagonal()
+            self._attach_condensation_context(solver_extras)
             return
         if solver_preset not in (None, "direct", "iterative"):
             raise ValueError("Solver type must be 'direct' or 'iterative'.")
@@ -2860,7 +2893,82 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if solver_extras:
             self.add_to_solver_config(solver_extras)
         _attach_block1_diagonal()
+        self._attach_condensation_context(solver_extras)
         self.register_update_callback(self.set_solver)
+
+    def _attach_condensation_context(self, extras) -> None:
+        """Publish what `gadopt.InternalVariableSCPC` reads, on every options path.
+
+        The base class publishes these on its own path
+        (`CoupledInternalVariableSolver.set_solver_options`), which the string
+        presets of this solver never reach. The keys are fixed names in the
+        shared application context, whatever option prefix the condensation
+        sits under, so publishing them once serves the nested split of the
+        iterative preset and any hand-written dictionary alike:
+
+        - `approximation`, `dt`, `scaling_factor`: what a preconditioner that
+          rebuilds the displacement operator from the material needs.
+        - `operator_version`: the reuse counter; `_refresh_operator_version`
+          bumps it before every solve when `dt` or a Jacobian coefficient
+          changed, and the condensation skips its reassembly otherwise.
+        - the three `condensed_field_*nullspace` providers: the displacement
+          part of a nullspace the caller declared on the mixed space; and, for
+          the near-nullspace, the modes named by `condensed_near_nullspace`
+          built on the condensed displacement space when the caller declared
+          none. GAMG coarsens the slow modes onto whatever it is given, and
+          the condensed operator is the elastic displacement operator, so the
+          rigid-body modes are what it needs by default.
+
+        On the condensed layout nothing reads these; they are harmless there.
+
+        Also selects the Krylov method on the condensed field: the preset
+        writes CG, which is valid only for a symmetric operator. The rheology
+        decides that (`condensed_operator_symmetric`); a power law under the
+        weak `un` boundary of the CMB, or with two or more elements, is not
+        symmetric and gets GMRES. The `Mapping` a caller passes is normally
+        `selfgrav_dtn_iterative_solver_parameters(...)` itself, whose `cg` is
+        the preset's default and not a choice, so a `cg` found there is
+        switched like the string path's. The one way to keep CG on an
+        operator this rule calls nonsymmetric is to name `ksp_type` under the
+        condensed-field prefix in `solver_parameters_extra`, which wins.
+
+        Args:
+          extras: the caller's `solver_parameters_extra`, or `None`.
+        """
+        if getattr(self, "appctx", None) is None:
+            self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        self.appctx["approximation"] = self.approximation
+        self.appctx["dt"] = self.dt
+        self.appctx["scaling_factor"] = self.scaling_factor
+        self.appctx["operator_version"] = self._operator_version
+        for key, basis in (
+            ("condensed_field_nullspace", self.nullspace),
+            ("condensed_field_transpose_nullspace", self.transpose_nullspace),
+        ):
+            displacement_basis = _displacement_basis(basis)
+            if displacement_basis is not None:
+                self.appctx[key] = _basis_provider(displacement_basis)
+        near = _displacement_basis(self.near_nullspace)
+        if near is not None:
+            self.appctx["condensed_field_near_nullspace"] = _basis_provider(near)
+        elif self.condensed_near_nullspace != "none":
+            modes = self.condensed_near_nullspace
+
+            def near_nullspace_provider(space, modes=modes):
+                # Built on the condensed displacement space the
+                # preconditioner hands over, once per operator build.
+                return near_nullspace_basis(space, modes)
+
+            self.appctx["condensed_field_near_nullspace"] = near_nullspace_provider
+
+        key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"
+        user_named = bool(extras) and key in extras
+        if (self.solver_parameters.get(key) == "cg"
+                and not user_named
+                and not self.condensed_operator_symmetric()):
+            self.add_to_solver_config({
+                key: "gmres",
+                "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_gmres_restart": 50})
 
     def refuse_stale_preconditioner(self) -> None:
         """`DtNTwoBlockSchurPC.update` is a no-op, which needs a constant Jacobian.
@@ -3244,11 +3352,22 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """
         u = self.solution.subfunctions[self.layout.displacement]
         strain = self.approximation.deviatoric_strain(u)
-        for m, maxwell_time in zip(self.internal_variables,
-                                   self.approximation.maxwell_times):
-            ratio = self.dt / maxwell_time
-            # into a temporary first: `m` appears on the right-hand side, and
-            # interpolating a function into itself is not worth relying on.
-            updated = Function(m.function_space()).interpolate(
-                (m + ratio * strain) / (1 + ratio))
-            m.assign(updated)
+        stored = self.internal_variables
+        updates = [
+            (m + self.dt / mt * strain) / (1 + self.dt / mt)
+            for m, mt in zip(history_slices(stored),
+                             self.approximation.maxwell_times)]
+        # Into a temporary of the same layout first: every stored field
+        # appears on the right-hand side, and interpolating a function into
+        # itself is not worth relying on. `assign_history_slices` handles the
+        # combined field, a single `(d, d)` field and the list layout alike.
+        if isinstance(stored, (list, tuple)):
+            scratch = [Function(m.function_space()) for m in stored]
+        else:
+            scratch = Function(stored.function_space())
+        assign_history_slices(scratch, updates)
+        if isinstance(stored, (list, tuple)):
+            for m, tmp in zip(stored, scratch):
+                m.assign(tmp)
+        else:
+            stored.assign(scratch)

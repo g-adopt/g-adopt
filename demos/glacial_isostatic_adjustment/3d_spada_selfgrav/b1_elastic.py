@@ -646,6 +646,16 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
     nullspace = (rigid_rotation_nullspace(Z, layout) if declare_nullspace
                  else None)
 
+    # On the condensed layout the solver's default history storage is one
+    # combined (n, d, d) field. The B5 drivers read and write the history as
+    # a list of (d, d) fields (`solver.internal_variables[0]`), which is also
+    # the layout of every checkpoint they have written, so hand the solver
+    # that list. The uncondensed layout keeps its history in the mixed space.
+    stored_history = (
+        [Function(TensorFunctionSpace(sub, "DG", ivdeg),
+                  name="internal_variable_0")]
+        if condense else None)
+
     solver = SelfGravitatingGIASolver(
         # `dt` is baked into the operator here: `CoupledInternalVariableSolver`
         # sets `approximation.mu = effective_viscosity(dt)` in `__init__`, so it
@@ -653,6 +663,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
         # one solver per dt segment. `None` keeps B1's elastic snapshot.
         z, approx, layout=layout,
         dt=DT_ELASTIC if dt is None else dt, bcs=bcs, fluid_core=core,
+        internal_variables=stored_history,
         # A3's constants, imported. The literals that used to stand here were
         # `C = 72.226893` (a rounded copy of 72.2269347) and
         # `C_minus_A = 2.362822e-01`, which is the SECONDARY prescribed value;

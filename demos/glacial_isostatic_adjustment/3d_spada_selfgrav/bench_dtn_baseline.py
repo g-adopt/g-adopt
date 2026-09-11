@@ -271,10 +271,13 @@ def build_annulus(args):
         gen.CURVE_RE: {"normal_stress":
                        B_mu * 1.0e-3 * cos(2 * atan2(Xm[1], Xm[0]))},
     }
+    # `u_pc` names the displacement preconditioner of the condensed layout
+    # only; the uncondensed layout condenses the (u, M) pair and refuses it.
     params = selfgrav_dtn_iterative_solver_parameters(
         condensed=args.condense, block0_rtol=args.block0_rtol,
         outer_rtol=args.outer_rtol, block0_max_it=args.block0_max_it,
-        snes_type=args.snes_type, u_pc=args.u_pc)
+        snes_type=args.snes_type,
+        **({"u_pc": args.u_pc} if args.condense else {}))
     solver = SelfGravitatingGIASolver(
         z, approx, layout=layout, dt=args.dt, bcs=bcs,
         rotation_moments={"C": C}, Omega_sq=OMEGA_SQ_EARTH,

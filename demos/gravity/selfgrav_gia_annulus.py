@@ -343,8 +343,11 @@ def fluid_limit_residual(solver, *, with_floor=False):
     # a `split` of a mixed function spanning two meshes carries both domains,
     # which `project` refuses with "Found multiple domains".
     u = solver.displacement
-    ivs = [solver.solution.subfunctions[i]
-           for i in solver.layout.internal_variables]
+    # One combined (n, d, d) field holds every Maxwell element; the
+    # approximation takes one (d, d) expression per element.
+    from gadopt.internal_variable_equation import history_slices
+    ivs = history_slices(
+        solver.solution.subfunctions[solver.layout.internal_variable_field])
     approx = solver.approximation
     s = approx.deviatoric_stress(u, ivs)
     e = approx.deviatoric_strain(u)
