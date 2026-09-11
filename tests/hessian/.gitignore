@@ -2,3 +2,4 @@ run_*/
 *.log
 *.json
 __pycache__/
+gadi-results/
