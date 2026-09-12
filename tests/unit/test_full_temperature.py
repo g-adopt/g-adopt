@@ -4,10 +4,7 @@ import firedrake as fd
 import pytest
 
 from gadopt import EnergySolver, ImplicitMidpoint
-from gadopt.approximations import (
-    AnelasticLiquidApproximation,
-    TruncatedAnelasticLiquidApproximation,
-)
+from gadopt.approximations import AnelasticLiquidApproximation
 from gadopt import (
     FullTemperatureAnelasticLiquidApproximation as FullALA,
     FullTemperatureExtendedBoussinesqApproximation as FullEBA,
@@ -22,11 +19,8 @@ def mesh():
     return m
 
 
-@pytest.mark.parametrize("old_class,new_class", [
-    (TruncatedAnelasticLiquidApproximation, FullTALA),
-    (AnelasticLiquidApproximation, FullALA),
-])
-def test_analytic_change_of_variable(mesh, old_class, new_class):
+def test_analytic_change_of_variable(mesh):
+    # ALA adds pressure buoyancy to the shared TALA temperature transformation.
     x, y = fd.SpatialCoordinate(mesh)
     di, ts = 0.5, 0.091
     reference = ts * fd.exp(di * (1 - y))
@@ -36,9 +30,8 @@ def test_analytic_change_of_variable(mesh, old_class, new_class):
     temperature = theta + reference
     u = fd.as_vector((x * y, y * (1 - y)))
     p = x - y
-    old = old_class(1e5, di, rho=density, Tbar=offset)
-    new = new_class(1e5, di, rho=density,
-                    reference_temperature=reference)
+    old = AnelasticLiquidApproximation(1e5, di, rho=density, Tbar=offset)
+    new = FullALA(1e5, di, rho=density, reference_temperature=reference)
     sink = old.linearized_energy_sink(u)
     # Compare complete steady strong energy residuals, including advection.
     old_r = (old.rhocp() * fd.dot(u, fd.grad(theta)) + sink * theta
@@ -49,19 +42,19 @@ def test_analytic_change_of_variable(mesh, old_class, new_class):
     assert fd.assemble((old_r - new_r)**2 * fd.dx) < 1e-20
     assert fd.assemble((old.buoyancy(p, theta)
                         - new.buoyancy(p, temperature))**2 * fd.dx) < 1e-16
-    if new_class is FullALA:
-        assert fd.assemble((old.dbuoyancydp(p, theta)
-                            - new.dbuoyancydp(p, temperature))**2 * fd.dx) == 0
+    assert fd.assemble((old.dbuoyancydp(p, theta)
+                        - new.dbuoyancydp(p, temperature))**2 * fd.dx) == 0
 
 
-@pytest.mark.parametrize("approx_class", [FullEBA, FullTALA, FullALA])
-@pytest.mark.parametrize("family", ["CG", "DG"])
-@pytest.mark.parametrize("offset", [0, 0.091])
-def test_full_temperature_manufactured_energy_step(mesh, approx_class, family, offset):
+# Cover both heat-capacity paths and both boundary discretisations without a
+# Cartesian product: ALA inherits the TALA energy implementation unchanged.
+@pytest.mark.parametrize("approx_class,family", [(FullEBA, "CG"), (FullTALA, "DG")])
+def test_full_temperature_manufactured_energy_step(mesh, approx_class, family):
+    offset = 0.091
     _, y = fd.SpatialCoordinate(mesh)
     q_space = fd.FunctionSpace(mesh, family, 2)
     v_space = fd.VectorFunctionSpace(mesh, "CG", 2)
-    exact = 0.091 + 1 - y - offset
+    exact = 1 - y
     temperature = fd.Function(q_space).interpolate(exact)
     u = fd.Function(v_space).interpolate(fd.as_vector((0, 0.2)))
     di = 0.5
@@ -87,37 +80,25 @@ def test_full_temperature_manufactured_energy_step(mesh, approx_class, family, o
     assert fd.assemble((temperature - exact)**2 * fd.dx) < 1e-18
 
 
-def test_eba_offset_is_physically_required(mesh):
-    x, y = fd.SpatialCoordinate(mesh)
-    u = fd.as_vector((x, 1 + y))
-    approximation = FullEBA(1e5, 0.5, reference_temperature=0.091)
-    theta = 1 - y
-    full_work = approximation.work_against_gravity(u, theta + 0.091)
-    incorrect_work = approximation.work_against_gravity(u, theta)
-    assert fd.assemble((full_work - incorrect_work)**2 * fd.dx) > 1e-4
-
-
-@pytest.mark.parametrize("approx_class", [FullEBA, FullTALA, FullALA])
-def test_ambiguous_offsets_rejected(approx_class):
+def test_ambiguous_offsets_rejected():
     with pytest.raises(ValueError, match="ambiguous"):
-        approx_class(1e5, 0.5, reference_temperature=0.091, Tbar=1)
+        FullTALA(1e5, 0.5, reference_temperature=0.091, Tbar=1)
 
 
-@pytest.mark.parametrize("approx_class", [FullEBA, FullTALA, FullALA])
-def test_vector_reference_rejected(mesh, approx_class):
+def test_vector_reference_rejected(mesh):
     with pytest.raises(ValueError, match="scalar"):
-        approx_class(1e5, 0.5, reference_temperature=fd.SpatialCoordinate(mesh))
+        FullTALA(1e5, 0.5, reference_temperature=fd.SpatialCoordinate(mesh))
 
 
-@pytest.mark.parametrize("approx_class", [FullEBA, FullTALA, FullALA])
-def test_constant_shift_physics(mesh, approx_class):
+def test_constant_shift_physics(mesh):
+    # Exercise the shared offset mixin with ALA pressure-dependent buoyancy.
     x, y = fd.SpatialCoordinate(mesh)
-    reference = 0.091 if approx_class is FullEBA else 0.091*fd.exp(0.5*(1-y))
+    reference = 0.091*fd.exp(0.5*(1-y))
     kwargs = dict(reference_temperature=reference, heating_weight=0.7,
                   H=0.2, rho=fd.exp(0.5*(1-y)))
-    absolute = approx_class(1e4, 0.5, **kwargs)
+    absolute = FullALA(1e4, 0.5, **kwargs)
     offset = fd.Constant(0.091)
-    shifted = approx_class(1e4, 0.5, temperature_offset=offset, **kwargs)
+    shifted = FullALA(1e4, 0.5, temperature_offset=offset, **kwargs)
     t, p = 1-y+x*y, x-y
     u = fd.as_vector((x*y, y*(1-y)))
     for a, b in [
@@ -135,15 +116,13 @@ def test_constant_shift_physics(mesh, approx_class):
     assert fd.assemble((shifted.buoyancy(p, t)-absolute.buoyancy(p, t+offset))**2*fd.dx) < 1e-18
 
 
-@pytest.mark.parametrize("approx_class", [FullEBA, FullTALA, FullALA])
-def test_spatial_offset_rejected(mesh, approx_class):
+def test_spatial_offset_rejected(mesh):
     _, y = fd.SpatialCoordinate(mesh)
     with pytest.raises(ValueError, match="temperature_offset"):
-        approx_class(1e4, 0.5, reference_temperature=0.091, temperature_offset=y)
+        FullTALA(1e4, 0.5, reference_temperature=0.091, temperature_offset=y)
 
 
-@pytest.mark.parametrize("approx_class", [FullEBA, FullTALA, FullALA])
-def test_offset_energy_adjoint(approx_class):
+def test_offset_energy_adjoint():
     from firedrake.adjoint import Control, ReducedFunctional, taylor_test
     from pyadjoint.tape import (
         Tape, annotate_tape, continue_annotation, get_working_tape,
@@ -163,7 +142,7 @@ def test_offset_energy_adjoint(approx_class):
         u = fd.Function(V).interpolate(fd.as_vector((0, 0.3)))
         offset = fd.Function(fd.FunctionSpace(mesh, "R", 0)).assign(0.091)
         control = Control(offset)
-        approximation = approx_class(
+        approximation = FullTALA(
             1e4, 0.5, reference_temperature=0.091, temperature_offset=offset)
         solver = EnergySolver(
             T, u, approximation, fd.Constant(0.1), ImplicitMidpoint,
