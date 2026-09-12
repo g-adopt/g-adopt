@@ -17,6 +17,10 @@ import ufl
 from .utility import ensure_constant, vertical_component
 
 __all__ = [
+    "FullTemperatureExtendedBoussinesqApproximation",
+    "FullTemperatureTruncatedAnelasticLiquidApproximation",
+    "FullTemperatureAnelasticLiquidApproximation",
+
     "BoussinesqApproximation",
     "ExtendedBoussinesqApproximation",
     "TruncatedAnelasticLiquidApproximation",
@@ -516,6 +520,74 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
         pressure_part = self.dbuoyancydp(p, T) * p
         temperature_part = super().buoyancy(p, T)
         return pressure_part + temperature_part
+
+
+class _FullTemperatureMixin:
+    """Map the full-temperature buoyancy reference to the T0 interface."""
+
+    def __init__(
+        self,
+        Ra: Number | ufl.core.expr.Expr,
+        Di: Number | ufl.core.expr.Expr,
+        *,
+        reference_temperature: Number | ufl.core.expr.Expr,
+        **kwargs,
+    ) -> None:
+        if {"T0", "Tbar"}.intersection(kwargs):
+            raise ValueError(
+                "Use reference_temperature with full temperature; "
+                "T0 and Tbar would make the temperature convention ambiguous."
+            )
+        if getattr(reference_temperature, "ufl_shape", ()) != ():
+            raise ValueError("reference_temperature must be a scalar temperature")
+        self.reference_temperature = reference_temperature
+        # TALA/ALA default Tbar to zero. EnergySolver therefore diffuses
+        # the evolved full temperature, without adding the reference twice.
+        super().__init__(Ra, Di, T0=reference_temperature, **kwargs)
+
+    def temperature_anomaly(
+        self, temperature: ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        """Return the temperature departure used by thermal buoyancy."""
+        return temperature - self.reference_temperature
+
+
+class FullTemperatureExtendedBoussinesqApproximation(
+    _FullTemperatureMixin, ExtendedBoussinesqApproximation
+):
+    """EBA evolving full absolute temperature.
+
+    Supply a spatially constant reference_temperature, usually surface
+    temperature divided by the temperature scale. The inherited energy
+    equation uses the full temperature in adiabatic heating. Other keyword
+    arguments retain the parent class meaning and nondimensional scaling.
+    """
+
+
+class FullTemperatureTruncatedAnelasticLiquidApproximation(
+    _FullTemperatureMixin, TruncatedAnelasticLiquidApproximation
+):
+    """TALA evolving full absolute temperature.
+
+    Supply the absolute reference-state temperature in reference_temperature,
+    with consistent rho, alpha, cp and g profiles. Tbar remains zero as the
+    legacy diffusion offset; the physical reference is retained separately.
+    Equivalence to a perturbation run requires a stationary adiabat satisfying
+    cp * grad(reference_temperature) = -Di * alpha * g * reference_temperature
+    in the upward/radial direction, for heating_weight=1.
+    """
+
+
+class FullTemperatureAnelasticLiquidApproximation(
+    _FullTemperatureMixin, AnelasticLiquidApproximation
+):
+    """ALA evolving full absolute temperature.
+
+    Reference-temperature semantics are those of the full-temperature TALA
+    class. The existing pressure-dependent buoyancy, its derivative, and ALA
+    pressure-nullspace construction are retained. Pressure is still dynamic
+    pressure relative to the hydrostatic reference state.
+    """
 
 
 class BaseGIAApproximation(DeviatoricStressMixin):
