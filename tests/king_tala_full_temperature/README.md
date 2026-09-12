@@ -1,7 +1,7 @@
 # Full-temperature Cartesian TALA benchmark
 
-The evolved variable is absolute Kelvin temperature divided by 3000 K. Its top
-and bottom boundary values are 0.091 and 1.091. The reference temperature is
+By default, the evolved variable is (Kelvin temperature - 273 K) / 3000 K.
+Its top and bottom boundary values are 0 and 1. The absolute reference temperature is
 `0.091*exp(Di*(1-y))` and density is `exp(Di*(1-y))`; all other thermodynamic
 coefficients, viscosity and conductivity are one. Heating is zero. `Ra` uses
 the full 3000 K contrast. The unit square has free-slip walls and insulated sides.
@@ -19,16 +19,28 @@ comparison data, not new G-ADOPT regression values.
 from gadopt import FullTemperatureTruncatedAnelasticLiquidApproximation
 
 approximation = FullTemperatureTruncatedAnelasticLiquidApproximation(
-    Ra, Di, reference_temperature=reference, rho=density,
+    Ra, Di, reference_temperature=reference, temperature_offset=0.091, rho=density,
 )
 ```
 
 Pass the same full-temperature Function to both StokesSolver and EnergySolver.
-The approximation uses `T-reference_temperature` in buoyancy, full T in
-adiabatic heating and full T in diffusion. Its legacy `Tbar` diffusion offset
+The approximation uses `T+temperature_offset-reference_temperature` in buoyancy,
+`T+temperature_offset` in adiabatic heating and T in diffusion. Its legacy `Tbar` diffusion offset
 remains zero. The corresponding EBA and ALA classes use the same explicit
-temperature convention; ALA retains pressure-dependent buoyancy and its
+temperature-offset convention; ALA retains pressure-dependent buoyancy and its
 nonconstant pressure nullspace. Only TALA is benchmarked here.
+
+`--formulation full` selects absolute scaled temperature, with top/bottom BCs
+0.091/1.091 and zero offset. The approximation default offset is zero for
+compatibility; the benchmark default is `--formulation surface-relative`.
+`reference_temperature` always means the absolute reference adiabat. The offset
+must be a stationary scalar number, Firedrake Constant, or Function in the Real
+(R, 0) space. Use the Real-space Function for an adjoint control. Spatial/time-dependent
+shifts would require additional advection, diffusion and time-derivative terms.
+Use `approximation.absolute_temperature(T)` in absolute-temperature material laws.
+`energy_source(u)` includes the negative offset contribution to adiabatic work;
+`viscous_dissipation(u)` remains pure dissipation, and `work_against_gravity(u,T)`
+returns physical work including the offset.
 
 `--formulation perturbation` uses the existing approximation and evolves theta.
 It diffuses `theta+reference-0.091`, which has the same gradient as absolute
@@ -88,3 +100,6 @@ Analytic reference coefficients and quadrature degree eight are used for the
 paired study. Although the two forms are equivalent continuously, an exponential
 reference cannot be represented exactly in Q2. Agreement should converge under
 refinement; it need not be bitwise exact.
+
+To compare the two total-temperature conventions through standard solvers, run
+`transient_check.py --initial <32-cell-checkpoint.h5> --comparison surface-relative`.

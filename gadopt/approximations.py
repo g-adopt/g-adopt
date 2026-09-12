@@ -11,7 +11,7 @@ from numbers import Number
 from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
+from firedrake import Constant, Function, Identity, div, grad, inner, sqrt, sym, tr
 import ufl
 
 from .utility import ensure_constant, vertical_component
@@ -523,7 +523,7 @@ class AnelasticLiquidApproximation(TruncatedAnelasticLiquidApproximation):
 
 
 class _FullTemperatureMixin:
-    """Map the full-temperature buoyancy reference to the T0 interface."""
+    """Evolve total temperature relative to a constant absolute offset."""
 
     def __init__(
         self,
@@ -531,6 +531,7 @@ class _FullTemperatureMixin:
         Di: Number | ufl.core.expr.Expr,
         *,
         reference_temperature: Number | ufl.core.expr.Expr,
+        temperature_offset: Number | Constant | Function = 0,
         **kwargs,
     ) -> None:
         if {"T0", "Tbar"}.intersection(kwargs):
@@ -540,34 +541,65 @@ class _FullTemperatureMixin:
             )
         if getattr(reference_temperature, "ufl_shape", ()) != ():
             raise ValueError("reference_temperature must be a scalar temperature")
+        is_real_function = (isinstance(temperature_offset, Function)
+                            and temperature_offset.ufl_element().family() == "Real")
+        if (not (isinstance(temperature_offset, (Number, Constant)) or is_real_function)
+                or getattr(temperature_offset, "ufl_shape", ()) != ()):
+            raise ValueError(
+                "temperature_offset must be a scalar number, Firedrake Constant, "
+                "or Function in the Real space")
         self.reference_temperature = reference_temperature
+        self.temperature_offset = ensure_constant(temperature_offset)
         # TALA/ALA default Tbar to zero. EnergySolver therefore diffuses
         # the evolved full temperature, without adding the reference twice.
-        super().__init__(Ra, Di, T0=reference_temperature, **kwargs)
+        super().__init__(Ra, Di, T0=reference_temperature-self.temperature_offset, **kwargs)
+
+    def absolute_temperature(
+        self, temperature: ufl.core.expr.Expr
+    ) -> ufl.core.expr.Expr:
+        """Return absolute temperature in the chosen temperature units."""
+        return temperature + self.temperature_offset
 
     def temperature_anomaly(
         self, temperature: ufl.core.expr.Expr
     ) -> ufl.core.expr.Expr:
         """Return the temperature departure used by thermal buoyancy."""
-        return temperature - self.reference_temperature
+        return self.absolute_temperature(temperature) - self.reference_temperature
+
+    def energy_source(self, u) -> ufl.core.expr.Expr:
+        """Include the constant-offset part of adiabatic heating in the source."""
+        return (super().energy_source(u)
+                - self.linearized_energy_sink(u) * self.temperature_offset)
+
+    def work_against_gravity(self, u, T) -> ufl.core.expr.Expr:
+        """Physical adiabatic work, including the absolute-temperature offset."""
+        return self.linearized_energy_sink(u) * self.absolute_temperature(T)
 
 
 class FullTemperatureExtendedBoussinesqApproximation(
     _FullTemperatureMixin, ExtendedBoussinesqApproximation
 ):
-    """EBA evolving full absolute temperature.
+    """EBA evolving total temperature with an optional constant offset.
 
     Supply a spatially constant reference_temperature, usually surface
     temperature divided by the temperature scale. The inherited energy
     equation uses the full temperature in adiabatic heating. Other keyword
     arguments retain the parent class meaning and nondimensional scaling.
+
+    temperature_offset is the stationary absolute temperature represented by
+    zero in the evolved field, in the same units as reference_temperature.
+    Use surface Kelvin temperature divided by Delta T for surface/base BCs
+    zero/one. Zero offset retains the absolute-temperature convention. Material
+    laws requiring absolute temperature should use absolute_temperature(T).
+    For an adjoint control, use a scalar Function in the Real (R, 0) space,
+    which retains its coefficient dependency on the tape.
     """
 
 
 class FullTemperatureTruncatedAnelasticLiquidApproximation(
     _FullTemperatureMixin, TruncatedAnelasticLiquidApproximation
 ):
-    """TALA evolving full absolute temperature.
+    """TALA evolving total temperature with an optional constant offset.
 
     Supply the absolute reference-state temperature in reference_temperature,
     with consistent rho, alpha, cp and g profiles. Tbar remains zero as the
@@ -575,13 +607,17 @@ class FullTemperatureTruncatedAnelasticLiquidApproximation(
     Equivalence to a perturbation run requires a stationary adiabat satisfying
     cp * grad(reference_temperature) = -Di * alpha * g * reference_temperature
     in the upward/radial direction, for heating_weight=1.
+
+    temperature_offset has the same stationary, spatially constant meaning as
+    in FullTemperatureExtendedBoussinesqApproximation. reference_temperature
+    is always absolute, even when the evolved field has surface/base BCs 0/1.
     """
 
 
 class FullTemperatureAnelasticLiquidApproximation(
     _FullTemperatureMixin, AnelasticLiquidApproximation
 ):
-    """ALA evolving full absolute temperature.
+    """ALA evolving total temperature with an optional constant offset.
 
     Reference-temperature semantics are those of the full-temperature TALA
     class. The existing pressure-dependent buoyancy, its derivative, and ALA

@@ -29,16 +29,19 @@ def run(args):
     initial = fd.Function(Q).interpolate(
         absolute + 0.005 * fd.cos(fd.pi*x) * fd.sin(fd.pi*y))
     models = []
-    for full in (True, False):
-        T = fd.Function(Q).interpolate(initial if full else initial-reference)
+    for formulation in ("full", args.comparison):
+        full = formulation != "perturbation"
+        offset = surface if formulation == "surface-relative" else 0
+        T = fd.Function(Q).interpolate(initial-offset if full else initial-reference)
         state = fd.Function(Z)
         state.subfunctions[0].assign(velocity)
         state.subfunctions[1].assign(pressure)
         u, _ = fd.split(state)
         if full:
             approximation = FullTemperatureTruncatedAnelasticLiquidApproximation(
-                ra, di, rho=rho, reference_temperature=reference)
-            bottom, top = surface+1, surface
+                ra, di, rho=rho, reference_temperature=reference,
+                temperature_offset=offset)
+            bottom, top = surface+1-offset, surface-offset
         else:
             approximation = TruncatedAnelasticLiquidApproximation(
                 ra, di, rho=rho, Tbar=reference-surface)
@@ -66,7 +69,7 @@ def run(args):
             stokes.solve()
             energy.solve()
         q_full = models[0][0]
-        q_perturbation = models[1][0]+reference
+        q_perturbation = models[1][0]+(reference if args.comparison == "perturbation" else surface)
         u_full = models[0][1].subfunctions[0]
         u_perturbation = models[1][1].subfunctions[0]
         rows.append({"step": step+1, "time": (step+1)*args.dt,
@@ -78,7 +81,7 @@ def run(args):
     assert max(row["velocity_relative_l2"] for row in rows) < 1e-5
     if mesh.comm.rank == 0:
         output = {"dt": args.dt, "steps": args.steps,
-                  "mpi_size": mesh.comm.size, "rows": rows}
+                  "mpi_size": mesh.comm.size, "comparison": args.comparison, "rows": rows}
         Path(args.output).write_text(json.dumps(output, indent=2)+"\n")
         print(json.dumps(rows[-1]), flush=True)
 
@@ -86,6 +89,8 @@ def run(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--initial", required=True)
+    parser.add_argument("--comparison", choices=["perturbation", "surface-relative"],
+                        default="perturbation")
     parser.add_argument("--dt", type=float, default=1e-4)
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--output", default="transient_check.json")

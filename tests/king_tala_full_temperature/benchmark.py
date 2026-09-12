@@ -34,12 +34,14 @@ def run(args):
     density = fd.exp(args.di * (1 - y))
     surface = 273.0 / 3000.0
     reference = surface * fd.exp(args.di * (1 - y))
-    if args.formulation == "full":
+    if args.formulation in ("full", "surface-relative"):
         approximation = gadopt.FullTemperatureTruncatedAnelasticLiquidApproximation(
-            args.ra, args.di, reference_temperature=reference, rho=density)
-        q = temperature
-        theta = temperature - reference
-        top, bottom = surface, surface + 1
+            args.ra, args.di, reference_temperature=reference, rho=density,
+            temperature_offset=surface if args.formulation == "surface-relative" else 0)
+        q = approximation.absolute_temperature(temperature)
+        theta = approximation.temperature_anomaly(temperature)
+        offset = surface if args.formulation == "surface-relative" else 0
+        top, bottom = surface-offset, surface+1-offset
     else:
         approximation = gadopt.TruncatedAnelasticLiquidApproximation(
             args.ra, args.di, Tbar=reference - surface, rho=density)
@@ -88,12 +90,14 @@ def run(args):
         state.subfunctions[2].interpolate(old_q)
         if args.formulation == "perturbation":
             state.subfunctions[2].interpolate(state.subfunctions[2] - reference)
+        elif args.formulation == "surface-relative":
+            state.subfunctions[2].interpolate(state.subfunctions[2] - surface)
     else:
         state.subfunctions[0].interpolate(fd.as_vector((
             -25 * fd.pi * fd.sin(fd.pi*x) * fd.cos(fd.pi*y) / density,
             25 * fd.pi * fd.cos(fd.pi*x) * fd.sin(fd.pi*y) / density)))
         state.subfunctions[2].interpolate(
-            initial_q if args.formulation == "full" else initial_q - reference)
+            initial_q - (reference if args.formulation == "perturbation" else offset))
     for bc in bcs:
         bc.apply(state)
 
@@ -143,6 +147,8 @@ def run(args):
         "mpi_size": mesh.comm.size, "gadopt_path": gadopt.__file__,
         "initial_checkpoint": args.initial,
         "temperature_surface": surface, "temperature_bottom": surface + 1,
+        "evolved_temperature_surface": top, "evolved_temperature_bottom": bottom,
+        "temperature_offset": None if args.formulation == "perturbation" else offset,
         "nu_top_gradient": nu_top, "nu_bottom_gradient": nu_bottom,
         "nu_top_reaction": nu_top_reaction, "nu_bottom_reaction": nu_bottom_reaction,
         "vrms": np.sqrt(fd.assemble(fd.dot(u, u) * dx) / volume),
@@ -154,9 +160,9 @@ def run(args):
         "adiabatic_work_perturbation": fd.assemble(work_perturbation * dx),
         "advective_heat_integral_evolved": advection_integral,
         "reaction_energy_defect": (nu_top_reaction - nu_bottom_reaction
-                                   - phi_integral
-                                   + fd.assemble(approximation.work_against_gravity(
-                                       u, temperature) * dx) + advection_integral),
+                                   - fd.assemble(approximation.energy_source(u) * dx)
+                                   + fd.assemble(approximation.linearized_energy_sink(u)
+                                                 * temperature * dx) + advection_integral),
         "gradient_energy_defect": nu_top - nu_bottom - phi_integral + work_integral,
         "mass_divergence_l2": np.sqrt(fd.assemble(fd.div(density*u)**2 * dx)),
         "mean_pressure": fd.assemble(p * dx) / volume,
@@ -200,7 +206,8 @@ if __name__ == "__main__":
     parser.add_argument("--di", type=float, default=0.5)
     parser.add_argument("--n", type=int, default=16)
     parser.add_argument("--quadrature", type=int, default=8)
-    parser.add_argument("--formulation", choices=["full", "perturbation"], default="full")
+    parser.add_argument("--formulation", choices=["full", "surface-relative", "perturbation"],
+                        default="surface-relative")
     parser.add_argument("--initial")
     parser.add_argument("--output", default="king_result")
     run(parser.parse_args())
