@@ -155,7 +155,8 @@ def get_reference_values():
             - delta_t: Time-step length (6e-6)
             - mu_0: Background viscosity (2.0)
             - mu_plast: Minimum plastic viscosity (0.1)
-            - mu_min: Minimum effective viscosity (0.4)
+            - mu_min: Minimum effective viscosity (0.4), applied as a smooth maximum
+            - mu_min_smoothing: width of the smooth maximum as a fraction of mu_min (0.05)
             - sigma_y: Surface yield stress (2e4)
             - sigma_y_depth: Depth dependence of yield stress (4e5)
             - mu_T: Temperature dependence of viscosity (80)
@@ -166,7 +167,8 @@ def get_reference_values():
         "delta_t": 6e-6,  # Time-step length
         "mu_0": 2.0,  # Background viscosity
         "mu_plast": 0.1,  # minimum plastic viscosity: mu_plast = 0.1 + sigma_y / epsii
-        "mu_min": 0.4,  # Miminimum amount of effective viscosity: mu = min(mu_eff, 0.4)
+        "mu_min": 0.4,  # Minimum effective viscosity: mu >= 0.4, applied as a smooth maximum
+        "mu_min_smoothing": 0.05,  # width of the smooth maximum, as a fraction of mu_min
         "sigma_y": 2e4,  # yield stress at the surface: sigma_y = 2e4 + 4e5 * (rmax - r)
         "sigma_y_depth": 4e5,  # depth dependence of yield stress: sigma_y = 2e4 + 4e5 * (rmax - r)
         "mu_T": 80,  # Temperature dependence of viscosity: mu_lin *= exp(-ln(Constant(80)) * T)
@@ -227,7 +229,22 @@ def get_viscosity(r, T, u):
     sigma_y = reference_values["sigma_y"] + reference_values["sigma_y_depth"] * (geometry_parameters["rmax"] - r)
     mu_plast = 0.1 + (sigma_y / epsii)
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
-    mu = conditional(mu_eff > reference_values["mu_min"], mu_eff, reference_values["mu_min"])
+
+    # Lower bound on the viscosity, mu >= mu_min, as a smooth maximum:
+    #     max(a, b) ~ 0.5 * (a + b + sqrt((a - b)**2 + delta**2))
+    # A hard `conditional(mu_eff > mu_min, mu_eff, mu_min)` is continuous but not
+    # continuously differentiable. UFL differentiates each branch separately, which
+    # is correct for the gradient, but the second derivative then misses the jump on
+    # the switching surface. The objective functional is then C1 and not C2 in the
+    # control, and no Hessian-vector product can pass a second-order Taylor test. The
+    # square-root form is C-infinity, and because sqrt((a-b)**2 + delta**2) >= |a-b|
+    # it never falls below mu_min, so the conditioning guarantee of the floor is
+    # kept. The overshoot is delta/2 at the crossing and decays as delta**2/(4|a-b|)
+    # away from it. delta is 5 percent of mu_min, which moves the functional by about
+    # 1e-4 in relative terms and keeps the second derivative bounded on the mesh.
+    mu_min = reference_values["mu_min"]
+    delta = reference_values["mu_min_smoothing"] * mu_min
+    mu = 0.5 * (mu_eff + mu_min + sqrt((mu_eff - mu_min) ** 2 + delta**2))
     return mu
 
 
