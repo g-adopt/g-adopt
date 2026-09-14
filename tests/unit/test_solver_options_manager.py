@@ -50,6 +50,24 @@ SHIPPED = [
     ("lowrank_gravity", lowrank_gravity_solver_parameters, ""),
 ]
 
+#: condensed -> the option prefix each split of the coupled block-0 sweep
+#: nests its preconditioner's own options under, split by split.
+#:
+#: Both layouts sweep two splits. Condensed the space holds `u` and `psi`, and
+#: each goes to one of the `gadopt` `AssembledPC` subclasses, which nest the
+#: operator's options under `assembled_`. Uncondensed the space also holds the
+#: internal variable, split 0 is the pair `(u, M)` under
+#: `gadopt.InternalVariableSCPC`, and the GAMG that solves its assembled
+#: condensed displacement matrix sits under `condensed_field_`; split 1 is
+#: `psi` and is `assembled_` as before.
+#:
+#: The prefix is part of the assertion because attaching the settings at the
+#: wrong depth is a silent no-op rather than an error.
+SWEEP_PREFIXES = {
+    True: ("assembled_", "assembled_"),
+    False: ("condensed_field_", "assembled_"),
+}
+
 
 class TestOneDefinition:
     def test_stokes_integrators_carries_the_same_six_settings(self):
@@ -68,9 +86,17 @@ class TestOneDefinition:
     def test_the_coupled_sweep_uses_them_on_every_split(self, condensed):
         """Each split of the coupled block-0 sweep, not just the first.
 
-        The sweep is two splits condensed and three uncondensed, and each gets
-        its own `assembled_` block. A shared constant applied to one and a
-        literal left on another is exactly the drift this guards.
+        Two splits on either layout, and each hands its operator to GAMG at
+        its own prefix (`SWEEP_PREFIXES`). A shared constant applied to one
+        and a literal left on another is exactly the drift this guards.
+
+        The internal variable reaches GAMG on neither layout: the condensed
+        space does not hold it, and the uncondensed one eliminates it inside
+        split 0. So every split named here is a displacement or a potential
+        block, and a GAMG that turned up on a DG tensor block would have to
+        appear at a prefix this test does not name --
+        `test_exactly_the_displacement_and_potential_splits_use_gamg` is what
+        counts those.
         """
         parameters = selfgrav_dtn_iterative_solver_parameters(
             condensed=condensed)
@@ -78,30 +104,34 @@ class TestOneDefinition:
             1 for key in parameters
             if key.startswith("dtn_fieldsplit_0_pc_fieldsplit_")
             and key.endswith("_fields"))
-        assert n_splits == (2 if condensed else 3)
-        for split in range(n_splits):
-            prefix = f"dtn_fieldsplit_0_fieldsplit_{split}_assembled_"
-            if uses_gamg(parameters, prefix):
-                assert gamg_keys_of(parameters, prefix) == dict(
-                    GAMG_PARAMETERS)
-            else:
-                # The `m` split is bjacobi/ilu and not GAMG: the (m, m) block
-                # is block-diagonal per cell, so ILU(0) on the cell blocks is
-                # exact. Asserted rather than skipped, because putting GAMG on
-                # the DG1 tensor block instead of the displacement is a
-                # mis-split that does not raise and has already cost a run.
-                assert parameters[prefix + "pc_type"] == "bjacobi"
+        suffixes = SWEEP_PREFIXES[condensed]
+        assert n_splits == len(suffixes)
+        for split, suffix in enumerate(suffixes):
+            prefix = f"dtn_fieldsplit_0_fieldsplit_{split}_{suffix}"
+            assert uses_gamg(parameters, prefix), (condensed, split, prefix)
+            assert gamg_keys_of(parameters, prefix) == dict(GAMG_PARAMETERS)
 
     def test_exactly_the_displacement_and_potential_splits_use_gamg(self):
-        """Two GAMG blocks either way: `u` and `psi`. Never the `m` block."""
+        """Two GAMG blocks either way: the displacement and `psi`.
+
+        The count is taken across both prefixes and across more splits than
+        either layout has, so it catches a third GAMG block as well as a
+        missing one. A third block is what a mis-split looks like: the
+        internal variable is block-diagonal per cell and belongs to an exact
+        cell-local inverse, and handing that block to smoothed aggregation
+        does not raise, does not warn, and shows up only as block 0 reaching
+        its iteration cap.
+        """
         for condensed in (True, False):
             parameters = selfgrav_dtn_iterative_solver_parameters(
                 condensed=condensed)
             using = [
-                split for split in range(3)
+                (split, suffix)
+                for split in range(4)
+                for suffix in ("assembled_", "condensed_field_")
                 if uses_gamg(
                     parameters,
-                    f"dtn_fieldsplit_0_fieldsplit_{split}_assembled_")]
+                    f"dtn_fieldsplit_0_fieldsplit_{split}_{suffix}")]
             assert len(using) == 2, (condensed, using)
 
     def test_the_check_rejects_a_drifted_copy(self):

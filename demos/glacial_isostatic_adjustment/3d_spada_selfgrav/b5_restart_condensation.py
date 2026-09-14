@@ -267,16 +267,25 @@ def main():
     parser.add_argument("--block0-rtol", type=float, default=1.0e-4)
     parser.add_argument("--block0-max-it", type=int, default=200)
     # The displacement preconditioner inside block 0, on every arm. The
-    # modes GAMG is seeded with: `rigid` (the P3 march) or `incompressible`
-    # (rigid plus the low-degree divergence-free fields, which is what made
-    # the standalone solver converge at bulk/shear 100 and 1000). And the
+    # modes GAMG is seeded with: `incompressible` (rigid plus the low-degree
+    # divergence-free fields) or `rigid` (the modes the P3 march ran). And the
     # Krylov method on the displacement split: 0 is one GAMG V-cycle per
     # block-0 iteration (`preonly`, the P3 march); N > 0 is CG with at most N
     # iterations to the given relative tolerance, counted as converged at
     # the cap so the block-0 FGMRES keeps going.
+    #
+    # Both defaults are the library preset's, so a run with no displacement
+    # flag measures what `gadopt` gives a caller who states nothing. Measured
+    # at 500 yr steps on `b2_coarse_ar7.msh` at 96 ranks, both jobs at block-0
+    # cap 400 so that the only difference is the two flags: that pair took 111
+    # block-0 applications at 46 inner iterations each, none at the cap, and
+    # 271 s for the warm step (Gadi job `178765560`); `rigid` with one V-cycle
+    # took 124 applications at 272 inner iterations, 64 at the cap, and 565 s
+    # (job `178765557`).
     parser.add_argument("--near-nullspace",
-                        choices=("rigid", "incompressible"), default="rigid")
-    parser.add_argument("--displacement-ksp-max-it", type=int, default=0)
+                        choices=("rigid", "incompressible"),
+                        default="incompressible")
+    parser.add_argument("--displacement-ksp-max-it", type=int, default=4)
     parser.add_argument("--displacement-ksp-rtol", type=float, default=1.0e-2)
     parser.add_argument("--ablation",
                         choices=("none", "gravity-feedback",

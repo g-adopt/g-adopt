@@ -114,6 +114,9 @@ _ARGV, sys.argv = list(sys.argv), sys.argv[:1]
 import gadopt  # noqa: E402,F401  (import gadopt before firedrake)
 import numpy as np  # noqa: E402
 from firedrake import COMM_WORLD  # noqa: E402
+# The displacement preconditioner the library preset picks. Named here rather
+# than spelled out, so the baseline measures whatever the shipped default is.
+from gadopt.gia_gravity import DEFAULT_DISPLACEMENT_PC  # noqa: E402
 
 # The reason-line format PETSc writes. Both outcomes are matched: a solve that
 # hit its cap reports DIVERGED_ITS and still did the work, and dropping those
@@ -502,14 +505,19 @@ def main():
     p.add_argument("--block0-rtol", type=float, default=1e-2)
     p.add_argument("--outer-rtol", type=float, default=1e-6)
     p.add_argument("--block0-max-it", type=int, default=200,
-                   help="B1's and B5's value, not the library preset's 60. "
-                        "A2's anisotropic lithosphere puts the condensed "
-                        "[u, psi] sweep in the 174-388 band, so a cap of 60 "
-                        "binds on every application and the baseline would "
-                        "measure the cap rather than the solver.")
+                   help="B1's, B5's and the library preset's value. A2's "
+                        "anisotropic lithosphere puts the condensed [u, psi] "
+                        "sweep in the 174-388 band, so a smaller cap binds on "
+                        "every application and the baseline would measure the "
+                        "cap rather than the solver.")
     p.add_argument("--snes-type", default="ksponly",
                    choices=["ksponly", "newtonls"])
-    p.add_argument("--u-pc", default="gadopt.RigidBodyAssembledPC")
+    p.add_argument("--u-pc", default=DEFAULT_DISPLACEMENT_PC,
+                   help="Preconditioner on the displacement split of the "
+                        "condensed layout. The default seeds GAMG with the "
+                        "rigid-body modes and the low-degree divergence-free "
+                        "fields; gadopt.RigidBodyAssembledPC gives the rigid "
+                        "modes alone.")
     p.add_argument("--condense", action="store_true", default=True)
     p.add_argument("--no-condense", dest="condense", action="store_false")
     p.add_argument("--rotation", action="store_true", default=False)

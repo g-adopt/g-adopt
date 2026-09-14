@@ -368,17 +368,79 @@ def _prefixed(d, prefix):
 # name there surfaces as `PETSc.Error: error code 101` naming nothing.
 
 
+#: The preconditioner the displacement split of block 0 runs by default.
+#:
+#: `gadopt.NearlyIncompressibleAssembledPC` seeds GAMG with the six rigid-body
+#: modes **and** the low-degree divergence-free fields. The internal-variable
+#: stress carries a volumetric penalty `lambda * integral (div u)(div v)`, and
+#: the slow modes of that operator sit in the divergence-free space once the
+#: effective bulk/shear ratio `bulk_shear_ratio * (1 + dt/tau)` is large. GAMG
+#: builds coarse spaces that reproduce whatever near-nullspace it is handed, so
+#: the rigid modes alone leave it nothing to coarsen the slow modes onto.
+#:
+#: Measured on Gadi: two 500 yr restart steps on `b2_coarse_ar7.msh`, 96 ranks,
+#: CG3 displacement, DG2 internal variables, bulk/shear 100, block-0 cap 400,
+#: `block0_rtol` 1e-4, dense Schur complement on the `Real` block. Job
+#: `178765557`, rigid modes: 33 699 GAMG V-cycles, 64 of 124 block-0 solves
+#: stopped at the cap, 565 s for the warm step. Job `178765558`, this class:
+#: 16 853 V-cycles, 8 of 102 at the cap, 270 s. The two states after two steps
+#: agree to 5e-7 in the displacement norm, so this is a preconditioner change
+#: and nothing else.
+#:
+#: Pass `u_pc="gadopt.RigidBodyAssembledPC"` to reproduce a run made with the
+#: rigid modes alone.
+DEFAULT_DISPLACEMENT_PC = "gadopt.NearlyIncompressibleAssembledPC"
+
+
+def _displacement_krylov(max_it: int, rtol: float) -> dict:
+    """The Krylov options of the displacement split, with no option prefix.
+
+    Block 0 is a flexible FGMRES, so its preconditioner can differ from one
+    application to the next and a truncated Krylov solve on the displacement
+    split is a valid preconditioner inside it. That is what `max_it > 0` buys:
+    the split stops being one GAMG V-cycle and becomes a few steps of CG with
+    GAMG, which brings the block-0 FGMRES to `block0_rtol` in far fewer of its
+    own iterations and lets the tolerance rather than the cap decide when
+    block 0 stops.
+
+    `ksp_converged_maxits` makes PETSc count a solve that reaches `max_it` as
+    `CONVERGED_ITS`. The truncation is deliberate here; without the option the
+    log fills with `DIVERGED_ITS` lines from a split that did exactly what it
+    was asked to do, and the block-0 counters of the campaign then have to be
+    read around them.
+
+    Args:
+      max_it: the iteration cap on the displacement split. `0` selects one
+        GAMG V-cycle per block-0 iteration (`ksp_type preonly`), which is the
+        route the P3 march ran.
+      rtol: the relative tolerance of the truncated CG. It has no effect when
+        `max_it` is `0`.
+
+    Returns:
+      The Krylov options of one split, for the caller to prefix.
+    """
+    if max_it <= 0:
+        return {"ksp_type": "preonly", "ksp_converged_reason": None}
+    return {
+        "ksp_type": "cg",
+        "ksp_max_it": max_it,
+        "ksp_rtol": rtol,
+        "ksp_converged_maxits": None,
+        "ksp_converged_reason": None,
+    }
+
+
 def selfgrav_dtn_iterative_solver_parameters(
     *, condensed: bool = True, block0_rtol: float = 1e-2,
-    outer_rtol: float = 1e-6, block0_max_it: int = 60,
+    outer_rtol: float = 1e-6, block0_max_it: int = 200,
     snes_rtol: float = 1e-4,
     snes_type: str = "newtonls",
-    u_pc: str = "gadopt.RigidBodyAssembledPC",
+    u_pc: str = DEFAULT_DISPLACEMENT_PC,
     multiplier_pc: str = "none",
-    condensed_field_rtol: float = 1e-5,
-    condensed_field_max_it: int = 1000,
+    u_ksp_max_it: int = 4,
+    u_ksp_rtol: float = 1e-2,
 ) -> dict:
-    r"""The 3-D configuration that works, and the only one that does.
+    r"""The 3-D configuration that works, and the one the measurements select.
 
     **This exists because its absence cost two production jobs in one day.**
     Until now `gadopt` shipped exactly one preset for this system,
@@ -393,7 +455,7 @@ def selfgrav_dtn_iterative_solver_parameters(
          +- DtNTwoBlockSchurPC, schur_fact_type full
              +- block 0: FGMRES rtol 1e-2 + multiplicative fieldsplit
              |   +- m  : AssembledPC + bjacobi/ilu   (condensed: absent)
-             |   +- u  : RigidBodyAssembledPC + GAMG
+             |   +- u  : CG 4 + NearlyIncompressibleAssembledPC + GAMG
              |   +- psi: SPDAssembledPC + GAMG   (GravitySolver's preset)
              +- block 1: GMRES on the Real block, pc_type none
 
@@ -447,16 +509,22 @@ def selfgrav_dtn_iterative_solver_parameters(
         `u_pc`) and `psi`. On the uncondensed layout it is field 1, and block
         0 is a two-way sweep over the pair `(u, M)` and `psi`: the pair is
         handed to `gadopt.InternalVariableSCPC`, which eliminates `M` cell by
-        cell with Slate and runs CG with GAMG on the exact condensed
-        displacement operator (options under `condensed_field_`), so the
+        cell with Slate and runs the displacement Krylov solve of
+        `u_ksp_max_it` with GAMG on the exact condensed displacement operator
+        (options under `condensed_field_`), so the
         block-0 count no longer pays the `1 - eta_eff/mu0` contraction of a
         sweep that treats `m` and `u` as separate splits. **Keep this argument
         and the solver's flag in step** - that is the whole reason it is an
         argument rather than an assumption.
-      condensed_field_rtol, condensed_field_max_it: the Krylov tolerance and
-        iteration cap on the condensed displacement operator; uncondensed
-        layout only.
       block0_rtol, outer_rtol, block0_max_it, snes_rtol: the tolerances.
+        `block0_max_it` caps the block-0 FGMRES at 200 iterations, which is
+        what A2's anisotropic lithosphere needs: the condensed `[u, psi]`
+        sweep sits in the 174-388 band and a smaller cap binds on every
+        application. The cap is not the knob that makes block 0 converge --
+        raising it to 400 with one V-cycle on the displacement split bought
+        three outer iterations for 28 percent more GAMG V-cycles and 15
+        percent more wall (job `178765557` against `178763503`). The knob is
+        `u_ksp_max_it` below.
         `snes_rtol` is relative to the norm of the **whole** mixed residual,
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
         are converged to correspondingly fewer digits, which is a live question
@@ -480,17 +548,38 @@ def selfgrav_dtn_iterative_solver_parameters(
         and 69 s per marching step against `none`'s 354 and 1036 s -- Gadi job
         176103130, medium rung, L = 5, 104 ranks. See NOTES/fastdtn/HANDOVER.md.
       u_pc: the preconditioner on the displacement split, condensed layout
-        only. The default builds the rigid-body near-nullspace on the block
-        itself; see `gadopt.RigidBodyAssembledPC` for why a `near_nullspace`
-        declared on the outer mixed space never reaches GAMG here. **The only
-        reason to pass `"firedrake.AssembledPC"` is to reproduce a run that
-        predates that class**, which is a measurement of the defect and not a
+        only. The default `DEFAULT_DISPLACEMENT_PC` builds the rigid-body
+        modes **and** the low-degree divergence-free fields on the block
+        itself; see that constant for the measurement behind it (job
+        `178765558` against `178765557`: 16 853 GAMG V-cycles against 33 699,
+        8 capped block-0 solves against 64, 270 s against 565 s for a 500 yr
+        step) and `gadopt.NearlyIncompressibleAssembledPC` for why a
+        `near_nullspace` declared on the outer mixed space never reaches GAMG
+        here. `"gadopt.RigidBodyAssembledPC"` gives the six rigid-body modes
+        alone, which span the slow space only while the effective bulk/shear
+        ratio is small; it is the route every run before this default took,
+        and naming it is how a caller reproduces one. **The only reason to
+        pass `"firedrake.AssembledPC"` is to reproduce a run that predates
+        both classes**, which is a measurement of the defect and not a
         configuration - a driver that names it is silently coarsening the
-        elasticity block with no rigid modes. On the uncondensed layout the
+        elasticity block with no modes at all. On the uncondensed layout the
         displacement operator is the condensed matrix and GAMG runs on it
         directly, so this argument has no meaning there and a non-default
         value raises: the near-nullspace is chosen by the solver's
         `condensed_near_nullspace` argument instead.
+      u_ksp_max_it, u_ksp_rtol: the Krylov solve on the displacement split, on
+        both layouts. The default runs four iterations of CG at relative
+        tolerance 1e-2 and counts the cap as convergence, so that block 0
+        preconditions with a few GAMG V-cycles instead of one.
+        `u_ksp_max_it=0` selects the single V-cycle (`ksp_type preonly`), the
+        route the P3 march ran. Measured on Gadi against that route with the
+        same modes (job `178765560` against `178765558`): 46 block-0 inner
+        iterations per application against 165, 0 of 111 block-0 solves at the
+        cap against 8 of 102, 20 156 GAMG V-cycles against 16 853, warm step
+        271 s against 270 s. So the wall is the same, the V-cycle count is 20
+        percent higher, and what the CG buys is that every block-0 solve
+        reaches `block0_rtol` and the tolerance decides. See
+        `_displacement_krylov` for the keys and for `ksp_converged_maxits`.
 
     Every sub-KSP reports `ksp_converged_reason`. That is not optional
     instrumentation: block 0 and block 1 are preconditioner applications inside
@@ -541,16 +630,24 @@ def selfgrav_dtn_iterative_solver_parameters(
                  else gamg_parameters("assembled_"))
         return d
 
+    # The displacement split carries the same Krylov settings on both
+    # layouts, so that the uncondensed layout's counts stay comparable with
+    # the condensed one's and the wall ratio between them measures the cost of
+    # the coupled residual alone (2.5 times at matched settings, job
+    # `178765563` against `178765560`). The `psi` split keeps one V-cycle:
+    # the potential block is a Laplacian that GAMG handles in one sweep.
+    displacement_krylov = _displacement_krylov(u_ksp_max_it, u_ksp_rtol)
+
     # (field index in the mixed space, options). Order IS the sweep order:
     # `m` first because it is exact and nearly free, `u` before `psi` because
     # the load enters through `u`. With the internal variable condensed away
     # the space has no `m` field and the indices shift, which is why this list
     # is built rather than written out.
     if condensed:
-        sweep = [("0", inner(u_pc)),
+        sweep = [("0", {**inner(u_pc), **displacement_krylov}),
                  ("1", inner("gadopt.SPDAssembledPC"))]
     else:
-        if u_pc != "gadopt.RigidBodyAssembledPC":
+        if u_pc != DEFAULT_DISPLACEMENT_PC:
             raise ValueError(
                 "u_pc has no meaning on the uncondensed layout: the "
                 "displacement operator there is the condensed matrix that "
@@ -559,19 +656,20 @@ def selfgrav_dtn_iterative_solver_parameters(
                 "SelfGravitatingGIASolver(condensed_near_nullspace=...) "
                 f"instead; got u_pc={u_pc!r}.")
         # Split 0 is the pair `(u, M)`, fields 0 and 1, under static
-        # condensation. The Krylov method on the condensed operator is set
-        # here as CG; `SelfGravitatingGIASolver.set_solver_options` switches
-        # it to GMRES when `condensed_operator_symmetric` says the operator is
-        # not symmetric (a power law under weak displacement boundaries).
+        # condensation. The displacement operator is the condensed matrix
+        # `gadopt.InternalVariableSCPC` assembles, GAMG runs on it directly,
+        # and the Krylov options under `condensed_field_` are the same short
+        # CG the condensed layout puts on its displacement split.
+        # `SelfGravitatingGIASolver._attach_condensation_context` replaces the
+        # CG by a GMRES of the same length when `condensed_operator_symmetric`
+        # says the condensed operator is not symmetric, which a power law or a
+        # weak displacement boundary makes it.
         condensation = {
             "ksp_type": "preonly",
             "pc_type": "python",
             "pc_python_type": "gadopt.InternalVariableSCPC",
             "pc_sc_eliminate_fields": "1",
-            "condensed_field_ksp_type": "cg",
-            "condensed_field_ksp_rtol": condensed_field_rtol,
-            "condensed_field_ksp_max_it": condensed_field_max_it,
-            "condensed_field_ksp_converged_reason": None,
+            **_prefixed(displacement_krylov, "condensed_field_"),
             "condensed_field_pc_type": "gamg",
             **_prefixed(gamg_parameters(), "condensed_field_"),
         }
@@ -1161,7 +1259,20 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
       condensed_near_nullspace: what GAMG is seeded with on the condensed
         displacement operator of the uncondensed iterative preset: `"rigid"`,
         `"incompressible"` or `"none"`, the axis `gadopt.near_nullspace_basis`
-        takes. A `near_nullspace` passed to the solver wins over it.
+        takes. The default `"incompressible"` adds the low-degree
+        divergence-free fields to the six rigid-body modes, because the
+        volumetric penalty of the internal-variable stress puts the slow modes
+        of this operator in the divergence-free space and GAMG can only
+        coarsen onto the modes it is given. It is the choice
+        `gadopt.gia_gravity.DEFAULT_DISPLACEMENT_PC` makes on the condensed
+        layout, and giving both layouts the same modes and the same short CG
+        is what keeps the ratio between them a measurement of the coupled
+        residual: job `178765563`, uncondensed, 107 block-0 applications at 55
+        inner iterations and 670 s for a 500 yr step, against job `178765560`,
+        condensed, 111 at 46 and 271 s. A `near_nullspace` passed to the
+        solver wins over this argument, and
+        `b1_elastic.build_solver` declares one unless it is called with
+        `near_nullspace=False`.
       Any remaining keyword goes to `CoupledInternalVariableSolver`, notably
       `bcs`, `scaling_factor`, `quad_degree`, `solver_parameters` and
       `solver_parameters_extra`.
@@ -1191,7 +1302,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         Omega_sq: Number | Constant = OMEGA_SQ_EARTH,
         fluid_core: "FluidCore | Mapping | None" = None,
         internal_variables: "Function | list | None" = None,
-        condensed_near_nullspace: str = "rigid",
+        condensed_near_nullspace: str = "incompressible",
         dtn_representation: str = "multiplier",
         **kwargs,
     ) -> None:
@@ -2916,16 +3027,21 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           the near-nullspace, the modes named by `condensed_near_nullspace`
           built on the condensed displacement space when the caller declared
           none. GAMG coarsens the slow modes onto whatever it is given, and
-          the condensed operator is the elastic displacement operator, so the
-          rigid-body modes are what it needs by default.
+          the condensed operator carries the volumetric penalty of the
+          internal-variable stress, so it needs the rigid-body modes and the
+          low-degree divergence-free fields, which is what the default
+          `"incompressible"` builds.
 
         On the condensed layout nothing reads these; they are harmless there.
 
-        Also selects the Krylov method on the condensed field: the preset
-        writes CG, which is valid only for a symmetric operator. The rheology
-        decides that (`condensed_operator_symmetric`); a power law under the
-        weak `un` boundary of the CMB, or with two or more elements, is not
-        symmetric and gets GMRES. The `Mapping` a caller passes is normally
+        Also selects the Krylov method on the condensed field. The preset
+        writes a short CG, which acts as a preconditioner inside the flexible
+        block-0 FGMRES and is valid only for a symmetric operator. The
+        rheology decides that (`condensed_operator_symmetric`); a power law
+        under the weak `un` boundary of the CMB, or with two or more elements,
+        is not symmetric, and the switch replaces the CG by an equally short
+        GMRES whose restart is the cap the preset wrote. The `Mapping` a
+        caller passes is normally
         `selfgrav_dtn_iterative_solver_parameters(...)` itself, whose `cg` is
         the preset's default and not a choice, so a `cg` found there is
         switched like the string path's. The one way to keep CG on an
@@ -2962,13 +3078,22 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.appctx["condensed_field_near_nullspace"] = near_nullspace_provider
 
         key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"
+        max_it_key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_max_it"
+        restart_key = (
+            "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_gmres_restart")
         user_named = bool(extras) and key in extras
         if (self.solver_parameters.get(key) == "cg"
                 and not user_named
                 and not self.condensed_operator_symmetric()):
+            # The restart is the preset's own iteration cap, so the GMRES that
+            # replaces the CG costs the same Krylov vectors and the same
+            # number of GAMG V-cycles per block-0 iteration. A restart longer
+            # than the cap would allocate vectors the solve never reaches. 50
+            # is the fallback for a hand-written dictionary that names no cap,
+            # where the condensed solve runs to its own tolerance instead.
             self.add_to_solver_config({
                 key: "gmres",
-                "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_gmres_restart": 50})
+                restart_key: self.solver_parameters.get(max_it_key, 50)})
 
     def refuse_stale_preconditioner(self) -> None:
         """`DtNTwoBlockSchurPC.update` is a no-op, which needs a constant Jacobian.

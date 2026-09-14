@@ -1632,7 +1632,8 @@ class TestPresetWiring:
             and k.endswith("_fields"))
         assert n_fields == 2 + len(layout.internal_variables)
 
-    def test_the_displacement_split_gets_the_rigid_body_pc(self, meshes):
+    def test_the_displacement_split_gets_the_near_incompressible_pc(
+            self, meshes):
         """Naming `firedrake.AssembledPC` here is the defect, not a milder choice.
 
         A `near_nullspace` declared on the outer mixed space never reaches
@@ -1640,6 +1641,23 @@ class TestPresetWiring:
         error and no warning. `b4_polar_motion` shipped exactly that. On the
         condensed layout the displacement split carries the class that builds
         the modes itself.
+
+        The class it carries is the near-incompressible one, which adds the
+        low-degree divergence-free fields to the six rigid-body modes. The
+        volumetric penalty of the internal-variable stress puts the slow modes
+        of the displacement block in the divergence-free space, and GAMG
+        coarsens onto the modes it is handed and no others. Measured on Gadi
+        at 500 yr steps, 96 ranks, bulk/shear 100: rigid modes 33 699 GAMG
+        V-cycles with 64 of 124 block-0 solves at the cap and 565 s for the
+        warm step (job 178765557); this class 16 853 V-cycles, 8 of 102 at the
+        cap, 270 s (job 178765558).
+
+        The split also runs a short CG instead of one V-cycle. Block 0 is a
+        flexible FGMRES, so a truncated CG is a valid preconditioner inside
+        it, and it brings every block-0 solve to its tolerance: 0 of 111
+        capped against 8 of 102, at the same wall (job 178765560 against
+        178765558). `ksp_converged_maxits` is what makes PETSc call the
+        truncation a convergence.
         """
         solver, _, _ = build(meshes, condensed=True,
                              solver_parameters="iterative")
@@ -1647,10 +1665,15 @@ class TestPresetWiring:
         u_split = next(
             s for s in range(3)
             if p.get(f"dtn_fieldsplit_0_pc_fieldsplit_{s}_fields") == "0")
-        assert p[f"dtn_fieldsplit_0_fieldsplit_{u_split}_pc_python_type"] \
-            == "gadopt.RigidBodyAssembledPC"
+        prefix = f"dtn_fieldsplit_0_fieldsplit_{u_split}_"
+        assert p[prefix + "pc_python_type"] \
+            == "gadopt.NearlyIncompressibleAssembledPC"
+        assert p[prefix + "ksp_type"] == "cg"
+        assert p[prefix + "ksp_max_it"] == 4
+        assert p[prefix + "ksp_rtol"] == 1e-2
+        assert prefix + "ksp_converged_maxits" in p
 
-    def test_the_uncondensed_split_condenses_the_pair_and_seeds_rigid_modes(
+    def test_the_uncondensed_split_condenses_the_pair_and_seeds_near_incompressible_modes(
             self, meshes):
         """On the uncondensed layout `(u, M)` is one split under condensation.
 
@@ -1658,16 +1681,24 @@ class TestPresetWiring:
         `AssembledPC` wraps it; GAMG is seeded through the near-nullspace
         provider the solver publishes, whose modes come from
         `condensed_near_nullspace`.
+
+        Both layouts get the same modes and the same short Krylov solve on the
+        displacement, so that the wall-clock ratio between them measures the
+        cost of the coupled residual and nothing else: 670 s against 271 s for
+        a 500 yr step at matched settings (Gadi jobs 178765563 and 178765560).
         """
         solver, _, _ = build(meshes, solver_parameters="iterative")
         p = solver.solver_parameters
+        prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
         assert p["dtn_fieldsplit_0_pc_fieldsplit_0_fields"] == "0,1"
         assert p["dtn_fieldsplit_0_pc_fieldsplit_1_fields"] == "2"
         assert p["dtn_fieldsplit_0_fieldsplit_0_pc_python_type"] \
             == "gadopt.InternalVariableSCPC"
         assert p["dtn_fieldsplit_0_fieldsplit_0_pc_sc_eliminate_fields"] == "1"
-        assert p["dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"] == "cg"
-        assert solver.condensed_near_nullspace == "rigid"
+        assert p[prefix + "ksp_type"] == "cg"
+        assert p[prefix + "ksp_max_it"] == 4
+        assert p[prefix + "ksp_rtol"] == 1e-2
+        assert solver.condensed_near_nullspace == "incompressible"
         assert callable(solver.appctx["condensed_field_near_nullspace"])
         assert solver.appctx["operator_version"] == 0
 
@@ -1675,6 +1706,25 @@ class TestPresetWiring:
         with pytest.raises(ValueError, match="u_pc has no meaning"):
             selfgrav_dtn_iterative_solver_parameters(
                 condensed=False, u_pc="firedrake.AssembledPC")
+
+    def test_one_v_cycle_is_selectable(self):
+        """`u_ksp_max_it=0` is the route the P3 march ran, on both layouts.
+
+        The preset defaults to a truncated CG on the displacement split, which
+        costs 20 percent more GAMG V-cycles than one V-cycle for the same wall
+        and caps no block-0 solve. A caller reproducing a run made before that
+        default asks for the single V-cycle, and must then get `preonly` with
+        no iteration cap attached: a cap left behind on a `preonly` KSP is
+        inert and would read as a truncated solve to anyone auditing the
+        dictionary.
+        """
+        for condensed, prefix in (
+                (True, "dtn_fieldsplit_0_fieldsplit_0_"),
+                (False, "dtn_fieldsplit_0_fieldsplit_0_condensed_field_")):
+            p = selfgrav_dtn_iterative_solver_parameters(
+                condensed=condensed, u_ksp_max_it=0)
+            assert p[prefix + "ksp_type"] == "preonly", condensed
+            assert prefix + "ksp_max_it" not in p, condensed
 
     def test_the_iterative_preset_solves_the_same_system(self, meshes, solved):
         """The one that is not about dictionaries: does the new path solve?

@@ -127,7 +127,8 @@ from firedrake import (Constant, Function, FunctionSpace, Mesh,  # noqa: E402
                        conditional, dot, ds, dx, sqrt)
 from gadopt import (CompressibleInternalVariableApproximation,  # noqa: E402
                     SphericalDtN, gamg_parameters)
-from gadopt.gia_gravity import (FluidCore, SelfGravitatingGIASolver,  # noqa: E402
+from gadopt.gia_gravity import (DEFAULT_DISPLACEMENT_PC,  # noqa: E402
+                                FluidCore, SelfGravitatingGIASolver,
                                 rigid_rotation_nullspace,
                                 selfgrav_dtn_iterative_solver_parameters,
                                 self_gravitating_gia_space)
@@ -487,19 +488,20 @@ def surface_spectra(solver, parent, sub, nproj, quad_degree=None,
 
 def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
                                 block0_max_it=200,
-                                u_pc="gadopt.RigidBodyAssembledPC",
+                                u_pc=DEFAULT_DISPLACEMENT_PC,
                                 snes_type="ksponly",
                                 multiplier_pc="none"):
     """`gadopt.selfgrav_dtn_iterative_solver_parameters`, condensed.
 
     **This used to be a hand-copy of that dictionary and the comment above the
     import claimed it was imported "so the two cannot drift". It was pasted,
-    and it had drifted** - `block0_max_it` 200 against the library's 60, and a
-    `u_pc` naming `gate_b2_solver`'s copy of `RigidBodyAssembledPC` rather than
-    the shipped one. Four copies of this dictionary existed across the library
-    and three drivers; this is now a thin wrapper that names only the two
-    values B1 genuinely wants different from the library defaults, so a reader
-    can see the whole of the difference in one place.
+    and it had drifted** - `block0_max_it` 200 against the library's cap of
+    the day, and a `u_pc` naming `gate_b2_solver`'s copy of
+    `RigidBodyAssembledPC` rather than the shipped one. Four copies of this
+    dictionary existed across the library and three drivers; this is now a thin
+    wrapper that names only the values B1 genuinely wants different from the
+    library defaults, so a reader can see the whole of the difference in one
+    place.
 
     `snes_type` defaults to `"ksponly"` here, where the library defaults to
     `"newtonls"`. B1 sets no `exponent`, so the rheology is Newtonian, the
@@ -511,15 +513,22 @@ def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
     caller, and B1 is not one. With `ksponly`, `outer_rtol` alone controls the
     accuracy and `snes_rtol` is inert.
 
-    Both remaining differences are B1's own, deliberately:
+    One remaining difference is B1's own, deliberately:
 
     * `outer_rtol` 1e-8 rather than 1e-6, so that solver tolerance is excluded
       as an explanation for any deficit in the displacement comparison - the
       handover records six orders of `ksp_rtol` changing nothing beyond the
-      last digit, and this is what makes that statement checkable;
-    * `block0_max_it` 200 rather than 60, because A2's anisotropic lithosphere
-      puts the condensed `[u, psi]` sweep in the 174-388 band and a cap of 60
-      would bind on every application.
+      last digit, and this is what makes that statement checkable.
+
+    `block0_max_it` 200 is named here and equals the library default, for the
+    reason B1 raises it: A2's anisotropic lithosphere puts the condensed
+    `[u, psi]` sweep in the 174-388 band, so a smaller cap binds on every
+    application. The displacement Krylov settings are named nowhere here and
+    come from the library, so B5's march picks up the four-iteration CG
+    through this wrapper with no flag (Gadi job `178765560` against
+    `178765558`). `u_pc` reaches B5 by its own route: `b5_viscoelastic.py`
+    defaults `--u-pc` to `gadopt.NearlyIncompressibleAssembledPC` and passes
+    it in, which is the same class this wrapper defaults to.
 
     Condensation removes `m` from the mixed space entirely
     (`self_gravitating_gia_space`: `spaces = [V] + [] + [Psi]`), so the fields
@@ -561,7 +570,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  outer_rtol=1e-10, block0_max_it=200, condense=False,
                  cmb_buoyancy="core", rigid_core=False,
                  bulk_shear_ratio=BULK_SHEAR_RATIO,
-                 u_pc="gadopt.RigidBodyAssembledPC", snes_type="ksponly",
+                 u_pc=DEFAULT_DISPLACEMENT_PC, snes_type="ksponly",
                  dt=None, block0_rtol=1e-2, multiplier_pc="none",
                  solver_kwargs_extra=None):
     """Build the Spada self-gravity solver of B1 and B5.
@@ -1211,12 +1220,14 @@ def main():
                         "load degree, not for choosing the mesh. The production "
                         "coarse mesh is aspect ratio 24 and two jobs died on it; "
                         "the AR-7 mesh is what runs.")
-    p.add_argument("--u-pc", default="gadopt.RigidBodyAssembledPC",
-                   help="Preconditioner on the displacement split. "
-                        "gadopt.NearlyIncompressibleAssembledPC adds the "
-                        "divergence-free modes and is what a near-incompressible "
-                        "run needs; the rigid modes alone do not span the slow "
-                        "space once the volumetric penalty dominates.")
+    p.add_argument("--u-pc", default=DEFAULT_DISPLACEMENT_PC,
+                   help="Preconditioner on the displacement split. The default "
+                        "adds the divergence-free modes to the rigid-body ones, "
+                        "which is what a near-incompressible run needs: the "
+                        "rigid modes alone do not span the slow space once the "
+                        "volumetric penalty dominates. Pass "
+                        "gadopt.RigidBodyAssembledPC to reproduce a run made "
+                        "before that default.")
     p.add_argument("--snes-type", default="ksponly",
                    choices=["ksponly", "newtonls"],
                    help="B1 sets no exponent, so the residual is linear and "

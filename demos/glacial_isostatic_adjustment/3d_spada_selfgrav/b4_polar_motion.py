@@ -120,48 +120,63 @@ def say(*a):
 # ---------------------------------------------------------------------------
 # B2's coupled iterative solver
 # ---------------------------------------------------------------------------
-#: `--u-pc` choice -> the `pc_python_type` string it selects. `assembled` is
-#: the pre-2026-08-02 behaviour and carries NO near-nullspace; see
-#: `coupled_solver_parameters`.
-U_PC = {"rigid": "gadopt.RigidBodyAssembledPC",
-        "assembled": "firedrake.AssembledPC"}
+#: The near-nullspace names `--u-pc` accepts. Each goes to `SelfGravitatingGIASolver(condensed_near_nullspace=...)`,
+#: which is the one argument that reaches GAMG on the layout B4 runs: the
+#: internal variable is a field of the mixed space, `gadopt.InternalVariableSCPC`
+#: eliminates it inside block 0, and GAMG runs on the assembled condensed
+#: displacement matrix. `"incompressible"` is the library default and adds the
+#: low-degree divergence-free fields to the six rigid-body modes;
+#: `"rigid"` is the set every B4 number after 2026-08-02 was measured with;
+#: `"none"` is GAMG with no near-nullspace at all, which is what B4 ran before
+#: that date and is here to reproduce those numbers.
+NEAR_NULLSPACE_CHOICES = ("incompressible", "rigid", "none")
 
 
 def coupled_solver_parameters(block0_rtol=1e-2, outer_rtol=1e-6,
-                              block0_max_it=60,
-                              u_pc=U_PC["rigid"]):
+                              block0_max_it=60):
     """`gadopt.selfgrav_dtn_iterative_solver_parameters`, uncondensed.
 
     This was a fourth hand-copy of that dictionary -- "reproduced here so a
     queue job is self-contained", which a library import already is -- and the
-    copy carried a defect the others did not.
+    copy carried a defect the others did not: it ran the displacement block on
+    plain `firedrake.AssembledPC`, with no near-nullspace at all. `--u-pc none`
+    is what reproduces that, and the paragraphs below say where the modes come
+    from now.
 
-    **B4 ran the displacement block on plain `firedrake.AssembledPC`, so the
-    rigid-body modes never reached GAMG.**  `near_nullspace_basis` below builds
-    them and `build_solver` passes them as `near_nullspace=`, and underneath
-    `DtNTwoBlockSchurPC` that argument is silently discarded: Firedrake
-    composes the basis onto the outer space's field index sets and
-    `PCSetUp_FieldSplit` reads it back by querying those, while the
-    preconditioner registers merged index sets of its own and the nested split
-    inside block 0 builds fresh ones from a sub-DM, so the query matches
-    nothing.  No error, no warning.  `gadopt.RigidBodyAssembledPC` exists
-    precisely for this and builds the modes on the block itself; B1 and the B2
-    spike both use it and B4 never got it.
+    **This dictionary names no displacement preconditioner, and that is a
+    property of the layout rather than an omission.**  B4 runs the uncondensed
+    space, where block 0 sweeps the pair `(u, M)` and then `psi`.  The pair
+    goes to `gadopt.InternalVariableSCPC`, which eliminates the internal
+    variable cell by cell with Slate and hands GAMG the assembled condensed
+    displacement matrix directly, so there is no `AssembledPC` on the
+    displacement and the library preset refuses a `u_pc` here.  The modes GAMG
+    is seeded with come from `SelfGravitatingGIASolver`'s
+    `condensed_near_nullspace` argument instead, which `build_solver` takes and
+    `--u-pc` selects.
 
-    **This changes B4's preconditioning and therefore its iteration counts.**
-    It should not change its answers -- a preconditioner cannot move a
-    converged solve, and the outer FGMRES is flexible -- but B4's polar-motion
-    magnitude is under investigation and no number from it should be compared
-    across this change without saying so.  `--u-pc assembled` restores the old
-    behaviour exactly, which is the only honest way to reproduce a pre-existing
-    B4 result.
+    **A `near_nullspace` declared on the outer mixed space never reaches GAMG
+    underneath `DtNTwoBlockSchurPC`.**  Firedrake composes the basis onto the
+    outer space's field index sets and `PCSetUp_FieldSplit` reads it back by
+    querying those, while the preconditioner registers merged index sets of its
+    own and the nested split inside block 0 builds fresh ones from a sub-DM, so
+    the query matches nothing.  No error, no warning.  What the declared basis
+    does reach is `condensed_near_nullspace`'s own slot: the solver takes the
+    displacement part of a declared basis in preference to the argument, which
+    is why `build_solver` declares the basis for the rigid arm alone.
+
+    **The choice of modes changes B4's preconditioning and therefore its
+    iteration counts.**  It must not change its answers -- a preconditioner
+    cannot move a converged solve, and the outer FGMRES is flexible -- but
+    B4's polar-motion magnitude is under investigation and no number from it
+    can be compared across a change of modes without saying so.  `--u-pc none`
+    reproduces the pre-2026-08-02 runs, which had no near-nullspace at all, and
+    `--u-pc rigid` the runs after that date.
 
     Everything else is the library's, including the sweep, which is built from
-    a list because `fieldsplit_N_` indexes the SPLIT and not the field: the
-    sweep order is `m, u, psi` while the mixed space orders `u = 0, m = 1,
-    psi = 2`, and writing the prefixes by hand puts GAMG on the DG1 tensor
-    block and `bjacobi/ilu` on the displacement, which does not raise, does not
-    warn, and surfaces only as block 0 hitting its cap.
+    a list because `fieldsplit_N_` indexes the SPLIT and not the field: split 0
+    is the `(u, M)` pair, fields 0 and 1, and split 1 is `psi`, field 2.
+    Writing the prefixes by hand puts GAMG on the wrong block, which does not
+    raise, does not warn, and surfaces only as block 0 hitting its cap.
 
     Block 1 stays at `pc_type: none`; the two obvious alternatives are dead for
     reasons that are properties of the route rather than of the object, and
@@ -172,11 +187,17 @@ def coupled_solver_parameters(block0_rtol=1e-2, outer_rtol=1e-6,
     """
     return selfgrav_dtn_iterative_solver_parameters(
         condensed=False, block0_rtol=block0_rtol, outer_rtol=outer_rtol,
-        block0_max_it=block0_max_it, u_pc=u_pc)
+        block0_max_it=block0_max_it)
 
 
 def near_nullspace_basis(Z, layout):
     """Rigid-body modes on the displacement block, for GAMG.
+
+    `build_solver` declares this basis for the rigid arm of `--u-pc` alone.
+    The solver takes the displacement part of a declared basis in preference
+    to its `condensed_near_nullspace` argument, so declaring it on any other
+    arm would replace the modes that arm asked for by these six, without a
+    message.
 
     B2 §3/§6: `rigid_body_modes` is absent from
     `coupled_gia_solver_parameters` entirely and **cannot** be supplied as an
@@ -367,6 +388,7 @@ def build_solver(parent, sub, *, dt, nmax=32, truncation=5,
                  c_minus_a="ks", feedback=True, fluid_core=True,
                  bulk_shear_ratio=1.94, solver_parameters=None,
                  solver_parameters_extra=None, near_nullspace=True,
+                 condensed_near_nullspace="incompressible",
                  quad_degree=None):
     """The coupled solver for the off-axis cap load.
 
@@ -422,7 +444,17 @@ def build_solver(parent, sub, *, dt, nmax=32, truncation=5,
     else:
         bcs[gen.SURF_RC] = {"un": 0.0}
 
-    if near_nullspace:
+    # The modes GAMG is seeded with on the condensed displacement operator.
+    # `near_nullspace=False` keeps its meaning of "no near-nullspace at all",
+    # so it selects `"none"` whatever the caller asked for. For the rigid arm
+    # the basis is also declared on the mixed space, because the solver takes
+    # the displacement part of a declared basis in preference to the argument
+    # and the two carry the same six modes there; every other arm leaves the
+    # argument to build its modes on the condensed displacement space, which a
+    # mixed-space basis cannot describe.
+    modes = condensed_near_nullspace if near_nullspace else "none"
+    kwargs["condensed_near_nullspace"] = modes
+    if modes == "rigid":
         kwargs["near_nullspace"] = near_nullspace_basis(Z, layout)
     cls = SelfGravitatingGIASolver if feedback else FeedbackOffSolver
     solver = cls(
@@ -676,10 +708,13 @@ def run_time_loop(parent, sub, args, epochs_kyr):
             # this loop**, the same shape of defect as the `--quad-degree` one
             # above: the t = 0 row of the table would be solved to one
             # tolerance with one preconditioner and every epoch after it to
-            # another, with nothing in the log saying so. Both defaults are
-            # unchanged, so connecting them moves no existing number.
+            # another, with nothing in the log saying so. Both flags reach both
+            # solves here. `--u-pc rigid` gives the modes every B4 number after
+            # 2026-08-02 was measured with, so a comparison against those
+            # numbers names it.
+            condensed_near_nullspace=args.u_pc,
             solver_parameters=coupled_solver_parameters(
-                outer_rtol=args.ksp_rtol, u_pc=U_PC[args.u_pc]))
+                outer_rtol=args.ksp_rtol))
         if z_prev is not None:
             z.assign(z_prev)
             # **`z.assign` alone loses the viscous history.** `solution_old` is
@@ -755,16 +790,20 @@ def main():
                          "Omega_sq = 1.57e-03, so the rotation rows sit three "
                          "orders below the dominant ones and a tolerance set "
                          "by those can under-resolve them without failing")
-    ap.add_argument("--u-pc", default="rigid", choices=["rigid", "assembled"],
-                    help="preconditioner on the displacement split. 'rigid' "
-                         "(gadopt.RigidBodyAssembledPC) builds the rigid-body "
-                         "near-nullspace on the block itself, which is the "
-                         "only way it reaches GAMG underneath "
-                         "DtNTwoBlockSchurPC. 'assembled' is plain "
-                         "firedrake.AssembledPC, i.e. NO near-nullspace - "
-                         "every B4 number recorded before this flag existed "
-                         "was measured that way, so it is here to reproduce "
-                         "them and for nothing else")
+    ap.add_argument("--u-pc", default="incompressible",
+                    choices=list(NEAR_NULLSPACE_CHOICES),
+                    help="the near-nullspace GAMG is seeded with on the "
+                         "condensed displacement operator, through "
+                         "SelfGravitatingGIASolver(condensed_near_nullspace). "
+                         "'incompressible' is the library default: the six "
+                         "rigid-body modes plus the low-degree "
+                         "divergence-free fields, which are the slow modes "
+                         "once the volumetric penalty dominates. 'rigid' is "
+                         "the six rigid-body modes alone, the set every B4 "
+                         "number after 2026-08-02 was measured with. 'none' "
+                         "is GAMG with no near-nullspace, which is what every "
+                         "earlier B4 number was measured with, so it is here "
+                         "to reproduce them and for nothing else")
     ap.add_argument("--no-curve", action="store_true",
                     help="skip the P2 isoparametric correction")
     ap.add_argument("--quad-degree", type=int, default=None)
@@ -809,8 +848,9 @@ def main():
         parent, sub, dt=dt, nmax=args.nmax, truncation=args.truncation,
         c_minus_a=args.c_minus_a, feedback=not args.no_feedback,
         fluid_core=not args.no_fluid_core, quad_degree=args.quad_degree,
+        condensed_near_nullspace=args.u_pc,
         solver_parameters=(coupled_solver_parameters(
-            outer_rtol=args.ksp_rtol, u_pc=U_PC[args.u_pc])
+            outer_rtol=args.ksp_rtol)
             if args.solver == "b2" else None),
         solver_parameters_extra=extra)
 

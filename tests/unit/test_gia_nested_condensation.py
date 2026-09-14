@@ -137,17 +137,51 @@ class TestNestedSolve:
         assert condensation_context(solver).condensed_ksp.getConvergedReason() > 0
 
     def test_it_matches_the_direct_solve(self, nested, direct):
+        """One discrete system, two routes to it.
+
+        The nested preset preconditions; it changes no residual. So the answer
+        must be the direct preset's to the accuracy of the Krylov tolerances
+        `nested_preset` sets, `outer_rtol` 1e-10 and `block0_rtol` 1e-4. The
+        displacement split runs the preset's truncated CG, which reaches its
+        own tolerance on almost every application and never stops the block-0
+        FGMRES short of `block0_rtol`, so the margin is set by `block0_rtol`
+        and not by the displacement split.
+        """
         _, z, layout = nested
         z_direct, _ = direct
         u, u_direct = (f.subfunctions[layout.displacement] for f in (z, z_direct))
         psi, psi_direct = (f.subfunctions[layout.potential] for f in (z, z_direct))
         assert fd.norm(u_direct) > 0.0
+        # Measured margins on this annulus: 7.1e-10 in the displacement,
+        # 1.8e-11 in the potential, 1.1e-11 in the internal variable. The
+        # threshold is an order and a half above the largest of them, so a
+        # formulation difference fails it and Krylov noise does not.
         assert relative_difference(u, u_direct) < 1e-8
         assert relative_difference(psi, psi_direct) < 1e-8
         m, = history_slices(z.subfunctions[layout.internal_variable_field])
         m_direct, = history_slices(
             z_direct.subfunctions[layout.internal_variable_field])
         assert relative_difference(m, m_direct) < 1e-8
+
+    def test_the_condensed_matrix_gets_the_near_incompressible_modes(
+            self, nested):
+        """GAMG on the condensed operator sees more than the rigid modes.
+
+        `condensed_near_nullspace` defaults to `"incompressible"`, so
+        `gadopt.near_nullspace_basis` builds the rigid-body modes and the
+        low-degree divergence-free fields and `gadopt.InternalVariableSCPC`
+        sets them on the assembled condensed matrix. In 2-D the rigid set is 3
+        vectors (two translations and one rotation) and the degree-1
+        divergence-free space adds 2 more after the drop-tolerant
+        orthogonalisation, so a count of 5 is what separates the default from
+        the rigid one. Counted on the matrix rather than on the provider,
+        because a basis that never reaches `MatSetNearNullSpace` is the
+        failure this whole line of work exists to catch.
+        """
+        solver, _, _ = nested
+        context = condensation_context(solver)
+        near_nullspace = context.S.petscmat.getNearNullSpace()
+        assert len(near_nullspace.getVecs()) == 5
 
 
 class TestOperatorReuse:
@@ -182,16 +216,30 @@ class TestKrylovSelection:
         solver.solve()
         context = condensation_context(solver)
         assert context.condensed_ksp.getType() == "cg"
+        # `getTolerances` is (rtol, atol, divtol, max_it). The cap is the
+        # preset's `u_ksp_max_it`: the condensed solve is a preconditioner
+        # inside the block-0 FGMRES, so it is truncated on purpose and a KSP
+        # that ran to convergence here would be the oversolve this nesting was
+        # measured to suffer from.
+        assert context.condensed_ksp.getTolerances()[3] == 4
         assert symmetry_defect(context.S.petscmat) < 1e-12
 
     def test_power_law_gets_gmres(self, meshes):
+        """The switch keeps the length of the solve it replaces.
+
+        A GMRES restart longer than the iteration cap would allocate Krylov
+        vectors the solve never reaches, so the restart the switch writes is
+        the cap the preset wrote.
+        """
         solver, _, _ = build(
             meshes, approximation_kwargs={"exponent": 3.0,
                                           "transition_stress": 1.0},
             solver_parameters=nested_preset(snes_type="newtonls"))
-        key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"
-        assert solver.solver_parameters[key] == "gmres"
+        prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
+        assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
         assert not solver.condensed_operator_symmetric()
+        assert (solver.solver_parameters[prefix + "ksp_gmres_restart"]
+                == solver.solver_parameters[prefix + "ksp_max_it"] == 4)
 
     def test_a_caller_named_krylov_type_wins(self, meshes):
         key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"
@@ -247,6 +295,7 @@ class TestThreeDimensions:
         assert solver.solver.snes.ksp.getConvergedReason() > 0
         context = condensation_context(solver)
         assert context.condensed_ksp.getType() == "cg"
+        assert context.condensed_ksp.getTolerances()[3] == 4
         W = context.cxt.a.arguments()[0].function_space()
         assert W[1].value_shape == (1, 3, 3)
         assert symmetry_defect(context.S.petscmat) < 1e-12
