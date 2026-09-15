@@ -223,11 +223,27 @@ def history_strain_term(eq: Equation, trial: Any) -> fd.Form:
     consistency.
 
     With this term the condensed displacement operator is symmetric for a
-    Newtonian rheology, and the Krylov solver on it can be CG. The transpose
-    relation holds per boundary cell only when `1/tau_i` is constant within
-    the cell, and the volume relation needs a symmetric relaxation tangent,
-    which a power law with several elements does not have; see
-    `CoupledInternalVariableSolver.condensed_operator_symmetric` and
+    Newtonian rheology on every cell shape (measured at 1e-16 on triangles,
+    tetrahedra and extruded hexahedra), and the Krylov solver on it can be CG.
+
+    Three conditions limit that, and all three are in
+    `CoupledInternalVariableSolver.condensed_operator_symmetric` with the
+    measurements: the boundary transpose relation holds per boundary cell only
+    when `1/tau_i` is constant within the cell; the volume relation needs a
+    symmetric relaxation tangent, which a power law with several elements does
+    not have; and the volume relation also needs $d(\\delta u)$ to lie in the
+    DG history space, which holds for P2 on a simplex and fails for Q2 on a
+    hexahedron or a prism, so a one-element power law is nonsymmetric on every
+    quadrilateral, hexahedral and extruded mesh (measured 3.4e-3 on an affine
+    hexahedral box against 1.1e-16 on tetrahedra).
+
+    The solver does not act on that case list. `condensed_operator_symmetric`
+    reads the rheology alone - CG for Newtonian, GMRES for every power law -
+    because the one configuration that satisfies all three conditions occurs
+    on no mesh this project runs in 3-D, and detecting it saves the
+    orthogonalisation of a short truncated GMRES and nothing else. This term
+    is what makes the **Newtonian** case symmetric, which is the case the rule
+    acts on. See also
     `NOTES/coupled-schur/FINDING-POWER-LAW-TANGENT-SYMMETRY.md`.
     """
     tests, _ = _element_slices(eq, trial)

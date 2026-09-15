@@ -179,7 +179,7 @@ from .stokes_integrators import (
     _displacement_basis,
     newton_stokes_solver_parameters,
 )
-from .utility import ensure_constant
+from .utility import CombinedSurfaceMeasure, ensure_constant
 
 
 __all__ = [
@@ -529,15 +529,41 @@ def selfgrav_dtn_iterative_solver_parameters(
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
         are converged to correspondingly fewer digits, which is a live question
         for the rotational closure.
-      snes_type: the outer method. `"newtonls"` is kept as the default because
-        this dictionary reaches the solver as a Mapping, and the Mapping path is
-        deliberately the one place `refuse_stale_preconditioner` does *not*
-        fire, so a caller may legitimately be running a power-law rheology here.
+      snes_type: the outer method. `"newtonls"` is the default because
+        this preset serves a power-law rheology as well as a Newtonian one.
+        With `exponent != 1` the residual is nonlinear and Newton is the method
+        that solves it, and the nested preconditioner follows the
+        state-dependent Jacobian without any help from the caller: the inner
+        fieldsplit keeps its own setup state against the preconditioning
+        matrix's object state and re-runs `PCSetUp` inside `apply` after every
+        Jacobian reassembly, so every sub-preconditioner's `update` runs once
+        per Newton iteration. Measured on the 2-D annulus at exponent 3 and
+        transition stress 1e-3: `gadopt.InternalVariableSCPC.assembly_count`
+        equals the Newton iteration count of the solve, and the nested route
+        reproduces the direct route's residual history to four digits at every
+        Newton step (`NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2).
         **For `exponent = 1` pass `"ksponly"`.** The residual is then linear -
         which is the same fact that lets `DtNTwoBlockSchurPC.update` be a no-op -
-        and Newton spends a second linear solve, a Jacobian assembly and a full
-        GAMG setup per timestep to rediscover that. Note that `snes_rtol` is then
-        inert and `outer_rtol` alone controls the accuracy.
+        and `newtonls` spends one extra residual evaluation per timestep to
+        rediscover that. Newton does not pay for a second linear solve here:
+        the residual after the first step sits at roundoff, below the
+        `snes_atol` of either preset, so SNES exits `CONVERGED_FNORM_ABS` at
+        iteration 1 with one outer linear solve per step (measured on every
+        Newtonian configuration of both presets, 2026-09-14). So the saving is
+        one residual evaluation and the linesearch around it, which is small
+        and real. Note that `snes_rtol` is then inert and `outer_rtol` alone
+        controls the accuracy. The reverse
+        combination, `"ksponly"` with `exponent != 1`, is refused by
+        `SelfGravitatingGIASolver.set_solver_options`: one linear solve on a
+        nonlinear residual reports `CONVERGED` and returns a state that is
+        wrong by the whole nonlinearity.
+        One trap carries over from the Newtonian case unchanged. The absolute
+        `snes_atol` of 1e-10 in `newton_stokes_solver_parameters` stops Newton
+        at iteration zero for any configuration whose whole forcing is smaller
+        than that, and it stops it for a power law exactly as it does for a
+        Newtonian one. This preset names `snes_atol` (1e-15) and so overrides
+        it; `selfgrav_dtn_schur_solver_parameters` does not name the key and so
+        inherits it.
       multiplier_pc: the preconditioner on the block-1 (`Real`) split. The
         default `"none"` is the historical behaviour. Pass
         `"gadopt.DtNMultiplierDenseSchurPC"` for the build-once dense Schur
@@ -662,8 +688,8 @@ def selfgrav_dtn_iterative_solver_parameters(
         # CG the condensed layout puts on its displacement split.
         # `SelfGravitatingGIASolver._attach_condensation_context` replaces the
         # CG by a GMRES of the same length when `condensed_operator_symmetric`
-        # says the condensed operator is not symmetric, which a power law or a
-        # weak displacement boundary makes it.
+        # says the condensed operator is not symmetric, which every power-law
+        # rheology does.
         condensation = {
             "ksp_type": "preonly",
             "pc_type": "python",
@@ -1221,6 +1247,56 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
     `GravitySolver.solve` does, because the 2-D monopole datum is a coefficient
     in the boundary form rather than an unknown.
 
+    **Rheology: where a power law is supported.** With `exponent != 1` in the
+    approximation the Maxwell times carry `power_law_factor`, the residual is
+    nonlinear and both string presets run `newtonls`. The three configurations
+    differ:
+
+    - **Uncondensed layout, `dtn_representation="multiplier"`: supported.**
+      The internal variables are field 1 of the mixed space, the history
+      equation carries the factor, and the nested preconditioner follows the
+      state-dependent Jacobian because the inner fieldsplit re-runs its setup
+      after every Jacobian reassembly. Measured on the 2-D annulus at exponent
+      3: the nested preset reproduces the direct route at every Newton step
+      and `gadopt.InternalVariableSCPC` rebuilds once per Newton iteration
+      (`NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2).
+    - **Condensed layout (`condense_internal_variables=True`): refused**, with
+      a `NotImplementedError` from `set_equations`. Pointwise substitution
+      writes `m(u)` into the stress before differentiation, which makes the
+      power-law factor a function of `u` alone and changes the Newton
+      linearisation rather than eliminating a block.
+    - **`dtn_representation="lowrank"`: refused**, with a `ValueError` from
+      this constructor. The low-rank forward and adjoint paths carry whatever
+      linearisation the residual has, so nothing is known to be wrong there;
+      what is missing is a power-law test, and the combination stays refused
+      until one exists.
+
+    A **fluid core** and a power law work together on the supported
+    configuration, in 2-D and in 3-D.
+    `tests/unit/test_gia_nested_condensation.py::TestPowerLaw` solves the
+    annulus with a `FluidCore` at the CMB on both routes and gets the same
+    state, with the core-pressure row inside the dense multiplier complement
+    that saddle needs. `TestThreeDimensions` does the 3-D counterpart on the
+    24-cell extruded sphere, where `fluid_core_measure` reaches the CMB through
+    `gadopt.utility.CombinedSurfaceMeasure` because that boundary is `ds_b` and
+    carries no facet tag.
+
+    Every power law takes GMRES on the condensed field, because
+    `condensed_operator_symmetric` reads the rheology and nothing else. On
+    these configurations the operator is nonsymmetric in fact as well as by
+    rule. Measured asymmetry `|S - S^T| / |S|` of the condensed operator at the
+    converged state: 3.6e-3 on the 2-D annulus with a rigid core, 1.0e-2 with a
+    fluid core, 1.4e-2 on the 3-D sphere with a rigid core and 9.4e-2 with a
+    fluid core, against 1.7e-16 for the same 3-D fluid-core configuration under
+    a Newtonian rheology. The fluid core adds no asymmetry of its own -
+    `fluid_core_energy` carries no stress, no `mu` and no Nitsche term, so it
+    contributes nothing to the `(u, M)` block - and the Newtonian number is
+    what says so; the 2-D trace of the deviatoric operator and the hexahedral
+    cells of an extruded sphere are what do.
+
+    Both are small cases that establish the construction works; nothing at
+    production rank counts is measured (parent plan S4).
+
     Args:
       solution: `Function` on the space `self_gravitating_gia_space` returned.
         Zero-initialised, and it is worth being explicit that it should be: the
@@ -1331,6 +1407,43 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"dtn_representation={dtn_representation!r}), or\n"
                 f"  - the solver, via SelfGravitatingGIASolver("
                 f"dtn_representation={layout.dtn_representation!r}).")
+        # A power law is refused on the low-rank representation, and the reason
+        # is coverage rather than mathematics. `dtn_coupled_adjoint.py`
+        # assembles `adjoint(derivative(F, saved_output))`, the exact
+        # linearisation of the full residual at the converged state, so it
+        # carries the power-law factor like any other coefficient, and
+        # `augment_jacobian` reinstalls `B` after every Jacobian assembly, so
+        # a Newton iteration on the forward path gets `A(x_k) + B`. What is
+        # missing is a test: `tests/unit/test_gia_gravity_adjoint_lowrank.py`
+        # is Newtonian throughout. Refuse until a power law is verified there,
+        # so that the first user of the combination is the person who adds the
+        # test and not a production run.
+        #
+        # Read the `approximation` ARGUMENT, not `self.approximation`: the base
+        # constructor below is what sets the attribute, and this check has to
+        # fire before `set_equations` and `set_solver_options` run.
+        if dtn_representation == "lowrank":
+            exponent = getattr(approximation, "exponent", 1)
+            try:
+                # The same predicate `_jacobian_depends_on_solution` uses. A
+                # FIELD-valued exponent counts as a power law, because `float`
+                # refuses it; a scalar `Real`-space `Function` converts and is
+                # judged by its value, so an exponent held in a `Real` field
+                # and assigned 1.0 reads as Newtonian here.
+                newtonian = float(exponent) == 1.0
+            except (TypeError, ValueError):
+                newtonian = False
+            if not newtonian:
+                raise ValueError(
+                    f"dtn_representation='lowrank' with exponent={exponent!r}: "
+                    "the lowrank representation has no power-law coverage, "
+                    "forward or adjoint. Its verification suite "
+                    "(tests/unit/test_gia_gravity_adjoint_lowrank.py) is "
+                    "Newtonian throughout, so a power law on this path is "
+                    "unverified rather than known-wrong, and it is refused "
+                    "until a test covers it. Use "
+                    "dtn_representation='multiplier', which is verified for a "
+                    "power law on the uncondensed layout.")
         self.layout = layout
         self._check_fluid_core_matches_layout(fluid_core)
         self._check_block0_split_matches_layout(kwargs.get("solver_parameters"))
@@ -1693,7 +1806,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "which `un` pins; they are alternatives, and `un = 0` is the "
                 "rigid-core switch the fluid core replaces.")
 
-        dss = Measure("ds", domain=self.mesh)(tag)
+        dss = self._plain_fluid_core_measure(tag)
         try:
             extent = assemble(Constant(1.0) * dss)
         except (KeyError, LookupError):
@@ -1721,6 +1834,40 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"radius {radius:.6g}, against {expected:.6e} for a complete "
                 "circle/sphere of that radius. A tag that matches only part of "
                 "the interface is not otherwise detectable.")
+
+    def _plain_fluid_core_measure(self, tag) -> Measure:
+        """The CMB facet measure for a *geometric* integral, un-intersected.
+
+        `check_fluid_core` measures the facet's own area and mean radius, which
+        are properties of the mechanics mesh alone. It therefore wants the
+        mantle's plain `ds(tag)` and never the cross-mesh pairing
+        `fluid_core_measure` builds: intersecting with the parent's facet
+        measure answers a different question, and the check has to be able to
+        report an empty measure rather than fail inside an intersection.
+
+        The extruded branch is the one thing the two share, and it must be
+        shared, because that is the whole content of this helper: an extruded
+        sphere's CMB is `ds_b` and a plain `ds("bottom")` refuses the name. So
+        the tag is resolved through `gadopt.utility.CombinedSurfaceMeasure`
+        here as well, and a `"bottom"` that the mesh does not carry still
+        measures zero and reaches the empty-measure message above.
+
+        `CombinedSurfaceMeasure` requires a degree, where the plain `ds` branch
+        takes UFL's estimate. The form's calibrated boundary degree is the one
+        used, so that this integral is taken at the degree every other CMB
+        integral uses. The choice is immaterial to the check itself, which
+        compares an area against `4 pi r^2` at a 1 percent tolerance.
+
+        Args:
+          tag: the fluid core's boundary, an integer tag or `"bottom"`/`"top"`.
+
+        Returns:
+          A `Measure` already called on `tag`.
+        """
+        if self.mesh.extruded:
+            return CombinedSurfaceMeasure(
+                domain=self.mesh, degree=self.form.quad_degree)(tag)
+        return Measure("ds", domain=self.mesh)(tag)
 
     def fluid_core_measure(self) -> Measure:
         r"""The CMB measure: the mantle's own `ds`, intersected with the parent's `dS`.
@@ -1780,7 +1927,47 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         parent is concerned, so it is restricted with `avg` in
         `fluid_core_energy` - never a hard-coded `'+'`, exactly as
         `DtNGravityForm.sheet_integral` argues.
+
+        ## Extruded meshes, where the CMB is the bottom surface
+
+        A radially extruded sphere - the 3-D production geometry - reaches its
+        CMB through `ds_b`, not through a tagged side facet, so a plain
+        `ds(tag)` refuses `"bottom"` with `Invalid subdomain_id bottom` and the
+        fluid core is unreachable on it. `gadopt.utility.CombinedSurfaceMeasure`
+        is the helper the rest of the solver already uses for this
+        (`Equation.__init__` builds one on `trial_space.extruded`): it maps
+        `"bottom"` to `ds_b`, `"top"` to `ds_t` and every integer tag to
+        `ds_v`, so every caller keeps writing `fluid_core_measure()(tag)` and
+        the tag itself decides. Returned here for an extruded mesh, so that the
+        energy, the sheet, the volume constraint and the diagnostics all follow
+        one measure on both geometries.
+
+        An extruded mesh is never cross-mesh: the two-mesh coupling comes from
+        `Submesh`, which the extruded path does not use, and
+        `CombinedSurfaceMeasure` takes no `intersect_measures` and so cannot
+        express one. The assertion below states that rather than leaving the
+        combination to produce a measure that silently drops the intersection.
         """
+        if self.mesh.extruded:
+            if self.layout.cross_mesh:
+                # Raised and not asserted: an `assert` disappears under
+                # `python -O`, and this one guards a silently wrong
+                # integration rather than an internal invariant.
+                # `Equation.__init__` raises the same way for the same gap.
+                raise NotImplementedError(
+                    "An extruded mechanics mesh with a separate potential "
+                    "mesh is not supported by the fluid core. "
+                    "CombinedSurfaceMeasure takes no `intersect_measures`, so "
+                    "there is no way to pair the parent's facet measure with "
+                    "it and the CMB sheet loses the facet-to-facet "
+                    "intersection it needs - which is a 21 percent error with "
+                    "no warning, as this method's docstring records. Extruded "
+                    "self-gravity runs pass one mesh for both roles; widen "
+                    "CombinedSurfaceMeasure if that ever stops being true.")
+            # The same calibrated boundary degree as the non-extruded branch
+            # below, for the same reason.
+            return CombinedSurfaceMeasure(domain=self.mesh,
+                                          degree=self.form.quad_degree)
         # `DtNGravityForm`'s **calibrated** boundary degree, not the solver's
         # volume `quad_degree`. Every other sheet in this system is integrated
         # at that degree, and calibrating it was a piece of work in its own
@@ -2902,7 +3089,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         `_check_block0_split_matches_layout` exists to catch is unreachable on
         this path by construction.
 
-        A `Mapping` is honoured verbatim, through the base class.
+        A `Mapping` is honoured verbatim, through the base class, and refused
+        when it names `ksponly` for a power law: that one combination reports
+        `CONVERGED` on a state that is wrong by the whole nonlinearity, so
+        there is nothing a caller can read to find out. See
+        `_refuse_ksponly_on_a_nonlinear_residual`.
         """
         # **The appctx is built on EVERY path, including the `Mapping` one, and
         # that placement is the fix for a defect rather than tidiness.** It
@@ -2953,26 +3144,17 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 self.appctx = {
                     "mu": self.approximation.mu / self.rho_continuity}
             self.appctx["dtn_block1_diagonal"] = self.block1_diagonal()
-            # Keep the live Constant, not its current float value. A caller can
-            # change the time step with ``dt.assign(...)``. The dense Schur PC
-            # uses this entry to rebuild its cached complement only after such
-            # a change. Fixed-step solves keep the build-once path.
-            self.appctx["gia_time_step"] = self.dt
 
         if isinstance(solver_preset, Mapping):
             super().set_solver_options(solver_preset, solver_extras, gpu_extras)
+            # The options are final on this path here, so the outer-method
+            # check runs here too: it reads `self.solver_parameters`.
+            self._refuse_ksponly_on_a_nonlinear_residual()
             _attach_block1_diagonal()
             self._attach_condensation_context(solver_extras)
             return
         if solver_preset not in (None, "direct", "iterative"):
             raise ValueError("Solver type must be 'direct' or 'iterative'.")
-
-        # Deliberately NOT moved above the `Mapping` branch: its own docstring
-        # names "pass an explicit solver_parameters dictionary" as the escape
-        # hatch for a caller whose preconditioner does handle a state-dependent
-        # Jacobian, so the dictionary path is exactly where the refusal must
-        # not fire.
-        self.refuse_stale_preconditioner()
 
         if solver_preset is None:
             solver_preset = (
@@ -3003,9 +3185,46 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 condensed=self.layout.condensed))
         if solver_extras:
             self.add_to_solver_config(solver_extras)
+        # The extras are the last thing that can name `snes_type`, so the
+        # outer method is final here and the check runs on the value a solve
+        # will actually use.
+        self._refuse_ksponly_on_a_nonlinear_residual()
         _attach_block1_diagonal()
         self._attach_condensation_context(solver_extras)
         self.register_update_callback(self.set_solver)
+
+    def _refuse_ksponly_on_a_nonlinear_residual(self) -> None:
+        """Refuse `snes_type ksponly` when the Jacobian depends on the state.
+
+        `ksponly` takes one linear solve at the initial state and reports
+        `CONVERGED`, which is the right thing for a Newtonian residual and a
+        wrong answer with no diagnostic for a power law: the returned state is
+        off by the whole nonlinearity and nothing in the log says so. Both
+        docstrings that recommend `ksponly` recommend it for `exponent = 1`,
+        so the misuse this guard catches is a copy of such a dictionary into a
+        power-law run.
+
+        Called on both options paths, after the options are final, because
+        `snes_type` can arrive from the preset, from a caller's `Mapping` or
+        from `solver_parameters_extra`, and only the merged dictionary says
+        which method a solve will use.
+
+        Raises:
+          ValueError: the outer method is `ksponly` and the rheology makes the
+            Jacobian state-dependent.
+        """
+        if self.solver_parameters.get("snes_type") != "ksponly":
+            return
+        if not self._jacobian_depends_on_solution():
+            return
+        exponent = getattr(self.approximation, "exponent", 1)
+        raise ValueError(
+            f"snes_type='ksponly' with exponent={exponent!r}: the "
+            "power-law factor makes the residual nonlinear, so one linear "
+            "solve at the initial state converges by definition and returns a "
+            "state that is wrong by the whole nonlinearity. Use "
+            "snes_type='newtonls' (the default of both self-gravity presets), "
+            "or set exponent=1 if the rheology is meant to be Newtonian.")
 
     def _attach_condensation_context(self, extras) -> None:
         """Publish what `gadopt.InternalVariableSCPC` reads, on every options path.
@@ -3032,15 +3251,47 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           low-degree divergence-free fields, which is what the default
           `"incompressible"` builds.
 
+        Two further keys serve `gadopt.DtNMultiplierDenseSchurPC`, which forms
+        the whole multiplier Schur complement by one block-0 solve per column
+        and must know when that complement is worth forming again. That
+        preconditioner keys its rebuild on `operator_version` above, the same
+        value the condensation uses, so the two caches of pieces of one
+        operator agree by construction. These two keys cover what the version
+        cannot say:
+
+        - `gia_solve_index`: the number of `solve()` calls this solver has made,
+          starting at 0 and incremented by `solve` before the nonlinear solve
+          runs, so the first solve carries index 1. A power law publishes
+          `operator_version = None`, because no version can describe a Jacobian
+          that moves inside one nonlinear solve; the solve index is what turns
+          "rebuild once per solve" into a test a preconditioner can make
+          without knowing about Newton at all.
+        - `gia_jacobian_depends_on_solution`: a `bool`, fixed for the life of
+          the solver, true for a power law. `operator_version` carries the same
+          fact from the first `solve` onwards, by going `None`, and this key
+          carries it **before** that: at construction the version is still the
+          integer 0 on every rheology, so a caller or a preconditioner that has
+          to know the answer before any solve reads this one.
+
+        Both keys are rank-consistent, which the collective rebuild needs:
+        `gia_solve_index` is incremented by the collective `solve()` on every
+        rank alike, and `gia_jacobian_depends_on_solution` is a deterministic
+        function of the exponent. So the rank-local rebuild decision agrees on
+        every rank and the collective `_build` of the dense complement is
+        entered by all ranks together.
+
         On the condensed layout nothing reads these; they are harmless there.
 
         Also selects the Krylov method on the condensed field. The preset
         writes a short CG, which acts as a preconditioner inside the flexible
         block-0 FGMRES and is valid only for a symmetric operator. The
-        rheology decides that (`condensed_operator_symmetric`); a power law
-        under the weak `un` boundary of the CMB, or with two or more elements,
-        is not symmetric, and the switch replaces the CG by an equally short
-        GMRES whose restart is the cap the preset wrote. The `Mapping` a
+        rheology alone decides that (`condensed_operator_symmetric`): a
+        Newtonian rheology keeps the CG, and every power law takes an equally
+        short GMRES whose restart is the cap the preset wrote. The self-gravity
+        configurations are all on the nonsymmetric side of that rule by more
+        than one route anyway - measured 3.6e-3 asymmetry on the 2-D annulus
+        with a rigid core, 9.4e-2 on the 3-D sphere with a fluid core - so the
+        switch fires for a power law here whatever the mesh. The `Mapping` a
         caller passes is normally
         `selfgrav_dtn_iterative_solver_parameters(...)` itself, whose `cg` is
         the preset's default and not a choice, so a `cg` found there is
@@ -3057,6 +3308,15 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self.appctx["dt"] = self.dt
         self.appctx["scaling_factor"] = self.scaling_factor
         self.appctx["operator_version"] = self._operator_version
+        # Fixed for the life of the solver: the rheology cannot change under a
+        # built residual, so the dense complement can read this once per update
+        # and trust it.
+        self.appctx["gia_jacobian_depends_on_solution"] = (
+            self._jacobian_depends_on_solution())
+        # `solve` increments this, so the first solve runs at index 1 and a
+        # preconditioner that initialises during that solve records 1 and does
+        # not rebuild inside it.
+        self.appctx["gia_solve_index"] = 0
         for key, basis in (
             ("condensed_field_nullspace", self.nullspace),
             ("condensed_field_transpose_nullspace", self.transpose_nullspace),
@@ -3094,29 +3354,6 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.add_to_solver_config({
                 key: "gmres",
                 restart_key: self.solver_parameters.get(max_it_key, 50)})
-
-    def refuse_stale_preconditioner(self) -> None:
-        """`DtNTwoBlockSchurPC.update` is a no-op, which needs a constant Jacobian.
-
-        Correct for Newtonian GIA, and false the moment the rheology is
-        non-Newtonian: with `exponent > 1` the viscosity depends on the state,
-        the assembled block-0 operator inside the preconditioner goes *stale*
-        rather than failing, and Newton then converges slowly or to nothing with
-        no diagnostic. Refused rather than warned about, because a silently
-        stale preconditioner is this project's recurring failure mode.
-        """
-        exponent = getattr(self.approximation, "exponent", 1)
-        try:
-            newtonian = float(exponent) == 1.0
-        except (TypeError, ValueError):
-            newtonian = False
-        if not newtonian:
-            raise ValueError(
-                f"The approximation has exponent={exponent!r}, so the Jacobian "
-                "depends on the state, but DtNTwoBlockSchurPC.update is a "
-                "no-op and its assembled block would go stale silently between "
-                "Newton steps. Pass an explicit solver_parameters dictionary "
-                "if you have a preconditioner that handles this.")
 
     def check_boundary_quadrature(self, *args, **kwargs):
         """Measures whether the boundary rule resolves the DtN modes.
@@ -3415,6 +3652,15 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
     def solve(self) -> None:
         """Refreshes the enclosed mass, solves, then projects out the kernel."""
         self.update_total_mass()
+        # Count the solve BEFORE it runs, so that every preconditioner setup
+        # inside it sees one index and a preconditioner built during this solve
+        # keeps its complement for the whole of it. The counter is what lets
+        # `gadopt.DtNMultiplierDenseSchurPC` rebuild once per time step on a
+        # state-dependent Jacobian without counting Newton iterations, which
+        # costs three times the block-0 work of a step. A pyadjoint replay
+        # goes through `_forward_solve` and never through this method, so a
+        # replayed solve leaves the index where the forward solve left it.
+        self.appctx["gia_solve_index"] = self.appctx.get("gia_solve_index", 0) + 1
         # Route 1.5b: on the low-rank path, let the stock annotated solve run,
         # then take its solve block off the tape and re-class it so the adjoint
         # and tangent carry `A + B` and the theta derivative. Record the block

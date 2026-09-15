@@ -256,11 +256,16 @@ matrix. For a Newtonian rheology that operator is symmetric because the
 history equations carry the boundary term of
 `gadopt.internal_variable_equation.history_strain_term`, so the solver on it
 is CG with GAMG, placed under the `condensed_field` prefix by
-`StokesSolverBase._configure_iterative_solver`. For a power-law rheology the
-operator is in general not symmetric (the relaxation rule has no dissipation
-potential when several elements share one stress-dependent factor) and
+`StokesSolverBase._configure_iterative_solver`. For a power-law rheology
 `CoupledInternalVariableSolver.condensed_operator_symmetric` switches the
-condensed solver to GMRES. The outer Krylov method is
+condensed solver to GMRES, without asking anything further: the operator is
+nonsymmetric in 2-D, on every non-simplex cell, under a weak displacement
+boundary and with two or more Maxwell elements, which between them cover every
+mesh this project runs, and the one narrow case that is symmetric saves
+orthogonalisation cost alone. That method's docstring carries the
+measurements. A caller who wants CG on that narrow case names
+`condensed_field_ksp_type` in `solver_parameters_extra`, which wins. The outer
+Krylov method is
 `preonly`: one condensation, one CG solve and one back-substitution are the
 whole linear solve, the same accounting as the substituted solver's single CG
 solve. `CoupledInternalVariableSolver` selects the outer nonlinear method from
@@ -1719,7 +1724,9 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         )
         # The base class configures CG on the condensed displacement operator.
         # CG is valid only when that operator is symmetric, which the rheology
-        # and the boundary conditions decide; see `condensed_operator_symmetric`.
+        # alone decides: Newtonian keeps CG, every power law takes GMRES. See
+        # `condensed_operator_symmetric` for the measurements and for why the
+        # one symmetric power-law case is given away rather than detected.
         # The user's extras are applied after this by the base class, so an
         # explicit `condensed_field_ksp_type` still wins.
         prefix = self.displacement_block_prefix
@@ -1786,7 +1793,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
             return False
 
     def condensed_operator_symmetric(self) -> bool:
-        r"""True when the condensed displacement operator is known to be symmetric.
+        r"""True for a Newtonian rheology, False for a power law. Nothing else.
 
         The condensed operator is $S = A_{uu} - A_{uM} A_{MM}^{-1} A_{Mu}$.
         With the boundary term of `history_strain_term`, the history rows are
@@ -1799,43 +1806,69 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         derivation, the numerical evidence and the alternatives are in
         `NOTES/coupled-schur/FINDING-POWER-LAW-TANGENT-SYMMETRY.md`.
 
-        The cases:
+        **Newtonian rheology: symmetric, on every mesh.** The Maxwell times
+        are fixed fields and $A_{MM}$ is a scaled mass matrix, so nothing in
+        the argument depends on the cell. Measured asymmetry
+        $|S - S^T| / |S|$ at 1e-16 on triangles, tetrahedra, affine hexahedra
+        and the extruded cubed spheres, with a rigid `un` core and with a
+        fluid core alike. (A Maxwell time that varies inside a boundary cell,
+        for example a CG1 viscosity field under a weak boundary condition,
+        leaves an asymmetry of order 1e-4 from the boundary term; CG has
+        tolerated it on the Burgers sphere and it is accepted here.)
 
-        - Newtonian rheology (exponent 1): the Maxwell times are fixed fields
-          and $A_{MM}$ is a scaled mass matrix. Symmetric. (A Maxwell time
-          that varies inside a boundary cell, for example a CG1 viscosity
-          field under a weak boundary condition, leaves an asymmetry of
-          order 1e-4 from the boundary term; CG has tolerated it on the
-          Burgers sphere and it is accepted here.)
-        - Power law with one Maxwell element: the rule is radial in its own
-          stress, so a potential exists and the volume tangent is symmetric.
-          The boundary term is then only the transpose of the Nitsche term
-          when the Maxwell time is constant within each boundary cell, which
-          a stress-dependent one is not, and in 2-D the fixed 2/3 of the
-          deviatoric operator gives the history a trace that breaks the
-          relation as well. So: symmetric in 3-D with strong displacement
-          boundary conditions only.
-        - Power law with two or more elements and the factor evaluated on the
-          total deviatoric stress (the model of `power_law_factor`): the
-          tangent is symmetric only at proportional steady-state creep. No
-          change of variables or row scaling repairs it. Not symmetric.
+        **Power law: reported nonsymmetric, always.** It genuinely is
+        symmetric in one narrow case - one Maxwell element, strong
+        displacement boundary conditions, simplex cells, 3-D - where the rule
+        is radial in its own stress, a potential exists, and the deviatoric
+        strain of a displacement increment lies in the DG history space so
+        that the history rows can be the transpose of the displacement rows
+        (measured 1.1e-16 on affine tetrahedra). Every other power-law
+        configuration breaks one of those conditions and is measurably
+        nonsymmetric:
+
+        - 2-D at all, where the fixed 2/3 of the deviatoric operator gives
+          the history a trace the relation does not survive: 3.6e-3 on the
+          annulus with a rigid core, 1.0e-2 with a fluid core.
+        - Any non-simplex cell, where the gradient of a Q2 displacement is
+          not in the DG1 history space and the history rows see a projection
+          of it: 3.4e-3 on an affine hexahedral box, 5.9e-3 and 7.0e-3 on
+          extruded cubed spheres with a flat and a degree-2 base, and on the
+          coupled self-gravity system 1.4e-2 with a rigid core and 9.4e-2
+          with a fluid core. Every 3-D production mesh in this project is
+          extruded, hence non-simplex.
+        - A weak `"u"` or `"un"` boundary, where the Nitsche transpose holds
+          only for a Maxwell time constant within each boundary cell, which a
+          stress-dependent one is not.
+        - Two or more Maxwell elements sharing one stress-dependent factor,
+          where the tangent is symmetric only at proportional steady-state
+          creep. No change of variables or row scaling repairs that one.
+
+        **Why the narrow case is given away rather than detected.** Selecting
+        per configuration means carrying the element count, the boundary
+        dictionary, the dimension and the cell shape in a predicate whose
+        answer is True on no mesh this project runs in 3-D, and whose failure
+        mode is CG on a nonsymmetric operator. What the detection buys where
+        it does fire is the orthogonalisation of a short GMRES and nothing
+        else: the iteration counts of the two methods match on the symmetric
+        case (`FINDING-POWER-LAW-TANGENT-SYMMETRY.md` section 6), and the
+        condensed solve is a truncated preconditioner inside the block-0
+        FGMRES, capped at a few iterations, so the vectors it orthogonalises
+        are few. Bookkeeping in exchange for that is the wrong trade, and one
+        rule that reads off the rheology cannot go stale against the mesh.
+
+        A caller who wants CG on the narrow case names `ksp_type` under the
+        condensed-field prefix in `solver_parameters_extra`, which wins over
+        this rule on both solvers - `condensed_field` on
+        `CoupledInternalVariableSolver`, and
+        `dtn_fieldsplit_0_fieldsplit_0_condensed_field` on
+        `SelfGravitatingGIASolver`'s uncondensed iterative preset.
 
         Returns:
-          True when CG may run on the condensed operator; the solver selects
-          GMRES otherwise.
+            True when CG can run on the condensed operator, which here means
+            a Newtonian rheology; the solver selects GMRES otherwise.
 
         """
-        if self._newtonian_rheology():
-            return True
-        n_elements = len(self.approximation.maxwell_times)
-        weak_displacement = any(
-            bc.keys() & {"u", "un"} for bc in self.weak_bcs.values()
-        )
-        return (
-            n_elements == 1
-            and not weak_displacement
-            and self.mesh.geometric_dimension == 3
-        )
+        return self._newtonian_rheology()
 
     def _jacobian_depends_on_solution(self) -> bool:
         """True when the Jacobian changes within one nonlinear solve.

@@ -362,11 +362,48 @@ class DtNTwoBlockSchurPC(fd.PCBase):
     Users can provide this class as a `pc_python_type` entry to a PETSc solver
     option dictionary; the preconditioning operator must be matrix-free.
 
-    `update` is a no-op, which is correct for the gravitational Poisson solver
-    because its Jacobian is constant by construction (see `update`). The class
-    is therefore not intended for problems with a state-dependent Jacobian: on
-    those, the assembled potential block would go stale silently rather than
-    fail, and the inner preconditioner would need rebuilding here.
+    ## `update` is a no-op, and a state-dependent Jacobian is still followed
+
+    `update` does nothing because the only thing this class owns is the pair of
+    index sets, and those do not change. That is not the same as freezing the
+    nested preconditioner. The inner fieldsplit is a separate PETSc object that
+    keeps its own setup state against the preconditioning matrix's object
+    state, and `PCApply` calls `PCSetUp` on it first
+    (`petsc/src/ksp/pc/interface/precon.c:542`). Every Newton iteration
+    assembles the matrix-free Jacobian, `MatAssemblyEnd` moves the outer `Mat`'s
+    object state, and `PCSetUp_FieldSplit` therefore re-extracts its sub-matrices
+    with `MAT_REUSE_MATRIX`; Firedrake's `createSubMatrix` assembles into the
+    reused sub-matrix, which moves every sub-matrix's state in turn, so every
+    sub-preconditioner's `update` runs once per Newton iteration.
+
+    Measured on the 2-D annulus at exponent 3 and transition stress 1e-3
+    (`NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2): `InternalVariableSCPC`,
+    `SPDAssembledPC` on the potential block and `DtNMultiplierDenseSchurPC` are
+    all updated at every Newton iteration, and `InternalVariableSCPC.
+    assembly_count` equals the Newton iteration count of the solve. So a
+    state-dependent Jacobian is a supported configuration of this class, and
+    `SelfGravitatingGIASolver` runs a power law on it.
+
+    Two consequences worth knowing before tuning anything:
+
+    - **`snes_lag_preconditioner` and `ksp_reuse_preconditioner` reach only this
+      python PC.** `PCSetReusePreconditioner` sets a flag on the outer PC alone
+      (`precon.c:1338-1346`) and `PCPYTHON` composes no
+      `PCSetReusePreconditioner_C`, so the inner fieldsplit sees only its own
+      flag and re-runs its setup inside `apply` whenever the Jacobian's object
+      state changed, whatever lag the outer PC carries. Measured: with
+      `snes_lag_preconditioner -2` the outer `update` never runs again and
+      `InternalVariableSCPC.update` still runs at every Newton iteration.
+      `snes_lag_jacobian` is the setting that lags the nested preconditioner,
+      because it stops the state bump at its source.
+    - **Every assembled sub-block is reassembled at every Newton iteration**,
+      the constant potential block included: `AssembledPC.update` reassembles
+      unconditionally. That work is correct and wasted, and how much it costs
+      at production rank counts belongs to the 3-D measurement (parent plan
+      S4).
+
+    The gravitational Poisson solver is the special case where nothing is ever
+    rebuilt, because its Jacobian is constant by construction (see `update`).
     """
 
     needs_python_pmat = True
@@ -458,13 +495,20 @@ class DtNTwoBlockSchurPC(fd.PCBase):
     def update(self, pc: PETSc.PC):
         """Updates the preconditioner state; nothing to do here.
 
-        The gravitational Poisson Jacobian is constant by construction: the
-        density and the gravitational constant enter the residual only through
-        terms linear in the test function, so they vanish under
-        differentiation, and every remaining coefficient (the Robin shift, the
-        DtN eigenvalues and the constraint-row scalings) is fixed when the form
-        is built. A repeated setup would therefore only rebuild the index sets
-        the preconditioner already holds.
+        This class owns the two index sets and nothing else, and the index sets
+        are a property of the mixed space, so a repeated setup can only rebuild
+        what is already held. Everything that does depend on the operator lives
+        in the inner fieldsplit, which keeps its own setup state and rebuilds
+        itself inside `apply`; the class docstring gives the mechanism and the
+        measurement. So this no-op is correct for a state-dependent Jacobian as
+        well as for a constant one.
+
+        For the gravitational Poisson solver nothing anywhere is rebuilt,
+        because that Jacobian is constant by construction: the density and the
+        gravitational constant enter the residual only through terms linear in
+        the test function, so they vanish under differentiation, and every
+        remaining coefficient (the Robin shift, the DtN eigenvalues and the
+        constraint-row scalings) is fixed when the form is built.
 
         Args:
           pc: PETSc preconditioner.
@@ -540,9 +584,23 @@ class _RealBlockPCBase(fd.preconditioners.base.PCBase):
         raise NotImplementedError
 
     def update(self, pc):
-        """Nothing to rebuild: the coupled Jacobian is constant by construction.
+        """The base does nothing; a subclass whose data moves overrides this.
 
-        Same argument as `DtNTwoBlockSchurPC.update`.
+        `DtNMultiplierDiagPC` needs no rebuild under any rheology. Its data is
+        the exact block-1 diagonal, built from three contributions and none of
+        them a function of the displacement or the internal variables:
+        `theta_psi` (the row scaling, made of `scaling_factor`, `B_mu` and
+        `Lambda`), the DtN mode scale times the discrete boundary area, and the
+        rotation rows' `_theta_rot * _closure_constant` (made of `Omega_sq` and
+        the rotation moments). So the diagonal is the same matrix at every
+        Newton iteration of a power-law solve as it is at the first.
+
+        `DtNMultiplierDenseSchurPC` does have data that moves, because its
+        complement is formed from the block-0 operator, and it overrides this
+        method with its own rebuild rule.
+
+        Args:
+          pc: PETSc preconditioner.
         """
 
     @staticmethod
@@ -627,6 +685,14 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
     derives the sign and the discrete area there), with no assembly and no
     `MatGetDiagonal`. Setup cost is therefore *nothing* -- no block-0 solves, no
     factorisation -- which is what makes this the one to reach for first.
+
+    **The diagonal is independent of the rheology**, so this preconditioner
+    serves a power law with no rebuild rule and no refusal. Its three
+    contributions are `theta_psi` (from `scaling_factor`, `B_mu` and `Lambda`),
+    the mode scale times the discrete boundary area, and the rotation rows'
+    closure constant (from `Omega_sq` and the rotation moments); none of them
+    is a function of the displacement or of the internal variables, so the
+    exact diagonal at Newton iteration k is the exact diagonal at iteration 0.
 
     What it misses is the Schur correction `C A00^{-1} B`, the DtN feedback
     through the potential, which is small for a boundary stood off to 2 Re and
@@ -748,24 +814,79 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     `selfp`, `AssembledPC` and `-pc_fieldsplit_schur_precondition full` all fail
     on the `Real` block -- the same reason `DtNMultiplierDiagPC` above works.
 
-    Unlike the diagonal PC, this one reads **nothing** from the appctx. It needs
+    Unlike the diagonal PC, this one takes **no data** from the appctx. It needs
     no `dtn_block1_diagonal`, no module global and no per-solver wiring: it forms
     S purely from the operator handed to it. That is the design rule this project
     settled on -- a preconditioner that reads its data off the operator has no
-    appctx failure mode, so it survives a `pyadjoint` replay (which drops appctx)
-    where the diagonal PC does not.
+    appctx failure mode, so it works where the diagonal PC raises: inside the
+    adjoint solve, whose kwargs pyadjoint strips of `appctx`
+    (`firedrake/adjoint_utils/blocks/solving.py:578`).
 
-    ## Build once per time-step value
+    What it does read from the appctx is two *markers* that say when the
+    complement is stale (see "When the complement is rebuilt" below). Neither
+    is data the solve needs: a context that carries neither leaves the
+    complement in place, which is a valid preconditioner and a correct solve.
 
-    The first build runs in `initialize`. Fixed-step solves keep that factor.
-    `SelfGravitatingGIASolver` puts its live `dt` in the application context.
-    If `dt.assign(...)` changes the value, `update` builds a new complement.
-    A normal matrix reassembly with unchanged `dt` does not rebuild it.
+    ## When the complement is rebuilt
+
+    The complement describes the mechanics block, so the question `update` has
+    to answer is "has that block moved since the last build". The solver
+    already answers it, for itself and for the nested condensation, and this
+    class reads the same answer rather than inventing a second one:
+
+    - **`operator_version`**, published by
+      `CoupledInternalVariableSolver._refresh_operator_version` at the start of
+      every `solve`. It is an integer that changes whenever any coefficient of
+      the Jacobian changes - the time step, a viscosity field written between
+      steps, a shear modulus or `B_mu` `Constant` assigned - and `None` when
+      the rheology makes the Jacobian depend on the state. A changed integer
+      means a new mechanics block, so `update` builds a new complement.
+      `gadopt.InternalVariableSCPC` keys its own reassembly on this same value,
+      which is the argument for using it here: one statement of when the
+      operator changed, trusted by everything that caches a piece of it, and no
+      second rule to drift out of step with it. It follows that
+      `CoupledInternalVariableSolver.invalidate_jacobian` rebuilds this
+      complement as well as the condensed operator, which is how a caller
+      declares a change the fingerprint cannot see - a coefficient written
+      through a view of its data, or one that appears only in a user-supplied
+      Jacobian `J`.
+    - **`gia_solve_index`**, incremented by `SelfGravitatingGIASolver.solve`
+      before each nonlinear solve, read only when `operator_version` is `None`.
+      For a power law the block-0 operator moves with the state, so a
+      complement built at one Newton iteration describes a Jacobian the later
+      iterations no longer have, and no version number can express that. The
+      rule is **once per solve**: the complement is built at the first Newton
+      iteration of a solve, from the state that solve starts from, and kept as
+      a preconditioner through the rest of that solve's Newton iterations.
+
+    Cost rules out the alternative of one build per Newton iteration. One build
+    is one block-0 solve per column, 72 columns at L = 5 and 75 with rotation,
+    so a build at every Newton iteration roughly triples the block-0 work of a
+    three-iteration step. A complement that lags the state costs outer
+    iterations and changes no residual, so the cheap rule is the right trade.
+
+    Behaviour under `pyadjoint`, which is not the obvious one. The **forward
+    replay** solver is built from the taped constructor kwargs
+    (`firedrake/adjoint_utils/variational_solver.py:50, 83-91`), and `appctx`
+    is one of them, so the replay solver shares the *live* application context
+    of the forward solver. What a replay never does is run
+    `SelfGravitatingGIASolver.solve`: replays go through `_forward_solve`
+    (`firedrake/adjoint_utils/blocks/solving.py:650`), so neither
+    `operator_version` nor `gia_solve_index` moves during a replay and the
+    replay solver's own complement is built once at its `initialize` and kept
+    across every replay, including every replayed step of a taped march. The
+    **adjoint** solve carries Firedrake's default empty context, because
+    pyadjoint pops `appctx` from its kwargs (`blocks/solving.py:578`), so both
+    markers are absent, `update` returns without comparing anything, and its
+    complement is likewise built once and kept.
 
     ## Two correctness conditions, and the second is not what the design assumed
 
-    - The coupled Jacobian must stay constant while the time step stays fixed.
-      A new time-step value changes the mechanics block and triggers a rebuild.
+    - The complement is a **preconditioner**. A stale one changes no residual,
+      only the outer iteration count, which is what makes a per-solve rebuild
+      rule a cost decision instead of a correctness one. A new time-step value
+      changes the mechanics block and triggers a rebuild anyway, and a
+      state-dependent Jacobian triggers one per solve.
     - S must be *linear*, and it is only as linear as the block-0 solve inside
       it. With `dtn_fieldsplit_0_ksp_type: preonly` (a fixed LU) that solve is a
       linear operator and the complement is exact to roundoff. With an iterative
@@ -789,22 +910,130 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     _prefix = "dtn_multiplier_dense_schur_"
 
     def initialize(self, pc):
-        self._time_step = self._current_time_step(pc)
+        """Record the state this build describes, then build the complement.
+
+        Both markers are read before `_build`, so that an `update` inside the
+        same solve compares against the state this build describes and does no
+        work. Reading them here, rather than lazily at the first `update`, is
+        what makes the rule correct for a Newtonian march: `update` is not
+        called at all inside a solve that takes one Newton step, so the first
+        `update` a fixed-step Newtonian solver sees belongs to the *second*
+        solve, and a marker adopted there instead of compared against misses a
+        coefficient changed between the two.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        self._operator_version, self._solve_index, _ = self._markers(pc)
+        # Counts builds over the life of this PC instance, `initialize`
+        # included. Tests read it to pin the rebuild rule; nothing in the
+        # solve path branches on it.
+        self.build_count = 0
         self._build(pc)
 
     def update(self, pc):
-        """Rebuild the complement only after the time-step value changes."""
-        time_step = self._current_time_step(pc)
-        if time_step is None or self._time_step is None:
+        """Rebuild the complement when the mechanics block it describes moved.
+
+        Two triggers, and the class docstring section "When the complement is
+        rebuilt" carries the argument for each:
+
+        1. `operator_version` is an integer and differs from the one this
+           complement was built at. The solver bumps it for any change of a
+           Jacobian coefficient, the time step included, so this one test
+           covers a viscosity field written between steps as well as a
+           `dt.assign`.
+        2. `operator_version` is `None` - the rheology makes the Jacobian
+           depend on the state, so no version can describe it - and
+           `gia_solve_index` has moved. The complement is then a preconditioner
+           frozen at the state each solve starts from, which is one build per
+           time step instead of one per Newton iteration.
+
+        A context carrying neither marker leaves the complement alone. That is
+        the adjoint solve, whose kwargs pyadjoint strips of `appctx`: the
+        factors the forward solve built are the ones the adjoint uses, which is
+        what makes this class usable on a taped replay.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        version, solve_index, present = self._markers(pc)
+        if not present:
             return
-        if time_step != self._time_step:
-            self._time_step = time_step
+        if version is not None:
+            if version != self._operator_version:
+                self._operator_version = version
+                # Carry the solve index across with it, so that a later
+                # switch to the state-dependent branch compares against this
+                # build and not against an older one.
+                self._solve_index = solve_index
+                self._build(pc)
+            return
+        if solve_index is None or self._solve_index is None:
+            return
+        if solve_index != self._solve_index:
+            self._operator_version = version
+            self._solve_index = solve_index
             self._build(pc)
 
-    def _current_time_step(self, pc):
-        """Return the live GIA time-step value, if the solver supplies it."""
-        value = self.get_appctx(pc).get("gia_time_step")
-        return None if value is None else float(value)
+    def _appctx(self, pc):
+        """The solver's application context, or an empty mapping.
+
+        `PCBase.get_appctx` resolves the context through `pc.getDM()`, and a
+        PETSc PC that Firedrake did not build carries no DM: `pc.getDM()`
+        returns a wrapper around a NULL handle, and Firedrake's
+        `dmhooks.get_appctx` then dereferences it and **crashes the process**
+        with a segmentation violation rather than raising (measured on the
+        bare dense `Mat` the unit tests of this class drive it over). So the
+        handle test comes first and is not tidiness: it is what keeps a
+        hand-built PC from killing the run. Reading `dm.handle` is a pure
+        Python attribute lookup on the petsc4py wrapper and touches no PETSc
+        object, so it is safe where everything else is not.
+
+        Args:
+          pc: PETSc preconditioner.
+
+        Returns:
+          The application context mapping, or `{}` when there is none to read.
+        """
+        dm = pc.getDM()
+        if dm.handle == 0:
+            return {}
+        try:
+            return self.get_appctx(pc) or {}
+        except AttributeError:
+            # A Firedrake DM with no solver context pushed onto it:
+            # `dmhooks.get_appctx` returns None and the `.appctx` lookup on it
+            # raises. Read that as "no markers", exactly like an empty context.
+            return {}
+
+    def _markers(self, pc):
+        """The solver's statement of when the mechanics block last changed.
+
+        `operator_version` is the same value `gadopt.InternalVariableSCPC`
+        keys its reassembly on, so the two caches of pieces of one operator
+        agree by construction. `gia_solve_index` covers the case that version
+        cannot express, a Jacobian that moves inside one nonlinear solve.
+
+        Both are rank-consistent: the version is bumped by a reduction over
+        the communicator in `_refresh_operator_version`, and the solve index is
+        incremented by the collective `solve()`. So the rebuild decision this
+        returns is identical on every rank and the collective `_build` is
+        entered by all ranks together.
+
+        Args:
+          pc: PETSc preconditioner.
+
+        Returns:
+          `(operator_version, solve_index, present)`. `present` is False when
+          the context names neither marker, which is the signal to leave the
+          complement alone.
+        """
+        appctx = self._appctx(pc)
+        present = "operator_version" in appctx or "gia_solve_index" in appctx
+        solve_index = appctx.get("gia_solve_index")
+        return (appctx.get("operator_version"),
+                None if solve_index is None else int(solve_index),
+                present)
 
     def _build(self, pc):
         A, _ = pc.getOperators()
@@ -844,6 +1073,10 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         self._n = n
         self._S = S
         self._factorise(S)
+        # Counted after the factorisation, so the count is the number of usable
+        # complements this PC has produced and a build that raised is not one
+        # of them.
+        self.build_count = getattr(self, "build_count", 0) + 1
         scale = max(np.abs(S).max(), 1e-300)
         PETSc.Sys.Print(
             f"    [dense Schur] {n}x{n} built in {n} block-0 applications; "

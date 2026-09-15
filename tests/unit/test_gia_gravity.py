@@ -121,6 +121,11 @@ def mechanics_bcs(sub):
     }
 
 
+def relative_difference(a, b):
+    """`|a - b| / |b|` in the L2 norm, for two fields on the same space."""
+    return fd.norm(a - b) / fd.norm(b)
+
+
 def build(meshes, *, rotation=True, n_internal_variables=1, truncation=3,
           condensed=False, approximation_kwargs=None, declare_nullspace=False,
           **kwargs):
@@ -533,22 +538,90 @@ class TestConstruction:
         solver, _, layout = solved
         assert len(solver.equations) == 1 + len(layout.internal_variables)
 
-    def test_power_law_rheology_is_refused(self, meshes):
-        """`DtNTwoBlockSchurPC.update` is a no-op, so the block goes stale.
+    def test_power_law_is_refused_on_the_condensed_layout(self, meshes):
+        """Pointwise substitution and a power law are a different linearisation.
 
-        Correct for Newtonian GIA and false the moment the viscosity depends on
-        the state. A stale preconditioner fails silently, which is this
-        project's recurring failure mode, so the combination is refused rather
-        than warned about.
+        The condensed layout writes the backward-Euler update `m(u)` into the
+        stress before differentiation. With a power law the factor is then a
+        function of `u` alone instead of an independent `m`, so the Newton
+        linearisation is not the one the uncondensed residual has, and
+        `set_equations` refuses the combination. That refusal fires from
+        `StokesSolverBase.__init__` before any solver options are read.
         """
         parent, sub = meshes
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=gravity_bcs(parent),
-            self_gravity_number=LAMBDA)
-        with pytest.raises(ValueError, match="exponent"):
+            condense_internal_variables=True, self_gravity_number=LAMBDA)
+        with pytest.raises(NotImplementedError, match="Newtonian"):
             SelfGravitatingGIASolver(
                 fd.Function(Z), approximation(exponent=3.0), layout=layout,
                 dt=1.0, bcs=mechanics_bcs(sub))
+
+    @pytest.mark.parametrize("solver_parameters", ["direct", "iterative", None])
+    def test_power_law_is_accepted_on_the_uncondensed_layout(
+            self, meshes, solver_parameters):
+        """A power law is a supported configuration of every options path.
+
+        The uncondensed layout keeps the internal variables as unknowns, so the
+        power-law factor enters the history equation and pyadjoint tapes it,
+        and the nested preconditioner follows the state-dependent Jacobian on
+        its own: the inner fieldsplit re-runs its setup after every Jacobian
+        reassembly, so every sub-preconditioner rebuilds once per Newton
+        iteration (measured, `NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2).
+        Construction must therefore succeed on all three ways of asking for
+        options, and Newton must be the outer method on each.
+
+        `None` selects the direct preset here, because the annulus is 2-D.
+
+        The `"iterative"` case carries one extra fact: the condensed field runs
+        GMRES. A power law makes the condensed displacement operator
+        nonsymmetric in 2-D, and the short CG the preset writes is valid only
+        on a symmetric operator, so `_attach_condensation_context` replaces it.
+        """
+        solver, _, _ = build(
+            meshes,
+            approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3},
+            solver_parameters=solver_parameters)
+        assert solver.solver_parameters["snes_type"] == "newtonls"
+        if solver_parameters == "iterative":
+            prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
+            assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
+
+    def test_ksponly_with_a_power_law_is_refused(self, meshes):
+        """One linear solve on a nonlinear residual reports CONVERGED.
+
+        `ksponly` is the right method for `exponent = 1` and both preset
+        docstrings recommend it there, so the misuse this guard catches is a
+        copy of such a dictionary into a power-law run. The wrong answer
+        carries no diagnostic at all: SNES exits converged after its single
+        linear solve at the initial state.
+        """
+        with pytest.raises(ValueError, match="ksponly"):
+            build(meshes,
+                  approximation_kwargs={"exponent": 3.0,
+                                        "transition_stress": 1e-3},
+                  solver_parameters_extra={"snes_type": "ksponly"})
+
+    def test_power_law_is_refused_on_the_lowrank_representation(self, meshes):
+        """Refused for want of a test, not for a known defect.
+
+        `dtn_coupled_adjoint.py` assembles the exact linearisation of the full
+        residual at the converged state, so it carries the power-law factor
+        like any other coefficient, and `augment_jacobian` reinstalls `B` after
+        every Jacobian assembly on the forward path. What is missing is
+        coverage: `tests/unit/test_gia_gravity_adjoint_lowrank.py` is Newtonian
+        throughout. The constructor refuses the combination so that whoever
+        first runs it is whoever first tests it.
+        """
+        parent, sub = meshes
+        Z, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent),
+            self_gravity_number=LAMBDA, dtn_representation="lowrank")
+        with pytest.raises(ValueError, match="lowrank"):
+            SelfGravitatingGIASolver(
+                fd.Function(Z), approximation(exponent=3.0), layout=layout,
+                dt=1.0, bcs=mechanics_bcs(sub),
+                dtn_representation="lowrank")
 
     def test_it_solves(self, solved):
         solver, z, layout = solved
@@ -569,6 +642,153 @@ class TestConstruction:
             for key, value in modes.items():
                 if key != "cos2":
                     assert abs(value) < 1e-9 * abs(modes["cos2"]) + 1e-15
+
+
+class TestNewtonianLimit:
+    """A power-law configuration that is Newtonian must solve the Newtonian problem.
+
+    Two statements, and they are different. The first is exact: at
+    `exponent = 1` the `0^0` guard in `power_law_factor` makes the factor
+    identically 1, whatever the transition and background stresses are, so the
+    two residuals are the same form up to UFL simplification and the two
+    solutions agree to roundoff. The second is a limit: at `exponent = 1 + eps`
+    with a positive background stress the factor is `1 + O(eps)` and the
+    solutions agree to that order.
+
+    Both are route tests on a 2-D annulus, so neither says anything about
+    power-law physics: in 2-D the factor is evaluated on a stress carrying the
+    spurious trace of the fixed 2/3 in the deviatoric operator.
+    """
+
+    @staticmethod
+    def _fields(solver, z, layout, condensed):
+        """The three states to compare: displacement, history, potential.
+
+        On the condensed layout the internal variables are stored `Function`s
+        on the solver rather than sub-fields of the mixed space, so they are
+        read from two different places and this helper hides the difference.
+
+        Args:
+          solver: the solved `SelfGravitatingGIASolver`.
+          z: its mixed solution `Function`.
+          layout: the `GIASpaceLayout` the space was built with.
+          condensed: whether the internal variables are eliminated.
+
+        Returns:
+          A tuple `(u, m, psi)`.
+        """
+        u = z.subfunctions[layout.displacement]
+        psi = z.subfunctions[layout.potential]
+        if condensed:
+            m, = history_slices(solver.internal_variables)
+        else:
+            m, = history_slices(
+                z.subfunctions[layout.internal_variable_field])
+        return u, m, psi
+
+    @pytest.mark.parametrize("condensed", [False, True])
+    def test_exponent_one_with_power_law_parameters_is_the_newtonian_solve(
+            self, meshes, condensed):
+        """Exponent 1 makes the transition and background stresses inert.
+
+        `power_law_factor` guards the `0^0` that UFL evaluates as 0 by
+        conditioning on `eq(n - 1, 0)`, so at `n = 1` both powers are 1 and the
+        factor is `(1 + 1) / (1 + 1) = 1` for every transition stress and every
+        background stress, the zero background included. The two residuals are
+        then the same form up to UFL simplification, and 1e-12 relative is the
+        roundoff that simplification can cost.
+
+        The condensed case pins something weaker, and deliberately so. That
+        layout substitutes with `approximation.maxwell_times` unmodified; the
+        `maxwell_times` list that carries the factor is built for the
+        uncondensed history equation only. So the two stress parameters never
+        enter the condensed residual at all, and this case pins that they are
+        inert there rather than that the factor is 1.
+        """
+        plain, z_plain, layout = build(
+            meshes, condensed=condensed, solver_parameters="direct")
+        power, z_power, _ = build(
+            meshes, condensed=condensed, solver_parameters="direct",
+            approximation_kwargs={"exponent": 1, "transition_stress": 1e-4,
+                                  "background_stress": 0.5})
+        plain.solve()
+        power.solve()
+
+        u_p, m_p, psi_p = self._fields(plain, z_plain, layout, condensed)
+        u_q, m_q, psi_q = self._fields(power, z_power, layout, condensed)
+        assert fd.norm(u_p) > 0.0
+        assert fd.norm(m_p) > 0.0
+        # Measured on this annulus, uncondensed: 7.0e-17 in `u`, 0 in `m`,
+        # 6.9e-17 in `psi` (plan review, table under B1). The gate is five
+        # orders above that, so a factor that is not exactly 1 fails it.
+        differences = {"u": relative_difference(u_q, u_p),
+                       "m": relative_difference(m_q, m_p),
+                       "psi": relative_difference(psi_q, psi_p)}
+        summary = "  ".join(f"{k}={v:.2e}" for k, v in differences.items())
+        print(f"\n    [exponent 1, condensed={condensed}] {summary}")
+        for key, value in differences.items():
+            assert value < 1e-12, f"{key} differs by {value:.3e}"
+
+    def test_exponent_near_one_is_the_newtonian_solve_to_first_order(
+            self, meshes):
+        r"""At `n = 1 + eps` with a positive background stress, `f = 1 + O(eps)`.
+
+        With `a = sigma_bg / sigma*` and `b = (sigma + sigma_bg) / sigma*`, the
+        factor is `f = (1 + a^eps) / (1 + b^eps)`. Choosing
+        `background_stress = transition_stress` gives `a = 1` exactly, so
+        `f = 2 / (1 + b^eps)` and
+
+            |f - 1| <= (eps / 2) ln(1 + sigma_max / sigma*),
+
+        of order 1e-7 on this annulus. The displacement gate is 1e-6 relative;
+        the measured difference is 5.8e-10 (plan review, table under B1).
+
+        **The limit needs a positive background stress, and the third
+        assertion pins why.** With `background_stress = 0` the model is
+        discontinuous in the exponent at `n = 1`: UFL evaluates a zero base to
+        a positive power as 0, so `a^(n-1)` is 0 for every `n > 1`, while the
+        guard sets it to 1 at `n = 1` exactly. The factor therefore tends to
+        1/2 rather than to 1 as `n` approaches 1 from above, the Maxwell times
+        halve, and the state differs from the Newtonian one by 25 percent in
+        `u` (measured). Asserting that gap keeps the property visible: a future
+        change to the guard that makes the zero-background case continuous
+        fails here, and so gets read rather than absorbed.
+        """
+        newtonian, z_newtonian, layout = build(
+            meshes, solver_parameters="direct")
+        near, z_near, _ = build(
+            meshes, solver_parameters="direct",
+            approximation_kwargs={"exponent": 1 + 1e-6,
+                                  "transition_stress": 1e-3,
+                                  "background_stress": 1e-3})
+        # Newton is the outer method, which is the whole reason this
+        # configuration is reachable: the residual is nonlinear for any
+        # exponent other than 1.
+        assert near.solver_parameters["snes_type"] == "newtonls"
+        newtonian.solve()
+        near.solve()
+        assert near.solver.snes.getConvergedReason() > 0
+
+        u_newtonian = z_newtonian.subfunctions[layout.displacement]
+        u_near = z_near.subfunctions[layout.displacement]
+        assert fd.norm(u_newtonian) > 0.0
+        near_difference = relative_difference(u_near, u_newtonian)
+        print(f"\n    [exponent 1+1e-6] background 1e-3: "
+              f"u={near_difference:.2e}")
+        assert near_difference < 1e-6
+
+        # The zero-background control: same exponent, same transition stress,
+        # a model that is discontinuous at n = 1 and a state that says so.
+        zero_background, z_zero, _ = build(
+            meshes, solver_parameters="direct",
+            approximation_kwargs={"exponent": 1 + 1e-6,
+                                  "transition_stress": 1e-3,
+                                  "background_stress": 0.0})
+        zero_background.solve()
+        u_zero = z_zero.subfunctions[layout.displacement]
+        zero_difference = relative_difference(u_zero, u_newtonian)
+        print(f"    [exponent 1+1e-6] background 0: u={zero_difference:.2e}")
+        assert zero_difference > 1e-1
 
 
 class TestTheBlockOneDiagonalReachesTheAppctx:

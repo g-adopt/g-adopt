@@ -445,8 +445,14 @@ def test_power_law_newton_with_static_condensation():
 def test_power_law_condensed_operator_is_not_symmetric():
     """Two elements with the total-stress factor: the exact tangent is not symmetric.
 
-    This pins the reason for GMRES. A single element with strong boundary
-    conditions in 3-D is symmetric, which pins the reason CG is kept there.
+    Two measurements of the mathematics, neither of which the Krylov selection
+    reads. Two elements sharing one stress-dependent factor have no dissipation
+    potential and the tangent is asymmetric at any state. One element with
+    strong boundary conditions on tetrahedra in 3-D is symmetric to roundoff -
+    the narrow case `CoupledInternalVariableSolver.condensed_operator_symmetric`
+    describes and deliberately does not detect, because it occurs on no mesh
+    this project runs in 3-D and detecting it saves orthogonalisation cost
+    alone.
     """
     mesh = square_mesh()
     V = fd.VectorFunctionSpace(mesh, "CG", 2)
@@ -483,23 +489,75 @@ def test_power_law_condensed_operator_is_not_symmetric():
     solver3 = gadopt.CoupledInternalVariableSolver(
         z3, approx3, dt=DT, bcs=bcs3, solver_parameters="direct"
     )
-    assert solver3.condensed_operator_symmetric()
     one_element = condensed_operator(fd.derivative(solver3.F, z3))
     assert asymmetry(one_element) < 1e-12
+    # The operator is symmetric and the rule still reports it as not, because
+    # `condensed_operator_symmetric` reads the rheology alone. This assertion
+    # is the pair to the one above: the mathematics and the policy disagree
+    # here on purpose, and the policy's reasons are in that method's
+    # docstring.
+    assert not solver3.condensed_operator_symmetric()
+
+
+def hexahedral_cube_mesh(n=2):
+    """A unit cube of affine hexahedra, the shape every 3-D production run has.
+
+    The extruded spheres the self-gravity solver runs on report a
+    `TensorProductCell`, which is not a simplex either; this affine box
+    isolates the cell shape from curvature and from extrusion.
+    """
+    mesh = fd.BoxMesh(n, n, n, 1.0, 1.0, 1.0, hexahedral=True)
+    mesh.cartesian = True
+    return mesh
+
+
+def cube_mesh(n=2):
+    """A unit cube of affine tetrahedra: the one 3-D cell that keeps CG."""
+    mesh = fd.UnitCubeMesh(n, n, n)
+    mesh.cartesian = True
+    return mesh
+
+
+def strong_bcs_3d(mesh):
+    """Component-wise strong conditions on a box, no weak displacement term.
+
+    The one-element power-law CG branch requires exactly this: no `"u"` and no
+    `"un"` anywhere, so the Nitsche boundary term that needs a cell-constant
+    Maxwell time is absent and only the volume relation decides.
+    """
+    bids = list(gadopt.get_boundary_ids(mesh))
+    return {bids[0]: {"ux": 0}, bids[2]: {"uy": 0}, bids[4]: {"uz": 0},
+            bids[5]: {"normal_stress": 0.1, "free_surface": {}}}
 
 
 @pytest.mark.parametrize(
-    "n_elements, exponent, bc_builder, dim, expected",
+    "n_elements, exponent, mesh_builder, bc_builder, expected",
     [
-        (2, 1, weak_bcs, 2, "cg"),
-        (1, 3, weak_bcs, 2, "gmres"),
-        (1, 3, strong_bcs, 2, "gmres"),
-        (2, 3, strong_bcs, 2, "gmres"),
+        (2, 1, square_mesh, weak_bcs, "cg"),
+        (1, 3, square_mesh, weak_bcs, "gmres"),
+        (1, 3, square_mesh, strong_bcs, "gmres"),
+        (2, 3, square_mesh, strong_bcs, "gmres"),
+        (1, 1, cube_mesh, strong_bcs_3d, "cg"),
+        (1, 3, cube_mesh, strong_bcs_3d, "gmres"),
+        (1, 3, hexahedral_cube_mesh, strong_bcs_3d, "gmres"),
     ],
-    ids=["newtonian", "power-law-weak", "power-law-2d", "power-law-two-elements"],
+    ids=["newtonian", "power-law-weak", "power-law-2d", "power-law-two-elements",
+         "newtonian-tetrahedra", "power-law-tetrahedra", "power-law-hexahedra"],
 )
-def test_condensed_krylov_selection(n_elements, exponent, bc_builder, dim, expected):
-    mesh = square_mesh()
+def test_condensed_krylov_selection(n_elements, exponent, mesh_builder,
+                                    bc_builder, expected):
+    """The rheology picks the method, and nothing else does.
+
+    Newtonian keeps the preset's CG on every mesh; every power law takes
+    GMRES, including the one-element tetrahedral 3-D case whose operator is
+    genuinely symmetric (`test_power_law_condensed_operator_is_not_symmetric`
+    measures it at 1.1e-16). That case is given away deliberately: it occurs
+    on no mesh this project runs in 3-D, and what detecting it saves is the
+    orthogonalisation of a short truncated GMRES. The tetrahedral and
+    hexahedral power-law rows differ only in the cell and expect the same
+    method, which is what pins that the rule no longer reads the mesh.
+    """
+    mesh = mesh_builder()
     approx = approximation(mesh, n_elements, exponent=exponent)
     V = fd.VectorFunctionSpace(mesh, "CG", 2)
     z = fd.Function(V * approx.internal_variable_space(mesh))
@@ -514,6 +572,62 @@ def test_condensed_krylov_selection(n_elements, exponent, bc_builder, dim, expec
         solver_parameters_extra={"condensed_field": {"ksp_type": "fgmres"}},
     )
     assert forced.solver_parameters["condensed_field"]["ksp_type"] == "fgmres"
+
+
+def test_one_element_power_law_is_asymmetric_on_hexahedra():
+    """Why the narrow CG case exists, and why the solver does not use it.
+
+    A measurement and not a gate on the solver: nothing in the Krylov
+    selection reads the cell. `condensed_operator_symmetric` sends every power
+    law to GMRES, and this test is the record of what that gives away.
+
+    The same rheology, the same boundary conditions, the same displacement and
+    history fields written by the same expressions: only the cell changes. The
+    tetrahedral operator is symmetric to roundoff - the narrow case, the one
+    `NOTES/coupled-schur/FINDING-POWER-LAW-TANGENT-SYMMETRY.md` establishes and
+    which `test_power_law_condensed_operator_is_not_symmetric` also pins - and
+    the hexahedral one is not, by three orders more than any roundoff. The
+    symmetry argument needs the deviatoric strain of a displacement increment
+    to lie in the DG history space, which holds for P2 on a tetrahedron and
+    fails for Q2 on a hexahedron.
+
+    Measured: tetrahedra 1.1e-16, hexahedra 3.4e-3. On the extruded cubed
+    spheres the self-gravity solver runs on, the same quantity is 5.9e-3 with a
+    flat base and 7.0e-3 with a degree-2 one, and on the coupled self-gravity
+    system 1.4e-2 with a rigid core and 9.4e-2 with a fluid core
+    (`tests/unit/test_gia_nested_condensation.py::TestThreeDimensions`). So the
+    tetrahedral row is the only symmetric power-law configuration anywhere in
+    this project, and no 3-D production mesh is on it. If that ever changes -
+    a tetrahedral 3-D GIA mesh, say - this test is where the case to reopen
+    the rule is already measured.
+    """
+    defects = {}
+    for name, mesh_builder in (("tetrahedra", cube_mesh),
+                               ("hexahedra", hexahedral_cube_mesh)):
+        mesh = mesh_builder()
+        approx = approximation(mesh, 1, exponent=3)
+        V = fd.VectorFunctionSpace(mesh, "CG", 2)
+        S = approx.internal_variable_space(mesh)
+        z = fd.Function(V * S)
+        X = fd.SpatialCoordinate(mesh)
+        z.subfunctions[0].interpolate(0.05 * (X + 0.3 * X[0] * X))
+        # The one-element symmetry needs a trace-free history, which the march
+        # preserves in 3-D; this artificial state is made trace free by hand,
+        # exactly as `test_power_law_condensed_operator_is_not_symmetric` does.
+        block = anisotropic_history(mesh, S, 1)[0, :, :]
+        z.subfunctions[1].interpolate(
+            fd.as_tensor([0.1 * (block - fd.tr(block) / 3 * fd.Identity(3))])
+        )
+        solver = gadopt.CoupledInternalVariableSolver(
+            z, approx, dt=DT, bcs=strong_bcs_3d(mesh),
+            solver_parameters="direct"
+        )
+        defects[name] = asymmetry(
+            condensed_operator(fd.derivative(solver.F, z)))
+    print("\n    [cell shape] "
+          + "  ".join(f"{k}={v:.3e}" for k, v in defects.items()))
+    assert defects["tetrahedra"] < 1e-12
+    assert defects["hexahedra"] > 1e-4
 
 
 def test_constant_exponent_one_keeps_operator_reuse():

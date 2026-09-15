@@ -106,7 +106,8 @@ def meshes():
 # ---------------------------------------------------------------------------
 # Forward map and the Taylor driver
 # ---------------------------------------------------------------------------
-def _forward(control, meshes, *, declare_nullspace):
+def _forward(control, meshes, *, declare_nullspace, approximation_kwargs=None,
+             solver_parameters_extra=None):
     """Coupled solve with `shear_modulus = control`; J = ||u||^2 over the mantle.
 
     `shear_modulus` is the strongest single control on the coupled operator
@@ -114,6 +115,19 @@ def _forward(control, meshes, *, declare_nullspace):
     directional derivative is large and the Taylor signal clean -- which is what
     a first *existence* test wants. It also governs the elastic response
     directly, so J moves strongly with it.
+
+    Args:
+      control: the Real-space `Function` that becomes `shear_modulus`.
+      meshes: the `(parent, sub)` pair of the annulus fixture.
+      declare_nullspace: whether to declare `rigid_rotation_nullspace`.
+      approximation_kwargs: extra approximation settings, merged on top of
+        `shear_modulus`. A power-law test passes `exponent` and
+        `transition_stress` here.
+      solver_parameters_extra: extra PETSc options, forwarded to the solver. A
+        nonlinear forward map needs its Newton tolerances tightened here, so
+        that the solve is converged far below the Taylor remainder at the
+        smallest step and the finite differences measure the model instead of
+        the solver.
     """
     _, sub = meshes
     with stop_annotating():
@@ -122,8 +136,10 @@ def _forward(control, meshes, *, declare_nullspace):
             rotation=False,
             condensed=False,
             declare_nullspace=declare_nullspace,
-            approximation_kwargs={"shear_modulus": control},
+            approximation_kwargs={"shear_modulus": control,
+                                  **(approximation_kwargs or {})},
             solver_parameters="direct",
+            solver_parameters_extra=solver_parameters_extra,
         )
     solver.solve()  # the taped variational solve
     u = fd.split(solver.solution)[layout.displacement]
@@ -131,6 +147,8 @@ def _forward(control, meshes, *, declare_nullspace):
 
 
 def _assert_replay_matches_fresh_solve(Jhat, meshes, *, declare_nullspace,
+                                       approximation_kwargs=None,
+                                       solver_parameters_extra=None,
                                        factor=1.05):
     """Tape replay at a shifted control equals a fresh build-and-solve there.
 
@@ -147,7 +165,10 @@ def _assert_replay_matches_fresh_solve(Jhat, meshes, *, declare_nullspace,
     R = fd.FunctionSpace(sub, "R", 0)
     m2 = fd.Function(R).assign(factor)
     with stop_annotating():
-        J_direct = float(_forward(m2, meshes, declare_nullspace=declare_nullspace))
+        J_direct = float(_forward(
+            m2, meshes, declare_nullspace=declare_nullspace,
+            approximation_kwargs=approximation_kwargs,
+            solver_parameters_extra=solver_parameters_extra))
     J_replay = float(Jhat(m2))
     assert abs(J_replay - J_direct) <= 1e-9 * abs(J_direct), (
         f"tape replay {J_replay:.12e} != fresh solve {J_direct:.12e} at "
@@ -157,8 +178,20 @@ def _assert_replay_matches_fresh_solve(Jhat, meshes, *, declare_nullspace,
     return J_direct, J_replay
 
 
-def _reduced_functional(meshes, *, declare_nullspace):
-    """Tape the forward once and wrap it, with the Real-space control and h."""
+def _reduced_functional(meshes, *, declare_nullspace, approximation_kwargs=None,
+                        solver_parameters_extra=None):
+    """Tape the forward once and wrap it, with the Real-space control and h.
+
+    Args:
+      meshes: the `(parent, sub)` pair of the annulus fixture.
+      declare_nullspace: whether to declare `rigid_rotation_nullspace`.
+      approximation_kwargs: extra approximation settings for `_forward`.
+      solver_parameters_extra: extra PETSc options for `_forward`.
+
+    Returns:
+      `(Jhat, control, h, J)`: the reduced functional, the control, the
+      direction and the taped value.
+    """
     _, sub = meshes
     R = fd.FunctionSpace(sub, "R", 0)
     control = fd.Function(R).assign(1.0)  # created annotation-free
@@ -169,7 +202,9 @@ def _reduced_functional(meshes, *, declare_nullspace):
     continue_annotation()
     try:
         m = Control(control)
-        J = _forward(control, meshes, declare_nullspace=declare_nullspace)
+        J = _forward(control, meshes, declare_nullspace=declare_nullspace,
+                     approximation_kwargs=approximation_kwargs,
+                     solver_parameters_extra=solver_parameters_extra)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -221,3 +256,58 @@ def test_coupled_adjoint_with_nullspace_declared(meshes):
     """
     Jhat, control, h, J = _reduced_functional(meshes, declare_nullspace=True)
     assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
+
+
+def test_coupled_adjoint_is_second_order_with_a_power_law(meshes):
+    """The coupled tape carries the power-law tangent, not just the Newtonian one.
+
+    What a passing rate 2 proves here. With `exponent = 3` the Maxwell times of
+    the history equation carry `power_law_factor`, a nonlinear function of the
+    deviatoric stress and hence of the internal variables, and the forward solve
+    is Newton rather than one linear solve. pyadjoint differentiates the
+    residual symbolically, so it tapes that factor's tangent like any other
+    coefficient, and the adjoint solve uses the Jacobian at the **converged**
+    state, which is the linearisation the gradient needs. Neither fact is
+    obvious from the Newtonian test above: that one has a linear residual, where
+    the Jacobian at any state is the Jacobian at the solution.
+
+    This answers the second open question of the parent plan (`PLAN.md`
+    section 3): a power law on the uncondensed layout keeps the coupled adjoint,
+    so the gradient work costed against the Newtonian solver carries over.
+
+    On tolerances. The string `"direct"` preset inherits `snes_atol 1e-10` from
+    `newton_stokes_solver_parameters`, and the residual norm of this
+    configuration is about 2.3e-3, so `2.3e-3 * snes_rtol` at 1e-10 is below
+    `snes_atol` and `atol` is the tolerance that stops Newton. Tightening
+    `snes_rtol` alone therefore changes nothing; both are set. Measured on
+    2026-09-14 by the plan reviewer: with `snes_rtol 1e-10` alone, Newton takes
+    3 iterations to a final norm of 1.35e-11 and the R1 rates are 1.993, 1.996,
+    1.998 with the replay identical to a fresh solve to the bit; adding
+    `snes_atol 1e-14` gives 4 iterations, a final norm of 1e-17 and the same
+    rates. That ladder is the expected result of this test.
+
+    `declare_nullspace=False`, as in the primary Newtonian test: the in-place
+    `project_out_nullspace` after the taped solve is a separate question and
+    has its own test.
+    """
+    approximation_kwargs = {"exponent": 3.0, "transition_stress": 1e-3}
+    solver_parameters_extra = {"snes_rtol": 1e-10, "snes_atol": 1e-14}
+    Jhat, control, h, J = _reduced_functional(
+        meshes, declare_nullspace=False,
+        approximation_kwargs=approximation_kwargs,
+        solver_parameters_extra=solver_parameters_extra)
+
+    ladder = taylor_first_order_ladder(Jhat, control, h)
+    print(f"\n    [ladder, power law] "
+          f"R0_rate={[f'{r:.3f}' for r in ladder['R0_rate']]}"
+          f"  R1_rate={[f'{r:.3f}' for r in ladder['R1_rate']]}")
+
+    assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
+
+    # The same false-green class the Newtonian test closes: a control value
+    # baked into a coefficient at construction time leaves the tape
+    # self-consistent while the gradient is wrong for the true forward map.
+    _assert_replay_matches_fresh_solve(
+        Jhat, meshes, declare_nullspace=False,
+        approximation_kwargs=approximation_kwargs,
+        solver_parameters_extra=solver_parameters_extra)
