@@ -294,14 +294,18 @@ def main():
                         default="none")
     parser.add_argument("--load-only", action="store_true")
     parser.add_argument(
-        "--block0", choices=("condensed-pair", "sweep"),
-        default="condensed-pair",
-        help="Uncondensed arm only. 'condensed-pair' (default) eliminates "
-             "the internal-variable field inside block 0 with "
-             "gadopt.InternalVariableSCPC and runs CG with GAMG on the exact "
-             "condensed displacement operator, the T2 route. 'sweep' is the "
-             "three-way multiplicative sweep over m, u, psi that the P3 march "
-             "used, kept for comparison.")
+        "--block0", choices=("condensed", "condensed-pair", "sweep"),
+        default="condensed",
+        help="Uncondensed arm only. 'condensed' (default) is "
+             "gadopt.CondensedBlockPC on block 0: the internal-variable "
+             "field is eliminated once per block-0 application and the "
+             "block-0 Krylov solve runs on the assembled (u, psi) condensed "
+             "system, the preset's default. 'condensed-pair' eliminates the "
+             "field inside block 0 with gadopt.InternalVariableSCPC on the "
+             "(u, M) split of a two-split sweep, so the elimination runs on "
+             "every block-0 inner iteration; the T2 route, kept for "
+             "comparison. 'sweep' is the three-way multiplicative sweep over "
+             "m, u, psi that the P3 march used, kept for comparison.")
     args = parser.parse_args()
 
     condense = args.arm == "condensed"
@@ -362,7 +366,7 @@ def main():
         })
         # In the three-way sweep `u` is split 1 (`m` is split 0).
         displacement_prefix = "dtn_fieldsplit_0_fieldsplit_1_"
-    else:
+    elif args.block0 == "condensed-pair":
         # Static condensation of the (u, M) pair inside block 0, the dense
         # Schur complement on the Real block, one linear solve per step.
         solver_parameters = selfgrav_dtn_iterative_solver_parameters(
@@ -379,6 +383,24 @@ def main():
             snes_type="ksponly",
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
         displacement_prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
+    else:
+        # `gadopt.CondensedBlockPC` on block 0: the internal-variable field is
+        # eliminated once per block-0 application and the block-0 Krylov
+        # solve runs on the assembled (u, psi) condensed system, so neither
+        # the block-0 Krylov vectors nor the per-iteration work carry the
+        # DG history field. The displacement split of that solve is split 0
+        # of the nest, under `dtn_fieldsplit_0_condensed_`. The dense Schur
+        # complement on the Real block and one linear solve per step, as on
+        # the other arms.
+        solver_parameters = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False,
+            block0="condensed",
+            block0_rtol=args.block0_rtol,
+            outer_rtol=args.outer_rtol,
+            block0_max_it=args.block0_max_it,
+            snes_type="ksponly",
+            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
+        displacement_prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
 
     # The displacement preconditioner, on whichever split carries it. For
     # the assembled-block classes the modes are a PETSc option they read at

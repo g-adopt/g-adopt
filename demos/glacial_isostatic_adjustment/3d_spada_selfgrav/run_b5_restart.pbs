@@ -29,9 +29,12 @@ source $D/pbs_kernel_cache.sh
 : ${CHECKPOINT:=$D/b5-p3-full-20260817.h5}
 : ${CHECKPOINT_INDEX:=6}
 : ${CHECKPOINT_TIME_KYR:=20.0}
-# Uncondensed arm only: condensed-pair (static condensation of (u, M) inside
-# block 0, the T2 route) or sweep (the three-way sweep the P3 march used).
-: ${BLOCK0:=condensed-pair}
+# Uncondensed arm only: condensed (gadopt.CondensedBlockPC on block 0, the
+# preset's default: the internal variables eliminated once per block-0
+# application), condensed-pair (static condensation of (u, M) inside a
+# two-split block-0 sweep, the T2 route) or sweep (the three-way sweep the
+# P3 march used).
+: ${BLOCK0:=condensed}
 : ${EXTRA:=}
 : ${PETSCOPTS:=-SelfGravitatingGIA_ksp_monitor -ksp_error_if_not_converged}
 export PETSC_OPTIONS="$PETSCOPTS"
