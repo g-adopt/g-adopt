@@ -17,6 +17,7 @@ from .gia_gravity import (
     FluidCore,
     GIASpaceLayout,
     RigidBodyAssembledPC,
+    SeaLevel,
     SelfGravitatingGIASolver,
     rigid_rotation_nullspace,
     self_gravitating_gia_space,

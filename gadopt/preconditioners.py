@@ -16,7 +16,9 @@ except ImportError:  # pragma: no cover - scipy ships in the firedrake venv
 from ufl import as_vector as ufl_as_vector
 from ufl import Form as ufl_Form
 from ufl.algorithms import expand_derivatives
+from ufl.corealg.traversal import unique_pre_traversal
 from ufl.indexed import Indexed
+from ufl.restriction import Restricted
 from firedrake.dmhooks import get_function_space
 from firedrake.petsc import PETSc
 from mpi4py import MPI
@@ -1877,6 +1879,42 @@ def internal_variable_condensation(A, keep: int = 0, eliminate: int = 1):
                           - blocks[keep, eliminate] * inverse
                           * blocks[eliminate, keep])
     return condensed_operator, inverse
+def single_domain_slate_form(form):
+    """The integrals of `form` that Slate can compile on one mesh.
+
+    Leaves out every exterior-facet integral whose integrand contains a
+    restricted expression. On the mechanics submesh an exterior-facet integrand
+    needs no restriction of its own, so a restriction there comes from a field
+    of the parent mesh evaluated on the parent's interior facet, through a
+    measure intersected with the parent's `dS`. The sea-level load is such a
+    term: its displacement block contains `avg(psi)` through the masks. Slate
+    merges the kernels of one mesh and fails on that facet map with
+    `KeyError: 'facet_1'`, and in a pytest process the same failure has been
+    seen as a segmentation fault.
+
+    The result is used only to build a preconditioner, so leaving a term out
+    changes the convergence rate and not the solution. For the sea-level load
+    the missing term is the weight of the ocean column,
+    `c B_mu g rho_w B C (u.n)(w.n)`, on the surface facets only. The internal
+    variable block and its couplings contain no such integral, so the
+    back-substitution is exact.
+
+    Args:
+      form: a bilinear form.
+
+    Returns:
+      `form` itself when nothing is left out, otherwise a new `Form`.
+    """
+    kept = []
+    for integral in form.integrals():
+        if integral.integral_type() == "exterior_facet" and any(
+                isinstance(node, Restricted)
+                for node in unique_pre_traversal(integral.integrand())):
+            continue
+        kept.append(integral)
+    if len(kept) == len(form.integrals()):
+        return form
+    return UFLForm(kept)
 
 
 class InternalVariableSCPC(fd.SCPC):
@@ -1999,6 +2037,16 @@ class InternalVariableSCPC(fd.SCPC):
             raise ValueError("Context must be an ImplicitMatrixContext")
 
         self.bilinear_form = self.cxt.a
+        # The form that Slate compiles. It leaves out the exterior-facet
+        # integrals of the mechanics mesh that read the parent's interior
+        # facet through a restriction (`avg(psi)`), which Slate cannot merge
+        # into one kernel (`KeyError: 'facet_1'`). See
+        # `single_domain_slate_form`.
+        slate_form = single_domain_slate_form(self.bilinear_form)
+        #: How many integrals of the operator the condensed matrix leaves out.
+        #: Zero without a sea-level load.
+        self.dropped_integrals = (len(self.bilinear_form.integrals())
+                                  - len(slate_form.integrals()))
 
         # Retrieve the mixed function space
         W = self.bilinear_form.arguments()[0].function_space()
@@ -2050,7 +2098,7 @@ class InternalVariableSCPC(fd.SCPC):
             wc.reciprocal()
 
         # Get expressions for the condensed linear system
-        A_tensor = Tensor(self.bilinear_form)
+        A_tensor = Tensor(slate_form)
         reduced_sys, schur_builder = self.condensed_system(
             A_tensor, self.residual, elim_fields, prefix, pc
         )
@@ -2081,7 +2129,7 @@ class InternalVariableSCPC(fd.SCPC):
         # assemble this as well
         if A != P:
             self.cxt_pc = P.getPythonContext()
-            P_tensor = Tensor(self.cxt_pc.a)
+            P_tensor = Tensor(single_domain_slate_form(self.cxt_pc.a))
             P_reduced_sys, _ = self.condensed_system(
                 P_tensor, self.residual, elim_fields, prefix, pc
             )
