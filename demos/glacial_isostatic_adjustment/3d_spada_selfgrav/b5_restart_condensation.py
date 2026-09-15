@@ -367,6 +367,12 @@ def main():
         # Schur complement on the Real block, one linear solve per step.
         solver_parameters = selfgrav_dtn_iterative_solver_parameters(
             condensed=False,
+            # This arm is the nested `InternalVariableSCPC` route, whose
+            # displacement split sits at
+            # `dtn_fieldsplit_0_fieldsplit_0_condensed_field_`; the preset's
+            # default block 0 writes a different prefix and would leave the
+            # options below unread.
+            block0="pair",
             block0_rtol=args.block0_rtol,
             outer_rtol=args.outer_rtol,
             block0_max_it=args.block0_max_it,

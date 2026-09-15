@@ -50,23 +50,54 @@ SHIPPED = [
     ("lowrank_gravity", lowrank_gravity_solver_parameters, ""),
 ]
 
-#: condensed -> the option prefix each split of the coupled block-0 sweep
-#: nests its preconditioner's own options under, split by split.
+#: route name -> (preset keyword arguments, the prefix of each GAMG block).
 #:
-#: Both layouts sweep two splits. Condensed the space holds `u` and `psi`, and
-#: each goes to one of the `gadopt` `AssembledPC` subclasses, which nest the
-#: operator's options under `assembled_`. Uncondensed the space also holds the
-#: internal variable, split 0 is the pair `(u, M)` under
-#: `gadopt.InternalVariableSCPC`, and the GAMG that solves its assembled
-#: condensed displacement matrix sits under `condensed_field_`; split 1 is
-#: `psi` and is `assembled_` as before.
+#: Every route sweeps a displacement block and a potential block, and each
+#: hands its operator to GAMG at its own depth:
+#:
+#: - condensed layout: block 0 is a two-way sweep over `u` and `psi`, each
+#:   under a `gadopt` `AssembledPC` subclass, which nests the operator's
+#:   options under `assembled_`.
+#: - uncondensed layout, default block 0 (`gadopt.CondensedBlockPC`): the class
+#:   eliminates `M` itself and runs its own `(u, psi)` fieldsplit on assembled
+#:   matrices, so GAMG sits directly under `condensed_fieldsplit_N_` with no
+#:   `AssembledPC` in between.
+#: - uncondensed layout, `block0="pair"`: split 0 is the pair `(u, M)` under
+#:   `gadopt.InternalVariableSCPC`, whose condensed displacement matrix goes to
+#:   GAMG under `condensed_field_`; split 1 is `psi` under `assembled_`.
 #:
 #: The prefix is part of the assertion because attaching the settings at the
 #: wrong depth is a silent no-op rather than an error.
-SWEEP_PREFIXES = {
-    True: ("assembled_", "assembled_"),
-    False: ("condensed_field_", "assembled_"),
+SWEEP_ROUTES = {
+    "condensed": (
+        dict(condensed=True),
+        ("dtn_fieldsplit_0_fieldsplit_0_assembled_",
+         "dtn_fieldsplit_0_fieldsplit_1_assembled_")),
+    "uncondensed-condensed-block0": (
+        dict(condensed=False),
+        ("dtn_fieldsplit_0_condensed_fieldsplit_0_",
+         "dtn_fieldsplit_0_condensed_fieldsplit_1_")),
+    "uncondensed-pair-block0": (
+        dict(condensed=False, block0="pair"),
+        ("dtn_fieldsplit_0_fieldsplit_0_condensed_field_",
+         "dtn_fieldsplit_0_fieldsplit_1_assembled_")),
 }
+
+
+def gamg_prefixes(parameters):
+    """Every prefix in `parameters` whose block is preconditioned by GAMG.
+
+    Read off the dictionary itself rather than tested against a list of
+    candidate prefixes, so that a GAMG block at a depth nobody expected is
+    found instead of missed. A third GAMG block is what a mis-split looks
+    like: the internal variable is block-diagonal per cell and belongs to an
+    exact cell-local inverse, and handing that block to smoothed aggregation
+    does not raise, does not warn, and shows up only as block 0 running to its
+    iteration cap.
+    """
+    suffix = "pc_type"
+    return sorted(key[:-len(suffix)] for key, value in parameters.items()
+                  if key.endswith(suffix) and value == "gamg")
 
 
 class TestOneDefinition:
@@ -82,57 +113,36 @@ class TestOneDefinition:
             self, name, parameters, prefix):
         assert gamg_keys_of(parameters, prefix) == dict(GAMG_PARAMETERS)
 
-    @pytest.mark.parametrize("condensed", [True, False])
-    def test_the_coupled_sweep_uses_them_on_every_split(self, condensed):
-        """Each split of the coupled block-0 sweep, not just the first.
+    @pytest.mark.parametrize("route", list(SWEEP_ROUTES),
+                             ids=list(SWEEP_ROUTES))
+    def test_the_coupled_sweep_uses_them_on_every_split(self, route):
+        """Each block of the coupled block-0 sweep, not just the first.
 
-        Two splits on either layout, and each hands its operator to GAMG at
-        its own prefix (`SWEEP_PREFIXES`). A shared constant applied to one
-        and a literal left on another is exactly the drift this guards.
-
-        The internal variable reaches GAMG on neither layout: the condensed
-        space does not hold it, and the uncondensed one eliminates it inside
-        split 0. So every split named here is a displacement or a potential
-        block, and a GAMG that turned up on a DG tensor block would have to
-        appear at a prefix this test does not name --
-        `test_exactly_the_displacement_and_potential_splits_use_gamg` is what
-        counts those.
+        Two blocks on every route, each handing its operator to GAMG at its
+        own prefix (`SWEEP_ROUTES`). A shared constant applied to one and a
+        literal left on another is exactly the drift this guards.
         """
-        parameters = selfgrav_dtn_iterative_solver_parameters(
-            condensed=condensed)
-        n_splits = sum(
-            1 for key in parameters
-            if key.startswith("dtn_fieldsplit_0_pc_fieldsplit_")
-            and key.endswith("_fields"))
-        suffixes = SWEEP_PREFIXES[condensed]
-        assert n_splits == len(suffixes)
-        for split, suffix in enumerate(suffixes):
-            prefix = f"dtn_fieldsplit_0_fieldsplit_{split}_{suffix}"
-            assert uses_gamg(parameters, prefix), (condensed, split, prefix)
+        keywords, prefixes = SWEEP_ROUTES[route]
+        parameters = selfgrav_dtn_iterative_solver_parameters(**keywords)
+        for prefix in prefixes:
+            assert uses_gamg(parameters, prefix), (route, prefix)
             assert gamg_keys_of(parameters, prefix) == dict(GAMG_PARAMETERS)
 
-    def test_exactly_the_displacement_and_potential_splits_use_gamg(self):
-        """Two GAMG blocks either way: the displacement and `psi`.
+    @pytest.mark.parametrize("route", list(SWEEP_ROUTES),
+                             ids=list(SWEEP_ROUTES))
+    def test_exactly_the_displacement_and_potential_blocks_use_gamg(
+            self, route):
+        """Two GAMG blocks on every route: the displacement and `psi`.
 
-        The count is taken across both prefixes and across more splits than
-        either layout has, so it catches a third GAMG block as well as a
-        missing one. A third block is what a mis-split looks like: the
-        internal variable is block-diagonal per cell and belongs to an exact
-        cell-local inverse, and handing that block to smoothed aggregation
-        does not raise, does not warn, and shows up only as block 0 reaching
-        its iteration cap.
+        The internal variable reaches GAMG on no route: the condensed space
+        does not hold it, and both uncondensed routes eliminate it cell by
+        cell with Slate. So a third GAMG block anywhere in the dictionary is a
+        mis-split, and a missing one is a block left on PETSc's default
+        preconditioner.
         """
-        for condensed in (True, False):
-            parameters = selfgrav_dtn_iterative_solver_parameters(
-                condensed=condensed)
-            using = [
-                (split, suffix)
-                for split in range(4)
-                for suffix in ("assembled_", "condensed_field_")
-                if uses_gamg(
-                    parameters,
-                    f"dtn_fieldsplit_0_fieldsplit_{split}_{suffix}")]
-            assert len(using) == 2, (condensed, using)
+        keywords, prefixes = SWEEP_ROUTES[route]
+        parameters = selfgrav_dtn_iterative_solver_parameters(**keywords)
+        assert gamg_prefixes(parameters) == sorted(prefixes)
 
     def test_the_check_rejects_a_drifted_copy(self):
         """The rejecting partner: an accepting assertion alone proves nothing.

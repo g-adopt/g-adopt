@@ -573,10 +573,13 @@ class TestConstruction:
 
         `None` selects the direct preset here, because the annulus is 2-D.
 
-        The `"iterative"` case carries one extra fact: the condensed field runs
-        GMRES. A power law makes the condensed displacement operator
+        The `"iterative"` case carries one extra fact: the displacement split
+        runs GMRES. A power law makes the condensed displacement operator
         nonsymmetric in 2-D, and the short CG the preset writes is valid only
         on a symmetric operator, so `_attach_condensation_context` replaces it.
+        The prefix is the default block-0 route's, `gadopt.CondensedBlockPC`,
+        whose displacement split sits under
+        `dtn_fieldsplit_0_condensed_fieldsplit_0_`.
         """
         solver, _, _ = build(
             meshes,
@@ -584,7 +587,7 @@ class TestConstruction:
             solver_parameters=solver_parameters)
         assert solver.solver_parameters["snes_type"] == "newtonls"
         if solver_parameters == "iterative":
-            prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
+            prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
             assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
 
     def test_ksponly_with_a_power_law_is_refused(self, meshes):
@@ -1800,8 +1803,8 @@ class TestPresetWiring:
         solver, _, _ = build(meshes, solver_parameters="iterative")
         p = solver.solver_parameters
         # LU on block 0 is the direct preset's signature and appears nowhere
-        # in the iterative one.
-        assert p["dtn_fieldsplit_0_pc_type"] == "fieldsplit"
+        # in the iterative one, whose block 0 is a python preconditioner.
+        assert p["dtn_fieldsplit_0_pc_type"] == "python"
         assert "dtn_fieldsplit_0_assembled_pc_type" not in p
 
     def test_direct_still_selects_the_direct_preset(self, meshes):
@@ -1841,8 +1844,15 @@ class TestPresetWiring:
         independent arguments that nothing reconciles. On the preset path they
         are now the same fact, so the split count must match the space's
         block-0 field count for free.
+
+        The route with a block-0 fieldsplit is `block0="pair"`; the default
+        route names no `_fields` key at all and is guarded by the class name
+        instead (`tests/unit/test_gia_condensed_block0.py`).
         """
-        solver, _, layout = build(meshes, solver_parameters="iterative")
+        solver, _, layout = build(
+            meshes,
+            solver_parameters=selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, block0="pair"))
         # A split may name a comma-separated pair (the condensed `(u, M)`
         # split), so count the fields named, not the splits.
         n_fields = sum(
@@ -1893,9 +1903,9 @@ class TestPresetWiring:
         assert p[prefix + "ksp_rtol"] == 1e-2
         assert prefix + "ksp_converged_maxits" in p
 
-    def test_the_uncondensed_split_condenses_the_pair_and_seeds_near_incompressible_modes(
+    def test_the_uncondensed_pair_split_condenses_and_seeds_near_incompressible_modes(
             self, meshes):
-        """On the uncondensed layout `(u, M)` is one split under condensation.
+        """With `block0="pair"` the uncondensed `(u, M)` is one split.
 
         The condensed displacement operator is an assembled matrix, so no
         `AssembledPC` wraps it; GAMG is seeded through the near-nullspace
@@ -1907,7 +1917,10 @@ class TestPresetWiring:
         cost of the coupled residual and nothing else: 670 s against 271 s for
         a 500 yr step at matched settings (Gadi jobs 178765563 and 178765560).
         """
-        solver, _, _ = build(meshes, solver_parameters="iterative")
+        solver, _, _ = build(
+            meshes,
+            solver_parameters=selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, block0="pair"))
         p = solver.solver_parameters
         prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
         assert p["dtn_fieldsplit_0_pc_fieldsplit_0_fields"] == "0,1"
@@ -1938,9 +1951,13 @@ class TestPresetWiring:
         inert and would read as a truncated solve to anyone auditing the
         dictionary.
         """
+        # The displacement split sits at a different depth on each route: it
+        # is split 0 of the block-0 sweep on the condensed layout, and split 0
+        # of `gadopt.CondensedBlockPC`'s own `(u, psi)` sweep on the
+        # uncondensed one.
         for condensed, prefix in (
                 (True, "dtn_fieldsplit_0_fieldsplit_0_"),
-                (False, "dtn_fieldsplit_0_fieldsplit_0_condensed_field_")):
+                (False, "dtn_fieldsplit_0_condensed_fieldsplit_0_")):
             p = selfgrav_dtn_iterative_solver_parameters(
                 condensed=condensed, u_ksp_max_it=0)
             assert p[prefix + "ksp_type"] == "preonly", condensed
@@ -1989,9 +2006,13 @@ class TestPresetWiring:
         """
         solver, _, _ = build(meshes, solver_parameters="iterative")
         p = solver.solver_parameters
+        # On the default block-0 route the block-0 KSP is `preonly` and the
+        # solve that does the work is `gadopt.CondensedBlockPC`'s own
+        # `(u, psi)` Krylov solve, so that is the line the Gadi counters read
+        # one block-0 application from.
         for key in ("ksp_converged_reason",
                     "snes_converged_reason",
-                    "dtn_fieldsplit_0_ksp_converged_reason",
+                    "dtn_fieldsplit_0_condensed_ksp_converged_reason",
                     "dtn_fieldsplit_1_ksp_converged_reason"):
             assert key in p
 

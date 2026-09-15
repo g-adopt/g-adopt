@@ -1249,6 +1249,55 @@ class SubstitutedDisplacementPC(fd.AuxiliaryOperatorPC):
         mat.setOption(mat.Option.SPD, True)
 
 
+def internal_variable_condensation(A, keep: int = 0, eliminate: int = 1):
+    r"""The Slate Schur complement of the cell-local internal-variable block.
+
+    The coupled internal-variable Jacobian couples the displacement `u` to the
+    combined history field `M` through the two off-diagonal blocks, and the
+    `M` block itself is block-diagonal per cell: a DG mass matrix scaled by
+    `1/dt + 1/tau_i` per Maxwell element, plus the coupling between elements
+    that a power-law rheology introduces. Its inverse is therefore cell-local
+    and exact, and eliminating `M` gives the exact Schur complement
+
+    $$ S_{uu} = A_{uu} - A_{uM} A_{MM}^{-1} A_{Mu} $$
+
+    on the displacement space. All Maxwell elements live in the one field, so
+    the number of elements never appears here and the expression is the same
+    for `n = 1` and for `n = 4`.
+
+    This is written once and used by both routes that eliminate `M`:
+    `InternalVariableSCPC`, which eliminates it on every inner iteration of a
+    Krylov solve over the pair `(u, M)`, and `CondensedBlockPC`, which
+    eliminates it once per block-0 application. Two copies of one Slate
+    expression would be two chances for a sign or a transpose to drift apart,
+    and a preconditioner built from a slightly different operator still
+    converges, only more slowly.
+
+    Args:
+      A: a Slate `Tensor` of the mixed bilinear form. It may hold more fields
+        than the two named here (the block-0 form of the self-gravity solver
+        holds `(u, M, psi)`); only the two named blocks are read.
+      keep: the field index of the displacement, which stays in the condensed
+        system.
+      eliminate: the field index of the combined internal-variable field.
+
+    Returns:
+      `(S, inverse)`, the Slate expression for the condensed displacement
+      operator and the Slate inverse of the `M` block. The inverse is returned
+      because the caller needs the same expression for the right-hand side
+      elimination and for the back-substitution.
+    """
+    blocks = A.blocks
+    # One Slate inverse of the cell-local internal-variable block, which for a
+    # power-law rheology also holds the coupling between elements, so this is
+    # the exact tangent elimination and not an approximation of it.
+    inverse = blocks[eliminate, eliminate].inv
+    condensed_operator = (blocks[keep, keep]
+                          - blocks[keep, eliminate] * inverse
+                          * blocks[eliminate, keep])
+    return condensed_operator, inverse
+
+
 class InternalVariableSCPC(fd.SCPC):
     r"""Static condensation of the DG internal variables of a coupled GIA solve.
 
@@ -1319,10 +1368,7 @@ class InternalVariableSCPC(fd.SCPC):
                 f"space; got eliminated fields {list(elim_fields)} of "
                 f"{len(rhs.subfunctions)}."
             )
-        # One Slate inverse of the cell-local internal-variable block, which
-        # for a power-law rheology also holds the coupling between elements.
-        inverse = blocks[1, 1].inv
-        condensed_operator = blocks[0, 0] - blocks[0, 1] * inverse * blocks[1, 0]
+        condensed_operator, inverse = internal_variable_condensation(A)
         condensed_rhs = vectors[0] - blocks[0, 1] * inverse * vectors[1]
         return LAContext(condensed_operator, condensed_rhs, (0,)), inverse
 
@@ -1550,3 +1596,496 @@ class InternalVariableSCPC(fd.SCPC):
         self._operator_version = version
         self.assembly_count += 1
         super().update(pc)
+
+
+class CondensedBlockPC(fd.preconditioners.base.PCBase):
+    r"""Block-0 preconditioner that eliminates the internal variables once.
+
+    `SelfGravitatingGIASolver` on the full layout has a block 0 over the three
+    fields `(u, M, psi)`: the displacement, the combined internal-variable
+    history field and the gravitational potential. `M` is a DG field of shape
+    `(n, d, d)` and carries about 85 percent of the block-0 unknowns, and its
+    Jacobian block is block-diagonal per cell. This class does the whole
+    block-0 solve, with `M` eliminated exactly once:
+
+        r_u' = r_u - A_uM A_MM^-1 r_M                 Slate, cell-local
+        solve [[S_uu, A_upsi], [A_psiu, A_psipsi]] (u, psi) = (r_u', r_psi)
+        M    = A_MM^-1 (r_M - A_Mu u)                 Slate, cell-local
+
+    with `S_uu = A_uu - A_uM A_MM^-1 A_Mu` the exact Schur complement that
+    `internal_variable_condensation` writes. Block 0's own KSP is therefore
+    `preonly`: one application of this class is one elimination, one Krylov
+    solve on the `(u, psi)` system and one back-substitution.
+
+    The alternative route, `InternalVariableSCPC` inside a two-split sweep over
+    `(u, M)` and `psi`, is kept (`selfgrav_dtn_iterative_solver_parameters(
+    condensed=False, block0="pair")`). There `M` rides in every block-0 Krylov
+    vector and the elimination runs on every block-0 inner iteration, about
+    900 times per production time step.
+
+    **Everything here is preconditioner-side.** The residual, the mixed space,
+    the tape and the adjoint are untouched, so the answer is the answer the
+    direct preset gives and the only quantities that move are iteration counts
+    and wall clock.
+
+    ## The operator
+
+    The four blocks are assembled sparse matrices held in a `PETSc.Mat` of
+    type nest, in the order `(u, psi)`. The order is not cosmetic: the
+    fieldsplit takes its index sets from the nest, so split 0 is the
+    displacement block and split 1 the potential block, and a nest built the
+    other way round would apply the displacement split's truncated CG and the
+    near-incompressible modes to the potential Laplacian without raising
+    anything.
+
+    `S_uu` comes from the Slate expression; `A_upsi`, `A_psiu` and `A_psipsi`
+    are sub-blocks of the block-0 bilinear form, extracted with
+    `ExtractSubBlock` and assembled as `aij`. `A_psipsi` is the potential
+    Laplacian with the DtN boundary terms, and it is marked SPD so that GAMG
+    uses its symmetric path on it.
+
+    ## Options
+
+    All under this preconditioner's own prefix plus `condensed_` (under the
+    shipped preset, `dtn_fieldsplit_0_condensed_`): `ksp_*` for the `(u, psi)`
+    Krylov solve, `pc_type fieldsplit` with `pc_fieldsplit_type multiplicative`
+    for the sweep, and `fieldsplit_0_*` / `fieldsplit_1_*` for the
+    displacement and potential splits.
+
+    ## The application context
+
+    The key names are the ones `InternalVariableSCPC` reads, so
+    `SelfGravitatingGIASolver._attach_condensation_context` publishes one set
+    for both routes:
+
+    - `operator_version`: the reuse fingerprint. A Newtonian march at fixed
+      `dt` has a constant Jacobian, so the four blocks and the GAMG
+      hierarchies built on them serve the whole march; the class reassembles
+      only when the version moves. `None` means "rebuild on every update",
+      which the solver publishes for a power law, where the Jacobian moves
+      inside one Newton solve.
+    - `condensed_field_nullspace`, `condensed_field_transpose_nullspace`,
+      `condensed_field_near_nullspace`: each a callable taking the
+      displacement space and returning a `VectorSpaceBasis`. The first two are
+      set on `S_uu` so that the Krylov solve works on a consistent system (on
+      a nonsymmetric condensed operator the left kernel is not the right one,
+      which is why both are read); the third is the near-nullspace GAMG
+      coarsens onto, the rigid-body modes plus the low-degree divergence-free
+      fields by default.
+
+    ## What is refused
+
+    A block-0 space that does not have exactly three fields, which is what
+    `condense_internal_variables=True` produces, and a strong boundary
+    condition on anything but the displacement. A strong condition on the
+    displacement is supported: it is carried into `S_uu` by the assembler, as
+    `firedrake.SCPC` carries it into its condensed operator, and the rows it
+    owns are emptied in the rectangular `A_upsi`. Production 3-D and every
+    annulus test use the weak forms (`un`, `normal_stress`) instead.
+
+    `applyTranspose` raises: pyadjoint solves `adjoint(J)` with the forward
+    options, so an adjoint solve of this system reaches the forward `apply`,
+    and a caller that does arrive at the transpose has reached a path this
+    class does not cover.
+
+    Select with `pc_type: python`, `pc_python_type: gadopt.CondensedBlockPC`
+    and `ksp_type: preonly` on block 0. The block-0 operator must be
+    matrix-free.
+    """
+
+    needs_python_pmat = True
+
+    #: The field indices of the block-0 mixed space. Fixed by
+    #: `self_gravitating_gia_space` on the full layout: displacement first,
+    #: the combined history field second, the potential third.
+    DISPLACEMENT, INTERNAL_VARIABLE, POTENTIAL = 0, 1, 2
+
+    def initialize(self, pc):
+        """Assemble the four blocks, build the nest and its Krylov solve."""
+        from firedrake.bcs import DirichletBC
+        from firedrake.cofunction import Cofunction
+        from firedrake.function import Function
+        from firedrake.functionspace import FunctionSpace
+        from firedrake.formmanipulation import ExtractSubBlock
+        from firedrake.matrix_free.operators import ImplicitMatrixContext
+        from firedrake.parloops import par_loop, INC
+        from firedrake.slate.slate import Tensor
+        from ufl import dx as ufl_dx
+
+        prefix = (pc.getOptionsPrefix() or "") + "condensed_"
+        _, P = pc.getOperators()
+        self.cxt = P.getPythonContext()
+        if not isinstance(self.cxt, ImplicitMatrixContext):
+            raise ValueError(
+                "gadopt.CondensedBlockPC needs a matrix-free block-0 operator: "
+                "it reads the block-0 bilinear form off the operator's Python "
+                f"context, and got {type(self.cxt).__name__}.")
+
+        self.bilinear_form = self.cxt.a
+        W = self.bilinear_form.arguments()[0].function_space()
+        # The field count is the guard that catches the one mismatch nothing
+        # else notices: the space and the preset are independent arguments,
+        # and `condense_internal_variables=True` gives a block 0 of two fields
+        # with no history field to eliminate.
+        if len(W) != 3:
+            raise ValueError(
+                "gadopt.CondensedBlockPC eliminates the internal-variable "
+                "field (field 1) of a three-field block-0 space "
+                "(displacement, internal variables, potential); the space it "
+                f"was given has {len(W)} field(s): "
+                f"{[V.ufl_element() for V in W]}. A two-field block 0 is what "
+                "self_gravitating_gia_space(condense_internal_variables=True) "
+                "builds, and that layout has no internal variables to "
+                "eliminate: either build the space with "
+                "condense_internal_variables=False, or use "
+                "selfgrav_dtn_iterative_solver_parameters(condensed=True), "
+                "whose block 0 is a two-way sweep.")
+        # Standalone copies of the two kept fields. The sub-spaces of a mixed
+        # space carry the mixed dof layout, and the assembled blocks act on
+        # the individual spaces. `W.mesh()[field]` rather than `W[field].mesh()`
+        # because the self-gravity space spans two meshes: the potential lives
+        # on the parent mesh and the displacement on the mantle submesh.
+        self.displacement_space = FunctionSpace(
+            W.mesh()[self.DISPLACEMENT],
+            W[self.DISPLACEMENT].ufl_element())
+        self.potential_space = FunctionSpace(
+            W.mesh()[self.POTENTIAL], W[self.POTENTIAL].ufl_element())
+
+        # A strong condition on the displacement is carried into the blocks
+        # the preconditioner solves on, the way `firedrake.SCPC` carries it
+        # into its condensed operator. Applying it to the residual and not to
+        # these blocks would precondition a system the residual does not
+        # describe: the constrained rows of `S_uu` would stay coupled to the
+        # interior and the solve would either stall or converge to the wrong
+        # fixed point, with nothing in the log to say so. Only a condition on
+        # the displacement is meaningful here; the potential rows are
+        # untouched by the elimination and the history field is cell-local.
+        bcs = []
+        for bc in self.cxt.row_bcs:
+            space = bc.function_space()
+            # A component subspace (`Z.sub(0).sub(1)`) has no index of its
+            # own; its field is its parent's and its component selects the
+            # same component of the standalone displacement space.
+            component = space.component
+            field = space.parent.index if component is not None else space.index
+            if field != self.DISPLACEMENT:
+                raise NotImplementedError(
+                    "gadopt.CondensedBlockPC supports a strong boundary "
+                    "condition on the displacement (field 0) only; got one on "
+                    f"field {field}.")
+            target = (self.displacement_space if component is None
+                      else self.displacement_space.sub(component))
+            bcs.append(DirichletBC(target, 0, bc.sub_domain))
+        self._bcs = bcs
+        # The rows of the rectangular `u`-`psi` coupling block that the
+        # condition owns. `S_uu` gets an identity row there from the assembler,
+        # so the coupling row must be empty for the two to describe one
+        # equation `u = 0` on that degree of freedom. The columns of `A_psiu`
+        # need no such treatment: the constrained entries of the incoming
+        # residual are zero (the matrix-free block-0 operator eliminates them),
+        # so the displacement this class returns is zero there and those
+        # columns are multiplied by zero.
+        self._constrained_rows = self._bc_rows(bcs)
+
+        self.residual = Cofunction(W.dual())
+        self.solution = Function(W)
+        self.condensed_rhs = Cofunction(self.displacement_space.dual())
+
+        # The multiplicity of every displacement degree of freedom: the number
+        # of cells that hold it. A Slate vector expression is assembled cell by
+        # cell and the contributions are summed, so a continuous field read
+        # back through `AssembledVector` arrives multiplied by that count. The
+        # incoming residual is therefore divided by it first, and the sum
+        # reproduces it exactly. The internal-variable field is discontinuous,
+        # so its multiplicity is one everywhere and it needs no such scaling.
+        # This is what `firedrake.SCPC` does with the same name.
+        shapes = (self.displacement_space.finat_element.space_dimension(),
+                  np.prod(self.displacement_space.shape))
+        domain = "{[i,j]: 0 <= i < %d and 0 <= j < %d}" % shapes
+        instructions = """
+        for i, j
+            w[i,j] = w[i,j] + 1
+        end
+        """
+        self.weight = Function(self.displacement_space)
+        par_loop((domain, instructions), ufl_dx, {"w": (self.weight, INC)})
+        with self.weight.dat.vec as weight:
+            weight.reciprocal()
+
+        # -- the Slate half: the elimination, the complement, the recovery --
+        # Slate compiles an expression whose arguments live on ONE mesh, and
+        # the block-0 space spans two (the potential on the parent mesh, the
+        # displacement on the mantle submesh). So the Slate work is done on
+        # the `(u, M)` sub-form, which is single-mesh on every configuration
+        # because the history field lives on the displacement's mesh. That is
+        # also exactly the form `InternalVariableSCPC` is handed by the
+        # `"pair"` route's fieldsplit, so both routes condense the same two by
+        # two system.
+        splitter = ExtractSubBlock()
+        pair_indices = (self.DISPLACEMENT, self.INTERNAL_VARIABLE)
+        self._pair_form = splitter.split(self.bilinear_form,
+                                         (pair_indices, pair_indices))
+        W_pair = self._pair_form.arguments()[0].function_space()
+        # The Slate right-hand side and solution live on the `(u, M)` space;
+        # the mixed `(u, M, psi)` residual and solution are the vectors PETSc
+        # hands over. One field-wise copy each way per application keeps the
+        # two layouts apart, and the copies are rank-local memory traffic on
+        # fields the elimination touches anyway.
+        self._pair_residual = Cofunction(W_pair.dual())
+        self._pair_solution = Function(W_pair)
+
+        A = Tensor(self._pair_form)
+        blocks = A.blocks
+        S_expr, inverse = internal_variable_condensation(A, keep=0,
+                                                         eliminate=1)
+        vectors = AssembledVector(self._pair_residual).blocks
+        # r_u' = r_u - A_uM A_MM^-1 r_M, assembled once per application.
+        rhs_expr = vectors[0] - blocks[0, 1] * inverse * vectors[1]
+        # M = A_MM^-1 (r_M - A_Mu u), cell by cell, once per application.
+        recovery_expr = inverse * (
+            AssembledVector(self._pair_residual.subfunctions[1])
+            - blocks[1, 0]
+            * AssembledVector(self._pair_solution.subfunctions[0]))
+
+        fcp = self.cxt.fc_params
+        self._assemble_condensed_rhs = get_assembler(
+            rhs_expr, bcs=self._bcs, form_compiler_parameters=fcp).assemble
+        self._assemble_internal_variables = get_assembler(
+            recovery_expr, form_compiler_parameters=fcp).assemble
+
+        displacement_assembler = get_assembler(
+            S_expr, bcs=self._bcs, form_compiler_parameters=fcp, mat_type="aij",
+            options_prefix=prefix, appctx=self.cxt.appctx)
+        self.S_uu = displacement_assembler.allocate()
+        self._assemble_S_uu = displacement_assembler.assemble
+
+        # -- the three blocks that carry no internal variable --------------
+        # The potential rows of the block-0 Jacobian hold no `M` at all (the
+        # history field enters the mechanics rows only), so these three are
+        # plain sub-blocks of the bilinear form with no Schur correction.
+        self._sub_forms = {
+            name: splitter.split(self.bilinear_form, indices)
+            for name, indices in (
+                ("A_upsi", (self.DISPLACEMENT, self.POTENTIAL)),
+                ("A_psiu", (self.POTENTIAL, self.DISPLACEMENT)),
+                ("A_psipsi", (self.POTENTIAL, self.POTENTIAL)))}
+        for name, form in self._sub_forms.items():
+            setattr(self, name, fd.assemble(
+                form, mat_type="aij", form_compiler_parameters=fcp))
+        self._assemble_blocks()
+
+        self._set_displacement_nullspaces()
+
+        # -- the nest and its Krylov solve ---------------------------------
+        # The fieldsplit takes its index sets from the nest, so this order is
+        # the split order: split 0 is the displacement block.
+        self.condensed_operator = PETSc.Mat().createNest(
+            [[self.S_uu.petscmat, self.A_upsi.petscmat],
+             [self.A_psiu.petscmat, self.A_psipsi.petscmat]], comm=pc.comm)
+        self.condensed_operator.setUp()
+        # The two work vectors are nest vectors over the blocks' own vectors,
+        # built explicitly so that the sub-vectors stay reachable: `apply`
+        # writes the eliminated right-hand side into them and reads the
+        # solution back out of them, field by field.
+        self._rhs_blocks = (self.S_uu.petscmat.createVecRight(),
+                            self.A_psipsi.petscmat.createVecRight())
+        self._solution_blocks = (self.S_uu.petscmat.createVecRight(),
+                                 self.A_psipsi.petscmat.createVecRight())
+        self._rhs = PETSc.Vec().createNest(list(self._rhs_blocks),
+                                           comm=pc.comm)
+        self._solution_vec = PETSc.Vec().createNest(
+            list(self._solution_blocks), comm=pc.comm)
+
+        ksp = PETSc.KSP().create(comm=pc.comm)
+        ksp.incrementTabLevel(1, parent=pc)
+        ksp.setOptionsPrefix(prefix)
+        ksp.setOperators(self.condensed_operator, self.condensed_operator)
+        ksp.setFromOptions()
+        self.condensed_ksp = ksp
+
+        #: Assemblies of the four blocks, including the one above: a Newtonian
+        #: march at fixed `dt` must stay at 1, and a power law must reach the
+        #: Newton iteration count.
+        self.assembly_count = 1
+        #: Eliminations of `M`, one per `apply`. The whole point of the route
+        #: is that this counts applications and not inner iterations.
+        self.elimination_count = 0
+        self._operator_version = self._published_version()
+
+    def _assemble_blocks(self):
+        """Reassemble the four blocks in place, keeping their `PETSc.Mat`s.
+
+        The nest and the KSP hold references to these matrices, so the
+        assembly must write into them rather than build new ones.
+        """
+        self._assemble_S_uu(tensor=self.S_uu)
+        for name, form in self._sub_forms.items():
+            fd.assemble(form, tensor=getattr(self, name), mat_type="aij",
+                        form_compiler_parameters=self.cxt.fc_params)
+        if len(self._constrained_rows):
+            # `diag=0.0`: the block is rectangular, so there is no diagonal to
+            # write, and the constrained equation lives in `S_uu`'s identity
+            # row alone.
+            self.A_upsi.petscmat.zeroRows(self._constrained_rows, diag=0.0)
+        # The potential block is a symmetric positive-definite Laplacian with
+        # the DtN boundary terms; telling PETSc so lets GAMG use its symmetric
+        # path (Chebyshev/Jacobi smoothing, no extra transpose products).
+        # Both an assembly into the block and an assembly of the enclosing
+        # nest clear a `Mat`'s symmetry flags, so the claim is made here,
+        # after every reassembly, and not once in `initialize`. It is also
+        # marked eternal: the sparsity and the sign structure of the potential
+        # Laplacian do not depend on the Jacobian's values, so the claim holds
+        # for every rebuild, and PETSc then keeps it across the assemblies
+        # that follow. Without this, the first rebuild (which is every Newton
+        # iteration of a power law) would silently move GAMG onto its
+        # nonsymmetric path.
+        self.A_psipsi.petscmat.setOption(PETSc.Mat.Option.SPD, True)
+        self.A_psipsi.petscmat.setOption(
+            PETSc.Mat.Option.SYMMETRY_ETERNAL, True)
+
+    def _bc_rows(self, bcs):
+        """The global row indices the strong conditions own, as a PETSc array.
+
+        Read off a marked `Function` rather than from the boundary condition's
+        node lists, because a condition may act on one component of a vector
+        space and the node list is then in nodes rather than in degrees of
+        freedom. Marking and reading the vector gives the degree-of-freedom
+        indices in the matrix's own numbering, with the local offset added.
+        """
+        if not bcs:
+            return np.zeros(0, dtype=PETSc.IntType)
+        marker = fd.Function(self.displacement_space)
+        for bc in bcs:
+            bc.set(marker, 1.0)
+        with marker.dat.vec_ro as vec:
+            low, _ = vec.getOwnershipRange()
+            rows = low + np.flatnonzero(vec.array_r != 0.0)
+        return rows.astype(PETSc.IntType)
+
+    def _set_displacement_nullspaces(self):
+        """Publish the kernels and the near-nullspace on `S_uu`.
+
+        The condensed displacement operator is the matrix both the Krylov
+        solve and GAMG see, so a basis that never reaches it is a basis that
+        does nothing. The near-nullspace is what GAMG builds its coarse spaces
+        to reproduce: the condensed operator carries the volumetric penalty of
+        the internal-variable stress, whose slow modes sit in the
+        divergence-free space once the effective bulk/shear ratio
+        `bulk_shear_ratio * (1 + dt/tau)` is large, so the rigid modes alone
+        leave the smoother nothing to coarsen those modes onto.
+        """
+        appctx = self.cxt.appctx
+        matrix = self.S_uu.petscmat
+        for key, setter in (
+            ("condensed_field_nullspace", matrix.setNullSpace),
+            ("condensed_field_transpose_nullspace",
+             matrix.setTransposeNullSpace),
+            ("condensed_field_near_nullspace", matrix.setNearNullSpace),
+        ):
+            provider = appctx.get(key)
+            if provider is not None:
+                setter(provider(self.displacement_space).nullspace())
+
+    def _published_version(self):
+        """The operator version the solver publishes, or a sentinel.
+
+        The sentinel is a fresh object, so an application context without the
+        key never compares equal to a stored version and the blocks are
+        rebuilt on every update, which is the safe default.
+        """
+        return self.cxt.appctx.get("operator_version", object())
+
+    def update(self, pc):
+        """Reassemble the four blocks when the Jacobian has moved.
+
+        PETSc calls this on every linear solve. `operator_version` says
+        whether anything in the Jacobian changed since the blocks were built;
+        `None` (a power law) means it changed and cannot be described, so
+        rebuild.
+        """
+        version = self._published_version()
+        if version is not None and version == self._operator_version:
+            return
+        self._operator_version = version
+        self._assemble_blocks()
+        self.assembly_count += 1
+        # The nullspaces are attached to the matrix object and survive the
+        # reassembly, but the near-nullspace providers may build their basis
+        # from the space alone, so setting them again costs one interpolation
+        # per rebuild and removes a dependence on PETSc's retention rules.
+        self._set_displacement_nullspaces()
+        # Bump the nest's object state and hand the operators over again, so
+        # that PETSc rebuilds the GAMG hierarchies on the new entries instead
+        # of preconditioning with the ones of the previous Jacobian.
+        self.condensed_operator.assemble()
+        self.condensed_ksp.setOperators(self.condensed_operator,
+                                        self.condensed_operator)
+
+    @PETSc.Log.EventDecorator("CondensedBlockPCApply")
+    def apply(self, pc, x, y):
+        """One block-0 application: eliminate, solve, back-substitute.
+
+        Args:
+          pc: the PETSc preconditioner object.
+          x: the block-0 residual, on the mixed `(u, M, psi)` layout.
+          y: the output, on the same layout. Not zero on entry.
+        """
+        with self.residual.dat.vec_wo as residual:
+            x.copy(residual)
+        # The Slate half works on the `(u, M)` space; move the two fields it
+        # reads across, field by field, because the two spaces have the same
+        # per-field dof layout and a different mixed one.
+        for pair_field, mixed_field in enumerate(
+                (self.DISPLACEMENT, self.INTERNAL_VARIABLE)):
+            self._pair_residual.subfunctions[pair_field].dat.data_wo[...] = (
+                self.residual.subfunctions[mixed_field].dat.data_ro)
+        # Undo the multiplicity the cell-wise Slate assembly will reintroduce
+        # on the continuous displacement field; see `self.weight`.
+        with self._pair_residual.subfunctions[0].dat.vec as r_u, \
+                self.weight.dat.vec_ro as weight:
+            r_u.pointwiseMult(r_u, weight)
+
+        # 1. The elimination, cell-local and exact.
+        self._assemble_condensed_rhs(tensor=self.condensed_rhs)
+        self.elimination_count += 1
+
+        u_rhs, psi_rhs = self._rhs_blocks
+        with self.condensed_rhs.dat.vec_ro as vec:
+            vec.copy(u_rhs)
+        with self.residual.subfunctions[self.POTENTIAL].dat.vec_ro as vec:
+            vec.copy(psi_rhs)
+
+        # 2. The `(u, psi)` Krylov solve on the assembled condensed system.
+        self._solution_vec.set(0.0)
+        self.condensed_ksp.solve(self._rhs, self._solution_vec)
+
+        u_out, psi_out = self._solution_blocks
+        with self.solution.subfunctions[self.DISPLACEMENT].dat.vec_wo as vec:
+            u_out.copy(vec)
+        with self.solution.subfunctions[self.POTENTIAL].dat.vec_wo as vec:
+            psi_out.copy(vec)
+
+        # 3. The back-substitution, once, on the displacement just computed.
+        self._pair_solution.subfunctions[0].dat.data_wo[...] = (
+            self.solution.subfunctions[self.DISPLACEMENT].dat.data_ro)
+        self._assemble_internal_variables(
+            tensor=self._pair_solution.subfunctions[1])
+        self.solution.subfunctions[self.INTERNAL_VARIABLE].dat.data_wo[...] = (
+            self._pair_solution.subfunctions[1].dat.data_ro)
+
+        with self.solution.dat.vec_ro as solution:
+            solution.copy(y)
+
+    def applyTranspose(self, pc, x, y):
+        """Refused; the transpose application is not implemented.
+
+        pyadjoint solves `adjoint(J)` with the forward options, so an adjoint
+        solve of this system reaches `apply` on the adjoint operator and never
+        this method. A silent no-op here would write nothing into the output
+        vector and leave PETSc preconditioning with whatever was in that
+        memory, so the refusal is explicit.
+        """
+        raise NotImplementedError(
+            "gadopt.CondensedBlockPC has no transpose application. An adjoint "
+            "solve reaches the forward apply, because pyadjoint solves "
+            "adjoint(J) with the forward solver options.")

@@ -40,7 +40,8 @@ from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import (create_stokes_nullspace, near_incompressible_modes,
                          rigid_body_modes, solenoidal_modes)
 from .internal_variable_equation import internal_variable_space
-from .preconditioners import (DtNMultiplierDenseSchurPC,  # noqa: F401
+from .preconditioners import (CondensedBlockPC,  # noqa: F401
+                              DtNMultiplierDenseSchurPC,
                               DtNMultiplierDiagPC,
                               DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
                               InternalVariableSCPC,

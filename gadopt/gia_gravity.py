@@ -439,6 +439,7 @@ def selfgrav_dtn_iterative_solver_parameters(
     multiplier_pc: str = "none",
     u_ksp_max_it: int = 4,
     u_ksp_rtol: float = 1e-2,
+    block0: str = "condensed",
 ) -> dict:
     r"""The 3-D configuration that works, and the one the measurements select.
 
@@ -453,10 +454,21 @@ def selfgrav_dtn_iterative_solver_parameters(
 
         outer FGMRES
          +- DtNTwoBlockSchurPC, schur_fact_type full
-             +- block 0: FGMRES rtol 1e-2 + multiplicative fieldsplit
-             |   +- m  : AssembledPC + bjacobi/ilu   (condensed: absent)
+             +- block 0, condensed layout: FGMRES + multiplicative fieldsplit
              |   +- u  : CG 4 + NearlyIncompressibleAssembledPC + GAMG
              |   +- psi: SPDAssembledPC + GAMG   (GravitySolver's preset)
+             +- block 0, full layout, block0="condensed" (the default):
+             |  preonly + gadopt.CondensedBlockPC, which eliminates `M` once
+             |  with Slate and solves the assembled (u, psi) system
+             |   +- FGMRES rtol block0_rtol + multiplicative fieldsplit
+             |       +- u  : CG 4 + GAMG on S_uu, near-incompressible modes
+             |       +- psi: one GAMG V-cycle on A_psipsi
+             +- block 0, full layout, block0="pair": FGMRES + multiplicative
+             |  fieldsplit
+             |   +- (u, M): InternalVariableSCPC, which eliminates `M` on
+             |   |          every inner iteration; CG 4 + GAMG on the
+             |   |          condensed operator under `condensed_field_`
+             |   +- psi   : SPDAssembledPC + GAMG
              +- block 1: GMRES on the Real block, pc_type none
 
     **This preset carries no iteration count of its own, and the "flat at 3"
@@ -506,16 +518,31 @@ def selfgrav_dtn_iterative_solver_parameters(
       condensed: whether the caller passes `condense_internal_variables=True`.
         The internal variable is ~85 % of block 0. On the condensed layout it
         is not in the space, and block 0 is a two-way sweep over `u` (through
-        `u_pc`) and `psi`. On the uncondensed layout it is field 1, and block
-        0 is a two-way sweep over the pair `(u, M)` and `psi`: the pair is
-        handed to `gadopt.InternalVariableSCPC`, which eliminates `M` cell by
-        cell with Slate and runs the displacement Krylov solve of
-        `u_ksp_max_it` with GAMG on the exact condensed displacement operator
-        (options under `condensed_field_`), so the
-        block-0 count no longer pays the `1 - eta_eff/mu0` contraction of a
-        sweep that treats `m` and `u` as separate splits. **Keep this argument
-        and the solver's flag in step** - that is the whole reason it is an
-        argument rather than an assumption.
+        `u_pc`) and `psi`. On the uncondensed layout it is field 1, and `M` is
+        eliminated cell by cell with Slate on either block-0 route below.
+        **Keep this argument and the solver's flag in step** - that is the
+        whole reason it is an argument rather than an assumption.
+      block0: which block-0 route the uncondensed layout takes. It has no
+        meaning on the condensed layout, where there is no `M` to eliminate,
+        and a non-default value there raises rather than being ignored.
+
+        `"condensed"`, the default, puts `gadopt.CondensedBlockPC` on block 0
+        behind a `preonly` KSP. That class eliminates `M` **once** per block-0
+        application and solves the assembled `(u, psi)` system
+        `[[S_uu, A_upsi], [A_psiu, A_psipsi]]` with its own FGMRES (options
+        under `condensed_`) around a multiplicative `u`/`psi` fieldsplit. So
+        `M` - about 85 percent of the block-0 unknowns - rides in no Krylov
+        vector at all.
+
+        `"pair"` is the earlier route: block 0 is an FGMRES over all three
+        fields around a two-split sweep whose split 0 is the pair `(u, M)`
+        under `gadopt.InternalVariableSCPC`, which eliminates `M` on every
+        block-0 inner iteration (about 900 times per production step) and runs
+        the displacement Krylov solve of `u_ksp_max_it` with GAMG on the exact
+        condensed displacement operator (options under `condensed_field_`).
+        It is kept because the T2 Gadi measurements were made on it - 472 s
+        per 500 yr step at 96 ranks - and a job that compares the two arms
+        selects one by this flag alone.
       block0_rtol, outer_rtol, block0_max_it, snes_rtol: the tolerances.
         `block0_max_it` caps the block-0 FGMRES at 200 iterations, which is
         what A2's anisotropic lithosphere needs: the condensed `[u, psi]`
@@ -607,13 +634,36 @@ def selfgrav_dtn_iterative_solver_parameters(
         reaches `block0_rtol` and the tolerance decides. See
         `_displacement_krylov` for the keys and for `ksp_converged_maxits`.
 
-    Every sub-KSP reports `ksp_converged_reason`. That is not optional
-    instrumentation: block 0 and block 1 are preconditioner applications inside
-    a flexible outer Krylov, so degrading either costs outer iterations rather
-    than accuracy, and the only way to see which one degraded is its own exit
-    status. The per-split lines are also the whole of B2's cost model - block-0
-    applications per solve are read from them and from nowhere else.
+    Every sub-KSP that runs a Krylov method reports `ksp_converged_reason`.
+    That is not optional instrumentation: block 0 and block 1 are
+    preconditioner applications inside a flexible outer Krylov, so degrading
+    either costs outer iterations rather than accuracy, and the only way to see
+    which one degraded is its own exit status. The per-split lines are also the
+    whole of B2's cost model, so which line to count depends on the route. On
+    the `"pair"` route block 0 runs its own Krylov solve and one block-0
+    application is one `dtn_fieldsplit_0_` line. On the `"condensed"` route
+    block 0's KSP is `preonly` and prints nothing at all: the line for one
+    block-0 application is the class's inner `(u, psi)` solve at
+    `dtn_fieldsplit_0_condensed_`, and its two splits print at
+    `dtn_fieldsplit_0_condensed_fieldsplit_N_`.
     """
+    if block0 not in ("condensed", "pair"):
+        raise ValueError(
+            f"block0 must be 'condensed' or 'pair', got {block0!r}.")
+    if condensed and block0 != "condensed":
+        raise ValueError(
+            f"block0={block0!r} has no meaning with condensed=True: the "
+            "condensed layout holds no internal-variable field, so there is "
+            "nothing for block 0 to eliminate and its sweep is over `u` and "
+            "`psi` alone. Drop the argument, or pass condensed=False if the "
+            "space was built with condense_internal_variables=False.")
+    # The default route does the whole block-0 solve inside
+    # `gadopt.CondensedBlockPC`, so block 0's own KSP is `preonly`. The
+    # tolerances and the converged-reason line move down to the class's own
+    # `(u, psi)` Krylov solve: leaving a reason line on a `preonly` KSP as
+    # well would put a second line in the log for one block-0 application,
+    # and `bench_dtn_baseline.parse_counts` counts an application per line.
+    new_block0 = not condensed and block0 == "condensed"
     p = {
         "mat_type": "matfree",
         "snes_type": snes_type,
@@ -632,12 +682,16 @@ def selfgrav_dtn_iterative_solver_parameters(
         "pc_python_type": "gadopt.DtNTwoBlockSchurPC",
         "dtn_pc_fieldsplit_schur_fact_type": "full",
 
-        "dtn_fieldsplit_0_ksp_type": "fgmres",
-        "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
-        "dtn_fieldsplit_0_ksp_max_it": block0_max_it,
-        "dtn_fieldsplit_0_ksp_converged_reason": None,
-        "dtn_fieldsplit_0_pc_type": "fieldsplit",
-        "dtn_fieldsplit_0_pc_fieldsplit_type": "multiplicative",
+        **({"dtn_fieldsplit_0_ksp_type": "preonly",
+            "dtn_fieldsplit_0_pc_type": "python",
+            "dtn_fieldsplit_0_pc_python_type": "gadopt.CondensedBlockPC"}
+           if new_block0 else
+           {"dtn_fieldsplit_0_ksp_type": "fgmres",
+            "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
+            "dtn_fieldsplit_0_ksp_max_it": block0_max_it,
+            "dtn_fieldsplit_0_ksp_converged_reason": None,
+            "dtn_fieldsplit_0_pc_type": "fieldsplit",
+            "dtn_fieldsplit_0_pc_fieldsplit_type": "multiplicative"}),
 
         # `pc_type: none` is not laziness; see the docstring.
         "dtn_fieldsplit_1_ksp_type": "gmres",
@@ -681,6 +735,40 @@ def selfgrav_dtn_iterative_solver_parameters(
                 "directly. Choose the near-nullspace with "
                 "SelfGravitatingGIASolver(condensed_near_nullspace=...) "
                 f"instead; got u_pc={u_pc!r}.")
+        if new_block0:
+            # `gadopt.CondensedBlockPC` owns the whole block-0 solve, so there
+            # is no block-0 fieldsplit and no `_fields` key: the class builds
+            # the `(u, psi)` nest itself and the fieldsplit below it takes its
+            # index sets from that nest. Split 0 is the displacement block and
+            # split 1 the potential block, in that order.
+            #
+            # `block0_rtol` and `block0_max_it` land on this inner Krylov
+            # solve, because it is the one that does the work now, and its
+            # converged-reason line is what the Gadi counters read one block-0
+            # application from.
+            #
+            # GAMG runs directly on the two assembled blocks: neither is
+            # matrix-free, so no `AssembledPC` wraps them and the GAMG keys
+            # carry no `assembled_` prefix.
+            # `SelfGravitatingGIASolver._attach_condensation_context` replaces
+            # the displacement split's CG by a GMRES of the same length when
+            # `condensed_operator_symmetric` says the condensed operator is
+            # not symmetric, which every power-law rheology makes it.
+            p.update(_prefixed({
+                "ksp_type": "fgmres",
+                "ksp_rtol": block0_rtol,
+                "ksp_max_it": block0_max_it,
+                "ksp_converged_reason": None,
+                "pc_type": "fieldsplit",
+                "pc_fieldsplit_type": "multiplicative",
+                **_prefixed({**displacement_krylov, "pc_type": "gamg",
+                             **gamg_parameters()}, "fieldsplit_0_"),
+                **_prefixed({"ksp_type": "preonly",
+                             "ksp_converged_reason": None,
+                             "pc_type": "gamg", **gamg_parameters()},
+                            "fieldsplit_1_"),
+            }, "dtn_fieldsplit_0_condensed_"))
+            return p
         # Split 0 is the pair `(u, M)`, fields 0 and 1, under static
         # condensation. The displacement operator is the condensed matrix
         # `gadopt.InternalVariableSCPC` assembles, GAMG runs on it directly,
@@ -1548,12 +1636,34 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         entries (a split may name a comma-separated pair, as the condensed
         `(u, M)` split does) are the preset's own statement of how many fields
         it thinks block 0 has, so their count is compared against how many the
-        space actually has. Anything that does not set those keys - a
-        hand-written dictionary, a string preset - is not making a claim and
-        is left alone.
+        space actually has. The method reads a second claim as well:
+        `dtn_fieldsplit_0_pc_python_type == "gadopt.CondensedBlockPC"` says
+        block 0 holds three fields, because that class eliminates an
+        internal-variable field, so it is refused on a condensed layout whose
+        block 0 holds only `(u, psi)`. Anything that makes neither claim - a
+        hand-written dictionary, a string preset - is left alone.
         """
         if not isinstance(solver_parameters, Mapping):
             return
+        # The default uncondensed route names no `_fields` key at all: block 0
+        # is one python preconditioner that splits the fields itself. So the
+        # field count below cannot see it, and the class name is the claim
+        # instead. On the condensed layout that class looks for an
+        # internal-variable field the space does not hold.
+        block0_class = solver_parameters.get("dtn_fieldsplit_0_pc_python_type")
+        if (block0_class == "gadopt.CondensedBlockPC"
+                and self.layout.condensed):
+            raise ValueError(
+                "Block 0 runs gadopt.CondensedBlockPC, which eliminates the "
+                "internal-variable field of a three-field block 0, but the "
+                "space was built with condense_internal_variables=True and "
+                "its block 0 holds two fields (displacement and potential). "
+                "Change ONE of:\n"
+                "  - the space, via self_gravitating_gia_space("
+                "condense_internal_variables=False), or\n"
+                "  - the parameters, via "
+                "selfgrav_dtn_iterative_solver_parameters(condensed=True).\n"
+                "They are independent arguments and must agree.")
         prefix = "dtn_fieldsplit_0_pc_fieldsplit_"
         named = [
             index.strip()
@@ -3227,7 +3337,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             "or set exponent=1 if the rheology is meant to be Newtonian.")
 
     def _attach_condensation_context(self, extras) -> None:
-        """Publish what `gadopt.InternalVariableSCPC` reads, on every options path.
+        """Publish what the block-0 condensations read, on every options path.
+
+        The keys serve both `gadopt.InternalVariableSCPC` (the `"pair"` value
+        of the preset's `block0`) and `gadopt.CondensedBlockPC` (the
+        `"condensed"` value) alike.
 
         The base class publishes these on its own path
         (`CoupledInternalVariableSolver.set_solver_options`), which the string
@@ -3295,9 +3409,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         caller passes is normally
         `selfgrav_dtn_iterative_solver_parameters(...)` itself, whose `cg` is
         the preset's default and not a choice, so a `cg` found there is
-        switched like the string path's. The one way to keep CG on an
-        operator this rule calls nonsymmetric is to name `ksp_type` under the
-        condensed-field prefix in `solver_parameters_extra`, which wins.
+        switched like the string path's.
+
+        The displacement split sits at a different prefix on each block-0
+        route, so the switch runs over both: `block0="pair"` puts it under
+        `dtn_fieldsplit_0_fieldsplit_0_condensed_field_`, and the default
+        `block0="condensed"` puts it under
+        `dtn_fieldsplit_0_condensed_fieldsplit_0_`. The one way to keep CG on
+        an operator this rule calls nonsymmetric is to name `ksp_type` under
+        the prefix of the route in use in `solver_parameters_extra`, which
+        wins; a key written under the other route's prefix is never read.
 
         Args:
           extras: the caller's `solver_parameters_extra`, or `None`.
@@ -3337,23 +3458,34 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
             self.appctx["condensed_field_near_nullspace"] = near_nullspace_provider
 
-        key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"
-        max_it_key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_max_it"
-        restart_key = (
-            "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_gmres_restart")
-        user_named = bool(extras) and key in extras
-        if (self.solver_parameters.get(key) == "cg"
-                and not user_named
-                and not self.condensed_operator_symmetric()):
-            # The restart is the preset's own iteration cap, so the GMRES that
-            # replaces the CG costs the same Krylov vectors and the same
-            # number of GAMG V-cycles per block-0 iteration. A restart longer
-            # than the cap would allocate vectors the solve never reaches. 50
-            # is the fallback for a hand-written dictionary that names no cap,
-            # where the condensed solve runs to its own tolerance instead.
-            self.add_to_solver_config({
-                key: "gmres",
-                restart_key: self.solver_parameters.get(max_it_key, 50)})
+        # The displacement split sits at a different prefix on each block-0
+        # route, and the switch has to reach whichever one the caller selected:
+        # `"pair"` puts the condensed displacement solve under
+        # `dtn_fieldsplit_0_fieldsplit_0_condensed_field_`, and
+        # `gadopt.CondensedBlockPC` puts it under
+        # `dtn_fieldsplit_0_condensed_fieldsplit_0_`. A route whose prefix this
+        # loop does not name keeps CG on a nonsymmetric operator, which does
+        # not raise and converges to the wrong thing or not at all. Both are
+        # visited because a hand-written dictionary may name either.
+        for prefix in ("dtn_fieldsplit_0_fieldsplit_0_condensed_field_",
+                       "dtn_fieldsplit_0_condensed_fieldsplit_0_"):
+            key = prefix + "ksp_type"
+            max_it_key = prefix + "ksp_max_it"
+            restart_key = prefix + "ksp_gmres_restart"
+            user_named = bool(extras) and key in extras
+            if (self.solver_parameters.get(key) == "cg"
+                    and not user_named
+                    and not self.condensed_operator_symmetric()):
+                # The restart is the preset's own iteration cap, so the GMRES
+                # that replaces the CG costs the same Krylov vectors and the
+                # same number of GAMG V-cycles per block-0 iteration. A restart
+                # longer than the cap would allocate vectors the solve never
+                # reaches. 50 is the fallback for a hand-written dictionary
+                # that names no cap, where the condensed solve runs to its own
+                # tolerance instead.
+                self.add_to_solver_config({
+                    key: "gmres",
+                    restart_key: self.solver_parameters.get(max_it_key, 50)})
 
     def check_boundary_quadrature(self, *args, **kwargs):
         """Measures whether the boundary rule resolves the DtN modes.

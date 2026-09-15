@@ -181,10 +181,23 @@ def parse_counts(text):
         "mg_sweeps": {}, "unclassified": [],
     }
     for prefix, reason, its in lines:
-        inner = re.search(r"dtn_fieldsplit_0_fieldsplit_(\d+)_$", prefix)
+        # `gadopt.CondensedBlockPC` (the default block-0 route of the
+        # uncondensed preset) runs block 0 as a `preonly` KSP around its own
+        # `(u, psi)` Krylov solve, so the line that reports one block-0
+        # application is that solve's, at `dtn_fieldsplit_0_condensed_`, and
+        # its two splits print at `dtn_fieldsplit_0_condensed_fieldsplit_N_`.
+        # The split test comes first for the same reason the old one does: a
+        # split's prefix CONTAINS the solve's.
+        inner = re.search(r"dtn_fieldsplit_0_(?:condensed_)?fieldsplit_(\d+)_$",
+                          prefix)
         if inner is not None:
             k = f"split_{inner.group(1)}"
             out["mg_sweeps"][k] = out["mg_sweeps"].get(k, 0) + 1
+        elif prefix.endswith("dtn_fieldsplit_0_condensed_"):
+            out["block0_applies"] += 1
+            out["block0_its"] += its
+            if reason.startswith("DIVERGED"):
+                out["block0_diverged"] += 1
         elif prefix.endswith("dtn_fieldsplit_0_"):
             out["block0_applies"] += 1
             out["block0_its"] += its

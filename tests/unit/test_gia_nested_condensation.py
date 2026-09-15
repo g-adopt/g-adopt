@@ -76,8 +76,17 @@ def build(meshes, *, condensed=False, n_internal_variables=1,
 
 
 def nested_preset(**kwargs):
-    """The uncondensed iterative preset, tightened for a direct comparison."""
-    settings = dict(condensed=False, snes_type="ksponly",
+    """The uncondensed iterative preset, tightened for a direct comparison.
+
+    `block0="pair"` is named explicitly, and every test in this file depends on
+    it. This file is about the nested route: block 0 is a two-split sweep whose
+    split 0 is the pair `(u, M)` under `gadopt.InternalVariableSCPC`. The
+    preset's default block-0 route is `gadopt.CondensedBlockPC`, which
+    eliminates `M` once per block-0 application instead and has no such split;
+    `tests/unit/test_gia_condensed_block0.py` is its file. Keeping this arm
+    exercised is also what keeps the T2 Gadi measurements reproducible.
+    """
+    settings = dict(condensed=False, block0="pair", snes_type="ksponly",
                     outer_rtol=1e-10, block0_rtol=1e-4, block0_max_it=200)
     settings.update(kwargs)
     return selfgrav_dtn_iterative_solver_parameters(**settings)
