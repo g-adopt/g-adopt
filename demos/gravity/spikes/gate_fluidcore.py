@@ -70,21 +70,22 @@ angle survives - FC-4's last row, and it is smaller still on a P2-curved mesh.
 1.39e-16. With the fluid core the quarantined number should **vanish, not
 shrink**.
 
-**FC-NS, the nullspace** (`--ns`). Rotations only, for the whole of A4. The
-fluid core removes one of the two mechanisms that keep a translation out of the
-kernel; the other is `grad_phi = g*upward_normal(mesh)`, anchored to the mesh
-origin, which does not translate with the body and therefore costs energy at
-the percent level whatever the CMB does. Until Phi_0 is computed from the
-reference density - `gravity()` calls that "a deliberate omission" - a
-translation is not a kernel mode. The gate does not infer this: it assembles
-the operator action on each candidate generator, on two meshes. The review's
-threshold of `||A c|| / (||A|| ||c||) <= 1e-13` was measured on the *volume
-term alone* and no mesh meets it for the whole discrete coupled operator, which
-annihilates the rotation only to facet-geometry error - the reason
-`rigid_rotation_nullspace` exists, and its docstring records ~2e-06. So the
-gate is written on the statement that separates the two: the rotation's
-residual is seven orders below the translation's and falls by a factor of
-thirty under one refinement, while the translation's does not move.
+**FC-NS, the rigid modes** (`--ns`). With a fluid core, which rigid motions
+does the coupled operator annihilate? Each candidate is the rigid displacement
+together with its own potential response: the potential and the DtN
+multipliers are solved from their rows with the displacement fixed. A rigid
+translation of a self-gravitating body carries its potential with it, so a
+candidate with `psi = 0` is not a translation of the body.
+
+The answer depends on the reference state. With a reference gravity that is
+consistent with the density, `g(r) = Lambda M(<r) / (2 pi r)` from Gauss' law,
+the translation and the rotation are both near-kernels: the residual is a
+discretisation error and falls with refinement. With the constant `g` of the
+other FC gates the reference state is not in equilibrium, the translation
+costs a force of about 19 percent of its parts, and that fraction does not fall.
+The gate asserts both. The rotation is declared by `rigid_rotation_nullspace`.
+The translation is not declared: the centre-of-mass multipliers
+(`self_gravitating_gia_space(..., centre_of_mass=True)`) fix it.
 
 FC-3, the A/B of the two CMB treatments on the benchmark, is a Phase D run and
 is not here.
@@ -99,6 +100,8 @@ import sys
 
 import gadopt  # noqa: F401  BEFORE firedrake; see the demo's note
 import numpy as np  # noqa: E402
+import scipy.sparse as sp  # noqa: E402
+import scipy.sparse.linalg as spla  # noqa: E402
 from gadopt import *  # noqa: E402
 from gadopt.gia_gravity import FluidCore  # noqa: E402
 
@@ -164,9 +167,33 @@ def approximation(density=RHO_MANTLE, g=G_CMB, B_mu=B_MU):
         g=g, B_mu=B_mu, self_gravity_number=LAMBDA)
 
 
+def enclosed_mass(r):
+    """Mass per unit length inside radius `r` >= Rc, non-dimensional.
+
+    A uniform core of density `RHO_CORE` inside Rc and a uniform mantle of
+    density `RHO_MANTLE` between Rc and `r`. Works on floats and on UFL.
+    """
+    return RHO_CORE * np.pi * RC ** 2 + RHO_MANTLE * np.pi * (r ** 2 - RC ** 2)
+
+
+def consistent_gravity(r):
+    """`|g_0|(r)` from the 2-D Gauss law, `g 2 pi r = Lambda M(<r)`.
+
+    This is the reference gravity that the model's own density produces. Only
+    with it is the reference state an equilibrium in which a rigid translation
+    of the whole body costs no energy.
+    """
+    return LAMBDA * enclosed_mass(r) / (2 * np.pi * r)
+
+
 def build_solver(parent, sub, *, rho_core, dt=1.0, truncation=3,
-                 rotation=False, **kwargs):
-    """The coupled solver with a fluid core at Rc and a load sheet at Re."""
+                 rotation=False, gravity="const", **kwargs):
+    """The coupled solver with a fluid core at Rc and a load sheet at Re.
+
+    `gravity="const"` uses `G_CMB` everywhere, the reference state of every FC
+    gate except FC-NS. `gravity="consistent"` uses `consistent_gravity(r)` in
+    the mantle and its value at Rc for the core's buoyancy.
+    """
     X = SpatialCoordinate(parent)
     sigma = SIGMA_HAT * cos(2 * atan2(X[1], X[0]))
     gravity_bcs = {
@@ -183,8 +210,15 @@ def build_solver(parent, sub, *, rho_core, dt=1.0, truncation=3,
         dtn_representation="multiplier")
     z = Function(Z)
 
-    approx = approximation()
     Xm = SpatialCoordinate(sub)
+    if gravity == "consistent":
+        # Gravity as UFL of the radius on the mantle mesh, and the core's
+        # buoyancy with the same gravity at Rc.
+        approx = approximation(g=consistent_gravity(sqrt(dot(Xm, Xm))))
+        core_kwargs = {"g": Constant(consistent_gravity(RC))}
+    else:
+        approx = approximation()
+        core_kwargs = {}
     sigma_m = SIGMA_HAT * cos(2 * atan2(Xm[1], Xm[0]))
     bcs = {gen.CURVE_RE: {"normal_stress": B_MU * sigma_m}}
 
@@ -196,7 +230,8 @@ def build_solver(parent, sub, *, rho_core, dt=1.0, truncation=3,
 
     solver = SelfGravitatingGIASolver(
         z, approx, layout=layout, dt=dt, bcs=bcs, rotation_moments=moments,
-        fluid_core=FluidCore(boundary=gen.CURVE_RC, rho_core=rho_core),
+        fluid_core=FluidCore(boundary=gen.CURVE_RC, rho_core=rho_core,
+                             **core_kwargs),
         **kwargs)
     return solver, z, layout
 
@@ -620,15 +655,88 @@ def gate_fc4(dr, nazim):
 # ---------------------------------------------------------------------------
 # FC-NS
 # ---------------------------------------------------------------------------
-def generator_residuals(dr, nazim, tag):
-    """`||A c|| / (||A|| ||c||)` for each candidate generator, one assembly."""
+def nest_to_scipy(form, z):
+    """The Jacobian of `form` as one scipy CSR matrix, plus the field offsets.
+
+    Assembled as `nest`, the route that assembles at all with `Real` blocks.
+    Sparse sub-blocks keep their CSR data. The `Real` rows and columns are
+    converted through dense arrays, which is cheap because they are single
+    rows or columns. A missing diagonal block is an explicit zero. Serial.
+
+    Returns:
+      `(A, offsets)`: the matrix, and the start of each field in it, with the
+      total size appended.
+    """
+    A = assemble(derivative(form, z), mat_type="nest").petscmat
+    Z = z.function_space()
+    n = len(Z)
+    sizes = [Z.sub(i).dof_dset.size * Z.sub(i).block_size for i in range(n)]
+    blocks = [[None] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            M = A.getNestSubMatrix(i, j)
+            if M is None:
+                continue
+            if M.getType() in ("seqaij", "seqbaij"):
+                indptr, indices, data = M.getValuesCSR()
+                blocks[i][j] = sp.csr_matrix((data, indices, indptr),
+                                             shape=M.getSize())
+            else:
+                blocks[i][j] = sp.csr_matrix(
+                    M.convert("dense").getDenseArray())
+    for i in range(n):
+        if blocks[i][i] is None:
+            blocks[i][i] = sp.csr_matrix((sizes[i], sizes[i]))
+    offsets = np.concatenate([[0], np.cumsum(sizes)])
+    return sp.bmat(blocks, format="csr"), offsets
+
+
+def generator_residuals(dr, nazim, tag, gravity):
+    """The force residual of each rigid mode with its potential response.
+
+    For each candidate `e` (a rigid displacement, everything else zero) the
+    potential and the DtN multipliers are solved from their own rows with the
+    displacement fixed, `A_PP x_P = -A_PU e`. That is the potential that the
+    displaced body produces. The candidate is then `x = (e, x_P)` and the
+    residual on the displacement rows is `r_U = A_UU e + A_UP x_P`.
+
+    Two measures, because the rotation and the translation need different
+    normalisations:
+
+    - `fraction`: `||r_U|| / max(||A_UU e||, ||A_UP x_P||)`, the part of the
+      forces on the translated body that does not cancel. For a rotation both
+      parts are themselves near zero, so this ratio is not informative there.
+    - `relative`: `||r_U||_inf / (||A_UU||_max ||e||_inf)`, the residual against
+      the scale of the operator. This is the measure the rotation is judged on,
+      as `rigid_rotation_nullspace` records it.
+
+    Args:
+      dr, nazim: radial spacing in the mantle and azimuthal cell count.
+      tag: file tag of the generated mesh.
+      gravity: `"const"` or `"consistent"`, passed to `build_solver`.
+
+    Returns:
+      `{mode name: {"fraction": float, "relative": float}}`.
+    """
     parent, sub = build_meshes(dr, nazim, tag)
     solver, z, layout = build_solver(parent, sub, rho_core=RHO_CORE,
-                                     rotation=True)
-    Z = z.function_space()
-    J = derivative(solver.F, z)
-    scale = max(np.abs(b).max() for b in nest_blocks(solver.F, z).values()
-                if b is not None and b.size)
+                                     rotation=True, gravity=gravity)
+    A, off = nest_to_scipy(solver.F, z)
+
+    def rows(i):
+        return np.arange(off[i], off[i + 1])
+
+    U = rows(layout.displacement)
+    # The potential response lives in the potential field and the DtN
+    # multipliers. The core pressure, rotation and history stay zero: the
+    # question is whether the displacement rows balance.
+    P = np.concatenate([rows(layout.potential)]
+                       + [rows(i) for i in layout.multipliers])
+    A_UU = A[U][:, U]
+    A_UP = A[U][:, P]
+    A_PP = A[P][:, P].tocsc()
+    A_PU = A[P][:, U]
+    scale_A = np.abs(A_UU.data).max()
 
     X = SpatialCoordinate(sub)
     generators = {
@@ -638,76 +746,105 @@ def generator_residuals(dr, nazim, tag):
     }
     out = {}
     for name, mode in generators.items():
-        c = Function(Z)
+        c = Function(z.function_space())
         c.subfunctions[layout.displacement].interpolate(mode)
-        norm_c = max(np.abs(np.asarray(s.dat.data_ro)).max()
-                     for s in c.subfunctions)
-        act = assemble(action(J, c))
-        norm_a = max(np.abs(np.asarray(s.dat.data_ro)).max()
-                     for s in act.subfunctions)
-        out[name] = norm_a / (scale * norm_c)
+        e = np.asarray(c.subfunctions[layout.displacement].dat.data_ro).ravel()
+        # The potential of the displaced body, from the potential rows.
+        x_P = spla.spsolve(A_PP, -(A_PU @ e))
+        force_elastic = A_UU @ e
+        force_gravity = A_UP @ x_P
+        r_U = force_elastic + force_gravity
+        parts = max(np.linalg.norm(force_elastic),
+                    np.linalg.norm(force_gravity))
+        out[name] = {
+            "fraction": np.linalg.norm(r_U) / parts if parts > 0 else 0.0,
+            "relative": np.abs(r_U).max() / (scale_A * np.abs(e).max()),
+        }
     return out
 
 
 def gate_nullspace(dr, nazim):
-    """FC-NS: which rigid modes the fluid-core operator actually annihilates.
+    """FC-NS: which rigid modes the fluid-core operator annihilates.
 
-    **The threshold is not the review's 1e-13, and the difference is not a
-    defect.** The review measured `a(rot, w)/scale = 8.3e-13` on the *volume
-    term alone*; the whole discrete coupled operator annihilates the rotation
-    only to facet-geometry error, because `u . n_h` is not exactly zero on a
-    piecewise-quadratic approximation to a circle. That is the reason
-    `rigid_rotation_nullspace` exists and its docstring records the number
-    (~2e-06 on the development annulus). A fixed 1e-13 on this operator is a
-    threshold no mesh meets.
+    A continuum kernel mode has a discrete residual that is a discretisation
+    error, so it falls with refinement. A mode that costs real energy has a
+    residual that is a physical number, so it stays. The gate measures each
+    rigid mode with its own potential response (see `generator_residuals`) on
+    two meshes and under two reference states.
 
-    So the gate is written on the statement that actually distinguishes the two
-    modes: **the rotation residual falls with refinement and the translation
-    residual does not.** A continuum kernel mode's discrete residual is a
-    geometry error and converges; a mode that costs real energy has a residual
-    that is a physical number and stays put.
+    Expected, from `NOTES/frame/m1_translation_kernel.py` on the sea-level
+    branch (force fraction of a translation at dr 0.2, 0.1, 0.05):
+
+    - consistent gravity: 1.07e-4, 1.96e-5, 3.51e-6. A near-kernel.
+    - constant gravity: 1.88e-1, 1.86e-1, 1.85e-1. Not a kernel.
+
+    **Why the constant-gravity case is kept.** It shows the reason for the
+    result. A uniform-density body in a constant gravity field is not in
+    hydrostatic equilibrium, so moving it costs a force. Every earlier FC gate
+    uses that reference state, and an older version of this gate concluded from
+    it, with the potential response left out, that a translation is never a
+    kernel mode.
+
+    **The rotation threshold is not 1e-13.** The whole discrete coupled
+    operator annihilates the rotation only to facet-geometry error, because
+    `u . n_h` is not exactly zero on a piecewise-quadratic circle.
+    `rigid_rotation_nullspace` records about 2e-06 on the development annulus.
+
+    **What follows for the solver.** The rotation is declared as a nullspace
+    by `rigid_rotation_nullspace`. The translation is not declared. With a
+    consistent reference state it is fixed by the centre-of-mass multipliers,
+    `self_gravitating_gia_space(..., centre_of_mass=True)`.
     """
     print("\n" + "=" * 78)
-    print("FC-NS  candidate kernel generators, tested before being declared")
+    print("FC-NS  rigid modes with their potential response")
     print("=" * 78)
     print("Expected, before the run:")
-    print("  rigid rotation    ||A c|| / (||A|| ||c||)   small, and falling")
-    print("                    fast with refinement - a geometry error")
-    print("  rigid translation                           ~1e-02, seven orders")
-    print("                    larger, and falling only as the norm's own O(h)")
-    print("The fluid core removes the free-slip mechanism that excluded a "
-          "translation,\nbut not the second one: `grad_phi = g*upward_normal"
-          "(mesh)` is anchored to the\nmesh origin and does not translate "
-          "with the body. Declaring translations is\nwrong for the whole of "
-          "A4, until Phi_0 is computed from the reference density.")
-
-    coarse = generator_residuals(dr, nazim, "ns")
-    fine = generator_residuals(dr / 2, 2 * nazim, "nsf")
-
-    print(f"\nMeasured:   {'coarse':>14s}{'refined':>14s}{'ratio':>12s}")
-    for name in coarse:
-        r = fine[name] / coarse[name]
-        print(f"  {name:<24s}{coarse[name]:14.3e}{fine[name]:14.3e}{r:12.3f}")
+    print("  consistent g: rotation relative residual small and falling;")
+    print("                translation force fraction ~1e-4 and falling")
+    print("                by about 5 per refinement - a near-kernel")
+    print("  constant g:   translation force fraction ~0.19 on both meshes")
+    print("                - the reference state is not an equilibrium")
 
     rot = "rigid rotation (-y, x)"
     trans = ("translation e_x", "translation e_y")
-    separation = max(coarse[rot] / coarse[t] for t in trans)
-    # The rotation's residual falls by a factor of thirty under one refinement
-    # while the translation's falls by two - and that two is the inf-norm's own
-    # O(h), not convergence. The separation is the statement that matters.
-    ok = (coarse[rot] <= 1e-5
-          and fine[rot] < 0.2 * coarse[rot]
-          and all(coarse[t] > 1e-4 and fine[t] > 1e-4 for t in trans)
-          and separation <= 1e-5)
-    print(f"\n  rotation / translation                     {separation:.2e}")
-    print(f"  rotation:    kernel mode, DECLARE  (converging, "
-          f"x{fine[rot] / coarse[rot]:.3f} under one refinement)")
-    print(f"  translation: NOT a kernel mode, DO NOT DECLARE  "
-          f"({coarse['translation e_x']:.2e}, and its x"
-          f"{fine['translation e_x'] / coarse['translation e_x']:.2f} is the "
-          "inf-norm's\n               own O(h) rather than convergence)")
-    print(f"\nFC-NS {verdict(ok)}   (rotations only, which is what "
-          "`rigid_rotation_nullspace`\n      declares and all it declares)")
+    measured = {}
+    for gravity in ("consistent", "const"):
+        coarse = generator_residuals(dr, nazim, "ns", gravity)
+        fine = generator_residuals(dr / 2, 2 * nazim, "nsf", gravity)
+        measured[gravity] = (coarse, fine)
+        print(f"\n  reference gravity: {gravity}")
+        print(f"  {'mode':<24s}{'measure':<10s}{'coarse':>12s}"
+              f"{'refined':>12s}{'ratio':>9s}")
+        for name in coarse:
+            key = "relative" if name == rot else "fraction"
+            a, b = coarse[name][key], fine[name][key]
+            print(f"  {name:<24s}{key:<10s}{a:12.3e}{b:12.3e}{b / a:9.3f}")
+
+    cons_c, cons_f = measured["consistent"]
+    const_c, const_f = measured["const"]
+    # Consistent gravity: the rotation converges as a geometry error, and the
+    # translation converges as a near-kernel. M1 measured a factor of about 5.5
+    # per refinement for the translation; 0.4 leaves room for a coarser pair.
+    ok_rotation = (cons_c[rot]["relative"] <= 1e-5
+                   and cons_f[rot]["relative"] < 0.2 * cons_c[rot]["relative"])
+    ok_translation = all(
+        cons_c[t]["fraction"] < 1e-3
+        and cons_f[t]["fraction"] < 0.4 * cons_c[t]["fraction"]
+        for t in trans)
+    # Constant gravity: the translation costs a force that does not converge
+    # away. This is the control that shows the reference state is the cause.
+    ok_control = all(
+        const_c[t]["fraction"] > 0.1 and const_f[t]["fraction"] > 0.1
+        for t in trans)
+    ok = ok_rotation and ok_translation and ok_control
+
+    print(f"\n  rotation, consistent g:    {verdict(ok_rotation)}  "
+          "near-kernel, declared by `rigid_rotation_nullspace`")
+    print(f"  translation, consistent g: {verdict(ok_translation)}  "
+          "near-kernel, fixed by the centre-of-mass multipliers")
+    print(f"  translation, constant g:   {verdict(ok_control)}  "
+          "not a kernel: the reference state is out of equilibrium")
+    print(f"\nFC-NS {verdict(ok)}")
     return ok
 
 
