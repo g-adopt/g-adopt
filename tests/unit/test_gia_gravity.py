@@ -2470,7 +2470,12 @@ class TestFluidCore:
         assert amax(iu, iu) == 0.0
 
     @pytest.mark.xfail(
-        strict=True,
+        # Not strict: the outcome depends on round-off in a singular block-0
+        # LU, so a pass is as uninformative as a failure. With the dense Schur
+        # complement on block 1 of the direct preset (2026-09-15) the test
+        # passes on phoenix; with `pc_type none` there it failed. Neither
+        # result shows that block 0 is non-singular.
+        strict=False,
         reason=(
             "Fragile by construction: with a fluid core and B_mu = 0 nothing "
             "pins a rigid motion of the mantle, so the block-0 LU of the "

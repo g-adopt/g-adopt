@@ -344,15 +344,6 @@ class TestItChangesNoDefault:
             assert p["dtn_fieldsplit_1_pc_type"] == "none", kwargs
             assert "dtn_fieldsplit_1_pc_python_type" not in p, kwargs
 
-    def test_the_direct_preset_runs_block_one_unpreconditioned(self):
-        """The 2-D preset is not in the campaign and does not move with it."""
-        assert selfgrav_dtn_schur_solver_parameters[
-            "dtn_fieldsplit_1_pc_type"] == "none"
-        assert "dtn_fieldsplit_1_pc_python_type" not in \
-            selfgrav_dtn_schur_solver_parameters
-        assert selfgrav_dtn_schur_solver_parameters[
-            "dtn_pc_fieldsplit_schur_fact_type"] == "full"
-
     def test_a_named_multiplier_pc_beats_the_sentinel_both_ways(self):
         """`None` means "the preset chooses"; a string means what it says."""
         off = selfgrav_dtn_iterative_solver_parameters(
@@ -419,6 +410,37 @@ class TestItChangesNoDefault:
         p = selfgrav_dtn_iterative_solver_parameters(
             condensed=True, block0_max_it=37)
         assert p["dtn_fieldsplit_0_ksp_gmres_restart"] == 37
+
+    def test_direct_preset_uses_the_dense_complement_on_block_one(self):
+        # The 2-D direct preset pairs its exact LU block 0 with the exact dense
+        # Schur complement of the `Real` block. The diagonal PC in this file
+        # stays opt-in.
+        assert selfgrav_dtn_schur_solver_parameters[
+            "dtn_fieldsplit_1_pc_type"] == "python"
+        assert selfgrav_dtn_schur_solver_parameters[
+            "dtn_fieldsplit_1_pc_python_type"] == \
+            "gadopt.DtNMultiplierDenseSchurPC"
+        # The 2-D preset is not in the 3-D campaign and does not move with it:
+        # its factorisation type stays `full`, which is what an exact block-0
+        # LU plus an exact complement makes an exact inverse of the pair.
+        assert selfgrav_dtn_schur_solver_parameters[
+            "dtn_pc_fieldsplit_schur_fact_type"] == "full"
+
+    def test_lowrank_direct_preset_keeps_block_one_unpreconditioned(self):
+        # The low-rank adjoint and tangent solves reuse the forward parameters
+        # on an assembled matrix, where a block-1 PC that needs a sub-DM
+        # crashes. The low-rank variant must differ from the multiplier preset
+        # in block 1 only.
+        from gadopt.gia_gravity import (
+            selfgrav_dtn_schur_lowrank_solver_parameters as lowrank)
+        assert lowrank["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in lowrank
+        differing = {key for key in set(lowrank)
+                     | set(selfgrav_dtn_schur_solver_parameters)
+                     if lowrank.get(key)
+                     != selfgrav_dtn_schur_solver_parameters.get(key)}
+        assert differing == {"dtn_fieldsplit_1_pc_type",
+                             "dtn_fieldsplit_1_pc_python_type"}
 
 
 class TestTheSolveAgrees:
