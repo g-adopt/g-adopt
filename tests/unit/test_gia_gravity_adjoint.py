@@ -311,3 +311,59 @@ def test_coupled_adjoint_is_second_order_with_a_power_law(meshes):
         Jhat, meshes, declare_nullspace=False,
         approximation_kwargs=approximation_kwargs,
         solver_parameters_extra=solver_parameters_extra)
+
+
+def test_coupled_adjoint_through_the_centre_of_mass_rows(meshes):
+    """Taylor rate 2 through the centre-of-mass multipliers, and a clean replay.
+
+    Degree-1 load, fluid core, the reference gravity of the test's own density,
+    and a functional that reads the degree-1 surface displacement and the
+    multiplier itself, so that both the constraint row and its column carry
+    the sensitivity. The rows are UFL on the one taped solve, so no
+    hand-written adjoint is involved; this pins that it stays that way.
+    """
+    from test_gia_gravity import CURVE_RE, TestCentreOfMassFrame
+
+    parent, sub = meshes
+    frame = TestCentreOfMassFrame()
+    extra = {"dtn_fieldsplit_1_pc_type": "python",
+             "dtn_fieldsplit_1_pc_python_type":
+                 "gadopt.DtNMultiplierDenseSchurPC",
+             "ksp_rtol": 1e-12}
+
+    def forward(control):
+        with stop_annotating():
+            solver, _, layout = frame.build(
+                meshes, load_degree=1,
+                approximation_kwargs={"shear_modulus": control},
+                solver_parameters="direct", solver_parameters_extra=extra)
+        solver.solve()
+        u = fd.split(solver.solution)[layout.displacement]
+        lam = fd.split(solver.solution)[layout.centre_of_mass[0]]
+        X = fd.SpatialCoordinate(sub)
+        rhat = X / fd.sqrt(fd.dot(X, X))
+        ds_re = fd.Measure("ds", domain=sub)(CURVE_RE)
+        dx_m = fd.Measure("dx", domain=sub,
+                          intersect_measures=(fd.Measure("dx", domain=parent),))
+        return fd.assemble(
+            1e3 * fd.dot(u, rhat) * fd.cos(fd.atan2(X[1], X[0])) * ds_re
+            + 1e6 * fd.inner(u, u) * dx_m
+            + 1e8 * lam * lam * dx_m)
+
+    R = fd.FunctionSpace(sub, "R", 0)
+    control = fd.Function(R).assign(1.0)
+    h = fd.Function(R).assign(1.0)
+    continue_annotation()
+    try:
+        m = Control(control)
+        J = forward(control)
+        Jhat = ReducedFunctional(J, m)
+    finally:
+        pause_annotation()
+    assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
+
+    shifted = fd.Function(R).assign(1.05)
+    with stop_annotating():
+        J_direct = float(forward(shifted))
+    J_replay = float(Jhat(shifted))
+    assert abs(J_replay - J_direct) <= 1e-9 * abs(J_direct)

@@ -2750,3 +2750,239 @@ class TestFluidCore:
         scale = max(np.abs(um).max(), np.abs(mu).max())
         assert scale > 0.0
         assert np.abs(um - mu.T).max() / scale < 1e-14
+
+
+class TestCentreOfMassFrame:
+    """The centre-of-mass multipliers: layout, refusals, symmetry and the constraint.
+
+    Structural checks, on the coarse annulus. The physics measurements (the
+    translation near-kernel under a consistent reference gravity, the
+    frame independence of `N - u_r`, the convergence of the multiplier) are
+    in `NOTES/frame/`.
+
+    The reference gravity here is the 2-D Gauss law for the test's own
+    density, `g(r) = Lambda M(<r) / (2 pi r)`. With the constant `g = 1` of the
+    other tests a rigid translation costs energy and the multiplier would
+    carry a real force; the constraint would still hold, but the test would
+    not describe the configuration the frame exists for.
+    """
+
+    RHO_CORE = 2.0
+
+    @classmethod
+    def gravity_of_r(cls, r):
+        """`g(r)` for a uniform core of `RHO_CORE` and a unit-density mantle."""
+        mass = cls.RHO_CORE * np.pi * RC ** 2 + np.pi * (r ** 2 - RC ** 2)
+        return LAMBDA * mass / (2 * np.pi * r)
+
+    def build(self, meshes, *, load_degree=1, rotation=False,
+              approximation_kwargs=None, **solver_kwargs):
+        parent, sub = meshes
+        X = fd.SpatialCoordinate(parent)
+        bcs_psi = gravity_bcs(parent, sheet=False)
+        bcs_psi[CURVE_RE] = {"interior_sigma": SIGMA_HAT * fd.cos(
+            load_degree * fd.atan2(X[1], X[0]))}
+        Z, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=bcs_psi, rotation=rotation,
+            fluid_core=True, centre_of_mass=True,
+            self_gravity_number=LAMBDA)
+        z = fd.Function(Z)
+        Xm = fd.SpatialCoordinate(sub)
+        rm = fd.sqrt(fd.dot(Xm, Xm))
+        moments = {}
+        if rotation:
+            dx_m = fd.Measure(
+                "dx", domain=sub,
+                intersect_measures=(fd.Measure("dx", domain=parent),))
+            moments["C"] = fd.assemble(fd.dot(Xm, Xm) * dx_m)
+        solver = SelfGravitatingGIASolver(
+            z, approximation(g=self.gravity_of_r(rm),
+                             **(approximation_kwargs or {})),
+            layout=layout, dt=1.0,
+            # The weight of the sheet with the surface gravity of this
+            # reference state, so that the load exerts no net force.
+            bcs={CURVE_RE: {"normal_stress": B_MU * self.gravity_of_r(RE)
+                            * SIGMA_HAT * fd.cos(
+                                load_degree * fd.atan2(Xm[1], Xm[0]))}},
+            rotation_moments=moments,
+            fluid_core=FluidCore(boundary=CURVE_RC, rho_core=self.RHO_CORE,
+                                 g=fd.Constant(self.gravity_of_r(RC))),
+            **solver_kwargs)
+        return solver, z, layout
+
+    @pytest.mark.parametrize("rotation", [False, True])
+    def test_fields_are_last_and_one_per_direction(self, meshes, rotation):
+        parent, sub = meshes
+        Z, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=rotation,
+            fluid_core=True, centre_of_mass=True,
+            self_gravity_number=LAMBDA)
+        assert len(layout.centre_of_mass) == 2
+        assert layout.centre_of_mass == tuple(range(len(Z) - 2, len(Z)))
+        assert len(Z) == layout.n_fields
+        real = tuple(i for i, V in enumerate(Z)
+                     if V.ufl_element().family() == "Real")
+        assert real == layout.real_fields
+        assert real == tuple(range(real[0], len(Z)))
+
+    def test_absent_by_default(self, meshes):
+        parent, sub = meshes
+        _, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
+            self_gravity_number=LAMBDA)
+        assert layout.centre_of_mass == ()
+
+    def test_refuses_a_rigid_core(self, meshes):
+        parent, sub = meshes
+        with pytest.raises(ValueError, match="requires fluid_core=True"):
+            self_gravitating_gia_space(
+                sub, parent, gravity_bcs=gravity_bcs(parent),
+                centre_of_mass=True, self_gravity_number=LAMBDA)
+
+    def test_refuses_the_lowrank_representation(self, meshes):
+        parent, sub = meshes
+        with pytest.raises(NotImplementedError, match="multiplier"):
+            self_gravitating_gia_space(
+                sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
+                centre_of_mass=True, dtn_representation="lowrank",
+                self_gravity_number=LAMBDA)
+
+    def test_translation_moment_is_the_total_mass(self, meshes):
+        """`D[u = e] = (rho_0 V_mantle + rho_core V_core) e`, per direction.
+
+        The load sheet is switched off by a zero amplitude, because its moment
+        is a constant and would hide an error in the two displacement terms.
+        """
+        solver, z, layout = self.build(meshes, load_degree=1)
+        _, sub = meshes
+        solver.form.sigma_bcs[:] = []
+        mantle = fd.assemble(fd.Constant(1.0) * fd.dx(domain=sub))
+        # The core volume from the discrete CMB circle, the same geometry the
+        # core sheet is integrated on.
+        Xm = fd.SpatialCoordinate(sub)
+        ds_c = fd.Measure("ds", domain=sub)(CURVE_RC)
+        radius = fd.assemble(fd.sqrt(fd.dot(Xm, Xm)) * ds_c) / fd.assemble(
+            fd.Constant(1.0) * ds_c)
+        mass = mantle + self.RHO_CORE * np.pi * radius ** 2
+        for i, e in enumerate(([1.0, 0.0], [0.0, 1.0])):
+            u = fd.Function(z.function_space().sub(layout.displacement))
+            u.interpolate(fd.as_vector(e))
+            D = [fd.assemble(solver.mass_dipole_form(j, u=u))
+                 for j in range(2)]
+            assert abs(D[i] - mass) < 1e-6 * mass
+            assert abs(D[1 - i]) < 1e-10 * mass
+
+    @pytest.mark.skipif(
+        fd.COMM_WORLD.size > 1,
+        reason="the per-block instrument needs global dense blocks")
+    @pytest.mark.parametrize("rotation", [False, True])
+    def test_blocks_form_an_exact_saddle_pair(self, meshes, rotation):
+        solver, z, layout = self.build(meshes, rotation=rotation)
+        A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
+        iu = layout.displacement
+        for il in layout.centre_of_mass:
+            ul = A.getNestSubMatrix(iu, il).convert("dense").getDenseArray()
+            lu = A.getNestSubMatrix(il, iu).convert("dense").getDenseArray()
+            scale = max(np.abs(ul).max(), np.abs(lu).max())
+            assert scale > 0.0
+            assert np.abs(ul - lu.T).max() / scale < 1e-14
+            for jl in layout.centre_of_mass:
+                ll = A.getNestSubMatrix(il, jl)
+                if ll is not None:
+                    assert np.abs(ll.convert("dense").getDenseArray()).max() \
+                        == 0.0
+
+    def test_block1_diagonal_is_zero_on_the_new_rows(self, meshes):
+        solver, _, layout = self.build(meshes)
+        d = solver.block1_diagonal()
+        where = [layout.real_fields.index(i) for i in layout.centre_of_mass]
+        assert np.all(d[where] == 0.0)
+
+    def test_solve_holds_the_centre_of_mass(self, meshes):
+        """After a solve with a degree-1 load, `D = 0` to the solver tolerance.
+
+        The scale is the moment of the load sheet alone, which the displacement
+        has to cancel.
+        """
+        solver, _, _ = self.build(meshes, load_degree=1)
+        load_moment = SIGMA_HAT * np.pi * RE ** 2
+        solver.solve()
+        D = solver.mass_dipole()
+        assert abs(D[0]) < 1e-8 * load_moment
+        assert abs(D[1]) < 1e-8 * load_moment
+        assert all(np.isfinite(solver.centre_of_mass_multipliers()))
+
+    def test_residual_is_the_variation_of_the_energy(self, meshes):
+        """The written-out residual equals `derivative` of the energy.
+
+        The residual is written term by term for a Slate reason (see
+        `centre_of_mass_residual`). This pins that it is still the variation
+        of `centre_of_mass_energy`, on a state where every unknown is nonzero.
+        """
+        solver, z, layout = self.build(meshes, rotation=False)
+        rng = np.random.default_rng(3)
+        for sub_z in z.subfunctions:
+            sub_z.dat.data[:] = rng.standard_normal(sub_z.dat.data.shape)
+        written = fd.assemble(solver.centre_of_mass_residual())
+        derived = fd.assemble(fd.derivative(solver.centre_of_mass_energy(),
+                                            solver.solution))
+        for a, b in zip(written.subfunctions, derived.subfunctions):
+            scale = max(np.abs(b.dat.data_ro).max(), 1e-300)
+            assert np.abs(a.dat.data_ro - b.dat.data_ro).max() / scale < 1e-13
+
+    @pytest.mark.skipif(
+        fd.COMM_WORLD.size > 1,
+        reason="the per-block instrument needs global dense blocks")
+    def test_extruded_sphere_assembles_the_saddle_pair(self):
+        """3-D, assembly only: three multipliers, exact transposes, `D[e] = M e`.
+
+        The production geometry passes one extruded mesh for both roles and
+        reaches the core boundary through `"bottom"`. No solve, by this file's
+        rule for 3-D. The mesh is the small `CubedSphereMesh` of the Real-block
+        diagonal tests.
+        """
+        from gadopt import SphericalDtN
+
+        base = fd.CubedSphereMesh(radius=1.0, refinement_level=1, degree=2)
+        mesh = fd.ExtrudedMesh(base, layers=2, layer_height=0.5,
+                               extrusion_type="radial")
+        mesh.cartesian = False
+        Z, layout = self_gravitating_gia_space(
+            mesh, mesh,
+            gravity_bcs={"top": {"dtn": SphericalDtN(1)},
+                         "bottom": {"dtn": SphericalDtN(1)}},
+            fluid_core=True, centre_of_mass=True, self_gravity_number=LAMBDA)
+        assert len(layout.centre_of_mass) == 3
+        assert layout.centre_of_mass == tuple(range(len(Z) - 3, len(Z)))
+        z = fd.Function(Z)
+        solver = SelfGravitatingGIASolver(
+            z, approximation(), layout=layout, dt=1.0,
+            bcs={"top": {"normal_stress": B_MU * SIGMA_HAT}},
+            fluid_core=FluidCore(boundary="bottom", rho_core=self.RHO_CORE))
+
+        A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
+        iu = layout.displacement
+        for il in layout.centre_of_mass:
+            ul = A.getNestSubMatrix(iu, il).convert("dense").getDenseArray()
+            lu = A.getNestSubMatrix(il, iu).convert("dense").getDenseArray()
+            scale = max(np.abs(ul).max(), np.abs(lu).max())
+            assert scale > 0.0
+            assert np.abs(ul - lu.T).max() / scale < 1e-14
+
+        # The whole mass of the body: the unit-density shell plus the core
+        # inside the discrete bottom sphere, whose volume is taken from its
+        # own area and mean radius (V = A r / 3 for a sphere).
+        shell = fd.assemble(fd.Constant(1.0) * fd.dx(domain=mesh))
+        ds_b = solver.fluid_core_measure()("bottom")
+        X = fd.SpatialCoordinate(mesh)
+        area = fd.assemble(fd.Constant(1.0) * ds_b)
+        radius = fd.assemble(fd.sqrt(fd.dot(X, X)) * ds_b) / area
+        mass = shell + self.RHO_CORE * area * radius / 3
+        for i in range(3):
+            e = [0.0, 0.0, 0.0]
+            e[i] = 1.0
+            u = fd.Function(Z.sub(iu)).interpolate(fd.as_vector(e))
+            D = [fd.assemble(solver.mass_dipole_form(j, u=u))
+                 for j in range(3)]
+            assert abs(D[i] - mass) < 1e-2 * mass
+            assert max(abs(D[j]) for j in range(3) if j != i) < 1e-10 * mass
