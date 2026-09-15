@@ -648,11 +648,47 @@ def test_dtheta_term_is_what_makes_L11_pass(meshes, representation):
 # wrong number reachable through the documented API, not a missing capability.
 # The mechanism is family-blind (`blocks/solving.py:304-346` issues a bare
 # `firedrake.solve` with no kwargs), so it is checked on every family.
+#
+# The multiplier arm does not run at all on the current Firedrake (450aa7905),
+# and the reason is a crash, not a wrong number. The tangent solve there is a
+# bare `firedrake.solve(A, x, b)` on the taped, matrix-free operator. With no
+# parameters and a pre-assembled `matfree` operator, `set_defaults` picks
+# GMRES with Jacobi. Jacobi asks for the diagonal, the matrix-free diagonal
+# assembly runs TSFC on the Real-by-Real blocks, and TSFC raises because Real
+# arguments are stripped from the kernel. That Python exception is raised
+# inside a PETSc callback, and under pytest's output capture petsc4py's
+# Python-level PETSc printer cannot print it with the exception pending, so
+# PETSc's error handler recurses until the stack overflows: exit 139. A
+# runtime `xfail` cannot catch an interpreter crash, so the marker is set on
+# the parameter with `run=False`.
+#
+# The fix is upstream: Firedrake branch `JHopeCollins/nlvs-hessian-fix` (tip
+# 00d4a2750, checked out at `~/Workplace/firedrake-pr4638`) rebuilds the
+# tangent solve as a `LinearVariationalSolver` that takes the forward solver's
+# parameters. On that branch all seven multiplier cases pass with the
+# tangent-linear value matching the adjoint to ~1e-15 (measured 2026-09-15).
+# As soon as that branch lands in the Firedrake g-adopt runs on, remove the
+# `run=False` xfail below so that the multiplier arm becomes a hard gate.
 # ===========================================================================
-@pytest.mark.parametrize("representation", REPRESENTATIONS)
+_TLM_REPRESENTATIONS = [
+    pytest.param(
+        "multiplier",
+        marks=pytest.mark.xfail(
+            run=False,
+            reason="the multiplier path's tangent issues a bare solve() whose "
+                   "Jacobi default needs the diagonal of a matrix-free "
+                   "operator with Real blocks; TSFC raises inside a PETSc "
+                   "callback and the process segfaults. Fixed upstream in "
+                   "Firedrake branch JHopeCollins/nlvs-hessian-fix; drop this "
+                   "marker once it lands.")),
+    "lowrank",
+]
+
+
+@pytest.mark.parametrize("representation", _TLM_REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
 def test_tlm_matches_adjoint_and_fresh_solves(meshes, representation,
-                                              control_name, request):
+                                              control_name):
     """L17: the tangent-linear model is the tangent of the solved map.
 
     **Pre-registered asymmetry, endorsed by the Lead in advance.** The gate is
@@ -664,16 +700,13 @@ def test_tlm_matches_adjoint_and_fresh_solves(meshes, representation,
 
     The gate is **not** restricted to hide that. A capability the low-rank path
     has and the multiplier path lacks is a result, and one of the few places
-    this port is strictly better rather than merely faster. The multiplier arm
-    is marked non-strict xfail so that it is reported rather than silenced, and
-    so that it turns into a green surprise if the property ever changes.
+    this port is strictly better rather than merely faster. On the current
+    Firedrake the failure is a segfault, which no runtime xfail can catch, so
+    the multiplier arm is marked `xfail(run=False)` at the parameter and is
+    reported as xfailed without running. The upstream fix is already verified
+    (see the block comment above); once it lands the marker comes off and the
+    multiplier arm is a hard gate like the low-rank one.
     """
-    if representation == "multiplier":
-        request.node.add_marker(pytest.mark.xfail(
-            strict=False,
-            reason="pre-registered: the multiplier path's tangent issues a "
-                   "bare solve() that the R-space mixed system defeats "
-                   "(NOTES/poisson/HANDOVER-FAST-DTN.md)"))
     value = CONTROL_VALUES[control_name]
     Jhat, control, _, J, _ = reduced_functional(meshes, control_name, value,
                                                 representation)
