@@ -1,5 +1,6 @@
 r"""The monolithic self-gravitating GIA system: displacement, internal
-variables, potential, DtN multipliers, core pressure, and rotation.
+variables, potential, DtN multipliers, core pressure, rotation, and the
+centre-of-mass frame multipliers.
 
 `SelfGravitatingGIASolver` solves the viscoelastic momentum equation, the
 internal-variable evolution, the gravitational Poisson equation with its
@@ -1013,8 +1014,8 @@ class GIASpaceLayout:
     of the dimension, so the indices of the later blocks are not knowable
     without both.
 
-    The `Real` sub-fields - DtN multipliers, core pressure, then rotation - are
-    **contiguous and last**, which `DtNTwoBlockSchurPC.initialize` asserts and
+    The `Real` sub-fields - DtN multipliers, core pressure, rotation, then the
+    centre-of-mass multipliers - are **contiguous and last**, which `DtNTwoBlockSchurPC.initialize` asserts and
     which is worth keeping: anything else would leave sub-fields out of both of
     its blocks, which is a silently wrong split rather than an error.
 
@@ -1037,6 +1038,10 @@ class GIASpaceLayout:
         position, because the 2-D field is `m_3` - index **2** of the rotation
         triple, not index 0 - and a positional record would silently reindex on
         promotion to 3-D.
+      centre_of_mass: indices of the `Real` blocks that hold the Lagrange
+        multipliers of the centre-of-mass frame, one per coordinate direction,
+        or `()` when the frame is not constrained. See
+        `SelfGravitatingGIASolver.centre_of_mass_energy`.
       gravity_form: the `DtNGravityForm` the multiplier count came from. It is
         returned rather than rebuilt by the solver because rebuilding it would
         re-run every boundary measurement and could pick a different quadrature
@@ -1078,6 +1083,10 @@ class GIASpaceLayout:
     #: Always set by `self_gravitating_gia_space`; the field default is never
     #: what a built layout carries.
     dtn_representation: str = "multiplier"
+    #: The centre-of-mass multiplier fields, one per coordinate direction, or
+    #: `()`. A default so that a layout built without the frame constraint
+    #: keeps its existing field count and order.
+    centre_of_mass: tuple[int, ...] = ()
 
     @property
     def cross_mesh(self) -> bool:
@@ -1091,7 +1100,8 @@ class GIASpaceLayout:
     @property
     def n_fields(self) -> int:
         return (2 + len(self.internal_variables) + len(self.multipliers)
-                + (self.core_pressure is not None) + len(self.rotation))
+                + (self.core_pressure is not None) + len(self.rotation)
+                + len(self.centre_of_mass))
 
     @property
     def real_fields(self) -> tuple[int, ...]:
@@ -1109,7 +1119,7 @@ class GIASpaceLayout:
         core = (() if self.core_pressure is None else (self.core_pressure,))
         return tuple(self.multipliers) + core + tuple(
             self.rotation[name] for name in self.rotation_names
-            if name in self.rotation)
+            if name in self.rotation) + tuple(self.centre_of_mass)
 
     def rotation_slots(self) -> tuple[int | None, int | None, int | None]:
         """`(m1, m2, m3)` indices, `None` where the component does not exist.
@@ -1166,11 +1176,12 @@ def self_gravitating_gia_space(
     alpha: Number | Constant | None = None,
     condense_internal_variables: bool = False,
     dtn_representation: str | None = None,
+    centre_of_mass: bool = False,
 ) -> tuple[MixedFunctionSpace, GIASpaceLayout]:
     r"""Builds the coupled mixed space and the layout that describes it.
 
         Z = [ V(sub), S_1..S_N(sub), Psi(parent),
-              R x n_mult, R_core, R x n_rot ]
+              R x n_mult, R_core, R x n_rot, R x n_com ]
 
     The multiplier count depends on the boundary conditions - a
     `CylindricalDtN(M)` contributes `2M` multipliers on an exterior boundary and
@@ -1222,10 +1233,41 @@ def self_gravitating_gia_space(
         the default: low-rank on the full layout, multiplier when
         `condense_internal_variables` is set (`resolve_dtn_representation`).
         The layout records the value for the solver to follow.
+      centre_of_mass: add one `Real` field per coordinate direction, the
+        Lagrange multipliers that hold the centre of mass of the whole system
+        (mantle, core and surface load) at the origin. It requires
+        `fluid_core=True` and the multiplier DtN representation; see
+        `SelfGravitatingGIASolver.centre_of_mass_energy` for the reasons.
 
     Returns:
       `(Z, layout)`.
     """
+    if centre_of_mass and not fluid_core:
+        # With a rigid core the solver pins `u.n = 0` on the core boundary, a
+        # circle or sphere about the origin. A rigid translation violates that
+        # condition, so translations are not a kernel of the operator and the
+        # frame is already fixed. A second constraint on the same freedom makes
+        # the system over-determined: the multiplier then has to supply a real
+        # force to reconcile the two.
+        raise ValueError(
+            "centre_of_mass=True requires fluid_core=True. A rigid core (un = 0 "
+            "at the core boundary) already fixes the translation of the mantle, "
+            "so a centre-of-mass constraint would over-determine the system.")
+    if centre_of_mass and dtn_representation is None:
+        # The frame rows exist on the multiplier representation alone, so a
+        # caller who asks for the frame and names no representation gets that
+        # one. Without this, `resolve_dtn_representation` below would return
+        # the low-rank default of the full layout, and the refusal underneath
+        # would fire on a caller who chose nothing.
+        dtn_representation = "multiplier"
+    if centre_of_mass and dtn_representation != "multiplier":
+        # The low-rank representation carries a hand-written adjoint and a
+        # hand-built Jacobian update. Neither has been extended to these rows,
+        # so the combination is refused until a test covers it.
+        raise NotImplementedError(
+            "centre_of_mass=True is implemented for "
+            "dtn_representation='multiplier' only. The low-rank representation "
+            "has a hand-written adjoint that does not carry these rows.")
     if n_internal_variables < 1:
         raise ValueError(
             f"n_internal_variables must be at least 1, got {n_internal_variables}.")
@@ -1287,11 +1329,17 @@ def self_gravitating_gia_space(
         dtn_representation, condensed=condense_internal_variables)
     n_mult = 0 if dtn_representation == "lowrank" else form.n_multipliers
     n_core = int(fluid_core)
-    spaces.extend([R] * (n_mult + n_core + n_rot))
+    # One centre-of-mass multiplier per coordinate direction: two in 2-D,
+    # three in 3-D. They go last, after rotation, so every existing field keeps
+    # its index when the frame constraint is switched on.
+    n_com = potential_mesh.geometric_dimension if centre_of_mass else 0
+    spaces.extend([R] * (n_mult + n_core + n_rot + n_com))
 
     multipliers = tuple(range(i_R, i_R + n_mult))
     core_pressure = i_R + n_mult if fluid_core else None
     i_rot = i_R + n_mult + n_core
+    i_com = i_rot + n_rot
+    centre_of_mass_fields = tuple(range(i_com, i_com + n_com))
     # Named, and named `m3` in 2-D: the 2-D component is index *2* of the
     # rotation triple, and a layout that recorded it as "the first rotation
     # field" would silently change meaning on promotion to 3-D.
@@ -1307,6 +1355,7 @@ def self_gravitating_gia_space(
         multipliers=multipliers,
         core_pressure=core_pressure,
         rotation=rotation_map,
+        centre_of_mass=centre_of_mass_fields,
         dtn_representation=dtn_representation,
         gravity_form=form,
         mechanics_mesh=mechanics_mesh,
@@ -2487,6 +2536,179 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         return (derivative(self.fluid_core_energy(), self.solution)
                 + self.fluid_core_rotational_traction())
 
+    # -- The centre-of-mass frame ---------------------------------------------
+
+    def mass_dipole_form(self, i: int, u=None, weight=None, *,
+                         include_load: bool = True) -> Form:
+        r"""`D_i`, the `i`th component of the first mass moment of the perturbation.
+
+            D_i = int_mantle rho_0 u_i dx
+                  + int_Rc x_i sigma_core ds
+                  + sum_sheets int x_i sigma dS
+
+        `D` is the total mass of the system times the displacement of its
+        centre of mass. The centre of mass stays at the origin exactly when
+        `D = 0`.
+
+        **Why the mantle term is `rho_0 u` and not `x delta_rho`.** The Eulerian
+        density change inside the mantle is `-div(rho_0 u)`, and the moving
+        boundaries add the sheets `rho_0 (u.n)` at Rc and Re. Integration by
+        parts of `x_i` against both gives `int rho_0 u_i dx` exactly, for any
+        layered `rho_0`, with no jump term. This is the same identity that makes
+        the potential source a divergence (`potential_residual`), so the moment
+        constrained here is the moment of the mass that the potential row sees.
+
+        The fluid core adds its own sheet, `sigma_core = rho_core (u.rhat)` at
+        Rc (`fluid_core_sheet`). The load sheets in `DtNGravityForm.sigma_bcs`
+        are prescribed, so they contribute a constant to `D`. A load with a
+        degree-1 pattern therefore moves the solid Earth by the opposite amount,
+        which is the physics of the centre-of-mass frame.
+
+        A check of the construction: a rigid translation `u = e` gives
+        `D = (rho_0 V_mantle + rho_core V_core) e`, the whole mass of the body
+        times `e`.
+
+        Args:
+          i: coordinate direction, 0-based.
+          u: displacement; the current solution's by default.
+          weight: a factor that multiplies every integrand. `None` gives the
+            plain functional, which `assemble` turns into a number. The
+            residual passes a multiplier or its test function here.
+          include_load: whether to add the moment of the prescribed load
+            sheets. The load term does not depend on `u`, so the variation of
+            `D` with respect to the displacement leaves it out.
+
+        Returns:
+          A 0-form (or a form in whatever arguments `weight` carries).
+        """
+        if u is None:
+            u = self.solution_split[self.layout.displacement]
+        weight = Constant(1.0) if weight is None else weight
+        rho0 = self.approximation.density
+
+        # The mantle term, on the intersected mantle measure. The `Real`
+        # factors live on the parent mesh; that pairing is the one
+        # `rotation_residual` already uses.
+        form = weight * rho0 * u[i] * self.dx_m
+
+        # The prescribed load sheets, written on the parent's coordinates
+        # because the sheets are parent expressions on the parent's facets.
+        if include_load:
+            X_g = SpatialCoordinate(self.potential_mesh)
+            for bc_id, sigma, integral_type in self.form.sigma_bcs:
+                form = form + self.form.sheet_integral(
+                    weight * ensure_constant(sigma) * X_g[i], bc_id,
+                    integral_type)
+
+        # The core sheet `sigma_core = -rho_core (u.n)` of the displacement
+        # passed in, on the core's own facet-to-facet measure, with the
+        # mechanics mesh's coordinates. It is written here and not through
+        # `fluid_core_sheet_integral`, because that method reads the solution's
+        # displacement: the residual evaluates this form at the test function,
+        # and reading the solution there would drop the core traction from the
+        # column and break the transpose.
+        if self.fluid_core is not None:
+            X_m = SpatialCoordinate(self.mesh)
+            sigma_core = -ensure_constant(self.fluid_core.rho_core) * dot(
+                u, FacetNormal(self.mesh))
+            dss = self.fluid_core_measure()(self.fluid_core.boundary)
+            form = form + weight * X_m[i] * sigma_core * dss
+        return form
+
+    def centre_of_mass_energy(self) -> Form:
+        r"""`c beta sum_i lambda_i D_i`: the energy whose variation fixes the frame.
+
+        **What it does.** A rigid translation of the whole body, with the
+        potential it carries, is a kernel of the continuous coupled problem
+        when the reference gravity is consistent with the reference density
+        and the core is fluid. The discrete operator then annihilates it up to
+        discretisation error, measured on the 2-D annulus at `1.1e-4`,
+        `2.0e-5`, `3.5e-6` relative on three refinements
+        (`NOTES/frame/m1_translation_kernel.py`). Nothing else in the system
+        picks a translation, so a load with a degree-1 pattern leaves the
+        solver close to singular and the degree-1 displacement and geoid
+        without meaning. The multipliers `lambda_i` enforce `D = 0`, which puts
+        the centre of mass of mantle, core and load at the origin. That is the
+        centre-of-mass frame the sea-level benchmarks use (Martinec et al.
+        2018).
+
+        **Why an energy.** Its `lambda`-variation is the constraint row
+        `beta D_i[u] = 0`. Its `u`-variation is the column
+        `beta lambda . (int rho_0 w dx + int x sigma_core(w) ds)`, a uniform
+        acceleration applied to all of the moving mass. The two are transposes
+        by construction, as for `fluid_core_energy`.
+
+        **What the multiplier value means.** In the continuous problem a
+        rigid translation costs no energy, so a load can exert no net force on
+        the body and `lambda = 0`. Discretely `lambda` is the force that
+        discretisation error leaves, and it must converge to zero with mesh
+        refinement. If it does not, the reference gravity is not consistent
+        with the density: with a constant `g` on the annulus the translation
+        residual is 19 percent and stays there.
+
+        **The scale `beta`.** `c * _row_scale_B_mu`, the same factor the
+        core-pressure row carries. The column then has the magnitude of the
+        body-force terms of the momentum row, and a floored `B_mu = 0` keeps
+        the row non-empty.
+        """
+        beta = self.scaling_factor * self._row_scale_B_mu
+        E = Form([])
+        for i, index in enumerate(self.layout.centre_of_mass):
+            lam_i = self.solution_split[index]
+            E += self.mass_dipole_form(i, weight=beta * lam_i)
+        return E
+
+    def centre_of_mass_residual(self) -> Form:
+        r"""The variation of `centre_of_mass_energy`, written out term by term.
+
+            c beta sum_i [ nu_i D_i[u]  +  lambda_i D_i^u[w] ]
+
+        with `nu_i` the test function of `lambda_i` and `D_i^u` the part of
+        `D_i` that depends on the displacement (the load moment left out). It
+        equals `derivative(centre_of_mass_energy(), solution)`, and
+        `tests/unit/test_gia_gravity.py` asserts that on the assembled vectors.
+
+        **Why it is not written as `derivative(E, solution)`**, as
+        `fluid_core_residual` is. `derivative` leaves the variation as an
+        unevaluated UFL node. The load moment in `E` is an integral over the
+        parent's interior facets, and its variation is zero. Firedrake's
+        `split_form` extracts a sub-block by replacing the test function
+        inside that node, and UFL cannot see that the result is zero until the
+        derivative is evaluated. So every sub-block of the Jacobian keeps an
+        integral on the parent mesh. `gadopt.InternalVariableSCPC` compiles the
+        `(u, m)` block with Slate, which needs a single mesh, and fails with
+        `ValueError: too many values to unpack (expected 1)` in
+        `slate/slac/compiler.py`. Written out, the load moment carries the test
+        function `nu_i` explicitly, and the split removes it from every block
+        that does not contain `nu_i`. The fluid-core energy does not hit this,
+        because all its integrals are on the mechanics mesh.
+        """
+        if not self.layout.centre_of_mass:
+            return Form([])
+        beta = self.scaling_factor * self._row_scale_B_mu
+        w = self.tests[self.layout.displacement]
+        F = Form([])
+        for i, index in enumerate(self.layout.centre_of_mass):
+            lam_i = self.solution_split[index]
+            nu_i = self.tests[index]
+            # The constraint row: the whole moment, load included.
+            F += self.mass_dipole_form(i, weight=beta * nu_i)
+            # The column: the variation of D_i with respect to u, in the
+            # direction of the displacement test function. D_i is linear in u,
+            # so this is D_i evaluated at `w` without the constant load term.
+            F += self.mass_dipole_form(i, u=w, weight=beta * lam_i,
+                                       include_load=False)
+        return F
+
+    def mass_dipole(self) -> list[float]:
+        """The first mass moment `D` of the current state, one number per direction.
+
+        Diagnostic. With the centre-of-mass multipliers active it is zero to
+        the solver tolerance.
+        """
+        dim = self.mesh.geometric_dimension
+        return [float(assemble(self.mass_dipole_form(i))) for i in range(dim)]
+
     # -- The scaling constants ---------------------------------------------
 
     @property
@@ -2660,6 +2882,15 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """The uniform fluid-core pressure, or `None` without a fluid core."""
         index = self.layout.core_pressure
         return None if index is None else self.solution.subfunctions[index]
+
+    def centre_of_mass_multipliers(self) -> list[float]:
+        """The solved centre-of-mass multipliers `lambda_i`, or `[]` without them.
+
+        `Real` data is replicated on every rank, so `float()` is local and
+        agrees on every rank.
+        """
+        return [float(self.solution.subfunctions[i])
+                for i in self.layout.centre_of_mass]
 
     def rotation_values(self) -> dict[str, float]:
         """The solved rotation scalars, by name.
@@ -3001,6 +3232,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self.F += self.fluid_core_residual()
         if self.layout.rotation:
             self.F += self.rotation_residual()
+        self.F += self.centre_of_mass_residual()
 
         self.strong_bcs.extend(
             DirichletBC(self.solution_space.sub(self.layout.potential),
@@ -3950,8 +4182,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"{expected}, and a contiguous trailing run would be "
                 f"{tuple(range(i_R, len(space)))}. The diagonal read requires "
                 "all three to agree: it assumes the Real block is exactly the "
-                "DtN multipliers, the optional core pressure, then the rotation "
-                "closure rows, in that order and last. Another Real field or a "
+                "DtN multipliers, the optional core pressure, the rotation "
+                "closure rows, then the optional centre-of-mass multipliers, "
+                "in that order and last. Another Real field or a "
                 "reordering invalidates it. Fix the accounting here before "
                 "using DtNMultiplierDiagPC on this configuration.")
 
@@ -3980,13 +4213,18 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             if idx is not None:
                 by_index[idx] = (float(self._theta_rot(k))
                                  * float(self._closure_constant(k)))
+        # The centre-of-mass multipliers are Lagrange multipliers, like the
+        # core pressure, so their diagonal is exactly zero. `getattr` keeps a
+        # layout that predates the field working.
+        for idx in getattr(self.layout, "centre_of_mass", ()):
+            by_index[idx] = 0.0
 
         missing = [i for i in expected if i not in by_index]
         if missing:
             raise RuntimeError(
                 f"no diagonal entry was derived for Real sub-fields {missing}; "
                 "they are in the layout but no DtN multiplier, core-pressure, "
-                "or rotation row described them.")
+                "rotation or centre-of-mass row described them.")
         return np.array([by_index[i] for i in expected])
 
     def project_out_nullspace(self) -> bool:
