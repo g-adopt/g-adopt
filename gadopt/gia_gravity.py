@@ -190,6 +190,10 @@ from .stokes_integrators import (
     newton_stokes_solver_parameters,
 )
 from .utility import CombinedSurfaceMeasure, ensure_constant
+from .sea_level_masks import (grounded_ice_function, mask_steepness,
+                              ocean_function)
+from ufl import derivative as ufl_derivative
+from ufl.algorithms.ad import expand_derivatives
 
 
 __all__ = [
@@ -1522,6 +1526,64 @@ class FluidCore:
 
 
 @dataclass(frozen=True)
+class SeaLevel:
+    r"""The sea-level equation on the outer surface, with a gravitationally consistent ocean.
+
+    The switch for the sea-level load, in the style of `FluidCore`: pass one
+    to `SelfGravitatingGIASolver` together with a space built with
+    `sea_level=True`. The surface load is then no longer a prescribed sheet.
+    It is the sheet of the ocean and the grounded ice, and the ocean depends
+    on the solution through the sea level
+
+        SL = SL_init + (N - N_init) - (u_r - ur_init) + Shift
+
+    with `N = (psi + psi_rot) / g_surface` the geoid height, `u_r = u . n` the
+    radial displacement at the surface and `Shift` a `Real` unknown, the
+    uniform sea-level change that conserves the mass of water and ice. With
+    the centre-of-mass multipliers the conservation holds to order of those
+    multipliers, which is discretisation error (see `sea_level_energy`). The
+    sheet is
+
+        sigma = rho_w (B C SL - B_init C_init SL_init)
+                + rho_i ((1 - B) I - (1 - B_init) I_init)
+
+    with the ocean function `C` and the grounded-ice function `B` of
+    `gadopt.sea_level_masks`. `SelfGravitatingGIASolver.sea_level_energy`
+    documents the energy whose variation gives every row.
+
+    Attributes:
+      boundary: the tag of the outer surface, as seen from the mechanics mesh
+        (an exterior facet there, an interior facet of the parent).
+      rho_w, rho_i: the water and ice densities, in the units of the
+        reference density.
+      g_surface: the surface gravity that divides the potential in the geoid
+        and weights the load. A number: in the 2-D configuration the
+        approximation's `g` is a mantle-mesh expression of radius, which is
+        not the surface value where it is read.
+      SL_init: the sea level of the reference state, a `Function` on the
+        mechanics mesh.
+      I, I_init: the current and the reference ice thickness.
+      N_init, ur_init: the geoid height and radial displacement of the
+        reference state. Zero for a run that starts undeformed.
+      alpha_mask: the factor of the mask steepness `k = alpha p / h`.
+      slope: an optional frozen `Function` of the surface slope of `SL`; see
+        `gadopt.sea_level_masks.mask_steepness`.
+    """
+
+    boundary: int | str
+    rho_w: Any
+    rho_i: Any
+    g_surface: Any
+    SL_init: Any
+    I: Any
+    I_init: Any
+    N_init: Any
+    ur_init: Any
+    alpha_mask: float = 0.5
+    slope: Any = None
+
+
+@dataclass(frozen=True)
 class GIASpaceLayout:
     """Where each field of the coupled mixed space lives, by name.
 
@@ -1532,7 +1594,8 @@ class GIASpaceLayout:
     without both.
 
     The `Real` sub-fields - DtN multipliers, core pressure, rotation, then the
-    centre-of-mass multipliers - are **contiguous and last**, which `DtNTwoBlockSchurPC.initialize` asserts and
+    centre-of-mass multipliers, then the sea-level `Shift` - are
+    **contiguous and last**, which `DtNTwoBlockSchurPC.initialize` asserts and
     which is worth keeping: anything else would leave sub-fields out of both of
     its blocks, which is a silently wrong split rather than an error.
 
@@ -1559,6 +1622,9 @@ class GIASpaceLayout:
         multipliers of the centre-of-mass frame, one per coordinate direction,
         or `()` when the frame is not constrained. See
         `SelfGravitatingGIASolver.centre_of_mass_energy`.
+      sea_level: index of the `Real` block that holds `Shift`, the spatially
+        uniform offset of the sea-level equation, or `None` when sea level is
+        off. It is the last field of the space. See `SeaLevel`.
       gravity_form: the `DtNGravityForm` the multiplier count came from. It is
         returned rather than rebuilt by the solver because rebuilding it would
         re-run every boundary measurement and could pick a different quadrature
@@ -1604,6 +1670,11 @@ class GIASpaceLayout:
     #: `()`. A default so that a layout built without the frame constraint
     #: keeps its existing field count and order.
     centre_of_mass: tuple[int, ...] = ()
+    #: The index of the `Real` field `Shift` of the sea-level equation, or
+    #: `None`. It is the LAST field of the space, after the centre-of-mass
+    #: multipliers, so every other field keeps its index when sea level is
+    #: switched on.
+    sea_level: int | None = None
 
     @property
     def cross_mesh(self) -> bool:
@@ -1618,7 +1689,7 @@ class GIASpaceLayout:
     def n_fields(self) -> int:
         return (2 + len(self.internal_variables) + len(self.multipliers)
                 + (self.core_pressure is not None) + len(self.rotation)
-                + len(self.centre_of_mass))
+                + len(self.centre_of_mass) + (self.sea_level is not None))
 
     @property
     def real_fields(self) -> tuple[int, ...]:
@@ -1636,7 +1707,8 @@ class GIASpaceLayout:
         core = (() if self.core_pressure is None else (self.core_pressure,))
         return tuple(self.multipliers) + core + tuple(
             self.rotation[name] for name in self.rotation_names
-            if name in self.rotation) + tuple(self.centre_of_mass)
+            if name in self.rotation) + tuple(self.centre_of_mass) + (
+            () if self.sea_level is None else (self.sea_level,))
 
     def rotation_slots(self) -> tuple[int | None, int | None, int | None]:
         """`(m1, m2, m3)` indices, `None` where the component does not exist.
@@ -1694,11 +1766,14 @@ def self_gravitating_gia_space(
     condense_internal_variables: bool = False,
     dtn_representation: str | None = None,
     centre_of_mass: bool = False,
+    sea_level: bool = False,
 ) -> tuple[MixedFunctionSpace, GIASpaceLayout]:
     r"""Builds the coupled mixed space and the layout that describes it.
 
         Z = [ V(sub), S_1..S_N(sub), Psi(parent),
-              R x n_mult, R_core, R x n_rot, R x n_com ]
+              R x n_mult, R_core, R x n_rot, R x n_com, R_shift ]
+
+    The field `R_shift` exists only with `sea_level=True`.
 
     The multiplier count depends on the boundary conditions - a
     `CylindricalDtN(M)` contributes `2M` multipliers on an exterior boundary and
@@ -1755,6 +1830,10 @@ def self_gravitating_gia_space(
         (mantle, core and surface load) at the origin. It requires
         `fluid_core=True` and the multiplier DtN representation; see
         `SelfGravitatingGIASolver.centre_of_mass_energy` for the reasons.
+      sea_level: add the `Real` field `Shift` of the sea-level equation, last
+        in the space. It requires `centre_of_mass=True`, because an ocean load
+        always has degree-1 content, and the multiplier DtN representation.
+        The solver must receive a matching `SeaLevel` object.
 
     Returns:
       `(Z, layout)`.
@@ -1785,6 +1864,27 @@ def self_gravitating_gia_space(
             "centre_of_mass=True is implemented for "
             "dtn_representation='multiplier' only. The low-rank representation "
             "has a hand-written adjoint that does not carry these rows.")
+    if sea_level and not centre_of_mass:
+        # The ocean load follows the geoid and the uplift, so it has degree-1
+        # content whatever the ice load is. Without the frame constraint that
+        # content drives the translation near-kernel of the coupled operator.
+        raise ValueError(
+            "sea_level=True requires centre_of_mass=True. The ocean load has "
+            "degree-1 content, and only the centre-of-mass multipliers fix the "
+            "translation that it drives.")
+    if sea_level and dtn_representation is None:
+        # The sea-level rows exist on the multiplier representation alone, for
+        # the same reason as the frame rows above, so a caller who asks for sea
+        # level and names no representation gets that one. Without this,
+        # `resolve_dtn_representation` would return the low-rank default of the
+        # full layout and the refusal underneath would fire on a caller who
+        # chose nothing.
+        dtn_representation = "multiplier"
+    if sea_level and dtn_representation != "multiplier":
+        raise NotImplementedError(
+            "sea_level=True is implemented for dtn_representation='multiplier' "
+            "only. The low-rank representation has a hand-written adjoint that "
+            "does not carry the sea-level rows.")
     if n_internal_variables < 1:
         raise ValueError(
             f"n_internal_variables must be at least 1, got {n_internal_variables}.")
@@ -1850,7 +1950,10 @@ def self_gravitating_gia_space(
     # three in 3-D. They go last, after rotation, so every existing field keeps
     # its index when the frame constraint is switched on.
     n_com = potential_mesh.geometric_dimension if centre_of_mass else 0
-    spaces.extend([R] * (n_mult + n_core + n_rot + n_com))
+    # The sea-level `Shift`, last of all, so that the frame multipliers keep
+    # their indices when sea level is switched on.
+    n_sl = int(sea_level)
+    spaces.extend([R] * (n_mult + n_core + n_rot + n_com + n_sl))
 
     multipliers = tuple(range(i_R, i_R + n_mult))
     core_pressure = i_R + n_mult if fluid_core else None
@@ -1873,6 +1976,7 @@ def self_gravitating_gia_space(
         core_pressure=core_pressure,
         rotation=rotation_map,
         centre_of_mass=centre_of_mass_fields,
+        sea_level=(i_com + n_com) if sea_level else None,
         dtn_representation=dtn_representation,
         gravity_form=form,
         mechanics_mesh=mechanics_mesh,
@@ -2154,6 +2258,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         internal_variables: "Function | list | None" = None,
         condensed_near_nullspace: str = "incompressible",
         dtn_representation: str | None = None,
+        sea_level: "SeaLevel | None" = None,
         **kwargs,
     ) -> None:
         # `None` follows the space: the layout records what it was built for,
@@ -2184,6 +2289,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"dtn_representation={layout.dtn_representation!r}).")
         self.layout = layout
         self._check_fluid_core_matches_layout(fluid_core)
+        self._check_sea_level_matches_layout(sea_level)
+        #: The `SeaLevel` settings, or `None`. Not called `sea_level`, because
+        #: that name is the method that returns the sea-level expression.
+        self.sea_level_parameters = sea_level
+        self._mixed_space = solution.function_space()
         self._check_block0_split_matches_layout(kwargs.get("solver_parameters"))
         self._check_representation_matches_parameters(
             kwargs.get("solver_parameters"))
@@ -2237,6 +2347,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self._resolve_rotation_moments()
 
         self.set_measures()
+        # The sea-level refusals read only the settings and the boundary form,
+        # so they run before the geometry measurements.
+        self.check_sea_level(kwargs.get("bcs") or {})
         # Before the base class, which builds a residual and a solver: a
         # constructor that is going to refuse a mesh should refuse it before
         # paying for either.
@@ -2384,6 +2497,21 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             "the iterations. Pass block0='condensed' and "
             "dtn_representation='lowrank' to "
             "selfgrav_dtn_iterative_solver_parameters.")
+    def _check_sea_level_matches_layout(self, sea_level) -> None:
+        """Refuses a `Shift` field without its equation, or the reverse."""
+        space_has_shift = self.layout.sea_level is not None
+        solver_has_sea_level = sea_level is not None
+        if space_has_shift == solver_has_sea_level:
+            return
+        raise ValueError(
+            "The space was built with sea_level="
+            f"{space_has_shift}, but the solver received sea_level="
+            f"{'a SeaLevel object' if solver_has_sea_level else 'None'}. "
+            "These settings must agree. Pass sea_level=True to "
+            "self_gravitating_gia_space() exactly when the solver receives a "
+            "SeaLevel object. Without the Shift field there is no row for the "
+            "mass conservation of water and ice. An unused Shift field makes "
+            "the Jacobian singular.")
 
     def _check_block0_split_matches_layout(self, solver_parameters) -> None:
         """Refuses a block-0 fieldsplit that disagrees with the space it acts on.
@@ -3274,6 +3402,341 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         return (derivative(self.fluid_core_energy(), self.solution)
                 + self.fluid_core_rotational_traction())
 
+    # -- The sea-level equation -----------------------------------------------
+
+    def check_sea_level(self, bcs: Mapping) -> None:
+        """Refuses a surface load given twice and an under-resolved surface rule.
+
+        With sea level on, the ice load and the ocean load are one sheet,
+        `surface_load_sheet`, that enters the mechanics, the potential and every
+        mass moment through `sea_level_energy`. Three refusals:
+
+        1. A `normal_stress` on the sea-level boundary in the mechanics `bcs`.
+           It would add a second surface load to the momentum row that the
+           potential row and the mass conservation row do not see.
+        2. A `sigma` or `interior_sigma` sheet on the same boundary in the
+           gravity boundary conditions, for the same reason on the other row.
+        3. A surface quadrature degree below `2 p`, with `p` the highest degree
+           of the displacement and the potential. The masks are integrated at
+           the quadrature points, and the calibration
+           (`NOTES/PLAN-SEA-LEVEL-2026-09-15-C.md` section 4c) needs `q >= 2 p`
+           for the derivative through the masks at `alpha = 0.5`.
+
+        Raises:
+          ValueError: for any of the three.
+          NotImplementedError: on an extruded mechanics mesh, which the
+            surface measure does not support yet.
+        """
+        sl = self.sea_level_parameters
+        if sl is None:
+            return
+        tag = sl.boundary
+        if tag in bcs and "normal_stress" in bcs[tag]:
+            raise ValueError(
+                f"Boundary {tag} carries both the sea-level load and a "
+                "`normal_stress`. With sea level on, the ice and ocean load is "
+                "the sea-level sheet, which already enters the momentum row. "
+                "Remove the normal_stress, and give the ice thickness to "
+                "SeaLevel.I instead.")
+        if any(bc_id == tag for bc_id, _, _ in self.form.sigma_bcs):
+            raise ValueError(
+                f"Boundary {tag} carries both the sea-level load and a gravity "
+                "sheet (`sigma` or `interior_sigma`). With sea level on, the "
+                "ice and ocean load is the sea-level sheet, which already enters "
+                "the potential row. Remove the sheet from gravity_bcs.")
+        if self.mesh.extruded:
+            raise NotImplementedError(
+                "The sea-level equation is implemented on a non-extruded "
+                "mechanics mesh only (the 2-D annulus).")
+        p = self._sea_level_polynomial_degree()
+        q = self.form.quad_degree
+        if q < 2 * p:
+            raise ValueError(
+                f"The sea-level measure uses the boundary quadrature degree "
+                f"{q}, below 2 p = {2 * p} for polynomial degree p = {p} of the "
+                "displacement and the potential. The mask derivative is not "
+                "resolved at that degree. Pass a larger quad_degree to "
+                "self_gravitating_gia_space, or None for the calibrated default.")
+
+    def _sea_level_polynomial_degree(self) -> int:
+        """`p`, the highest polynomial degree of the displacement and the potential.
+
+        The sea level contains `u . n` and `psi`, so its degree on a facet is
+        the larger of the two. The mask steepness and the quadrature check
+        both read it.
+        """
+        # The space of the solution Function, read directly, because the check
+        # runs before the base constructor sets `solution_space`.
+        Z = self._mixed_space
+        return max(Z[self.layout.displacement].ufl_element().embedded_superdegree,
+                   Z[self.layout.potential].ufl_element().embedded_superdegree)
+
+    def sea_level_measure(self) -> Measure:
+        """The surface measure of the sea-level sheet, not yet restricted to a tag.
+
+        The mantle's own `ds`, intersected with the parent's interior facet
+        measure `dS`, at the boundary form's calibrated quadrature degree. This
+        is the construction of `fluid_core_measure` for the outer surface, and
+        the reasons are the same: the displacement exists only on the mantle
+        side, `FacetNormal` of the mechanics mesh is the unambiguous outward
+        normal, and the facet-to-facet intersection evaluates the parent's
+        `psi` at the right points. Intersecting with the parent's cell measure
+        instead assembles without an error and is 21 percent wrong for a
+        parent field (`fluid_core_measure` docstring).
+
+        Call the result on `SeaLevel.boundary`.
+        """
+        kwargs = {"domain": self.mesh, "degree": self.form.quad_degree}
+        if self.layout.cross_mesh:
+            kwargs["intersect_measures"] = (
+                Measure("dS", domain=self.potential_mesh),)
+        return ds(**kwargs)
+
+    def _sea_level_ds(self) -> Measure:
+        """`sea_level_measure()` restricted to the sea-level boundary."""
+        return self.sea_level_measure()(self.sea_level_parameters.boundary)
+
+    def _sea_level_expression(self, split) -> Any:
+        """`SL` built from the sub-functions `split` of a solution.
+
+        `sea_level` passes the live solution. `sea_level_energy` passes a
+        frozen copy, from which it builds the masks that the energy holds
+        fixed.
+
+        Args:
+          split: the `split()` of a `Function` on the mixed space.
+
+        Returns:
+          `SL_init + (N - N_init) - (u . n - ur_init) + Shift` as UFL on the
+          sea-level measure.
+        """
+        sl = self.sea_level_parameters
+        u = split[self.layout.displacement]
+        psi = split[self.layout.potential]
+        shift = split[self.layout.sea_level]
+        g_surface = ensure_constant(sl.g_surface)
+        # `avg(psi)`: the surface is an interior facet of the parent, so the
+        # parent's field is formally two-valued there. `psi` is CG, so the
+        # average of its trace is exact and does not depend on the side order.
+        psi_face = avg(psi) if self.layout.cross_mesh else psi
+        # Bruns: N = +(psi + psi_rot) / g. The sign is derived in
+        # `BaseGIAApproximation.geoid`: a mass excess raises the geoid.
+        N = psi_face / g_surface
+        if self.layout.rotation:
+            # The polynomial on the mechanics mesh, which the measure
+            # integrates over. It is the same polynomial as on the parent.
+            values = [Constant(0.0) if i is None else split[i]
+                      for i in self.layout.rotation_slots()]
+            n_rot = 1 if self.mesh.geometric_dimension == 2 else 3
+            N = N + rotational_potential(
+                values[-n_rot:], self.mesh, Omega_sq=self.Omega_sq) / g_surface
+        # The mechanics mesh's outward normal is the radial direction at the
+        # outer surface, so `u . n` is the uplift.
+        u_r = dot(u, FacetNormal(self.mesh))
+        return (sl.SL_init + (N - sl.N_init) - (u_r - sl.ur_init) + shift)
+
+    def sea_level(self):
+        """The sea level `SL = SL_init + (N - N_init) - (u_r - ur_init) + Shift`.
+
+        UFL on the sea-level measure. `N = (psi + psi_rot) / g_surface` with
+        rotation, `psi / g_surface` without. `g_surface` is a number from
+        `SeaLevel` and never the approximation's `g`, which in the 2-D
+        configuration is an expression of radius on the mechanics mesh.
+        """
+        return self._sea_level_expression(self.solution_split)
+
+    def _sea_level_steepness(self):
+        """The mask steepness `k = alpha p / (h s)` on the sea-level measure."""
+        sl = self.sea_level_parameters
+        return mask_steepness(self.mesh, self._sea_level_polynomial_degree(),
+                              sl.alpha_mask, sl.slope)
+
+    def _sheet_of(self, SL, mask_SL=None):
+        r"""The load sheet for the sea level `SL`, with masks from `mask_SL`.
+
+            sigma = rho_w (B C SL - B_init C_init SL_init)
+                    + rho_i ((1 - B) I - (1 - B_init) I_init)
+
+        Args:
+          SL: the sea level in the water term.
+          mask_SL: the sea level that the masks `B` and `C` are evaluated at.
+            `None` uses `SL`, which gives the live masks.
+        """
+        sl = self.sea_level_parameters
+        k = self._sea_level_steepness()
+        mask_SL = SL if mask_SL is None else mask_SL
+        rho_w, rho_i = sl.rho_w, sl.rho_i
+        B = grounded_ice_function(sl.I, mask_SL, k, rho_w, rho_i)
+        C = ocean_function(mask_SL, k)
+        B_init = grounded_ice_function(sl.I_init, sl.SL_init, k, rho_w, rho_i)
+        C_init = ocean_function(sl.SL_init, k)
+        # The water term: the water column `B C SL` now minus the reference
+        # water column. Floating ice (`B = 1`) is counted as water, because it
+        # displaces its own mass of water.
+        water = rho_w * (B * C * SL - B_init * C_init * sl.SL_init)
+        # The grounded-ice term: the ice resting on the bed now minus before.
+        ice = rho_i * ((1 - B) * sl.I - (1 - B_init) * sl.I_init)
+        return water + ice
+
+    def surface_load_sheet(self):
+        """The surface mass density `sigma` of ocean and ice, with live masks.
+
+        Positive where mass has been added, in the convention of every
+        `interior_sigma`. UFL on the sea-level measure.
+        """
+        return self._sheet_of(self.sea_level())
+
+    def surface_load_sheet_integral(self, integrand) -> Form:
+        """`int_Re integrand * sigma dS` on the sea-level measure.
+
+        An empty form without sea level, so callers need no special case. Write
+        a position polynomial on the mechanics mesh's coordinates: the only
+        cross-mesh objects in the form are then `psi` inside `sigma` and any
+        `Real` test function.
+        """
+        if self.sea_level_parameters is None:
+            return Form([])
+        return integrand * self.surface_load_sheet() * self._sea_level_ds()
+
+    def _sheet_test_variation(self):
+        r"""`(d sigma / d SL) delta Delta`, in the directions of the test functions.
+
+            delta Delta = avg(v) / g_s - (w . n) + s + Omega_sq p_i nu_i / g_s
+
+        with `w`, `v`, `s` and `nu_i` the test functions of the displacement,
+        the potential, `Shift` and the rotation scalars, and live masks in
+        `d sigma / d SL`.
+
+        Built as the Gateaux derivative of `surface_load_sheet` with respect to
+        the solution, in the direction of the mixed test function, and
+        expanded at once by `expand_derivatives`. Two reasons for this
+        spelling:
+
+        - The expression is the same one that the Jacobian assembly derives for
+          the transpose block, so the two blocks agree to round-off without a
+          hand-derived mask derivative.
+        - No unevaluated derivative node stays in the form, so `split_form`
+          removes the parent-mesh terms from the blocks that do not contain
+          these test functions (handover B trap 3.4.2).
+        """
+        direction = TestFunction(self._mixed_space)
+        return expand_derivatives(ufl_derivative(
+            self.surface_load_sheet(), self.solution, direction))
+
+    def _sea_level_scale(self):
+        """`c B_mu g_s`, the factor of the sea-level energy."""
+        return (self.scaling_factor * self.approximation.B_mu
+                * ensure_constant(self.sea_level_parameters.g_surface))
+
+    def sea_level_energy(self) -> Form:
+        r"""The sea-level energy with the masks fixed at the current state.
+
+            E_sl = -c B_mu g_s int_Re G(Delta) dS,   dG/dDelta = sigma
+
+        with `Delta = SL - SL_init = (N - N_init) - (u_r - ur_init) + Shift`.
+        Its variations are the three sea-level rows:
+
+        - `u`, direction `w`: `+c B_mu g_s int sigma (w . n) dS`, the weight of
+          the load, the same as a `normal_stress` of `B_mu g_s sigma`;
+        - `psi`, direction `v`: `-c B_mu int sigma v dS`, the same as an
+          `interior_sigma` of density `sigma` in the potential row, which
+          carries `-theta_psi 4 pi G sigma v = -c B_mu sigma v`;
+        - `Shift`, direction `s`: `-c B_mu g_s int sigma dS`, the conservation
+          of the mass of water and ice. The centre-of-mass energy adds
+          `c B_mu sum_i lambda_i int x_i (dsigma/dShift) s dS` to the same row,
+          because the sheet moves the centre of mass. Keeping that column keeps
+          the residual the gradient of one Lagrangian and the Jacobian
+          symmetric. At convergence the net sheet mass is therefore
+          `sum_i lambda_i int x_i dsigma/dShift dS / g_s`: of order the
+          multipliers, which are discretisation error, and not zero to the
+          solver tolerance (measured 7.4e-9 on the coarse annulus, about 7e-8
+          of the ice mass).
+
+        The sign of `E_sl` is fixed by the first two. `g_s` equals the
+        reference gravity at the surface, so the potential variation cancels
+        it and the displacement variation keeps it.
+
+        **Fixed masks.** With `B` and `C` held at their current values `B_f`,
+        `C_f`, the sheet is affine in `Delta`:
+
+            sigma = sigma_f(0) + rho_w B_f C_f Delta,
+            G(Delta) = sigma_f(0) Delta + 0.5 rho_w B_f C_f Delta^2
+
+        The masks are built from a copy of the solution made at the call, so
+        `derivative(E_sl, solution)` does not differentiate them. With live
+        masks the residual is still the variation of `int G(Delta)` for the
+        exact `G`, because `sigma` depends pointwise on the one scalar `Delta`.
+        That `G` has no closed form, which is why the residual is written
+        directly in `sea_level_residual`, and this energy is the check of it
+        on a state where the masks are saturated.
+
+        **Rotation.** With rotation on, `Delta` contains `psi_rot / g_s`, and
+        the `m_i` variation of this energy duplicates the sheet term that
+        `inertia_form` already puts into the rotation row. This energy is a
+        diagnostic; the residual does not include that variation.
+        """
+        sl = self.sea_level_parameters
+        if sl is None:
+            return Form([])
+        frozen = self.solution.copy(deepcopy=True)
+        SL_f = self._sea_level_expression(split(frozen))
+        k = self._sea_level_steepness()
+        B_f = grounded_ice_function(sl.I, SL_f, k, sl.rho_w, sl.rho_i)
+        C_f = ocean_function(SL_f, k)
+        delta = self.sea_level() - sl.SL_init
+        # sigma at Delta = 0 with the frozen masks, and the quadratic
+        # coefficient of the water column.
+        sigma_0 = self._sheet_of(sl.SL_init, mask_SL=SL_f)
+        G = sigma_0 * delta + 0.5 * sl.rho_w * B_f * C_f * delta * delta
+        return -self._sea_level_scale() * G * self._sea_level_ds()
+
+    def sea_level_residual(self) -> Form:
+        r"""The sea-level rows, with live masks, written term by term.
+
+            -c B_mu g_s int sigma(Delta) delta Delta dS
+            delta Delta = avg(v) / g_s - (w . n) + s
+
+        The `u`, `psi` and `Shift` rows of the variation of `sea_level_energy`,
+        with `sigma` evaluated at the live masks. The Jacobian of these rows is
+        symmetric with live masks too, because `sigma` depends on the unknowns
+        only through `Delta`.
+
+        **Why it is written out and not `derivative(E, solution)`**: the energy
+        contains `avg(psi)` on the parent's facets. `derivative` leaves an
+        unevaluated node whose zero variations still carry the parent mesh
+        into every Jacobian block after `split_form`, and
+        `InternalVariableSCPC` then fails in Slate
+        (`centre_of_mass_residual` docstring). Here each term carries its test
+        function explicitly.
+
+        **No rotation row.** With rotation on, the sheet already enters the
+        rotation row through `inertia_form`, which is the transpose partner of
+        the `psi_rot / g_s` part of `Delta` in these rows. Adding the
+        `m_i`-variation of the energy here as well would count that coupling
+        twice, the trap that `fluid_core_rotational_traction` records.
+
+        An empty form without sea level.
+        """
+        if self.sea_level_parameters is None:
+            return Form([])
+        sl = self.sea_level_parameters
+        g_surface = ensure_constant(sl.g_surface)
+        sigma = self.surface_load_sheet()
+        dss = self._sea_level_ds()
+        scale = self._sea_level_scale()
+        w = self.tests[self.layout.displacement]
+        v = self.tests[self.layout.potential]
+        s = self.tests[self.layout.sea_level]
+        v_face = avg(v) if self.layout.cross_mesh else v
+        # The displacement row: the weight of the load on the surface.
+        F = scale * sigma * dot(w, FacetNormal(self.mesh)) * dss
+        # The potential row: the mass sheet, with the sign of every other sheet.
+        F -= scale * sigma * (v_face / g_surface) * dss
+        # The Shift row: the net mass of water and ice is zero, up to the
+        # centre-of-mass column that `centre_of_mass_residual` adds to it.
+        F -= scale * sigma * s * dss
+        return F
+
     # -- The centre-of-mass frame ---------------------------------------------
 
     def mass_dipole_form(self, i: int, u=None, weight=None, *,
@@ -3283,6 +3746,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             D_i = int_mantle rho_0 u_i dx
                   + int_Rc x_i sigma_core ds
                   + sum_sheets int x_i sigma dS
+                  + int_Re x_i sigma_sl dS   (only with sea_level)
 
         `D` is the total mass of the system times the displacement of its
         centre of mass. The centre of mass stays at the origin exactly when
@@ -3302,6 +3766,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         degree-1 pattern therefore moves the solid Earth by the opposite amount,
         which is the physics of the centre-of-mass frame.
 
+        The sea-level sheet `sigma_sl` (`surface_load_sheet`) is different. It
+        depends on the solution through `u`, `psi`, `Shift` and the rotation
+        potential, so its contribution to `D` is not constant.
+
         A check of the construction: a rigid translation `u = e` gives
         `D = (rho_0 V_mantle + rho_core V_core) e`, the whole mass of the body
         times `e`.
@@ -3312,9 +3780,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           weight: a factor that multiplies every integrand. `None` gives the
             plain functional, which `assemble` turns into a number. The
             residual passes a multiplier or its test function here.
-          include_load: whether to add the moment of the prescribed load
-            sheets. The load term does not depend on `u`, so the variation of
-            `D` with respect to the displacement leaves it out.
+          include_load: whether to add the moment of the load sheets. The
+            prescribed sheets do not depend on `u`, so the variation of `D`
+            with respect to the displacement leaves them out. The sea-level
+            sheet depends on the solution. `centre_of_mass_residual` writes
+            its variation as a separate column through
+            `_sheet_test_variation`.
 
         Returns:
           A 0-form (or a form in whatever arguments `weight` carries).
@@ -3351,6 +3822,14 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 u, FacetNormal(self.mesh))
             dss = self.fluid_core_measure()(self.fluid_core.boundary)
             form = form + weight * X_m[i] * sigma_core * dss
+
+        # The sea-level sheet of the current solution. It depends on `u`,
+        # `psi`, `Shift` and the rotation scalars, so it is not linear in the
+        # `u` passed in, and it is part of the load: the column of
+        # `centre_of_mass_residual` writes its variation separately.
+        if include_load and self.sea_level_parameters is not None:
+            X_m = SpatialCoordinate(self.mesh)
+            form = form + self.surface_load_sheet_integral(weight * X_m[i])
         return form
 
     def centre_of_mass_energy(self) -> Form:
@@ -3436,6 +3915,20 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             # so this is D_i evaluated at `w` without the constant load term.
             F += self.mass_dipole_form(i, u=w, weight=beta * lam_i,
                                        include_load=False)
+        if self.sea_level_parameters is not None:
+            # With sea level on, `D_i` also contains `int x_i sigma dS`, and
+            # `sigma` depends on every unknown in `Delta`. The column is its
+            # variation, `lambda_i int x_i (d sigma/d SL) delta Delta dS`, in the
+            # directions of the displacement, potential, Shift and rotation
+            # test functions. The rotation part is included here: the rotation
+            # row reads `D` through nothing else, so the `(m_i, lambda)` block
+            # would otherwise be missing its transpose.
+            X_m = SpatialCoordinate(self.mesh)
+            variation = self._sheet_test_variation()
+            dss = self._sea_level_ds()
+            for i, index in enumerate(self.layout.centre_of_mass):
+                lam_i = self.solution_split[index]
+                F += beta * lam_i * X_m[i] * variation * dss
         return F
 
     def mass_dipole(self) -> list[float]:
@@ -3794,6 +4287,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # surface only as a polar-motion answer wrong by an unattributable
         # amount. See `fluid_core_sheet` for why it is not in `sigma_bcs`.
         form = form + self.fluid_core_sheet_integral(weight * p_m)
+        # The sea-level sheet enters dI as any load sheet does. It depends on
+        # the solution, so in the rotation row its variation is the transpose
+        # partner of the `psi_rot / g_s` part of the sea level in the
+        # sea-level rows (`sea_level_residual`).
+        form = form + self.surface_load_sheet_integral(weight * p_m)
         return form
 
     def inertia_perturbation(self) -> dict[str, float]:
@@ -3970,6 +4468,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self.F = sum(eq.residual(sol) for eq, sol in mechanics)
         self.F += self.potential_residual()
         self.F += self.fluid_core_residual()
+        self.F += self.sea_level_residual()
         if self.layout.rotation:
             self.F += self.rotation_residual()
         self.F += self.centre_of_mass_residual()
@@ -4096,10 +4595,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         deliberately so, but the mass form is not: in the coupled system the
         volume source is the divergence form, whose net mass is *identically*
         zero (see `source_mass_form`), so the enclosed mass is the sheets alone
-        - **every** sheet, including the fluid core's, which is not in
+        - every sheet, including the fluid core's, which is not in
         `sigma_bcs` and which `enclosed_mass_forms` therefore adds by hand.
-        That is a fact to assert rather than to assume, which is what
-        `check_net_mass` is for.
+        The one exception is the sea-level sheet, whose net mass the `Shift`
+        row sets to zero; `enclosed_mass_forms` records why including it with
+        a lag of one solve gives a wrong answer. That the enclosed mass is
+        what it should be is a fact to assert, which is what `check_net_mass`
+        is for.
         """
         self.monopole_boundaries = [
             bc_id for bc_id, _ in self.form.dtn_boundaries
@@ -4142,7 +4644,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         The volume source contributes **nothing**, which is the one difference
         from `GravitySolver`: the divergence form carries exactly zero net mass
-        by construction, so the datum is driven by the sheets alone.
+        by construction, so the datum is driven by the sheets alone, except
+        the sea-level sheet, whose net mass the `Shift` row sets to zero.
         """
         mu = TestFunction(self._real_space)
         nu = TrialFunction(self._real_space)
@@ -4179,6 +4682,18 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         core = self.fluid_core_sheet_integral(mu)
         if core.integrals():
             mass = core if mass is None else mass + core
+
+        # The sea-level sheet is deliberately left out of the datum. The
+        # `Shift` row makes its net mass zero at a converged state (to order
+        # of the centre-of-mass multipliers, which is discretisation error), so
+        # its correct contribution is zero. Including it would evaluate it one
+        # solve late, like the core sheet above, and on the first solve after
+        # the ice changes the previous state holds the net mass of the ice
+        # change that the ocean has not yet balanced. Measured on the 2-D
+        # annulus: a datum of 1.29e-2 and `Shift` and the geoid wrong by
+        # 1.44e-3, 15 percent of the eustatic value, on that solve only
+        # (`NOTES/PLAN-SEA-LEVEL-2026-09-15-C.md` section 4d). The sheet still
+        # sets the scale of `check_net_mass`.
 
         flux = None
         for bc_id, value in self.form.flux_bcs:
@@ -4287,6 +4802,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             scale += assemble(
                 abs(sigma_core)
                 * self.fluid_core_measure()(self.fluid_core.boundary))
+        if self.sea_level_parameters is not None:
+            # The mass that the sea-level sheet moves, for the same reason.
+            scale += assemble(
+                abs(self.surface_load_sheet()) * self._sea_level_ds())
         mass = abs(float(self.source_mass))
         relative = mass / scale if scale > 0.0 else 0.0
         anchored = relative > 1e-8 or float(self.cavity_flux) != 0.0
@@ -4956,7 +5475,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "all three to agree: it assumes the Real block is exactly the "
                 "DtN multipliers, the optional core pressure, the rotation "
                 "closure rows, then the optional centre-of-mass multipliers, "
-                "in that order and last. Another Real field or a "
+                "then the optional sea-level Shift, in that order and last. Another Real field or a "
                 "reordering invalidates it. Fix the accounting here before "
                 "using DtNMultiplierDiagPC on this configuration.")
 
@@ -4990,6 +5509,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # layout that predates the field working.
         for idx in getattr(self.layout, "centre_of_mass", ()):
             by_index[idx] = 0.0
+        # The sea-level Shift row. Its assembled diagonal is
+        # `-c B_mu g_s rho_w int B C dS` plus mask derivatives, which depends
+        # on the state. No assembly is allowed here, so the entry is zero, as
+        # for a Lagrange multiplier. `DtNMultiplierDiagPC` is therefore not
+        # suitable for a space with sea level.
+        if getattr(self.layout, "sea_level", None) is not None:
+            by_index[self.layout.sea_level] = 0.0
 
         missing = [i for i in expected if i not in by_index]
         if missing:
