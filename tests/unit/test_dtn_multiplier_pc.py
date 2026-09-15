@@ -253,25 +253,50 @@ class TestTheDiagonalPreconditioner:
 
 
 class TestItChangesNoDefault:
-    """The constraint that matters most: these are opt-in.
+    """The block-1 defaults of the shipped presets, pinned.
 
-    Flipping a default would move every number the running campaign produces
-    and would make two arms of it incomparable. A test, not a comment, because
-    a comment does not fail.
+    The 3-D iterative preset keeps no block-1 preconditioner by default:
+    flipping it would move every number the running campaign produces and would
+    make two arms of it incomparable. The 2-D direct preset uses the dense
+    Schur complement, because its block 0 is an exact LU solve and the `Real`
+    block can carry zero-diagonal multiplier rows. A test, not a comment,
+    because a comment does not fail.
     """
 
-    def test_both_shipped_presets_still_run_block_one_unpreconditioned(self):
-        assert selfgrav_dtn_schur_solver_parameters[
-            "dtn_fieldsplit_1_pc_type"] == "none"
+    def test_iterative_preset_still_runs_block_one_unpreconditioned(self):
+        # The 3-D preset keeps "none" as its default: the Gadi campaign names
+        # the dense complement through `multiplier_pc` when it wants it.
         for condensed in (True, False):
             assert selfgrav_dtn_iterative_solver_parameters(
                 condensed=condensed)["dtn_fieldsplit_1_pc_type"] == "none"
-
-    def test_neither_preset_names_a_python_pc_on_block_one(self):
-        assert "dtn_fieldsplit_1_pc_python_type" not in \
-            selfgrav_dtn_schur_solver_parameters
         assert "dtn_fieldsplit_1_pc_python_type" not in \
             selfgrav_dtn_iterative_solver_parameters()
+
+    def test_direct_preset_uses_the_dense_complement_on_block_one(self):
+        # The 2-D direct preset pairs its exact LU block 0 with the exact dense
+        # Schur complement of the `Real` block. The diagonal PC in this file
+        # stays opt-in.
+        assert selfgrav_dtn_schur_solver_parameters[
+            "dtn_fieldsplit_1_pc_type"] == "python"
+        assert selfgrav_dtn_schur_solver_parameters[
+            "dtn_fieldsplit_1_pc_python_type"] == \
+            "gadopt.DtNMultiplierDenseSchurPC"
+
+    def test_lowrank_direct_preset_keeps_block_one_unpreconditioned(self):
+        # The low-rank adjoint and tangent solves reuse the forward parameters
+        # on an assembled matrix, where a block-1 PC that needs a sub-DM
+        # crashes. The low-rank variant must differ from the multiplier preset
+        # in block 1 only.
+        from gadopt.gia_gravity import (
+            selfgrav_dtn_schur_lowrank_solver_parameters as lowrank)
+        assert lowrank["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in lowrank
+        differing = {key for key in set(lowrank)
+                     | set(selfgrav_dtn_schur_solver_parameters)
+                     if lowrank.get(key)
+                     != selfgrav_dtn_schur_solver_parameters.get(key)}
+        assert differing == {"dtn_fieldsplit_1_pc_type",
+                             "dtn_fieldsplit_1_pc_python_type"}
 
 
 class TestTheSolveAgrees:

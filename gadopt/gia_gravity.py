@@ -195,6 +195,7 @@ __all__ = [
     "resolve_dtn_representation",
     "selfgrav_dtn_iterative_solver_parameters",
     "selfgrav_dtn_lowrank_direct_solver_parameters",
+    "selfgrav_dtn_schur_lowrank_solver_parameters",
     "selfgrav_dtn_schur_solver_parameters",
 ]
 
@@ -275,7 +276,16 @@ selfgrav_dtn_schur_solver_parameters = {
     # not the fix for that; nobody should read it as one and stop looking.**
     "dtn_fieldsplit_1_ksp_rtol": 1e-4,
     "dtn_fieldsplit_1_ksp_max_it": 200,
-    "dtn_fieldsplit_1_pc_type": "none",
+    # The dense Schur complement of the `Real` block, built once by block-0
+    # solves and factorised. Block 0 is an exact LU solve here, so the
+    # complement is exact and GMRES on block 1 converges in one iteration.
+    # Without a preconditioner, GMRES on block 1 must resolve rows that span
+    # several orders of magnitude. With the centre-of-mass rows, which have a
+    # zero diagonal, that took 66 block-0 solves per warm step against 9 with
+    # the complement (`NOTES/frame/FINDINGS-2026-09-15.md`, M3). The build
+    # costs one block-0 solve per `Real` column, which is cheap at 2-D size.
+    "dtn_fieldsplit_1_pc_type": "python",
+    "dtn_fieldsplit_1_pc_python_type": "gadopt.DtNMultiplierDenseSchurPC",
     # **Auditability, and it is not optional instrumentation.** GMRES stops on
     # its recurrence estimate of the residual, not on a recomputed one; under
     # loss of orthogonality that estimate can drift below the truth and the KSP
@@ -301,6 +311,15 @@ block* of `DtNTwoBlockSchurPC`'s two-block Schur split, with the multiplier
 Schur complement taken by GMRES. Spike S2 measured this dictionary converging
 in a single FGMRES iteration on the coupled space, at 1, 2 and 4 ranks.
 
+Block 1 is preconditioned by `gadopt.DtNMultiplierDenseSchurPC`, the dense
+Schur complement of the `Real` block. With LU on block 0 that complement is
+exact, so it is the natural pairing for this preset. It is necessary once the
+`Real` block contains Lagrange multiplier rows with a zero diagonal (the core
+pressure, the centre-of-mass frame), where unpreconditioned GMRES needs many
+more block-0 solves. `selfgrav_dtn_iterative_solver_parameters` still defaults
+to no block-1 preconditioner and takes the dense complement through
+`multiplier_pc`.
+
 **`fieldsplit_0` is not the potential block.** The preconditioner merges every
 non-`Real` sub-field into block 0, so here that is displacement + internal
 variables + potential together - a saddle-ish coupled operator, not the scalar
@@ -318,6 +337,25 @@ the segregated Picard iteration as the preconditioner.
 Note also that reaching for a plain `fieldsplit` while debugging brings back
 PETSc's 128-field cap, which registering the two blocks as index sets is what
 avoids.
+"""
+
+
+selfgrav_dtn_schur_lowrank_solver_parameters = {
+    key: value for key, value in selfgrav_dtn_schur_solver_parameters.items()
+    if key != "dtn_fieldsplit_1_pc_python_type"
+} | {"dtn_fieldsplit_1_pc_type": "none"}
+"""The 2-D direct preset for the low-rank DtN path WITH `Real` sub-fields.
+
+The same dictionary as `selfgrav_dtn_schur_solver_parameters`, with no
+preconditioner on block 1. The low-rank adjoint and tangent solves in
+`gadopt.dtn_coupled_adjoint` pass the forward solver parameters to a solve on
+an assembled matrix. Any block-1 preconditioner other than `none` makes
+`DtNTwoBlockSchurPC.initialize` ask Firedrake for a sub-DM of the `Real` fields,
+and on that matrix the request ends in a segmentation fault
+(`tests/unit/test_gia_gravity_adjoint_lowrank.py`, the fluid-core adjoint and
+tangent tests). `DtNTwoBlockSchurPC.initialize` records the mechanism. The
+low-rank path carries at most the core pressure and the rotation scalars in its
+`Real` block, so GMRES without a preconditioner there costs little.
 """
 
 
@@ -3701,7 +3739,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.add_to_solver_config(
                 selfgrav_dtn_lowrank_direct_solver_parameters)
         elif solver_preset == "direct":
-            self.add_to_solver_config(selfgrav_dtn_schur_solver_parameters)
+            # The low-rank path keeps block 1 unpreconditioned: its adjoint and
+            # tangent solves reuse these parameters on an assembled matrix,
+            # where the dense complement's sub-DM request crashes.
+            self.add_to_solver_config(
+                selfgrav_dtn_schur_lowrank_solver_parameters
+                if self.dtn_representation == "lowrank"
+                else selfgrav_dtn_schur_solver_parameters)
         else:
             # The representation has to be passed, and not left at the
             # preset's default: this is the path a 3-D driver takes when it
