@@ -605,26 +605,28 @@ class TestConstruction:
                                         "transition_stress": 1e-3},
                   solver_parameters_extra={"snes_type": "ksponly"})
 
-    def test_power_law_is_refused_on_the_lowrank_representation(self, meshes):
-        """Refused for want of a test, not for a known defect.
+    def test_power_law_is_accepted_on_the_lowrank_representation(self, meshes):
+        """A power law builds and solves on the low-rank representation.
 
-        `dtn_coupled_adjoint.py` assembles the exact linearisation of the full
-        residual at the converged state, so it carries the power-law factor
-        like any other coefficient, and `augment_jacobian` reinstalls `B` after
-        every Jacobian assembly on the forward path. What is missing is
-        coverage: `tests/unit/test_gia_gravity_adjoint_lowrank.py` is Newtonian
-        throughout. The constructor refuses the combination so that whoever
-        first runs it is whoever first tests it.
+        The combination was refused for want of a test. The test now exists:
+        `test_gia_gravity_adjoint_lowrank.py::test_taylor_with_a_power_law`
+        takes the gradient at exponent 3 on both presets. This one pins the
+        acceptance itself, and that the Newton solve converges: `B` does not
+        depend on the rheology and is reinstalled after every Jacobian
+        assembly, so nothing in the low-rank path reads the exponent.
         """
         parent, sub = meshes
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=gravity_bcs(parent),
             self_gravity_number=LAMBDA, dtn_representation="lowrank")
-        with pytest.raises(ValueError, match="lowrank"):
-            SelfGravitatingGIASolver(
-                fd.Function(Z), approximation(exponent=3.0), layout=layout,
-                dt=1.0, bcs=mechanics_bcs(sub),
-                dtn_representation="lowrank")
+        z = fd.Function(Z)
+        solver = SelfGravitatingGIASolver(
+            z, approximation(exponent=3.0, transition_stress=1e-3),
+            layout=layout, dt=1.0, bcs=mechanics_bcs(sub),
+            dtn_representation="lowrank")
+        solver.solve()
+        assert solver.solver.snes.getConvergedReason() > 0
+        assert fd.norm(solver.displacement) > 0.0
 
     def test_it_solves(self, solved):
         solver, z, layout = solved

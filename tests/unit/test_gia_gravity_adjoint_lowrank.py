@@ -254,7 +254,8 @@ def real(mesh, value):
 
 def _build(meshes, control_name, control, representation, *,
            rotation=False, declare_nullspace=False, b_mu=None,
-           fluid_core=False, solver_parameters="direct"):
+           fluid_core=False, solver_parameters="direct",
+           approximation_kwargs=None, solver_parameters_extra=None):
     """Assemble the coupled solver with exactly one control live.
 
     Mirrors `test_gia_gravity.build`, but `self_gravity_number` is threaded into
@@ -307,7 +308,8 @@ def _build(meshes, control_name, control, representation, *,
         viscosity=pick("viscosity", fd.Constant(1.0)),
         g=pick("G", fd.Constant(G0)),
         B_mu=pick("B_mu", b_mu_default),
-        self_gravity_number=lam)
+        self_gravity_number=lam,
+        **(approximation_kwargs or {}))
 
     dx_m = fd.Measure("dx", domain=sub,
                       intersect_measures=(fd.Measure("dx", domain=parent),))
@@ -315,6 +317,8 @@ def _build(meshes, control_name, control, representation, *,
     if declare_nullspace:
         from gadopt import rigid_rotation_nullspace
         kwargs["nullspace"] = rigid_rotation_nullspace(Z, layout)
+    if solver_parameters_extra:
+        kwargs["solver_parameters_extra"] = solver_parameters_extra
 
     solver = SelfGravitatingGIASolver(
         z, approx, layout=layout, dt=1.0, bcs=mechanics_bcs,
@@ -533,6 +537,73 @@ def test_taylor_by_family(meshes, representation, control_name, preset):
     print(f"    [ladder/{representation}/{control_name}] "
           f"R1_rate={[f'{r:.3f}' for r in ladder['R1_rate']]}")
     assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
+
+
+# ===========================================================================
+# A power law on the low-rank representation
+#
+# Stage 3 of `NOTES/HANDOVER-LOWRANK-2026-09-16.md`. `B` does not depend on the
+# rheology and `adjoint(dFdu)` carries the power-law tangent from UFL, so the
+# refusal in the constructor existed for want of this test.
+# ===========================================================================
+POWER_LAW = {"exponent": 3.0, "transition_stress": 1e-3}
+# The string preset inherits `snes_atol 1e-10` from the Stokes defaults and the
+# residual norm here is about 2e-3, so `atol` is what stops Newton; both are
+# tightened, as in `test_gia_gravity_adjoint.py`'s power-law test. The forward
+# solve must run Newton: the derivative solves force `ksponly` on their own.
+POWER_LAW_SNES = {"snes_type": "newtonls", "snes_rtol": 1e-10,
+                  "snes_atol": 1e-14}
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+@pytest.mark.parametrize("control_name", ["shear_modulus", "Lambda"])
+def test_taylor_with_a_power_law(meshes, control_name, preset):
+    """Exponent 3 on the low-rank arm: rate 2 and a replay equal to a fresh solve.
+
+    `Lambda` is the control that exercises the hand-written `d theta/dm` term
+    on top of the power-law tangent; `shear_modulus` enters the power-law
+    factor directly. The iterative preset puts `gadopt.CondensedBlockPC` on
+    block 0 with `operator_version = None`, so the derivative solves run with
+    block-0 blocks reassembled at every linear solve and the potential-split
+    preconditioner kept for the run, which is the configuration stage 4 runs
+    on Gadi.
+    """
+    value = CONTROL_VALUES[control_name]
+    parameters = preset_parameters(preset, "lowrank", fluid_core=True)
+    if isinstance(parameters, dict):
+        parameters = dict(parameters, **POWER_LAW_SNES)
+    Jhat, control, h, J, _ = reduced_functional(
+        meshes, control_name, value, "lowrank", fluid_core=True,
+        solver_parameters=parameters, approximation_kwargs=POWER_LAW,
+        solver_parameters_extra=POWER_LAW_SNES)
+    ladder = taylor_first_order_ladder(Jhat, control, h)
+    print(f"    [ladder/power-law/{control_name}/{preset}] "
+          f"R1_rate={[f'{r:.3f}' for r in ladder['R1_rate']]}")
+    assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
+
+    cmesh = control_mesh(meshes, control_name)
+    shifted = 1.05 * value
+    with stop_annotating():
+        J_direct, _, _, _ = forward(
+            meshes, control_name, real(cmesh, shifted), "lowrank",
+            tape_it=False, fluid_core=True, solver_parameters=parameters,
+            approximation_kwargs=POWER_LAW,
+            solver_parameters_extra=POWER_LAW_SNES)
+    J_replay = float(Jhat(real(cmesh, shifted)))
+    assert abs(J_replay - float(J_direct)) / abs(float(J_direct)) <= 1e-9
+
+
+@pytest.mark.parametrize("preset", PRESETS)
+def test_power_law_gradient_against_fresh_solves(meshes, preset):
+    """Exponent 3: the adjoint against a central difference of fresh solves."""
+    parameters = preset_parameters(preset, "lowrank", fluid_core=True)
+    if isinstance(parameters, dict):
+        parameters = dict(parameters, **POWER_LAW_SNES)
+    _, _, relative = gradient_against_fresh_solves(
+        meshes, "shear_modulus", CONTROL_VALUES["shear_modulus"], "lowrank",
+        fluid_core=True, solver_parameters=parameters,
+        approximation_kwargs=POWER_LAW, solver_parameters_extra=POWER_LAW_SNES)
+    assert relative < FD_GATE
 
 
 # ===========================================================================

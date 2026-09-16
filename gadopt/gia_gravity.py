@@ -1405,11 +1405,18 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
       writes `m(u)` into the stress before differentiation, which makes the
       power-law factor a function of `u` alone and changes the Newton
       linearisation rather than eliminating a block.
-    - **`dtn_representation="lowrank"`: refused**, with a `ValueError` from
-      this constructor. The low-rank forward and adjoint paths carry whatever
-      linearisation the residual has, so nothing is known to be wrong there;
-      what is missing is a power-law test, and the combination stays refused
-      until one exists.
+    - **Uncondensed layout, `dtn_representation="lowrank"`: supported.** The
+      update `B` does not depend on the rheology, the forward Newton solve
+      reinstalls it after every Jacobian assembly through `augment_jacobian`,
+      and the adjoint form `adjoint(dFdu)` carries the power-law tangent from
+      UFL. Verified by
+      `tests/unit/test_gia_gravity_adjoint_lowrank.py::test_taylor_with_a_power_law`
+      at exponent 3 on both presets (Taylor rate 2, replay equal to a fresh
+      solve), and by
+      `tests/unit/test_gia_lowrank_block0.py::test_the_columns_survive_newton_on_a_power_law`,
+      which pins that the potential-split preconditioner is built once per
+      run under Newton while `gadopt.CondensedBlockPC` reassembles its blocks
+      at every linear solve (`operator_version` is `None` for a power law).
 
     A **fluid core** and a power law work together on the supported
     configuration, in 2-D and in 3-D.
@@ -1547,43 +1554,6 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"dtn_representation={dtn_representation!r}), or\n"
                 f"  - the solver, via SelfGravitatingGIASolver("
                 f"dtn_representation={layout.dtn_representation!r}).")
-        # A power law is refused on the low-rank representation, and the reason
-        # is coverage rather than mathematics. `dtn_coupled_adjoint.py`
-        # assembles `adjoint(derivative(F, saved_output))`, the exact
-        # linearisation of the full residual at the converged state, so it
-        # carries the power-law factor like any other coefficient, and
-        # `augment_jacobian` reinstalls `B` after every Jacobian assembly, so
-        # a Newton iteration on the forward path gets `A(x_k) + B`. What is
-        # missing is a test: `tests/unit/test_gia_gravity_adjoint_lowrank.py`
-        # is Newtonian throughout. Refuse until a power law is verified there,
-        # so that the first user of the combination is the person who adds the
-        # test and not a production run.
-        #
-        # Read the `approximation` ARGUMENT, not `self.approximation`: the base
-        # constructor below is what sets the attribute, and this check has to
-        # fire before `set_equations` and `set_solver_options` run.
-        if dtn_representation == "lowrank":
-            exponent = getattr(approximation, "exponent", 1)
-            try:
-                # The same predicate `_jacobian_depends_on_solution` uses. A
-                # FIELD-valued exponent counts as a power law, because `float`
-                # refuses it; a scalar `Real`-space `Function` converts and is
-                # judged by its value, so an exponent held in a `Real` field
-                # and assigned 1.0 reads as Newtonian here.
-                newtonian = float(exponent) == 1.0
-            except (TypeError, ValueError):
-                newtonian = False
-            if not newtonian:
-                raise ValueError(
-                    f"dtn_representation='lowrank' with exponent={exponent!r}: "
-                    "the lowrank representation has no power-law coverage, "
-                    "forward or adjoint. Its verification suite "
-                    "(tests/unit/test_gia_gravity_adjoint_lowrank.py) is "
-                    "Newtonian throughout, so a power law on this path is "
-                    "unverified rather than known-wrong, and it is refused "
-                    "until a test covers it. Use "
-                    "dtn_representation='multiplier', which is verified for a "
-                    "power law on the uncondensed layout.")
         self.layout = layout
         self._check_fluid_core_matches_layout(fluid_core)
         self._check_block0_split_matches_layout(kwargs.get("solver_parameters"))

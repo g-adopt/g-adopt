@@ -75,7 +75,8 @@ def preset(representation, **kwargs):
 
 
 def build(meshes, representation, *, truncation=3, fluid_core=True,
-          rotation=True, solver_parameters=None, dt=1.0):
+          rotation=True, solver_parameters=None, dt=1.0,
+          approximation_kwargs=None):
     """One coupled solver on the annulus, in either representation.
 
     Mirrors `NOTES/measurements/lowrank-iterative/lowrank_block0.py`, which is
@@ -109,7 +110,7 @@ def build(meshes, representation, *, truncation=3, fluid_core=True,
         bulk_modulus=1.0, density=fd.Constant(1.0),
         shear_modulus=fd.Constant(1.0), viscosity=fd.Constant(1.0),
         g=fd.Constant(tl.G0), B_mu=fd.Constant(tl.B_MU),
-        self_gravity_number=lam)
+        self_gravity_number=lam, **(approximation_kwargs or {}))
     dx_m = fd.Measure("dx", domain=sub,
                       intersect_measures=(fd.Measure("dx", domain=parent),))
     if solver_parameters is None:
@@ -314,6 +315,33 @@ def test_the_columns_are_built_once_across_steps_and_a_dt_change(meshes):
     solver.solve()
     assert condensed.assembly_count > 1, (
         "the test is vacuous unless the dt change did reassemble the blocks")
+    assert potential_pc(condensed).column_builds == 1
+
+
+def test_the_columns_survive_newton_on_a_power_law(meshes):
+    """Under Newton the potential split is built once; the blocks per linear solve.
+
+    With `exponent = 3` the Jacobian depends on the state, the solver
+    publishes `operator_version = None`, and `CondensedBlockPC` reassembles
+    its blocks at every linear solve, that is at every Newton iteration
+    (measured: `assembly_count` 1 to 3 inside one three-iteration solve). The
+    potential block `A_psipsi + B` does not depend on the rheology or on the
+    state, so the Woodbury columns must survive every Newton iteration and
+    every solve: the build counter stays at 1 while the assembly counter moves.
+    """
+    approx_kwargs = {"exponent": 3.0, "transition_stress": 1e-3}
+    solver, _, _ = build(
+        meshes, "lowrank",
+        solver_parameters=preset("lowrank", snes_type="newtonls"),
+        approximation_kwargs=approx_kwargs)
+    solver.solve()
+    assert solver.solver.snes.getIterationNumber() >= 2, (
+        "the test is vacuous unless Newton took more than one iteration")
+    condensed = block0_context(solver)
+    assert potential_pc(condensed).column_builds == 1
+    first = condensed.assembly_count
+    solver.solve()
+    assert condensed.assembly_count > first
     assert potential_pc(condensed).column_builds == 1
 
 
