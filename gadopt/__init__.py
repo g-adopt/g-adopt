@@ -45,6 +45,7 @@ from .preconditioners import (CondensedBlockPC,  # noqa: F401
                               DtNMultiplierDiagPC,
                               DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
                               InternalVariableSCPC,
+                              LowRankPotentialPC,
                               NearlyIncompressibleAssembledPC, SPDAssembledPC,
                               SubstitutedDisplacementPC)
 from .solver_options_manager import (GAMG_PARAMETERS, DeleteParam,

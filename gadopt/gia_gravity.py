@@ -430,6 +430,39 @@ def _displacement_krylov(max_it: int, rtol: float) -> dict:
     }
 
 
+def _potential_split(dtn_representation: str) -> dict:
+    """Options for the potential split of `gadopt.CondensedBlockPC`'s nest.
+
+    On the multiplier representation the potential block is the assembled
+    Laplacian with the DtN boundary terms, which GAMG handles in one V-cycle.
+
+    On the low-rank representation that block also carries
+    `B = theta_psi * sum_b C_b^T W_b C_b`, applied in factored form, and GAMG
+    alone does not see it: the block is then a Python operator and its
+    preconditioner is `gadopt.LowRankPotentialPC`, which applies one V-cycle on
+    the assembled part and corrects it with the Woodbury identity. The V-cycle's
+    own options move down one prefix, to `lowrank_`, because the class creates
+    that Krylov solve itself.
+
+    Args:
+      dtn_representation: `"multiplier"` or `"lowrank"`.
+
+    Returns:
+      The options of the split, unprefixed.
+    """
+    if dtn_representation == "multiplier":
+        return {"ksp_type": "preonly", "ksp_converged_reason": None,
+                "pc_type": "gamg", **gamg_parameters()}
+    return {
+        "ksp_type": "preonly",
+        "ksp_converged_reason": None,
+        "pc_type": "python",
+        "pc_python_type": "gadopt.LowRankPotentialPC",
+        **_prefixed({"ksp_type": "preonly", "pc_type": "gamg",
+                     **gamg_parameters()}, "lowrank_"),
+    }
+
+
 def selfgrav_dtn_iterative_solver_parameters(
     *, condensed: bool = True, block0_rtol: float = 1e-2,
     outer_rtol: float = 1e-6, block0_max_it: int = 200,
@@ -440,6 +473,7 @@ def selfgrav_dtn_iterative_solver_parameters(
     u_ksp_max_it: int = 4,
     u_ksp_rtol: float = 1e-2,
     block0: str = "condensed",
+    dtn_representation: str = "multiplier",
 ) -> dict:
     r"""The 3-D configuration that works, and the one the measurements select.
 
@@ -650,6 +684,26 @@ def selfgrav_dtn_iterative_solver_parameters(
     if block0 not in ("condensed", "pair"):
         raise ValueError(
             f"block0 must be 'condensed' or 'pair', got {block0!r}.")
+    if dtn_representation not in ("multiplier", "lowrank"):
+        raise ValueError(
+            "dtn_representation must be 'multiplier' or 'lowrank', got "
+            f"{dtn_representation!r}.")
+    if dtn_representation == "lowrank" and block0 == "pair":
+        raise ValueError(
+            "block0='pair' has no low-rank route. The nested block-0 sweep "
+            "solves over (u, M) and psi separately, and the low-rank DtN "
+            "update lives on the potential rows of an operator that sweep "
+            "never assembles, so there is nowhere to put it and the outer "
+            "FGMRES would pay for its absence. Use the default "
+            "block0='condensed', whose potential split is a matrix this "
+            "update can be added to.")
+    if dtn_representation == "lowrank" and condensed:
+        raise ValueError(
+            "dtn_representation='lowrank' needs the full layout: the "
+            "condensed layout's block 0 has no internal-variable field, so "
+            "gadopt.CondensedBlockPC is refused there and the potential split "
+            "the update belongs in does not exist. Pass condensed=False, "
+            "with a space built with condense_internal_variables=False.")
     if condensed and block0 != "condensed":
         raise ValueError(
             f"block0={block0!r} has no meaning with condensed=True: the "
@@ -763,9 +817,7 @@ def selfgrav_dtn_iterative_solver_parameters(
                 "pc_fieldsplit_type": "multiplicative",
                 **_prefixed({**displacement_krylov, "pc_type": "gamg",
                              **gamg_parameters()}, "fieldsplit_0_"),
-                **_prefixed({"ksp_type": "preonly",
-                             "ksp_converged_reason": None,
-                             "pc_type": "gamg", **gamg_parameters()},
+                **_prefixed(_potential_split(dtn_representation),
                             "fieldsplit_1_"),
             }, "dtn_fieldsplit_0_condensed_"))
             return p
@@ -1535,6 +1587,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self.layout = layout
         self._check_fluid_core_matches_layout(fluid_core)
         self._check_block0_split_matches_layout(kwargs.get("solver_parameters"))
+        self._check_representation_matches_parameters(
+            kwargs.get("solver_parameters"))
         # In the pointwise history layout the internal variables are not unknowns:
         # they are stored `Function`s carried between steps, exactly as the
         # segregated `InternalVariableSolver` carries them.
@@ -1616,6 +1670,117 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             "self_gravitating_gia_space() exactly when the solver receives a "
             "FluidCore object. A missing Real field omits the core-volume "
             "constraint. An unused Real field makes the Jacobian singular.")
+
+    def _check_representation_matches_parameters(self, solver_parameters) -> None:
+        """Refuses a potential-split preconditioner the representation cannot serve.
+
+        `selfgrav_dtn_iterative_solver_parameters(dtn_representation=...)` and
+        the solver's own `dtn_representation` are independent arguments, and a
+        disagreement is silent in both directions.
+
+        A `"lowrank"` preset on a multiplier solver selects
+        `gadopt.LowRankPotentialPC`, whose preconditioning matrix would then be
+        the plain assembled potential block: that raises inside
+        `PCSetUp`, which is late and reported as an unhandled Python exception
+        under a PETSc error code, so it is caught here instead.
+
+        A `"multiplier"` preset on a low-rank solver fails late as well:
+        `gadopt.CondensedBlockPC.initialize` installs the Python potential
+        block `A_psipsi + B` whenever `dtn_operator` is in the context,
+        whatever the preset names on the split, and plain GAMG then refuses
+        that block inside `PCSetUp_GAMG` (`No method getinfo for Mat of type
+        python`). Caught here with a message that names the fix.
+
+        The combination this check does NOT see is a block-0 route without a
+        potential split at all, `block0="pair"` or a hand-written dictionary,
+        on a low-rank solver: there the update reaches block 0's operator
+        through no split, nothing raises, and the outer FGMRES pays 8 or 9
+        iterations where it should pay 3 (measured, annulus, truncation 3).
+        `_refuse_block0_without_potential_split` refuses the named route.
+        """
+        if not isinstance(solver_parameters, Mapping):
+            return
+        keys = ("dtn_fieldsplit_0_condensed_fieldsplit_1_pc_python_type",
+                # With no `Real` field the two-block Schur split has nothing to
+                # split and `gadopt.CondensedBlockPC` is the outer
+                # preconditioner, so its potential split loses the
+                # `dtn_fieldsplit_0_` prefix.
+                "condensed_fieldsplit_1_pc_python_type")
+        preset_is_lowrank = any(
+            solver_parameters.get(key) == "gadopt.LowRankPotentialPC"
+            for key in keys)
+        solver_is_lowrank = self.dtn_representation == "lowrank"
+        if preset_is_lowrank == solver_is_lowrank:
+            return
+        if not preset_is_lowrank:
+            # Only a dictionary that HAS a potential split can be wrong about
+            # it. A direct preset solves block 0 with LU and has no split at
+            # all, and a hand-written dictionary may do anything; neither is a
+            # mistake and neither is refused here. The claim that there is a
+            # split to be wrong about is the block-0 class, the same claim
+            # `_check_block0_split_matches_layout` reads.
+            block0_class = solver_parameters.get(
+                "dtn_fieldsplit_0_pc_python_type",
+                solver_parameters.get("pc_python_type"))
+            if block0_class != "gadopt.CondensedBlockPC":
+                self._refuse_block0_without_potential_split(solver_parameters)
+                return
+        if preset_is_lowrank:
+            raise ValueError(
+                "The solver parameters put gadopt.LowRankPotentialPC on the "
+                "potential split of block 0, which preconditions the low-rank "
+                "DtN update, but the solver was built with "
+                f"dtn_representation={self.dtn_representation!r} and carries "
+                "no such update. Pass dtn_representation='lowrank' to "
+                "SelfGravitatingGIASolver, or drop it from "
+                "selfgrav_dtn_iterative_solver_parameters.")
+        raise ValueError(
+            "The solver was built with dtn_representation='lowrank', but the "
+            "solver parameters leave the potential split of block 0 on plain "
+            "GAMG. gadopt.CondensedBlockPC hands that split the Python block "
+            "A_psipsi + B, which GAMG refuses inside PCSetUp with 'No method "
+            "getinfo for Mat of type python'. Pass "
+            "dtn_representation='lowrank' to "
+            "selfgrav_dtn_iterative_solver_parameters as well.")
+
+    def _refuse_block0_without_potential_split(self, solver_parameters) -> None:
+        """Refuses the nested block-0 route on a low-rank solver.
+
+        The nested route (`block0="pair"`) is a multiplicative fieldsplit on
+        block 0 with `gadopt.InternalVariableSCPC` on its `(u, M)` half and a
+        plain assembled potential block on the other. The low-rank update
+        reaches block 0's operator through the outer matrix, so nothing raises
+        and every solve converges; the outer FGMRES pays 8 or 9 iterations
+        where the potential split of `gadopt.CondensedBlockPC` brings it to 3.
+        That is the cost that decides a Gadi campaign, so the route is refused
+        on the low-rank representation. A direct preset (no block-0 Python
+        class) and a hand-written dictionary are not refused: neither names a
+        block-0 route this class can reason about.
+
+        The route is recognised by the key the preset writes for it,
+        `dtn_fieldsplit_0_fieldsplit_0_pc_python_type`, and its no-Real-field
+        spelling without the `dtn_fieldsplit_0_` prefix.
+
+        Args:
+          solver_parameters: the dictionary under test.
+
+        Raises:
+          ValueError: block 0 is the nested route on a low-rank solver.
+        """
+        keys = ("dtn_fieldsplit_0_fieldsplit_0_pc_python_type",
+                "fieldsplit_0_pc_python_type")
+        if not any(solver_parameters.get(key) == "gadopt.InternalVariableSCPC"
+                   for key in keys):
+            return
+        raise ValueError(
+            "The solver was built with dtn_representation='lowrank', but the "
+            "solver parameters put gadopt.InternalVariableSCPC (block0='pair') "
+            "on block 0, which has no potential split for the low-rank DtN "
+            "update to be preconditioned on. Nothing would raise: every solve "
+            "would converge and the outer FGMRES would cost about three times "
+            "the iterations. Pass block0='condensed' and "
+            "dtn_representation='lowrank' to "
+            "selfgrav_dtn_iterative_solver_parameters.")
 
     def _check_block0_split_matches_layout(self, solver_parameters) -> None:
         """Refuses a block-0 fieldsplit that disagrees with the space it acts on.
@@ -3291,8 +3456,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         elif solver_preset == "direct":
             self.add_to_solver_config(selfgrav_dtn_schur_solver_parameters)
         else:
+            # The representation has to be passed, and not left at the
+            # preset's default: this is the path a 3-D driver takes when it
+            # names no solver_parameters dictionary of its own, so leaving it
+            # at "multiplier" would put plain GAMG on the potential split of a
+            # low-rank solver, which `gadopt.CondensedBlockPC` hands the
+            # Python block `A_psipsi + B`, and GAMG refuses that inside
+            # `PCSetUp` with a PETSc type error.
             self.add_to_solver_config(selfgrav_dtn_iterative_solver_parameters(
-                condensed=self.layout.condensed))
+                condensed=self.layout.condensed,
+                dtn_representation=self.dtn_representation))
         if solver_extras:
             self.add_to_solver_config(solver_extras)
         # The extras are the last thing that can name `snes_type`, so the
@@ -3468,7 +3641,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # not raise and converges to the wrong thing or not at all. Both are
         # visited because a hand-written dictionary may name either.
         for prefix in ("dtn_fieldsplit_0_fieldsplit_0_condensed_field_",
-                       "dtn_fieldsplit_0_condensed_fieldsplit_0_"):
+                       "dtn_fieldsplit_0_condensed_fieldsplit_0_",
+                       # With no `Real` field the two-block Schur split has
+                       # nothing to split, `gadopt.CondensedBlockPC` sits as the
+                       # outer preconditioner, and its displacement split loses
+                       # the `dtn_fieldsplit_0_` prefix entirely.
+                       "condensed_fieldsplit_0_"):
             key = prefix + "ksp_type"
             max_it_key = prefix + "ksp_max_it"
             restart_key = prefix + "ksp_gmres_restart"
@@ -3576,6 +3754,33 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.solution_space, self.layout.potential, mode_rows,
             # A callable, not a float. See point 3 above.
             lambda: self.theta_psi_value, self.potential_mesh.comm)
+        # Published so that `gadopt.CondensedBlockPC` can put the update inside
+        # block 0's potential split, where the outer Jacobian's augmentation
+        # cannot reach: Firedrake's `createSubMatrix` builds every fieldsplit
+        # sub-block as a plain `ImplicitMatrixContext`, so without this key
+        # block 0 preconditions a system with no `B` in it and the outer FGMRES
+        # pays 8 or 9 iterations where the multiplier representation pays 3.
+        # The key is absent on the multiplier representation, and its absence
+        # is what keeps that path unchanged.
+        #
+        # `_attach_condensation_context` runs inside `super().__init__` and
+        # creates `self.appctx`, and this method runs after it, so the
+        # dictionary exists here. It is the same dictionary the solver hands to
+        # the preconditioners, and it is read at their `initialize`, which is
+        # the first solve, so publishing here is early enough.
+        if getattr(self, "appctx", None) is None:
+            # Unreachable by construction, and a hard error rather than a new
+            # dictionary: a dictionary made here would not be the one the
+            # solver already handed to Firedrake, so the key would reach no
+            # preconditioner and block 0 would lose `B` with nothing to say so.
+            raise RuntimeError(
+                "SelfGravitatingGIASolver.build_dtn_operator ran before the "
+                "application context existed. The context is created by "
+                "set_solver_options during the base constructor, and this "
+                "method runs after it; reaching this means the construction "
+                "order changed and the low-rank update would not reach "
+                "block 0.")
+        self.appctx["dtn_operator"] = self.dtn_operator
         return self.dtn_operator
 
     # -- The two augmentations, which must stay consistent -------------------

@@ -15,6 +15,8 @@ import itertools
 
 import firedrake as fd
 from pyadjoint.tape import stop_annotating
+from ufl.constantvalue import Zero
+from ufl.tensors import ListTensor
 from .approximations import AnelasticLiquidApproximation
 from .utility import upward_normal
 
@@ -257,10 +259,21 @@ def rigid_body_modes(
 
 
 def _monomials(X, dim: int, degree: int):
-    r"""Yield UFL monomials $x^a y^b (z^c)$ of exact total ``degree``.
+    r"""Yield UFL monomials $x^a y^b (z^c)$ of exact total ``degree`` with their gradients.
 
-    Built as plain products of the spatial coordinates so that UFL's own
-    differentiation (`.dx`, `curl`) applies to them symbolically.
+    Each item is `(mono, grad)`: the monomial as a plain product of the spatial
+    coordinates, and its partial derivatives as a list of ``dim`` expressions.
+    The derivatives are formed from the exponents, `d/dx_i x^a = a x^(a-1)`,
+    and not through UFL's `.dx`. Where an exponent is zero the derivative is
+    the literal integer `0`, which UFL folds into `Zero`. UFL's own
+    differentiation of these products leaves an index sum with the identity
+    tensor that its expansion never reduces to `Zero`, so a vanishing derivative
+    stays a symbol, and a candidate field that is zero in every component is
+    then compiled as a kernel that reads no coordinates. On an extruded mesh
+    that kernel's argument list is one the pyop2 wrapper refuses
+    (`assert len(self.accesses) == len(self.dtypes)` in
+    `pyop2/local_kernel.py`), which is why exactness here matters and not only
+    economy.
     """
     for exps in itertools.product(range(degree + 1), repeat=dim):
         if sum(exps) != degree:
@@ -269,7 +282,43 @@ def _monomials(X, dim: int, degree: int):
         for i, e in enumerate(exps):
             for _ in range(e):
                 mono = mono * X[i]
-        yield mono
+        grad = []
+        for i in range(dim):
+            if exps[i] == 0:
+                # The monomial does not depend on x_i: the derivative is an
+                # exact zero, so the fields built from it carry a literal 0.
+                grad.append(0)
+                continue
+            # a x^(a-1) times the other coordinates at their own exponents. A
+            # plain float for `a`: a `Constant` would add one kernel argument
+            # per candidate for a value that is fixed at compile time.
+            d = float(exps[i])
+            for j, e in enumerate(exps):
+                for _ in range(e - (1 if j == i else 0)):
+                    d = d * X[j]
+            grad.append(d)
+        yield mono, grad
+
+
+def _is_identically_zero(expr) -> bool:
+    """Whether a UFL vector expression is zero in every component.
+
+    The candidates of `solenoidal_modes` carry literal zeros from `_monomials`,
+    so a vanishing field arrives as `as_vector((0, 0, 0))`, which UFL folds to a
+    single `Zero`, or as a `ListTensor` whose components are all `Zero`. Both
+    shapes are checked; nothing is differentiated or evaluated here.
+
+    Args:
+      expr: a UFL expression, scalar or vector.
+
+    Returns:
+      `True` if the expression is `Zero` or every component of it is.
+    """
+    if isinstance(expr, Zero):
+        return True
+    if isinstance(expr, ListTensor):
+        return all(isinstance(c, Zero) for c in expr.ufl_operands)
+    return False
 
 
 def solenoidal_modes(
@@ -328,18 +377,19 @@ def solenoidal_modes(
 
     fields = []
     for pot_degree in range(2, max_degree + 2):
-        for mono in _monomials(X, dim, pot_degree):
+        for mono, grad in _monomials(X, dim, pot_degree):
             if dim == 2:
                 # v = curl of the scalar stream function `mono`:
                 #     (d phi/dy, -d phi/dx).
-                fields.append(fd.as_vector((mono.dx(1), -mono.dx(0))))
+                d0, d1 = grad
+                fields.append(fd.as_vector((d1, -d0)))
             else:
                 # v = curl of each single-component vector potential
                 # A = mono e_i. Written out rather than via `fd.curl` on
                 # `as_vector` with `Constant(0)` slots: UFL's curl lowering
                 # differentiates every slot, and a bare constant carries no
                 # domain, so `find_geometric_dimension` fails there.
-                d0, d1, d2 = mono.dx(0), mono.dx(1), mono.dx(2)
+                d0, d1, d2 = grad
                 # A = (mono, 0, 0) -> (0,  d/dz,  -d/dy)
                 fields.append(fd.as_vector((0, d2, -d1)))
                 # A = (0, mono, 0) -> (-d/dz, 0,  d/dx)
@@ -362,9 +412,15 @@ def solenoidal_modes(
     # production -- `NearlyIncompressibleAssembledPC.initialize` -- is already
     # covered, because Firedrake runs the whole solve inside `stop_annotating`
     # and PETSc only sets a PC up lazily from within `KSPSolve`.
+    #
+    # Candidates that are zero in every component (curl(x^2 e_x) and its two
+    # siblings in 3-D) are dropped BEFORE interpolation, and not only by the
+    # norm test below: the norm test costs an interpolation and an assembly
+    # per candidate for a field that is known to be zero from its symbols.
     kept = []
     with stop_annotating():
-        for m in [fd.Function(V).interpolate(v) for v in fields]:
+        candidates = [v for v in fields if not _is_identically_zero(v)]
+        for m in [fd.Function(V).interpolate(v) for v in candidates]:
             m_norm = fd.sqrt(fd.assemble(fd.inner(m, m) * fd.dx))
             if m_norm == 0.0:
                 continue

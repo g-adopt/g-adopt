@@ -13,9 +13,13 @@ try:
     _HAVE_SCIPY = True
 except ImportError:  # pragma: no cover - scipy ships in the firedrake venv
     _HAVE_SCIPY = False
+from ufl import as_vector as ufl_as_vector
+from ufl import Form as ufl_Form
+from ufl.algorithms import expand_derivatives
 from ufl.indexed import Indexed
 from firedrake.dmhooks import get_function_space
 from firedrake.petsc import PETSc
+from mpi4py import MPI
 from firedrake.assemble import get_assembler
 from firedrake import dmhooks
 from firedrake.slate import AssembledVector
@@ -1124,6 +1128,446 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         return self._invT @ rhs
 
 
+class _LowRankPotentialOperator:
+    r"""`A_psipsi + B` on the potential space, with `B` applied in factored form.
+
+    The potential block of `gadopt.CondensedBlockPC`'s nest on the low-rank DtN
+    path. `B = theta * sum_b C_b^T W_b C_b` is the exterior condition the
+    multiplier representation obtains through its Schur complement; here it is
+    the rank-k update `gadopt.dtn_coupled.CoupledLowRankDtN` applies, and it is
+    never formed. One application is the assembled matrix-vector product plus,
+    per DtN boundary, two small dense products against the boundary entries with
+    one `Allreduce` of the `k`-vector in between.
+
+    **The indices are the potential space's own.** The sub-vector of the nest
+    carries the potential space's layout, so the rows are
+    `BoundaryModeRows.dofs` directly. `CoupledLowRankDtN.rows_mono` shifts the
+    same rows onto the monolithic mixed vector by `psi_local_offset` and is
+    wrong here by exactly the owned size of the displacement and history fields
+    in front of the potential. That error writes the update into the wrong rows
+    of a vector it still fits inside, so it neither raises nor changes the
+    residual: it degrades the preconditioner and nothing says so.
+
+    **`theta` is read at every application.** It is
+    `scaling_factor * B_mu / Lambda`, all three of which can be adjoint
+    controls, so it is taken from the operator's own callable rather than
+    folded into the weights once.
+
+    `multTranspose` is the same action, because `B` is symmetric and the
+    assembled potential block is too.
+
+    Attributes:
+      assembled: The assembled `A_psipsi`, as a `PETSc.Mat`. Reassembled in
+        place by `CondensedBlockPC._assemble_blocks`, so this reference stays
+        valid across every rebuild.
+      dtn: The `CoupledLowRankDtN`, for its `mode_rows`, its prefactor and its
+        communicator.
+      applications: Counts applications, so a test can confirm the update ran
+        rather than being bypassed.
+    """
+
+    def __init__(self, assembled, dtn_operator):
+        self.assembled = assembled
+        self.dtn = dtn_operator
+        self.applications = 0
+
+    def mult(self, mat, x, y):
+        """`y = (A_psipsi + B) x`."""
+        self.assembled.mult(x, y)
+        theta = self.dtn.theta_value
+        x_local = x.array_r
+        # `array_w` hands back the same local memory and marks it modified, so
+        # the `+=` below accumulates onto what `mult` just wrote. This is the
+        # pattern `gadopt.dtn_lowrank.LowRankDtNOperator._add_low_rank` uses.
+        y_local = y.array_w
+        for rows in self.dtn.mode_rows:
+            if rows.rows.size:
+                local = rows.rows @ x_local[rows.dofs]
+            else:
+                local = np.zeros(len(rows.keys))
+            total = np.empty_like(local)
+            # The modes are global and the boundary dofs are partitioned, so
+            # the `k`-vector is summed before it is scattered back. This is the
+            # whole of the parallel communication of one application.
+            self.dtn.comm.Allreduce(local, total)
+            if rows.rows.size:
+                y_local[rows.dofs] += theta * (
+                    rows.rows.T @ (rows.weights * total))
+        self.applications += 1
+
+    # Symmetric, so the transpose action is the same action. Stated rather than
+    # left to inheritance: PETSc will use this for a transposed solve, and
+    # getting it wrong would show up only in the adjoint.
+    multTranspose = mult
+
+
+class LowRankPotentialPC(fd.preconditioners.base.PCBase):
+    r"""GAMG plus a Woodbury correction for `A_psipsi + B`.
+
+    The preconditioner of the potential split of `gadopt.CondensedBlockPC` on
+    the low-rank DtN path. Its operator is `_LowRankPotentialOperator`, which
+    the class reads off its own preconditioning matrix's Python context; it
+    needs no application-context key of its own.
+
+    ## Why this exists
+
+    `AugmentedImplicitMatrixContext` adds `B` to the OUTER Jacobian's action
+    only. Firedrake's `createSubMatrix` builds every fieldsplit sub-block as a
+    plain `ImplicitMatrixContext`, so block 0 never sees `B`, and
+    `CondensedBlockPC` assembles `A_psipsi` from the bilinear form, which has no
+    `B` in it either. Measured on the annulus: the outer FGMRES then spends 8 or
+    9 iterations where the multiplier representation spends 3
+    (`NOTES/FINDING-LOWRANK-ITERATIVE-2026-09-16.md`). This class is what puts
+    `B` inside block 0.
+
+    ## The identity
+
+    With `U` the `n_psi x k` matrix whose columns are the mode rows, `W` the
+    diagonal of the weights and `theta` the prefactor, the Woodbury identity in
+    the form that never inverts `W` is
+
+        (A + theta U W U^T)^-1 = A^-1 - Z Cap^-1 (theta W U^T A^-1)
+        Z   = A^-1 U
+        Cap = I + theta W (U^T Z)
+
+    so one application costs one solve against `A` alone, one `Allreduce` of a
+    `k`-vector, one dense solve of size `k`, and one scatter back.
+
+    **`W` is singular in every default configuration, which is why the identity
+    is written this way.** A weight is `(lam_k - alpha/R) / (scale_k * A_h)`,
+    and `gadopt.dtn_form` builds `lam = (l+1)/R` on an exterior boundary and
+    `l/R` on an interior one with `alpha = 1`, so the weight is exactly zero for
+    the exterior `l = 0` mode and the interior `l = 1` modes: four modes at
+    every truncation, in 2-D and in 3-D alike. The textbook form of the identity
+    carries `W^-1/theta` in the capacitance and does not exist for any of them.
+    This form carries `theta W` instead, contributes nothing for a zero weight,
+    which is what a zero weight means, and stays well conditioned for a small
+    one. `Cap` is non-singular exactly when `A + B` is, by the determinant
+    lemma.
+
+    `Z = A^-1 U` is built by `k` accurate solves of `A_psipsi`, to the fixed
+    `_column_rtol` of 1e-10, because an error in a column enters `Cap` and is not
+    corrected by the outer Krylov method. The application's own `A^-1` may be as
+    inexact as one V-cycle: it makes the identity approximate, which is what a
+    preconditioner is allowed to be.
+
+    ## What is rebuilt, and when
+
+    Within one forward run nothing is. The potential block is
+    `theta * (grad psi . grad v dx + sum_b (alpha/R_b) psi v ds_b)`, so neither
+    `dt` nor the stress nor the rheology enters it, and `B = theta * B0` with
+    `theta = scaling_factor * B_mu / Lambda` does not either. `Z`, `Cap` and the
+    multigrid hierarchy therefore survive every time-step change and every
+    Newton iteration, which the multiplier representation's dense complement
+    cannot do, because that complement goes through the mechanics block.
+
+    **`theta` is not an independent input.** It multiplies the whole potential
+    row, so it scales `A_psipsi` and `B` together: a replay with `Lambda`,
+    `B_mu` or `scaling_factor` as a control moves `A_psipsi` by the same factor
+    it moves `B`. Refactoring `Cap` at a new `theta` while keeping `Z` and the
+    hierarchy of the old matrix would build a capacitance belonging to no
+    operator at all. So there is ONE reuse test, the Frobenius norm of
+    `A_psipsi`, and everything is rebuilt together when it moves.
+
+    The inner Krylov solve works on a private copy of `A_psipsi`, refreshed from
+    the same test. Without the copy, `CondensedBlockPC.update` reassembling the
+    block in place and calling `assemble()` on the enclosing nest bumps the
+    matrix state and makes PETSc re-run the multigrid setup on every `dt` change
+    and every Newton iteration, which is a recomputation of the coarse operators
+    for entries that did not change.
+
+    ## Options
+
+    Under this preconditioner's own prefix plus `lowrank_`: `ksp_*` and `pc_*`
+    for the solve against `A_psipsi` that the application uses. The default the
+    preset writes is one GAMG V-cycle (`ksp_type preonly`). The column build
+    uses the same preconditioner and hierarchy with CG and a tight tolerance,
+    so a second hierarchy is never built.
+
+    ## What is refused
+
+    A preconditioning matrix that is not `_LowRankPotentialOperator`, which
+    means the class was selected on the multiplier path or outside
+    `CondensedBlockPC`'s nest. A transpose application is refused for the same
+    reason `CondensedBlockPC` refuses one, and because this approximate inverse
+    is not symmetric anyway: the columns `Z` come from an accurate solve and the
+    leading term from one V-cycle, so the two halves of the correction are built
+    to different accuracies.
+    """
+
+    needs_python_pmat = True
+
+    #: Option prefix of the solve against `A_psipsi`, under this
+    #: preconditioner's own prefix.
+    _prefix = "lowrank_"
+
+    #: Relative tolerance of the `k` solves that build the columns `Z`. Tight
+    #: because an error in a column enters the capacitance, which no outer
+    #: Krylov method corrects; the application's own solve is separate and may
+    #: be one V-cycle.
+    _column_rtol = 1e-10
+
+    def initialize(self, pc):
+        """Build the hierarchy, the columns `Z` and the capacitance."""
+        _, P = pc.getOperators()
+        # The type is tested before the context is asked for: `getPythonContext`
+        # on a matrix of any other type raises inside PETSc, and this method
+        # runs inside a PETSc callback, where a raised error is reported as an
+        # error code with the Python cause some distance away.
+        context = (P.getPythonContext()
+                   if P.getType() == PETSc.Mat.Type.PYTHON else None)
+        if not isinstance(context, _LowRankPotentialOperator):
+            raise ValueError(
+                "gadopt.LowRankPotentialPC preconditions the potential block "
+                "of gadopt.CondensedBlockPC on the low-rank DtN path, so its "
+                "preconditioning matrix must carry a "
+                "_LowRankPotentialOperator Python context; it got "
+                f"{type(context).__name__}. On the multiplier representation "
+                "the potential split has no low-rank update and its "
+                "preconditioner is plain GAMG: select this class only through "
+                "selfgrav_dtn_iterative_solver_parameters("
+                "dtn_representation='lowrank').")
+        self.context = context
+        self.assembled = context.assembled
+        self.dtn = context.dtn
+        self.comm = self.dtn.comm
+
+        # The columns of `U`, flattened across the DtN boundaries: one entry
+        # per mode, holding the owned local indices it touches, the row itself
+        # and its weight. The flattening is what makes the capacitance one
+        # dense `k x k` system instead of one per boundary, which it must be:
+        # two boundaries share the potential space, so their columns are not
+        # orthogonal and a per-boundary capacitance would ignore the coupling.
+        # A zero weight is kept, not refused and not dropped: it contributes
+        # nothing to `B`, and the capacitance below carries `theta W` instead
+        # of `W^-1/theta`, so a zero costs a row of the identity and nothing
+        # else. Four modes are exactly zero in every default configuration.
+        self._columns = []
+        for rows in self.dtn.mode_rows:
+            for mode in range(len(rows.keys)):
+                self._columns.append((rows.dofs,
+                                      np.ascontiguousarray(rows.rows[mode]),
+                                      float(rows.weights[mode])))
+        self._n_modes = len(self._columns)
+        self._weights = np.array([w for _, _, w in self._columns])
+
+        # A private copy, so that the multigrid hierarchy is not torn down and
+        # rebuilt every time `CondensedBlockPC.update` reassembles the block in
+        # place and calls `assemble()` on the enclosing nest. Those two bump the
+        # matrix state, and PETSc then re-runs the setup of any preconditioner
+        # built on it, whether or not an entry moved. The copy is refreshed from
+        # the same reuse test that governs `Z`.
+        self._matrix = self.assembled.copy()
+
+        prefix = (pc.getOptionsPrefix() or "") + self._prefix
+        ksp = PETSc.KSP().create(comm=pc.comm)
+        ksp.incrementTabLevel(1, parent=pc)
+        ksp.setOptionsPrefix(prefix)
+        ksp.setOperators(self._matrix, self._matrix)
+        ksp.setFromOptions()
+        self.ksp = ksp
+
+        #: Builds of the columns `Z` and of everything keyed with them. A
+        #: forward march at any number of time steps must leave this at 1.
+        self.column_builds = 0
+        self._rebuild()
+
+    def _mark_spd(self):
+        """Claim the private copy symmetric positive definite, as the block is.
+
+        `CondensedBlockPC._assemble_blocks` makes the same claim on the block
+        itself after every assembly, and a copy does not inherit it. Without it
+        the multigrid setup takes its non-symmetric path on a Laplacian.
+        """
+        self._matrix.setOption(PETSc.Mat.Option.SPD, True)
+        self._matrix.setOption(PETSc.Mat.Option.SYMMETRY_ETERNAL, True)
+
+    def _rebuild(self):
+        """Refresh the private copy, the columns `Z` and the capacitance.
+
+        `_columns`, `_weights` and `_n_modes` are read once in `initialize`
+        and are not refreshed here, because the mode rows are built once in
+        the operator's constructor and a change of truncation needs a new
+        solver. A rebuild answers a change of `A_psipsi` or of the prefactor,
+        which moves `Z`, `U^T Z` and the capacitance and nothing else.
+        """
+        self.assembled.copy(self._matrix,
+                            PETSc.Mat.Structure.SAME_NONZERO_PATTERN)
+        self._mark_spd()
+        self._build_columns()
+        self._factorise_capacitance()
+        self._fingerprint = self._matrix_fingerprint()
+        self.column_builds += 1
+
+    def _matrix_fingerprint(self) -> float:
+        """The Frobenius norm of `A_psipsi`, as the reuse test for `Z`.
+
+        A norm is a weak fingerprint, and it is the right strength here: the
+        columns are expected never to need rebuilding, so this exists to catch
+        a potential block that moves against expectation, and a move that
+        preserved the norm exactly would have to be a reflection of the
+        entries. The cost is one pass over the non-zeros per linear solve,
+        against a multigrid V-cycle on the same matrix.
+        """
+        return float(self.assembled.norm(PETSc.NormType.FROBENIUS))
+
+    def _build_columns(self):
+        """`Z = A^-1 U`, by one accurate solve per mode.
+
+        The solves borrow this class's KSP, and so its multigrid hierarchy,
+        with the method and tolerance temporarily replaced: building a second
+        KSP would build a second hierarchy on the same matrix.
+        """
+        saved_type = self.ksp.getType()
+        saved_rtol, saved_atol, saved_dtol, saved_max = self.ksp.getTolerances()
+        self.ksp.setType(PETSc.KSP.Type.CG)
+        self.ksp.setTolerances(rtol=self._column_rtol, max_it=1000)
+        try:
+            rhs = self.assembled.createVecRight()
+            self._Z = []
+            for dofs, row, _ in self._columns:
+                # `set` then `array_w`, and not two writes through one view:
+                # the cached norm `KSPSolve` tests `rtol` against is
+                # invalidated when the array view is released, and a single
+                # view would leave that release to the moment CPython drops the
+                # previous iteration's reference. Two explicit acquisitions
+                # cost one call and depend on nothing.
+                rhs.set(0.0)
+                rhs.array_w[dofs] = row
+                column = self.assembled.createVecRight()
+                self.ksp.solve(rhs, column)
+                reason = self.ksp.getConvergedReason()
+                if reason < 0:
+                    raise ValueError(
+                        "gadopt.LowRankPotentialPC could not solve for a "
+                        "column of Z: the potential block's Krylov solve "
+                        f"stopped with PETSc reason {reason}. The columns "
+                        "enter the capacitance directly, so an inaccurate one "
+                        "is a wrong preconditioner and not a slow one.")
+                self._Z.append(column)
+        finally:
+            self.ksp.setType(saved_type)
+            self.ksp.setTolerances(rtol=saved_rtol, atol=saved_atol,
+                                   divtol=saved_dtol, max_it=saved_max)
+        # `U^T Z`, the part of the capacitance that does not carry the
+        # prefactor. Built rank-locally against the sparse rows and summed
+        # once, instead of by `k^2` global dot products.
+        local = np.zeros((self._n_modes, self._n_modes))
+        for j, column in enumerate(self._Z):
+            column_local = column.array_r
+            for i, (dofs, row, _) in enumerate(self._columns):
+                local[i, j] = row @ column_local[dofs]
+        self._UtZ = np.empty_like(local)
+        self.comm.Allreduce(local, self._UtZ)
+
+    def _factorise_capacitance(self):
+        """`Cap = I + theta W (U^T Z)`, factored for the application.
+
+        This form of the identity never inverts `W`, which is what lets the
+        four zero-weight modes of every default configuration through. The
+        prefactor is read here and enters as a row scaling.
+        """
+        self._theta = self.dtn.theta_value
+        cap = np.eye(self._n_modes) + (
+            (self._theta * self._weights)[:, np.newaxis] * self._UtZ)
+        if _HAVE_SCIPY:
+            lu = _lu_factor(cap)
+            # `lu_factor` never raises on a singular matrix: it returns a `U`
+            # with a zero pivot and a warning. Catching it here makes the
+            # failure a named error instead of a silent NaN application that
+            # the outer Krylov method reports as stagnation.
+            if not np.all(np.abs(np.diag(lu[0])) > 0.0):
+                raise ValueError(
+                    f"gadopt.LowRankPotentialPC's {self._n_modes}x"
+                    f"{self._n_modes} capacitance matrix is singular: a zero "
+                    "pivot appeared in its LU factorisation.")
+            self._cap_lu = lu
+            self._cap_inv = None
+        else:  # pragma: no cover - scipy ships in the firedrake venv
+            self._cap_lu = None
+            self._cap_inv = np.linalg.inv(cap)
+
+    def _cap_solve(self, rhs):
+        """`Cap^-1 rhs` through the stored factorisation.
+
+        `check_finite=False`: a non-finite residual arriving from a diverged
+        displacement split must propagate as a NaN, which the outer Krylov
+        method reports as `DIVERGED_NANORINF`, the same way the multiplier
+        path reports it. With the check on, scipy raises `ValueError: array
+        must not contain infs or NaNs` here, and the traceback points at the
+        capacitance instead of at the split that diverged.
+        """
+        if self._cap_lu is not None:
+            return _lu_solve(self._cap_lu, rhs, check_finite=False)
+        return self._cap_inv @ rhs
+
+    def update(self, pc):
+        """Rebuild everything, or nothing, on one test of `A_psipsi`.
+
+        PETSc calls this on every linear solve. The prefactor is NOT a second
+        input to test: it scales the assembled block and the update together,
+        so a change in it moves this norm.
+        """
+        # The rebuild below is COLLECTIVE (it solves, and it reduces), so every
+        # rank must reach the same decision or the ones that rebuild wait on an
+        # `Allreduce` the others never enter. `Mat.norm` reduces and MPI
+        # guarantees an identical result everywhere, so comparing the floats
+        # already agrees; this one-flag reduction removes the dependence on
+        # that guarantee for the price of one boolean. It is the pattern
+        # `_refresh_operator_version` uses for the same reason.
+        moved = self._matrix_fingerprint() != self._fingerprint
+        if self.comm.allreduce(moved, MPI.LOR):
+            self._rebuild()
+
+    @PETSc.Log.EventDecorator("LowRankPotentialPCApply")
+    def apply(self, pc, x, y):
+        """`y = (A + theta U W U^T)^-1 x`, to the accuracy of the inner solve."""
+        self.ksp.solve(x, y)
+        y_local = y.array_r
+        local = np.array([row @ y_local[dofs]
+                          for dofs, row, _ in self._columns])
+        total = np.empty_like(local)
+        # The modes are global and the boundary dofs are partitioned, so the
+        # `k`-vector is summed before the dense solve. This is the whole of the
+        # parallel communication of one application.
+        self.comm.Allreduce(local, total)
+        correction = self._cap_solve(self._theta * self._weights * total)
+        # One fused pass over the potential vector instead of `k` separate
+        # ones. At the truncations this exists for, `k` is in the hundreds per
+        # boundary, so `k` calls to `axpy` would read `k` potential vectors per
+        # block-0 Krylov iteration.
+        y.maxpy(-correction, self._Z)
+
+    def applyTranspose(self, pc, x, y):
+        """Refused; the transpose application is not implemented.
+
+        Two reasons, either sufficient. pyadjoint solves `adjoint(J)` with the
+        forward options, so an adjoint solve reaches `apply` on the adjoint
+        operator and never this method, which is why `CondensedBlockPC` refuses
+        one as well. And the map this class applies is not symmetric even
+        though its operator is: the leading term comes from one multigrid
+        V-cycle and the columns `Z` from an accurate solve, so the two halves of
+        the correction are built to different accuracies. A silent `apply` here
+        would precondition a transposed solve with a map that is close to the
+        right one and not equal to it.
+        """
+        raise NotImplementedError(
+            "gadopt.LowRankPotentialPC has no transpose application. An "
+            "adjoint solve reaches the forward apply, because pyadjoint solves "
+            "adjoint(J) with the forward solver options.")
+
+    def view(self, pc, viewer=None):
+        super().view(pc, viewer)
+        # The base class quietly returns on a missing or non-ASCII viewer, so
+        # repeat its test before writing anything of our own.
+        if viewer is None or viewer.getType() != PETSc.Viewer.Type.ASCII:
+            return
+        viewer.printfASCII(
+            f"Low-rank potential preconditioner, {self._n_modes} modes, "
+            f"{self.column_builds} build(s)\n")
+        self.ksp.view(viewer)
+
+
 class SubstitutedDisplacementPC(fd.AuxiliaryOperatorPC):
     r"""Precondition the displacement Schur complement of a coupled GIA solve.
 
@@ -1247,6 +1691,127 @@ class SubstitutedDisplacementPC(fd.AuxiliaryOperatorPC):
         super().initialize(pc)
         mat = self.P.petscmat
         mat.setOption(mat.Option.SPD, True)
+
+
+def _restrict_to_mesh(form, mesh):
+    """Keep only the integrals of `form` written on `mesh`.
+
+    Slate compiles an expression whose integrals are on ONE mesh, and the
+    self-gravity block-0 form spans two: the potential on the parent mesh and
+    the displacement and internal variables on the mantle submesh. Extracting
+    the `(u, M)` sub-block is enough on the forward path, where every surviving
+    integral is on the submesh. It is NOT enough on an adjoint operator: one
+    cell integral on the PARENT mesh survives the same extraction, and Slate
+    then fails with `too many values to unpack (expected 1)` out of
+    `slate/slac/compiler.py:_compile_expression_comm`.
+
+    Measured on the annulus with a fluid core
+    (`NOTES/team/lowrank-block0/diag_adj.py`): the forward `(u, M)` block has
+    15 integrals, all on the submesh; the adjoint's has one more, on the
+    parent mesh.
+
+    **That integral is identically zero**, and this function exists because
+    the splitter does not reduce it. Its integrand is
+
+        conj(theta * sum_i grad([v_0[0..5], 0, ..., 0])[6, i]
+                    * grad([v_1[0..5], 0, ..., 0])[6, i])
+
+    the potential Laplacian with the potential slot, component 6, already set
+    to `Zero` by `ExtractSubBlock.argument`. UFL folds `Grad(Zero)` and does
+    not fold `Indexed(Grad(ListTensor), 6)`, so the integrand survives as a
+    symbol with no value: `expand_derivatives` on it returns a form with no
+    integrals. It appears only on an adjoint operator because `ufl.adjoint`
+    reorders the arguments after `derivative` has run, and a forward block
+    reaches this class already expanded.
+
+    So this filter changes no number, on either path, and it proves that on
+    every call: the dropped integrals are expanded, and a form that keeps any
+    integral after `expand_derivatives` is refused. A genuine cross-mesh
+    `(u, M)` coupling on the parent mesh would belong in `A_uM`, and dropping
+    it would change `S_uu` with nothing in any log to say so. The proof is one
+    `expand_derivatives` on one integral, once per `initialize`.
+
+    Args:
+      form: the extracted `(u, M)` sub-block.
+      mesh: the mesh the internal-variable elimination runs on.
+
+    Returns:
+      The form with the integrals on other meshes removed, or the form itself
+      when every integral is already on `mesh`, which is every forward call.
+    """
+    kept = [integral for integral in form.integrals()
+            if integral.ufl_domain() is mesh]
+    if len(kept) == len(form.integrals()):
+        return form
+    if not kept:
+        raise ValueError(
+            "gadopt.CondensedBlockPC found no integral of the "
+            "(displacement, internal variable) block on the displacement's "
+            f"own mesh {mesh}. There is then nothing to eliminate and the "
+            "block-0 form is not the one this class was written for.")
+    dropped = [integral for integral in form.integrals()
+               if integral.ufl_domain() is not mesh]
+    # The proof that the filter changes no number: every dropped integral
+    # expands to nothing.
+    if not expand_derivatives(ufl_Form(dropped)).empty():
+        raise ValueError(
+            "gadopt.CondensedBlockPC found a (displacement, internal "
+            "variable) coupling on a mesh other than the displacement's own "
+            f"mesh {mesh} that does not expand to zero. Dropping it would "
+            "change the eliminated block silently, so it is refused; the term "
+            "belongs in the displacement-internal-variable coupling block.")
+    return ufl_Form(kept)
+
+
+def _split_mixed_coefficients(form):
+    """Replace every mixed-space coefficient of `form` by its components.
+
+    Slate compiles an expression whose arguments and coefficients live on ONE
+    mesh. The self-gravity block-0 space spans two: the potential on the parent
+    mesh and the displacement on the mantle submesh. Extracting the `(u, M)`
+    sub-block makes the ARGUMENTS single-mesh, and a coefficient on the whole
+    mixed space still spans both, so Slate refuses the form with
+    `too many values to unpack (expected 1)` out of
+    `slate/slac/compiler.py:_compile_expression_comm`.
+
+    On the forward path the question never arises. Firedrake reaches this class
+    through `createSubMatrix`, which runs `solving_utils.split`, and that
+    replaces the mixed solution by its per-field components before the form
+    ever gets here. An adjoint solve builds its operator from
+    `adjoint(dFdu)` and hands over a form whose coefficients are still on the
+    mixed space, so the same class meets a form the forward path never
+    produces.
+
+    This does what `solving_utils.split` does to `J`: rebuild each mixed
+    coefficient as a `ufl.as_vector` of the scalar components of its
+    sub-functions, in field order, and substitute it. A form with no mixed
+    coefficient is returned unchanged, which is every forward call.
+
+    Args:
+      form: the extracted sub-block, a UFL form.
+
+    Returns:
+      The same form with every mixed-space coefficient replaced.
+    """
+    replacements = {}
+    for coefficient in form.coefficients():
+        space = coefficient.function_space()
+        if space is None or len(space) <= 1:
+            continue
+        components = []
+        for piece in fd.split(coefficient):
+            if piece.ufl_shape == ():
+                components.append(piece)
+            else:
+                # A tensor-valued field (the combined internal variables are
+                # `(n, d, d)`) contributes every scalar component, in the
+                # order `as_vector` expects.
+                components.extend(piece[index]
+                                  for index in np.ndindex(piece.ufl_shape))
+        replacements[coefficient] = ufl_as_vector(components)
+    if not replacements:
+        return form
+    return fd.replace(form, replacements)
 
 
 def internal_variable_condensation(A, keep: int = 0, eliminate: int = 1):
@@ -1823,8 +2388,11 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         # two system.
         splitter = ExtractSubBlock()
         pair_indices = (self.DISPLACEMENT, self.INTERNAL_VARIABLE)
-        self._pair_form = splitter.split(self.bilinear_form,
-                                         (pair_indices, pair_indices))
+        self._pair_form = _restrict_to_mesh(
+            _split_mixed_coefficients(
+                splitter.split(self.bilinear_form,
+                               (pair_indices, pair_indices))),
+            self.displacement_space.mesh())
         W_pair = self._pair_form.arguments()[0].function_space()
         # The Slate right-hand side and solution live on the `(u, M)` space;
         # the mixed `(u, M, psi)` residual and solution are the vectors PETSc
@@ -1876,12 +2444,37 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
 
         self._set_displacement_nullspaces()
 
+        # -- the low-rank DtN update, when the solver carries one -----------
+        # `SelfGravitatingGIASolver.build_dtn_operator` publishes this key on
+        # the low-rank representation and never on the multiplier one, so its
+        # absence keeps every existing configuration byte for byte.
+        #
+        # The update lives in the potential rows alone, so it lives in the
+        # potential block of the nest and nothing else here changes. It has to
+        # go into the PRECONDITIONING matrix and not into a separate operator
+        # matrix: PCFieldSplit extracts both the split operator and the split
+        # preconditioning matrix from `P` and ignores `A` entirely (measured,
+        # `NOTES/team/lowrank-block0/nest_probe2.py`), so a nest handed over as
+        # the operator alone would leave the potential split solving a system
+        # with no update in it, converging, with nothing in any log to say so.
+        self.dtn_operator = self.cxt.appctx.get("dtn_operator")
+        if self.dtn_operator is not None:
+            self.potential_operator = _LowRankPotentialOperator(
+                self.A_psipsi.petscmat, self.dtn_operator)
+            potential_block = PETSc.Mat().createPython(
+                self.A_psipsi.petscmat.getSizes(), self.potential_operator,
+                comm=pc.comm)
+            potential_block.setUp()
+        else:
+            self.potential_operator = None
+            potential_block = self.A_psipsi.petscmat
+
         # -- the nest and its Krylov solve ---------------------------------
         # The fieldsplit takes its index sets from the nest, so this order is
         # the split order: split 0 is the displacement block.
         self.condensed_operator = PETSc.Mat().createNest(
             [[self.S_uu.petscmat, self.A_upsi.petscmat],
-             [self.A_psiu.petscmat, self.A_psipsi.petscmat]], comm=pc.comm)
+             [self.A_psiu.petscmat, potential_block]], comm=pc.comm)
         self.condensed_operator.setUp()
         # The two work vectors are nest vectors over the blocks' own vectors,
         # built explicitly so that the sub-vectors stay reachable: `apply`
