@@ -3816,17 +3816,43 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
     def set_solver(self) -> None:
         """The base solver, rebuilt with the two callbacks on the low-rank path.
 
-        Rebuilt rather than patched: `post_function_callback` and
+        Rebuilt and not patched: `post_function_callback` and
         `post_jacobian_callback` are public constructor arguments of both
         `NonlinearVariationalSolver` and `LinearVariationalSolver`, and reaching
         into `solver._ctx` afterwards would be a private-API dependency for no
         gain. Constructing a solver assembles nothing, so the discarded first
-        object costs no work.
+        object costs no work. The class is `LowRankVariationalSolver`, which
+        supplies the adjoint solver's keywords on every annotated solve, so
+        the derivative solves carry the same two callbacks, this application
+        context and `snes_type: ksponly`.
         """
         super().set_solver()
         if self.dtn_representation != "lowrank":
             return
-        self.solver = type(self.solver)(
+        if self.constant_jacobian:
+            # The base builds a `LinearVariationalSolver` on a
+            # `LinearVariationalProblem` in this case, and the class below
+            # derives from `NonlinearVariationalSolver`, whose default
+            # `snes_type` is `newtonls` against the linear solver's `ksponly`.
+            # A forward solve would then run a Newton loop on a linear system
+            # with a preset that names no `snes_type`, one residual evaluation
+            # per solve for nothing. No driver passes this combination; it is
+            # refused instead of being silently reshaped.
+            raise NotImplementedError(
+                "dtn_representation='lowrank' with constant_jacobian=True: the "
+                "low-rank path rebuilds the solver as a "
+                "NonlinearVariationalSolver subclass to name its adjoint "
+                "solver's keywords, which the LinearVariationalProblem the "
+                "constant-Jacobian path builds does not fit. Use "
+                "constant_jacobian=False; the operator-version reuse of the "
+                "block-0 preconditioner already avoids the reassembly a "
+                "constant Jacobian would save.")
+        # `LowRankVariationalSolver` and not the base class: it names the
+        # adjoint solver's keywords on every annotated solve, so the adjoint
+        # carries the two callbacks, this context and `ksponly`
+        # (`gadopt.dtn_coupled_adjoint`, "Both augmentations, and ksponly").
+        from .dtn_coupled_adjoint import LowRankVariationalSolver
+        self.solver = LowRankVariationalSolver(
             self.problem,
             solver_parameters=self.solver_parameters,
             nullspace=self.nullspace,
@@ -3837,6 +3863,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             post_function_callback=self.augment_residual,
             post_jacobian_callback=self.augment_jacobian,
         )
+        self.solver.gia_solver = self
 
     def block1_diagonal(self):
         """The exact diagonal of the `Real` block, or `None` if there is none.

@@ -61,6 +61,10 @@ from gadopt import (
     SelfGravitatingGIASolver,
     self_gravitating_gia_space,
 )
+from gadopt.gia_gravity import (
+    selfgrav_dtn_iterative_solver_parameters,
+    selfgrav_dtn_lowrank_direct_solver_parameters,
+)
 
 # Siblings on the test path: the guarded Taylor driver and the matfree-safe
 # first-order ladder. Reused rather than re-derived, so that the low-rank arm is
@@ -71,6 +75,54 @@ from test_gravity_adjoint import (  # noqa: E402
 )
 
 REPRESENTATIONS = ("multiplier", "lowrank")
+
+# The two solver presets every differentiated solve is checked through. The
+# direct preset is the reference (LU on block 0, the historical acceptance
+# suite); the iterative one is the production configuration with
+# `gadopt.CondensedBlockPC` on block 0 and, on the low-rank arm, the potential
+# split preconditioned by `gadopt.LowRankPotentialPC`. The adjoint and the
+# tangent run through the same preset as the forward solve, so a gate here is
+# a gate on the derivative solves' preconditioners as much as on the
+# derivative itself.
+PRESETS = ("direct", "iterative")
+
+
+def preset_parameters(preset, representation, *, rotation=False,
+                      fluid_core=False):
+    """The `solver_parameters` argument for one preset and one representation.
+
+    Args:
+      preset: `"direct"` or `"iterative"`.
+      representation: `"multiplier"` or `"lowrank"`, which the iterative
+        preset has to be told, because its potential split differs.
+      rotation, fluid_core: the build flags, because they decide whether the
+        mixed space has a `Real` block. The multiplier representation always
+        has one (the DtN multipliers); the low-rank one has one only with
+        rotation or a fluid core, and without it the two-block Schur preset
+        has nothing to split and refuses. `SelfGravitatingGIASolver` maps the
+        string `"iterative"` to the single-block LU preset in that case
+        (`selfgrav_dtn_lowrank_direct_solver_parameters`), and so does this,
+        at the suite's tolerance: the derivative solves then run through
+        `firedrake.AssembledPC` with the update taken on the outer FGMRES,
+        which is the configuration the reverted attempt regressed.
+
+    Returns:
+      The string `"direct"`, or the iterative dictionary at the suite's
+      tolerances (outer 1e-11 so that the finite-difference gate is not
+      limited by the solve).
+    """
+    if preset == "direct":
+        return "direct"
+    has_real_block = representation == "multiplier" or rotation or fluid_core
+    if not has_real_block:
+        return dict(selfgrav_dtn_lowrank_direct_solver_parameters,
+                    ksp_rtol=1e-11, snes_type="ksponly")
+    return selfgrav_dtn_iterative_solver_parameters(
+        condensed=False, block0="condensed", block0_rtol=1e-4,
+        outer_rtol=1e-11, block0_max_it=200, snes_type="ksponly",
+        multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+        dtn_representation=representation)
+
 
 # ---------------------------------------------------------------------------
 # THE INTERFACE CONTRACT
@@ -202,7 +254,7 @@ def real(mesh, value):
 
 def _build(meshes, control_name, control, representation, *,
            rotation=False, declare_nullspace=False, b_mu=None,
-           fluid_core=False):
+           fluid_core=False, solver_parameters="direct"):
     """Assemble the coupled solver with exactly one control live.
 
     Mirrors `test_gia_gravity.build`, but `self_gravity_number` is threaded into
@@ -269,7 +321,7 @@ def _build(meshes, control_name, control, representation, *,
         rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
         fluid_core=(FluidCore(boundary=CURVE_RC, rho_core=2.0)
                     if fluid_core else None),
-        solver_parameters="direct",
+        solver_parameters=solver_parameters,
         **{CONTRACT["keyword"]: representation}, **kwargs)
     return solver, z, layout
 
@@ -469,12 +521,14 @@ def control_mesh(meshes, control_name):
 # L10 (`Lambda`) is a CANARY, never a gate: it was measured green at 1.999706
 # with a 93.6% wrong gradient. The gate for family 4 is L11.
 # ===========================================================================
+@pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
-def test_taylor_by_family(meshes, representation, control_name):
+def test_taylor_by_family(meshes, representation, control_name, preset):
     """L1, L2, L5, L7, L10: guarded Taylor for every control family."""
     Jhat, control, h, J, _ = reduced_functional(
-        meshes, control_name, CONTROL_VALUES[control_name], representation)
+        meshes, control_name, CONTROL_VALUES[control_name], representation,
+        solver_parameters=preset_parameters(preset, representation))
     ladder = taylor_first_order_ladder(Jhat, control, h)
     print(f"    [ladder/{representation}/{control_name}] "
           f"R1_rate={[f'{r:.3f}' for r in ladder['R1_rate']]}")
@@ -492,12 +546,15 @@ def test_taylor_by_family(meshes, representation, control_name):
 # L11 (`Lambda`) is THE GATE of the whole suite -- the one the design predicts
 # fails if the `d theta/dm` term is not written by hand.
 # ===========================================================================
+@pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
-def test_gradient_against_fresh_solves(meshes, representation, control_name):
+def test_gradient_against_fresh_solves(meshes, representation, control_name,
+                                       preset):
     """L3, L6, L8, L11, L12, L13: the instrument a Taylor test cannot replace."""
     _, _, relative = gradient_against_fresh_solves(
-        meshes, control_name, CONTROL_VALUES[control_name], representation)
+        meshes, control_name, CONTROL_VALUES[control_name], representation,
+        solver_parameters=preset_parameters(preset, representation))
     assert relative < FD_GATE, (
         f"{control_name} on {representation}: adjoint and a central difference "
         f"of fresh solves differ by {relative:.3e}. A Taylor test cannot see "
@@ -685,10 +742,11 @@ _TLM_REPRESENTATIONS = [
 ]
 
 
+@pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("representation", _TLM_REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
 def test_tlm_matches_adjoint_and_fresh_solves(meshes, representation,
-                                              control_name):
+                                              control_name, preset):
     """L17: the tangent-linear model is the tangent of the solved map.
 
     **Pre-registered asymmetry, endorsed by the Lead in advance.** The gate is
@@ -708,8 +766,9 @@ def test_tlm_matches_adjoint_and_fresh_solves(meshes, representation,
     multiplier arm is a hard gate like the low-rank one.
     """
     value = CONTROL_VALUES[control_name]
-    Jhat, control, _, J, _ = reduced_functional(meshes, control_name, value,
-                                                representation)
+    Jhat, control, _, J, _ = reduced_functional(
+        meshes, control_name, value, representation,
+        solver_parameters=preset_parameters(preset, representation))
     tape = get_working_tape()
     control.block_variable.tlm_value = real(
         control_mesh(meshes, control_name), 1.0)
@@ -1205,36 +1264,43 @@ def test_gradient_with_rotation_on_and_off(meshes, representation, rotation,
 # ===========================================================================
 # FC1-FC4 - the core-pressure field crosses each differentiated solve path
 # ===========================================================================
-def test_fluid_core_lowrank_replay_matches_fresh_solve(meshes):
+@pytest.mark.parametrize("preset", PRESETS)
+def test_fluid_core_lowrank_replay_matches_fresh_solve(meshes, preset):
     """FC1: replay includes the core-pressure row and its transpose column."""
     value = CONTROL_VALUES["shear_modulus"]
+    parameters = preset_parameters(preset, "lowrank", fluid_core=True)
     Jhat, _, _, _, solver = reduced_functional(
-        meshes, "shear_modulus", value, "lowrank", fluid_core=True)
+        meshes, "shear_modulus", value, "lowrank", fluid_core=True,
+        solver_parameters=parameters)
     assert abs(float(solver.core_pressure)) > 1e-12
 
     shifted = 1.05 * value
     with stop_annotating():
         J_direct, _, _, _ = forward(
             meshes, "shear_modulus", real(meshes[1], shifted), "lowrank",
-            tape_it=False, fluid_core=True)
+            tape_it=False, fluid_core=True, solver_parameters=parameters)
     J_replay = float(Jhat(real(meshes[1], shifted)))
     relative = abs(J_replay - float(J_direct)) / abs(float(J_direct))
     assert relative <= 1e-9
 
 
-def test_fluid_core_lowrank_adjoint_matches_fresh_solves(meshes):
+@pytest.mark.parametrize("preset", PRESETS)
+def test_fluid_core_lowrank_adjoint_matches_fresh_solves(meshes, preset):
     """FC2: the low-rank adjoint includes the core-pressure constraint."""
     _, _, relative = gradient_against_fresh_solves(
         meshes, "shear_modulus", CONTROL_VALUES["shear_modulus"],
-        "lowrank", fluid_core=True)
+        "lowrank", fluid_core=True,
+        solver_parameters=preset_parameters(preset, "lowrank", fluid_core=True))
     assert relative < FD_GATE
 
 
-def test_fluid_core_lowrank_tlm_matches_adjoint(meshes):
+@pytest.mark.parametrize("preset", PRESETS)
+def test_fluid_core_lowrank_tlm_matches_adjoint(meshes, preset):
     """FC3: the tangent and adjoint include the same core-pressure blocks."""
     value = CONTROL_VALUES["shear_modulus"]
     Jhat, control, _, J, _ = reduced_functional(
-        meshes, "shear_modulus", value, "lowrank", fluid_core=True)
+        meshes, "shear_modulus", value, "lowrank", fluid_core=True,
+        solver_parameters=preset_parameters(preset, "lowrank", fluid_core=True))
     tape = get_working_tape()
     control.block_variable.tlm_value = real(meshes[1], 1.0)
     tape.evaluate_tlm()

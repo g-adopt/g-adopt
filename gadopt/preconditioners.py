@@ -356,7 +356,9 @@ class DtNTwoBlockSchurPC(fd.PCBase):
 
     The two blocks are found by introspecting the mixed space of the operator
     for its Real sub-fields, never from the application context, which pyadjoint
-    drops from the kwargs of the adjoint solve.
+    drops from the kwargs of the adjoint solve on the multiplier path (the
+    low-rank path supplies it through `LowRankVariationalSolver`'s
+    `adj_kwargs`, and this class does not need it there either).
 
     Options for the inner fieldsplit are read under a `dtn_` prefix, e.g.
     `Gravity_dtn_fieldsplit_0_ksp_type`. Never supply `pc_fieldsplit_%d_fields`
@@ -721,7 +723,9 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
        (`tests/unit/test_gravity_adjoint.py`), and it is *not* the deferred
        one -- while this class takes its diagonal from the **appctx**, which
        `DtNTwoBlockSchurPC`'s own docstring records pyadjoint **dropping from
-       the kwargs of the adjoint solve**. That is precisely why that class
+       the kwargs of the adjoint solve** on that path (the low-rank path
+       supplies it through `LowRankVariationalSolver`'s `adj_kwargs`; the
+       multiplier path does not). That is precisely why that class
        introspects the operator instead of using appctx. An appctx-carried
        diagonal is therefore the wrong mechanism on the one path with a live
        adjoint, and no guard in this class can see the difference: the count is
@@ -768,10 +772,12 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
                 "  * this is GravitySolver, which supplies no diagonal and "
                 "whose rows are UNSCALED - see the class docstring; that path "
                 "is deliberately left at pc_type: none.\n"
-                "  * this is an ADJOINT solve. pyadjoint drops appctx from the "
-                "kwargs of the adjoint solve (see DtNTwoBlockSchurPC), so a "
-                "preconditioner that reads appctx cannot be used on a taped "
-                "replay. This is a loud failure by design; it must never "
+                "  * this is an ADJOINT solve on the multiplier path. pyadjoint "
+                "drops appctx from the kwargs of that adjoint solve (see "
+                "DtNTwoBlockSchurPC), so a preconditioner that reads appctx "
+                "cannot be used on its taped replay; the low-rank path "
+                "supplies the context through LowRankVariationalSolver's "
+                "adj_kwargs. This is a loud failure by design; it must never "
                 "become a silent zero diagonal."))
         A, _ = pc.getOperators()
         self._n = A.getSizes()[0][1]
@@ -823,8 +829,10 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     S purely from the operator handed to it. That is the design rule this project
     settled on -- a preconditioner that reads its data off the operator has no
     appctx failure mode, so it works where the diagonal PC raises: inside the
-    adjoint solve, whose kwargs pyadjoint strips of `appctx`
-    (`firedrake/adjoint_utils/blocks/solving.py:578`).
+    multiplier path's adjoint solve, whose kwargs pyadjoint strips of `appctx`
+    (`firedrake/adjoint_utils/blocks/solving.py:578`). The low-rank path
+    supplies the context through `LowRankVariationalSolver`'s `adj_kwargs`,
+    and this class reads nothing from it there either.
 
     What it does read from the appctx is two *markers* that say when the
     complement is stale (see "When the complement is rebuilt" below). Neither
@@ -879,10 +887,16 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     `operator_version` nor `gia_solve_index` moves during a replay and the
     replay solver's own complement is built once at its `initialize` and kept
     across every replay, including every replayed step of a taped march. The
-    **adjoint** solve carries Firedrake's default empty context, because
-    pyadjoint pops `appctx` from its kwargs (`blocks/solving.py:578`), so both
-    markers are absent, `update` returns without comparing anything, and its
-    complement is likewise built once and kept.
+    **adjoint** solve differs by path. On the multiplier path it carries
+    Firedrake's default empty context, because pyadjoint pops `appctx` from
+    its kwargs (`blocks/solving.py:578`), so both markers are absent, `update`
+    returns without comparing anything, and its complement is built once and
+    kept. On the low-rank path `LowRankVariationalSolver` supplies the live
+    context through `adj_kwargs`, so both markers are present; they are
+    frozen during a reverse sweep for the same reason they are frozen during a
+    replay (nothing runs `SelfGravitatingGIASolver.solve`), so `update`
+    compares equal values and the adjoint's complement is likewise built once,
+    at the first adjoint solve, and kept.
 
     ## Two correctness conditions, and the second is not what the design assumed
 
@@ -953,9 +967,11 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
            time step instead of one per Newton iteration.
 
         A context carrying neither marker leaves the complement alone. That is
-        the adjoint solve, whose kwargs pyadjoint strips of `appctx`: the
-        factors the forward solve built are the ones the adjoint uses, which is
-        what makes this class usable on a taped replay.
+        the multiplier path's adjoint solve, whose kwargs pyadjoint strips of
+        `appctx`. The low-rank path's adjoint carries the live context through
+        `LowRankVariationalSolver`, with both markers frozen for the sweep, so
+        it ends in the same place: one complement, built at the first adjoint
+        solve and kept.
 
         Args:
           pc: PETSc preconditioner.

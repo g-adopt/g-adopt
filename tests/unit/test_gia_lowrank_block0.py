@@ -442,28 +442,14 @@ def test_the_transpose_application_is_refused(meshes):
 # `dmhooks.create_subdm` raised `Action right argument must be either
 # Coefficient or BaseForm`, because the adjoint solved a PRE-ASSEMBLED operator
 # and the boundary-lifting term of such a problem is an `Action` that UFL
-# cannot split. `_solve_augmented` solves the form instead.
+# cannot split. The adjoint and tangent now run as variational solves on the
+# adjoint and tangent FORMS, through Firedrake's own adjoint solver for the
+# block, which `LowRankVariationalSolver.solve` builds with both augmentation
+# callbacks, the forward application context and `snes_type: ksponly`.
 #
 # Both are checked here by running the gradient, because both failures were
 # raised errors and a test that only builds the solver would not see them.
-@pytest.mark.parametrize("representation", [
-    "multiplier",
-    pytest.param("lowrank", marks=pytest.mark.xfail(
-        run=False,
-        reason="Stage 2 is half done. The low-rank adjoint solves a "
-               "PRE-ASSEMBLED operator, and dmhooks.create_subdm cannot split "
-               "the Action term such a problem's residual carries, so this "
-               "preset is unreachable and the solve raises TypeError before "
-               "any preconditioner runs. Solving the form instead reaches the "
-               "preset and gives the right gradient, and it regressed the "
-               "DIRECT preset to Taylor rate 1.08: that preset inherits "
-               "snes_type newtonls, which the old LinearSolver route ignored "
-               "and a LinearVariationalSolver honours, and Newton with only "
-               "the Jacobian augmented converges to the root of the residual "
-               "that has no B in it. The fix is both callbacks plus a forced "
-               "ksponly. See NOTES/FINDING-LOWRANK-ITERATIVE-2026-09-16.md "
-               "section 7.2 and 7.3.")),
-])
+@pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
 def test_the_gradient_is_right_through_this_preset(meshes, representation):
     """Gradient and Taylor rate, with the iterative preset in place of LU.
 
@@ -643,3 +629,38 @@ class TestThreeDimensions:
         assert condensed.potential_operator is None
         split = condensed.condensed_ksp.getPC().getFieldSplitSubKSP()[1]
         assert split.getPC().getType() == "gamg"
+
+
+def test_the_adjoint_solve_carries_both_augmentations(meshes):
+    """The Jacobian and the residual of the adjoint solve agree, under Newton.
+
+    The rule from `augment_jacobian`'s docstring, both augmentations or
+    neither, pinned on the derivative solve where it was broken once: an
+    adjoint solver with the Jacobian callback alone under `newtonls` takes one
+    correct step and then walks to the root of a residual with no `B` in it
+    (Taylor rate 1.08, gradient 1.9e-2 out, direct preset). The structural
+    half checks what the solver was built with; the behavioural half forces
+    Newton for one adjoint solve and asserts that it stops after one
+    iteration, which it can only do if the residual at the Krylov solution is
+    zero, that is if both operators carry `B`. The type is asserted after the
+    solve so that a solver that quietly reverted to `ksponly` cannot pass.
+    """
+    import test_gia_gravity_adjoint_lowrank as suite
+
+    value = suite.CONTROL_VALUES["shear_modulus"]
+    functional, _, _, _, solver = suite.reduced_functional(
+        meshes, "shear_modulus", value, "lowrank", fluid_core=True)
+    adjoint_solver = solver.adjoint_block._ad_solvers["adjoint_lvs"]
+    context = adjoint_solver._ctx
+    assert context._post_function_callback == solver.augment_residual
+    assert context._post_jacobian_callback == solver.augment_jacobian
+    assert "dtn_operator" in context.appctx
+    assert adjoint_solver.snes.getType() == "ksponly"
+
+    adjoint_solver.snes.setType("newtonls")
+    try:
+        functional.derivative()
+        assert adjoint_solver.snes.getType() == "newtonls"
+        assert adjoint_solver.snes.getIterationNumber() == 1
+    finally:
+        adjoint_solver.snes.setType("ksponly")
