@@ -157,7 +157,6 @@ class ScalarFieldConnector:
 
         return result
 
-    # Cache
     def _check_cache(self, age: float, target_coords: np.ndarray) -> bool:
         """Return True when the cached result can stand in for this request.
 
