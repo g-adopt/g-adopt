@@ -1,0 +1,55 @@
+# Mean linear iterations per Newton step, total water content at the end of
+# the run, and the step counts that say whether two runs followed the same dt
+# trajectory. One row per (case, level, solver).
+#
+# theta_total is int theta(h) dx in m^3, the suite's only check that a solve
+# reached the right answer rather than merely converging. At a given case and
+# level every solver is solving the same problem, so their values must agree.
+#
+# steps and failed are recorded because the basin cases adapt dt: a run with a
+# different failed-step count integrated a different problem, which makes its
+# water content and its timings incomparable rather than merely different.
+#
+# Regenerate on the target system after any change to a solver preset or to a
+# benchmark driver. nan means not yet measured: the test skips.
+case,level,solver,linear_iterations,theta_total,steps,failed
+cockett,1,iterative,nan,nan,nan,nan
+cockett,1,bjacobi,nan,nan,nan,nan
+cockett,1,vlumping,nan,nan,nan,nan
+cockett,1,vlumping_linesmooth,nan,nan,nan,nan
+cockett,1,vlumping_hmg,nan,nan,nan,nan
+cockett,2,iterative,nan,nan,nan,nan
+cockett,2,bjacobi,nan,nan,nan,nan
+cockett,2,vlumping,nan,nan,nan,nan
+cockett,2,vlumping_linesmooth,nan,nan,nan,nan
+cockett,2,vlumping_hmg,nan,nan,nan,nan
+cockett,4,iterative,nan,nan,nan,nan
+cockett,4,bjacobi,nan,nan,nan,nan
+cockett,4,vlumping,nan,nan,nan,nan
+cockett,4,vlumping_linesmooth,nan,nan,nan,nan
+cockett,4,vlumping_hmg,nan,nan,nan,nan
+cockett,8,iterative,nan,nan,nan,nan
+cockett,8,bjacobi,nan,nan,nan,nan
+cockett,8,vlumping,nan,nan,nan,nan
+cockett,8,vlumping_linesmooth,nan,nan,nan,nan
+cockett,8,vlumping_hmg,nan,nan,nan,nan
+murr_vertical,1,vlumping,nan,nan,nan,nan
+murr_vertical,1,vlumping_linesmooth,nan,nan,nan,nan
+murr_vertical,1,vlumping_hmg,nan,nan,nan,nan
+murr_vertical,2,vlumping,nan,nan,nan,nan
+murr_vertical,2,vlumping_linesmooth,nan,nan,nan,nan
+murr_vertical,2,vlumping_hmg,nan,nan,nan,nan
+murr_vertical,4,vlumping,nan,nan,nan,nan
+murr_vertical,4,vlumping_linesmooth,nan,nan,nan,nan
+murr_vertical,4,vlumping_hmg,nan,nan,nan,nan
+murr_vertical,8,vlumping,nan,nan,nan,nan
+murr_vertical,8,vlumping_linesmooth,nan,nan,nan,nan
+murr_vertical,8,vlumping_hmg,nan,nan,nan,nan
+murr_seasonal,1,vlumping,nan,nan,nan,nan
+murr_seasonal,1,vlumping_linesmooth,nan,nan,nan,nan
+murr_seasonal,2,vlumping,nan,nan,nan,nan
+murr_seasonal,2,vlumping_linesmooth,nan,nan,nan,nan
+murr_seasonal,4,vlumping,nan,nan,nan,nan
+murr_seasonal,4,vlumping_linesmooth,nan,nan,nan,nan
+murr_seasonal,8,vlumping,nan,nan,nan,nan
+murr_seasonal,8,vlumping_linesmooth,nan,nan,nan,nan

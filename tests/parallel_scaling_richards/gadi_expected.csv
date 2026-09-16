@@ -1,0 +1,52 @@
+# PETSc -log_view timings on Gadi normalsr (Sapphire Rapids, 104 cores/node).
+# All in seconds; the test tolerance is +/- 20 per cent.
+#
+# pc_setup is paid once per Jacobian, pc_apply once per Krylov iteration. They
+# are recorded separately because a smoother change trades one against the
+# other, which their sum would hide. ksp_solve and snes_solve bracket both, so
+# a change can be read as a fraction of the whole; solve_time is the run total.
+#
+# These are hardware specific and shift with node health and filesystem load.
+# Regenerate together with expected.csv, from the same runs.
+# nan means not yet measured: the test skips.
+case,level,solver,pc_setup,pc_apply,ksp_solve,snes_solve,solve_time
+cockett,1,iterative,nan,nan,nan,nan,nan
+cockett,1,bjacobi,nan,nan,nan,nan,nan
+cockett,1,vlumping,nan,nan,nan,nan,nan
+cockett,1,vlumping_linesmooth,nan,nan,nan,nan,nan
+cockett,1,vlumping_hmg,nan,nan,nan,nan,nan
+cockett,2,iterative,nan,nan,nan,nan,nan
+cockett,2,bjacobi,nan,nan,nan,nan,nan
+cockett,2,vlumping,nan,nan,nan,nan,nan
+cockett,2,vlumping_linesmooth,nan,nan,nan,nan,nan
+cockett,2,vlumping_hmg,nan,nan,nan,nan,nan
+cockett,4,iterative,nan,nan,nan,nan,nan
+cockett,4,bjacobi,nan,nan,nan,nan,nan
+cockett,4,vlumping,nan,nan,nan,nan,nan
+cockett,4,vlumping_linesmooth,nan,nan,nan,nan,nan
+cockett,4,vlumping_hmg,nan,nan,nan,nan,nan
+cockett,8,iterative,nan,nan,nan,nan,nan
+cockett,8,bjacobi,nan,nan,nan,nan,nan
+cockett,8,vlumping,nan,nan,nan,nan,nan
+cockett,8,vlumping_linesmooth,nan,nan,nan,nan,nan
+cockett,8,vlumping_hmg,nan,nan,nan,nan,nan
+murr_vertical,1,vlumping,nan,nan,nan,nan,nan
+murr_vertical,1,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_vertical,1,vlumping_hmg,nan,nan,nan,nan,nan
+murr_vertical,2,vlumping,nan,nan,nan,nan,nan
+murr_vertical,2,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_vertical,2,vlumping_hmg,nan,nan,nan,nan,nan
+murr_vertical,4,vlumping,nan,nan,nan,nan,nan
+murr_vertical,4,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_vertical,4,vlumping_hmg,nan,nan,nan,nan,nan
+murr_vertical,8,vlumping,nan,nan,nan,nan,nan
+murr_vertical,8,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_vertical,8,vlumping_hmg,nan,nan,nan,nan,nan
+murr_seasonal,1,vlumping,nan,nan,nan,nan,nan
+murr_seasonal,1,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_seasonal,2,vlumping,nan,nan,nan,nan,nan
+murr_seasonal,2,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_seasonal,4,vlumping,nan,nan,nan,nan,nan
+murr_seasonal,4,vlumping_linesmooth,nan,nan,nan,nan,nan
+murr_seasonal,8,vlumping,nan,nan,nan,nan,nan
+murr_seasonal,8,vlumping_linesmooth,nan,nan,nan,nan,nan
