@@ -19,7 +19,8 @@ points they read, so the factory refuses instead.
 """
 
 from mpi4py import MPI
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
+from collections.abc import Callable
 from functools import cached_property
 
 from .connectors import ScalarFieldConnector
@@ -123,11 +124,9 @@ class ConnectorFactory:
             RuntimeError: If this factory already has a source.
             TypeError: If no source class was configured.
         """
-        if self._source is not None:
-            raise RuntimeError("This factory already has a source.")
         if self._source_class is None:
             raise TypeError("The source class is not configured.")
-        self._source = self._source_class(*source_args, **source_kwargs)
+        self.source = self._source_class(*source_args, **source_kwargs)
 
     @property
     def output(self):
@@ -150,11 +149,9 @@ class ConnectorFactory:
             RuntimeError: If this factory already has an indicator output.
             TypeError: If no indicator output class was configured.
         """
-        if self._output is not None:
-            raise RuntimeError("This factory already has an indicator output.")
         if self._output_class is None:
             raise TypeError("The indicator output class is not configured.")
-        self._output = self._output_class(**output_kwargs)
+        self.output = self._output_class(**output_kwargs)
 
     @property
     def geotherm_output(self):
@@ -177,11 +174,9 @@ class ConnectorFactory:
             RuntimeError: If this factory already has a geotherm output.
             TypeError: If no geotherm output class was configured.
         """
-        if self._geotherm_output is not None:
-            raise RuntimeError("This factory already has a geotherm output.")
         if self._geotherm_output_class is None:
             raise TypeError("The geotherm output class is not configured.")
-        self._geotherm_output = self._geotherm_output_class(**output_kwargs)
+        self.geotherm_output = self._geotherm_output_class(**output_kwargs)
 
     @cached_property
     def indicator(self):
