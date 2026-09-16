@@ -21,6 +21,7 @@ Three groups:
 
 import gc
 import sys
+from unittest.mock import Mock
 from pathlib import Path
 import pickle
 
@@ -36,7 +37,6 @@ from gadopt.gplates import (
     GplatesScalarFunction,
     ScalarFieldConnector,
     InterpolationConfig,
-    SphericalKNNInterpolator,
     BoundedLinearGeotherm,
     BoundedLayerIndicator,
     MeshConfig,
@@ -60,6 +60,7 @@ from gtrack.config import TracerConfig
 # Internal to the deblend rather than public API, so imported from the module
 # it lives in rather than widening gadopt.gplates.
 from gadopt.gplates.outputs import MEMBERSHIP_FLOOR
+from gadopt.gplates.interpolation import gather
 
 
 # ---------------------------------------------------------------------------
@@ -214,15 +215,12 @@ class TestGcCollectDefault:
     def test_default_is_ten_factory(self, factory_class, source_factory):
         factory = factory_class()
         factory.source = source_factory()
-        factory.create_indicator()
+        factory.create_indicator_output()
         assert factory.indicator.gc_collect_frequency == 10
 
     def _drive(self, monkeypatch, frequency, n_calls):
-        calls = {"n": 0}
-        monkeypatch.setattr(
-            "gadopt.gplates.connectors.gc.collect",
-            lambda *a, **k: calls.__setitem__("n", calls["n"] + 1),
-        )
+        mock_gc = Mock()
+        monkeypatch.setattr("gadopt.gplates.connectors.gc.collect", mock_gc)
         conn = ScalarFieldConnector(
             _DataSource(), GlobalLayerIndicator(), gc_collect_frequency=frequency
         )
@@ -231,7 +229,7 @@ class TestGcCollectDefault:
         # call is a cache miss and runs _compute (where the gc counter lives).
         for age in range(90, 90 - 10 * n_calls, -10):
             conn.get_indicator(target, conn.source.age2ndtime(float(age)))
-        return calls["n"]
+        return mock_gc.call_count
 
     @pytest.mark.parametrize(
         "frequency, n_calls, expected_collects",
@@ -600,7 +598,7 @@ class TestGeometrySharing:
         source_dict = src.prepare(50.0)
         bundle = conn._interpolator.geometry(source_dict["xyz"], target)
         prop = source_dict["thickness"]
-        gathered = SphericalKNNInterpolator.gather(bundle, prop)
+        gathered = gather(bundle, prop)
 
         idx = bundle["idx"]
         weights = bundle["weights"]
@@ -727,11 +725,10 @@ def Q(regression_mesh):
 # Regression: four factory pairings + GplatesScalarFunction wrapper
 # ---------------------------------------------------------------------------
 
-def _reduced_quantities(values, mesh):
-    """Volume and surface integrals of a scalar field on the regression mesh,
-    plus mean / std / min / max of the DoF values."""
-    f = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-    f.dat.data_with_halos[:] = values
+def _reduced_quantities(f):
+    """Volume and surface integrals of a scalar Function on the regression
+    mesh, plus mean / std / min / max of its DoF values."""
+    values = f.dat.data_ro_with_halos
     return {
         "volume": float(fd.assemble(f * fd.dx)),
         "surface": float(fd.assemble(f * fd.ds_t)),
@@ -759,9 +756,7 @@ def _evaluate_connectors_lockstep(connectors_by_name, mesh, Q, ages):
         ndtime = sample.source.age2ndtime(float(age))
         for name in connectors_by_name:
             sfs[name].update_plate_reconstruction(ndtime)
-            out[name][age] = _reduced_quantities(
-                sfs[name].dat.data_ro_with_halos.copy(), mesh
-            )
+            out[name][age] = _reduced_quantities(sfs[name])
     return out
 
 
@@ -799,8 +794,8 @@ class TestConnectorRegression:
         # from the radial grading of `regression_mesh`: with the plain
         # one-sided step, nodes have to sit inside the lithosphere for a
         # moving base depth to change the reduced integrals at all.
-        factory.create_indicator()
-        factory.create_geotherm()
+        factory.create_indicator_output()
+        factory.create_geotherm_output()
         observed = _evaluate_connectors_lockstep({
             "lith_indicator": factory.indicator,
             "lith_geotherm": factory.geotherm,
@@ -814,8 +809,8 @@ class TestConnectorRegression:
         ref = _load_reference()
         factory = PolygonConnectorFactory()
         factory.source = poly_source
-        factory.create_indicator()
-        factory.create_geotherm()
+        factory.create_indicator_output()
+        factory.create_geotherm_output()
         observed = _evaluate_connectors_lockstep({
             "polygon_indicator": factory.indicator,
             "polygon_geotherm": factory.geotherm,
@@ -885,10 +880,10 @@ class TestSharedSourceConsistency:
         # The shared source and target nodes must produce identical values.
         factory_a = LithosphereConnectorFactory()
         factory_a.source = fresh_lith_source
-        factory_a.create_indicator()
+        factory_a.create_indicator_output()
         factory_b = LithosphereConnectorFactory()
         factory_b.source = fresh_lith_source
-        factory_b.create_indicator()
+        factory_b.create_indicator_output()
         ind_a = factory_a.indicator
         ind_b = factory_b.indicator
 
@@ -914,8 +909,8 @@ class TestSharedSourceConsistency:
         # use the same source arrays. The second call must use the age cache.
         factory = LithosphereConnectorFactory()
         factory.source = fresh_lith_source
-        factory.create_indicator()
-        factory.create_geotherm()
+        factory.create_indicator_output()
+        factory.create_geotherm_output()
         ind = factory.indicator
         geo = factory.geotherm
 

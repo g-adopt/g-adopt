@@ -57,8 +57,8 @@ class ConnectorFactory:
 
     Args:
         source_class: Source class that ``create_source`` instantiates.
-        output_class: Output class that ``create_indicator`` instantiates.
-        geotherm_output_class: Output class that ``create_geotherm``
+        output_class: Output class that ``create_indicator_output`` instantiates.
+        geotherm_output_class: Output class that ``create_geotherm_output``
             instantiates.
         mesh: ``MeshConfig`` forwarded to every ``ScalarFieldConnector`` this
             factory creates.
@@ -78,7 +78,7 @@ class ConnectorFactory:
         ...     output_class=GlobalLayerIndicator,
         ... )
         >>> factory.create_source(lithosphere_cloud_source, plate_model)
-        >>> factory.create_indicator()
+        >>> factory.create_indicator_output()
         >>> indicator = factory.indicator
     """
 
@@ -139,7 +139,7 @@ class ConnectorFactory:
             raise RuntimeError("This factory already has an indicator output.")
         self._output = output
 
-    def create_indicator(self, **output_kwargs):
+    def create_indicator_output(self, **output_kwargs):
         """Create the indicator output with the configured output class.
 
         Args:
@@ -164,7 +164,7 @@ class ConnectorFactory:
             raise RuntimeError("This factory already has a geotherm output.")
         self._geotherm_output = geotherm_output
 
-    def create_geotherm(self, **output_kwargs):
+    def create_geotherm_output(self, **output_kwargs):
         """Create the geotherm output with the configured output class.
 
         Args:
@@ -288,7 +288,7 @@ class LithosphereConnectorFactory(ConnectorFactory):
         """
         super().create_source(producer, gplates_connector, comm=comm)
 
-    def create_indicator(
+    def create_indicator_output(
         self,
         base_transition_width_km: float = 10.0,
         *,
@@ -311,18 +311,18 @@ class LithosphereConnectorFactory(ConnectorFactory):
                 kilometres.
 
         Examples:
-            >>> factory.create_indicator(lateral_weight=SourceLateralWeight())
+            >>> factory.create_indicator_output(lateral_weight=SourceLateralWeight())
         """
         if lateral_weight is None:
             lateral_weight = UniformLateralWeight()
-        super().create_indicator(
+        super().create_indicator_output(
             base_transition_width_km=base_transition_width_km,
             fixed_base_depth_km=fixed_base_depth_km,
             fallback_thickness_km=fallback_thickness_km,
             lateral_weight=lateral_weight,
         )
 
-    def create_geotherm(
+    def create_geotherm_output(
         self,
         thermal_diffusivity_m2_per_s: float = 1e-6,
         fallback_thickness_km: float = 100.0,
@@ -340,7 +340,7 @@ class LithosphereConnectorFactory(ConnectorFactory):
                 millions of years.
             geotherm: Profile function. Defaults to ``ocean_erf_normalized``.
         """
-        super().create_geotherm(
+        super().create_geotherm_output(
             thermal_diffusivity_m2_per_s=thermal_diffusivity_m2_per_s,
             fallback_thickness_km=fallback_thickness_km,
             fallback_age_myr=fallback_age_myr,
@@ -396,7 +396,7 @@ class PolygonConnectorFactory(ConnectorFactory):
         """
         super().create_source(producer, gplates_connector, comm=comm)
 
-    def create_indicator(
+    def create_indicator_output(
         self,
         base_transition_width_km: float = 10.0,
         *,
@@ -411,12 +411,12 @@ class PolygonConnectorFactory(ConnectorFactory):
                 kilometres. If None, the membership-corrected thickness sets
                 each base depth.
         """
-        super().create_indicator(
+        super().create_indicator_output(
             base_transition_width_km=base_transition_width_km,
             fixed_base_depth_km=fixed_base_depth_km,
         )
 
-    def create_geotherm(
+    def create_geotherm_output(
         self,
         geotherm: Callable | None = None,
     ):
@@ -425,6 +425,6 @@ class PolygonConnectorFactory(ConnectorFactory):
         Args:
             geotherm: Profile function. Defaults to ``continental_linear``.
         """
-        super().create_geotherm(
+        super().create_geotherm_output(
             geotherm=geotherm,
         )

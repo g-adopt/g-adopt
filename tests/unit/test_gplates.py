@@ -204,14 +204,14 @@ class TestConnectorFactory:
 
     def test_constructed_output(self):
         factory = ConnectorFactory(output_class=GlobalLayerIndicator)
-        factory.create_indicator()
+        factory.create_indicator_output()
 
         assert isinstance(factory.output, GlobalLayerIndicator)
 
     def test_lithosphere_factory_forwards_lateral_weight_strategy(self):
         factory = LithosphereConnectorFactory()
         lateral_weight = SourceLateralWeight()
-        factory.create_indicator(lateral_weight=lateral_weight)
+        factory.create_indicator_output(lateral_weight=lateral_weight)
 
         assert factory.output.lateral_weight is lateral_weight
         assert factory.output.requires == frozenset(
@@ -221,13 +221,13 @@ class TestConnectorFactory:
     def test_inherited_output(self):
         factory1 = ConnectorFactory(output_class=GlobalLayerIndicator)
         factory2 = ConnectorFactory()
-        factory1.create_indicator()
+        factory1.create_indicator_output()
         factory2.output = factory1.output
         assert factory1.output is factory2.output
 
     def test_strictly_single_output(self):
         factory = ConnectorFactory(output_class=GlobalLayerIndicator)
-        factory.create_indicator()
+        factory.create_indicator_output()
         output = GlobalLayerIndicator()
         with pytest.raises(
             RuntimeError, match=r"This factory already has an indicator output\."
@@ -236,7 +236,7 @@ class TestConnectorFactory:
 
     def test_strictly_single_geotherm_output(self):
         factory = ConnectorFactory(geotherm_output_class=HalfSpaceCoolingGeotherm)
-        factory.create_geotherm()
+        factory.create_geotherm_output()
         with pytest.raises(
             RuntimeError, match=r"This factory already has a geotherm output\."
         ):
@@ -244,7 +244,7 @@ class TestConnectorFactory:
 
     def test_constructed_geotherm_output(self):
         factory = ConnectorFactory(geotherm_output_class=HalfSpaceCoolingGeotherm)
-        factory.create_geotherm(thermal_diffusivity_m2_per_s=2e-6)
+        factory.create_geotherm_output(thermal_diffusivity_m2_per_s=2e-6)
 
         assert isinstance(factory.geotherm_output, HalfSpaceCoolingGeotherm)
         assert factory.geotherm_output.thermal_diffusivity_m2_per_s == 2e-6
@@ -264,8 +264,8 @@ class TestConnectorFactory:
         age no matter which connector updates first."""
         factory = LithosphereConnectorFactory()
         factory.create_source(_FakeProducer(), _DummyGplates())
-        factory.create_indicator()
-        factory.create_geotherm()
+        factory.create_indicator_output()
+        factory.create_geotherm_output()
 
         assert factory.indicator.source is factory.geotherm.source
         assert factory.indicator is not factory.geotherm
@@ -283,8 +283,8 @@ class TestConnectorFactory:
             mesh=mesh_cfg, interpolation=interp_cfg, gc_collect_frequency=3
         )
         factory.create_source(_FakeProducer(), _DummyGplates())
-        factory.create_indicator()
-        factory.create_geotherm()
+        factory.create_indicator_output()
+        factory.create_geotherm_output()
 
         assert factory.indicator.gc_collect_frequency == 3
         assert factory.geotherm.gc_collect_frequency == 3

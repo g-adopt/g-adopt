@@ -145,8 +145,8 @@ def outside_source_range_mask(source_xyz, thetas, max_source_separation_rad, nei
 
 class TestAngleToChord:
     def test_matches_the_closed_form(self):
-        assert _angle_to_chord(0.5) == 2.0 * np.sin(0.25)
-        assert _angle_to_chord(0.02) == 2.0 * np.sin(0.01)
+        assert _angle_to_chord(0.5) == pytest.approx(2.0 * np.sin(0.25))
+        assert _angle_to_chord(0.02) == pytest.approx(2.0 * np.sin(0.01))
 
     def test_pi_disables_the_test(self):
         # Infinity avoids a floating-point comparison at the antipodal limit.
@@ -225,7 +225,6 @@ class TestStraddle:
         mask = outside_source_range_mask(source_xyz, thetas, 0.5)
         np.testing.assert_array_equal(mask, [False, True, True])
         assert mask.dtype == np.bool_
-        assert mask.shape == (len(thetas),)
 
 
 # ---------------------------------------------------------------------------

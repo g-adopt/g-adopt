@@ -28,8 +28,9 @@ from scipy.spatial import cKDTree
 
 __all__ = [
     "InterpolationConfig",
-    "SphericalKNNInterpolator"
+    "SphericalKNNInterpolator",
 ]
+
 # This angle gives the previous default unit-sphere chord width of 0.04.
 DEFAULT_GAUSSIAN_WIDTH_RAD = 2.0 * np.arcsin(0.04 / 2.0)
 
@@ -106,10 +107,6 @@ class InterpolationConfig:
                 "gaussian_width_rad must be at most pi radians, "
                 f"got {self.gaussian_width_rad}"
             )
-        # Forcing an unhashable field (a list, a numpy array) to fail.
-        # This is to avoid silent breaking of the geometry cache
-        # the first time this config is used as a key.
-        hash(self)
 
 
 def _angle_to_chord(angle: float) -> float:
@@ -137,12 +134,12 @@ def _angle_to_chord(angle: float) -> float:
 # ---------------------------------------------------------------------------
 
 class SphericalKNNInterpolator:
-    """Build interpolation geometry and apply it to source channels.
+    """Build the interpolation geometry for a source cloud.
 
     ``geometry`` does the expensive part once for a source cloud and returns a
-    dict that callers treat as read-only, because siblings share it. Each
-    call to ``gather`` reads one channel through that geometry and allocates its
-    own result.
+    dict that callers treat as read-only, because siblings share it. The
+    module-level ``gather`` function then reads one channel through that
+    geometry and allocates its own result.
 
     Args:
         config: Interpolation settings. Defaults to ``InterpolationConfig()``.
@@ -225,30 +222,30 @@ class SphericalKNNInterpolator:
             "weights": weights,
         }
 
-    @staticmethod
-    def gather(geometry: dict, prop: np.ndarray) -> np.ndarray:
-        """Gather one channel through a geometry dict.
 
-        Nothing in the geometry is modified, since several outputs hold the
-        same arrays; the only writes go to the freshly allocated result.
-        Target nodes that coincide with a source point take that point's
-        value directly, which avoids the division by a near-zero distance
-        that the inverse-distance kernel would otherwise hit.
+def gather(geometry: dict, prop: np.ndarray) -> np.ndarray:
+    """Gather one channel through a geometry dict.
 
-        Args:
-            geometry: The dict returned by ``geometry``.
-            prop: Source channel values, shape ``(n_source,)``.
+    Nothing in the geometry is modified, since several outputs hold the
+    same arrays; the only writes go to the freshly allocated result.
+    Target nodes that coincide with a source point take that point's
+    value directly, which avoids the division by a near-zero distance
+    that the inverse-distance kernel would otherwise hit.
 
-        Returns:
-            The interpolated values at the target nodes, shape
-            ``(n_target,)``.
-        """
-        idx = geometry["idx"]
-        if geometry["k1"]:
-            return prop[idx].copy()
+    Args:
+        geometry: The dict returned by ``SphericalKNNInterpolator.geometry``.
+        prop: Source channel values, shape ``(n_source,)``.
 
-        weights = geometry["weights"]
-        exact_match = geometry["exact_match"]
-        interpolated = np.sum(weights * prop[idx], axis=1)
-        interpolated[exact_match] = prop[idx[exact_match, 0]]
-        return interpolated
+    Returns:
+        The interpolated values at the target nodes, shape
+        ``(n_target,)``.
+    """
+    idx = geometry["idx"]
+    if geometry["k1"]:
+        return prop[idx].copy()
+
+    weights = geometry["weights"]
+    exact_match = geometry["exact_match"]
+    interpolated = np.sum(weights * prop[idx], axis=1)
+    interpolated[exact_match] = prop[idx[exact_match, 0]]
+    return interpolated

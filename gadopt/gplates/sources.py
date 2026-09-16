@@ -23,6 +23,7 @@ the next collective call, so failures are broadcast before they are raised.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -40,6 +41,7 @@ __all__ = [
     "PointCloudSource",
     "Source",
 ]
+
 # This alias matches the inputs that ``gtrack.PointCloud.from_data`` accepts.
 CloudDataType = (
     PointCloud | tuple[npt.ArrayLike, npt.ArrayLike] | str | Path | int | float
@@ -143,7 +145,9 @@ class Source(ABC):
             self._interp_geometry_cache.clear()
         return sources
 
-    def get_or_build_geometry(self, key, build_fn):
+    def get_or_build_geometry(
+        self, key: tuple, build_fn: Callable[[], dict]
+    ) -> dict:
         """Return the rank-local interpolation geometry for one key.
 
         Consumers sharing this source at the same age reuse a single

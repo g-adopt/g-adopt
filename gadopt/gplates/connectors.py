@@ -26,7 +26,7 @@ import numpy as np
 from mpi4py import MPI
 
 from ..utility import log, DEBUG
-from .interpolation import InterpolationConfig, SphericalKNNInterpolator
+from .interpolation import InterpolationConfig, SphericalKNNInterpolator, gather
 from .outputs import MeshConfig, OutputStrategy
 from .sources import Source
 
@@ -159,6 +159,21 @@ class ScalarFieldConnector:
 
     # Cache
     def _check_cache(self, age: float, target_coords: np.ndarray) -> bool:
+        """Return True when the cached result can stand in for this request.
+
+        A hit needs three things:
+            1 - a previous result exists.
+            2 - its age is within ``delta_t`` of the requested age,
+            3 - the target coordinates are the same array object as before.
+        A new array means a new mesh.
+
+        Args:
+            age: Requested reconstruction age, in millions of years.
+            target_coords: Target coordinates, shape ``(n_target, 3)``.
+
+        Returns:
+            True if the cached result is reused, False on a miss.
+        """
         if self.reconstruction_age is None:
             return False
         if abs(age - self.reconstruction_age) >= self.delta_t:
@@ -177,6 +192,16 @@ class ScalarFieldConnector:
     def _update_cache(
         self, age: float, target_coords: np.ndarray, result: np.ndarray
     ) -> None:
+        """Store a freshly computed result as the cache entry.
+
+        The coordinates are held through a weak reference so that the cache
+        does not keep a "released mesh" alive.
+
+        Args:
+            age: Reconstruction age the result was computed for.
+            target_coords: Target coordinates the result was computed on.
+            result: The scalar field, one value per target node.
+        """
         self.reconstruction_age = age
         self._cached_result = result
         self._cached_coords_ref = weakref.ref(target_coords)
@@ -205,7 +230,7 @@ class ScalarFieldConnector:
 
         channel_keys = sorted(self.output.requires)
         interpolated = {
-            k: SphericalKNNInterpolator.gather(geometry, sources_dict[k])
+            k: gather(geometry, sources_dict[k])
             for k in channel_keys
         }
         return self.output.compute(

@@ -156,8 +156,8 @@ def main():
     # Age sensitivity comes from REGRESSION_LAYER_HEIGHTS, not from an
     # lateral-weight term: the graded mesh puts nodes inside the lithosphere so a
     # moving base depth actually moves the reduced integrals.
-    lith_factory.create_indicator()
-    lith_factory.create_geotherm()
+    lith_factory.create_indicator_output()
+    lith_factory.create_geotherm_output()
     lith_result = walk_connectors({
         "lith_indicator": lith_factory.indicator,
         "lith_geotherm": lith_factory.geotherm,
@@ -181,8 +181,8 @@ def main():
     poly_src = PointCloudSource(poly_producer, plate_model)
     poly_factory = PolygonConnectorFactory()
     poly_factory.source = poly_src
-    poly_factory.create_indicator()
-    poly_factory.create_geotherm()
+    poly_factory.create_indicator_output()
+    poly_factory.create_geotherm_output()
     poly_result = walk_connectors({
         "polygon_indicator": poly_factory.indicator,
         "polygon_geotherm": poly_factory.geotherm,

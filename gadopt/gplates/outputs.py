@@ -26,6 +26,7 @@ from typing import Protocol
 from collections.abc import Callable
 
 import numpy as np
+import numpy.typing as npt
 from scipy.special import erf
 
 __all__ = [
@@ -51,6 +52,8 @@ __all__ = [
     "ocean_erf_normalized",
     "radial_quintic_step",
 ]
+
+
 # Mesh geometry
 @dataclass(frozen=True)
 class MeshConfig:
@@ -82,7 +85,12 @@ class MeshConfig:
 
 
 # Geotherm functions (used by HalfSpaceCoolingGeotherm / LinearGeotherm)
-def ocean_erf_normalized(depth_m, z_lab_m, age_myr, thermal_diffusivity_m2_per_s):
+def ocean_erf_normalized(
+    depth_m: npt.ArrayLike,
+    z_lab_m: npt.ArrayLike,
+    age_myr: npt.ArrayLike,
+    thermal_diffusivity_m2_per_s: float,
+) -> np.ndarray:
     """Return a normalised half-space cooling geotherm.
 
     The profile is ``erf(z / a) / erf(z_lab / a)`` with the cooling length
@@ -125,7 +133,7 @@ def ocean_erf_normalized(depth_m, z_lab_m, age_myr, thermal_diffusivity_m2_per_s
     return np.clip(result, 0.0, 1.0)
 
 
-def continental_linear(depth_m, z_lab_m):
+def continental_linear(depth_m: npt.ArrayLike, z_lab_m: npt.ArrayLike) -> np.ndarray:
     """Return the normalised linear profile ``z / z_lab``.
 
     This is the continental counterpart to ``ocean_erf_normalized``: a plate
@@ -149,7 +157,9 @@ def continental_linear(depth_m, z_lab_m):
 
 
 # Shared radial primitive (used by every indicator output)
-def radial_quintic_step(r_target, base_r, width_nondim):
+def radial_quintic_step(
+    r_target: npt.ArrayLike, base_r: npt.ArrayLike, width_nondim: float
+) -> np.ndarray:
     """Return a one-sided quintic radial transition.
 
     The result is one at or above ``base_r``, zero at or below
@@ -250,7 +260,9 @@ class LateralWeight(Protocol):
         ...
 
 
-def _clip_membership(interpolated, outside_source_range):
+def _clip_membership(
+    interpolated: dict[str, np.ndarray], outside_source_range: np.ndarray
+) -> np.ndarray:
     """Clip the membership channel and zero it outside the source range.
 
     A node with no source point in range cannot be shown to belong to the
@@ -290,7 +302,9 @@ class RadialQuinticTransition:
             )
         self.base_transition_width_km = base_transition_width_km
 
-    def step(self, r_target, base_r, mesh):
+    def step(
+        self, r_target: np.ndarray, base_r: np.ndarray | float, mesh: MeshConfig
+    ) -> np.ndarray:
         return radial_quintic_step(
             r_target, base_r, self.base_transition_width_km / mesh.depth_scale
         )
@@ -318,7 +332,12 @@ class FixedBaseDepth:
             )
         self.fixed_base_depth_km = fixed_base_depth_km
 
-    def base_r(self, interpolated, outside_source_range, mesh):
+    def base_r(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray | float:
         return mesh.r_outer - self.fixed_base_depth_km / mesh.depth_scale
 
 
@@ -344,7 +363,12 @@ class InterpolatedBaseDepth:
             )
         self.fallback_thickness_km = fallback_thickness_km
 
-    def base_r(self, interpolated, outside_source_range, mesh):
+    def base_r(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray | float:
         thickness_km = interpolated["thickness"].copy()
         thickness_km[outside_source_range] = self.fallback_thickness_km
         return mesh.r_outer - thickness_km / mesh.depth_scale
@@ -364,7 +388,12 @@ class MembershipCorrectedBaseDepth:
 
     requires = frozenset({"masked_thickness", "membership"})
 
-    def base_r(self, interpolated, outside_source_range, mesh):
+    def base_r(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray | float:
         membership = _clip_membership(interpolated, outside_source_range)
         covered = membership > MEMBERSHIP_FLOOR
         thickness_km = np.where(
@@ -386,7 +415,11 @@ class UniformLateralWeight:
 
     requires = frozenset()
 
-    def weight(self, interpolated, outside_source_range):
+    def weight(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+    ) -> np.ndarray | float:
         return 1.0
 
 
@@ -399,7 +432,11 @@ class MembershipLateralWeight:
 
     requires = frozenset({"membership"})
 
-    def weight(self, interpolated, outside_source_range):
+    def weight(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+    ) -> np.ndarray | float:
         return _clip_membership(interpolated, outside_source_range)
 
 
@@ -416,10 +453,14 @@ class MappedMembershipWeight:
 
     requires = frozenset({"membership"})
 
-    def __init__(self, mapping):
+    def __init__(self, mapping: Callable[[np.ndarray], npt.ArrayLike]):
         self.mapping = mapping
 
-    def weight(self, interpolated, outside_source_range):
+    def weight(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+    ) -> np.ndarray | float:
         m = _clip_membership(interpolated, outside_source_range)
         return np.clip(self.mapping(m), 0.0, 1.0)
 
@@ -435,7 +476,11 @@ class SourceLateralWeight:
 
     requires = frozenset({"lateral_weight"})
 
-    def weight(self, interpolated, outside_source_range):
+    def weight(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+    ) -> np.ndarray | float:
         lateral_weight = interpolated["lateral_weight"].copy()
         lateral_weight[outside_source_range] = 1.0
         return np.clip(lateral_weight, 0.0, 1.0)
@@ -461,8 +506,8 @@ class LayerIndicator(OutputStrategy):
 
     def __init__(
         self,
-        radial_transition,
-        base_depth,
+        radial_transition: RadialQuinticTransition,
+        base_depth: FixedBaseDepth | InterpolatedBaseDepth | MembershipCorrectedBaseDepth,
         lateral_weight: LateralWeight,
     ):
         self.radial_transition = radial_transition
@@ -474,7 +519,13 @@ class LayerIndicator(OutputStrategy):
             | lateral_weight.requires
         )
 
-    def compute(self, interpolated, r_target, outside_source_range, mesh):
+    def compute(
+        self,
+        interpolated: dict[str, np.ndarray],
+        r_target: np.ndarray,
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray:
         base_r = self.base_depth.base_r(
             interpolated, outside_source_range, mesh
         )
@@ -649,7 +700,13 @@ class HalfSpaceCoolingGeotherm(OutputStrategy):
         self.fallback_age_myr = fallback_age_myr
         self._geotherm = geotherm or ocean_erf_normalized
 
-    def compute(self, interpolated, r_target, outside_source_range, mesh):
+    def compute(
+        self,
+        interpolated: dict[str, np.ndarray],
+        r_target: np.ndarray,
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray:
         thickness_km = interpolated["thickness"].copy()
         age_myr = interpolated["age"].copy()
         thickness_km[outside_source_range] = self.fallback_thickness_km
@@ -685,7 +742,13 @@ class LinearGeotherm(OutputStrategy):
     ):
         self._geotherm = geotherm or continental_linear
 
-    def compute(self, interpolated, r_target, outside_source_range, mesh):
+    def compute(
+        self,
+        interpolated: dict[str, np.ndarray],
+        r_target: np.ndarray,
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray:
         thickness_km = interpolated["thickness"]
         depth_m = (mesh.r_outer - r_target) * mesh.depth_scale * 1e3
         z_lab_m = thickness_km * 1e3
@@ -714,7 +777,13 @@ class BoundedLinearGeotherm(OutputStrategy):
     ):
         self._geotherm = geotherm or continental_linear
 
-    def compute(self, interpolated, r_target, outside_source_range, mesh):
+    def compute(
+        self,
+        interpolated: dict[str, np.ndarray],
+        r_target: np.ndarray,
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray:
         membership = np.clip(interpolated["membership"], 0.0, 1.0)
         # A node outside the source range cannot belong to the bounded region.
         membership = np.where(outside_source_range, 0.0, membership)
@@ -749,7 +818,13 @@ class MembershipField(OutputStrategy):
 
     requires = frozenset({"membership"})
 
-    def compute(self, interpolated, r_target, outside_source_range, mesh):
+    def compute(
+        self,
+        interpolated: dict[str, np.ndarray],
+        r_target: np.ndarray,
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray:
         frac = np.clip(interpolated["membership"].copy(), 0.0, 1.0)
         frac[outside_source_range] = 0.0
         return frac
