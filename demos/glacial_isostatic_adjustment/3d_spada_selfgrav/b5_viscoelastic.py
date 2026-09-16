@@ -214,6 +214,13 @@ def main():
     p.add_argument("--block0-rtol", type=float, default=1e-2,
                    help="block-0 tolerance. 1e-4 when using the dense block-1 PC.")
     p.add_argument("--snes-type", default="ksponly", choices=["ksponly", "newtonls"])
+    p.add_argument("--dtn-representation", choices=["multiplier", "lowrank"],
+                   default="multiplier",
+                   help="how the exterior DtN condition enters the coupled "
+                        "system. This driver runs the condensed layout, which "
+                        "the low-rank representation refuses; the flag is here "
+                        "so that the refusal is the library's message and not "
+                        "a missing option.")
     p.add_argument("--nproj", type=int, default=None)
     p.add_argument("--label", default="b5")
     p.add_argument("--output", default=None, help="directory for h5/pvd")
@@ -311,6 +318,7 @@ def main():
                 bulk_shear_ratio=args.bulk_shear_ratio,
                 u_pc=args.u_pc, snes_type=args.snes_type,
                 block0_rtol=args.block0_rtol, multiplier_pc=args.multiplier_pc,
+                dtn_representation=args.dtn_representation,
                 dt=b1.DT_ELASTIC)
             tic = time.time()
             solver.solve()
@@ -338,6 +346,7 @@ def main():
                 bulk_shear_ratio=args.bulk_shear_ratio,
                 u_pc=args.u_pc, snes_type=args.snes_type,
                 block0_rtol=args.block0_rtol, multiplier_pc=args.multiplier_pc,
+                dtn_representation=args.dtn_representation,
                 dt=dt)
 
         previous_dt_yr = None

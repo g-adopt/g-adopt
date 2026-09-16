@@ -490,7 +490,8 @@ def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
                                 block0_max_it=200,
                                 u_pc=DEFAULT_DISPLACEMENT_PC,
                                 snes_type="ksponly",
-                                multiplier_pc="none"):
+                                multiplier_pc="none",
+                                dtn_representation="multiplier"):
     """`gadopt.selfgrav_dtn_iterative_solver_parameters`, condensed.
 
     **This used to be a hand-copy of that dictionary and the comment above the
@@ -541,7 +542,7 @@ def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
     return selfgrav_dtn_iterative_solver_parameters(
         condensed=True, outer_rtol=outer_rtol, block0_rtol=block0_rtol,
         block0_max_it=block0_max_it, u_pc=u_pc, snes_type=snes_type,
-        multiplier_pc=multiplier_pc)
+        multiplier_pc=multiplier_pc, dtn_representation=dtn_representation)
 
 
 BLOCK0 = {
@@ -572,7 +573,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  bulk_shear_ratio=BULK_SHEAR_RATIO,
                  u_pc=DEFAULT_DISPLACEMENT_PC, snes_type="ksponly",
                  dt=None, block0_rtol=1e-2, multiplier_pc="none",
-                 solver_kwargs_extra=None):
+                 solver_kwargs_extra=None, dtn_representation="multiplier"):
     """Build the Spada self-gravity solver of B1 and B5.
 
     `solver_kwargs_extra` is merged into the keywords handed to
@@ -580,6 +581,14 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
     builder does not know (for example `condensed_near_nullspace`, which
     only acts when `near_nullspace=False` here, because a declared outer
     near-nullspace wins over it).
+
+    `dtn_representation` selects how the exterior DtN condition enters the
+    coupled system: `"multiplier"` carries one `Real` unknown per spherical
+    harmonic mode, `"lowrank"` applies the condition as a rank-k update on the
+    potential rows with no multiplier unknowns. It is threaded into the space,
+    the solver and the preset, which must agree: the solver refuses a
+    mismatch. The low-rank representation needs the full layout
+    (`condense=False`).
     """
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
@@ -598,7 +607,8 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
         fluid_core=not rigid_core,
         self_gravity_number=LAMBDA, displacement_degree=udeg,
         internal_variable_degree=ivdeg,
-        condense_internal_variables=condense)
+        condense_internal_variables=condense,
+        dtn_representation=dtn_representation)
     z = Function(Z)
     z.subfunctions[layout.displacement].rename("displacement")
     z.subfunctions[layout.potential].rename("potential")
@@ -695,6 +705,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
         # cannot drift. `--block0` still selects one of the two local
         # single-block fallbacks, both of which failed in 3-D and are kept only
         # so that failure stays reproducible.
+        dtn_representation=dtn_representation,
         solver_parameters=(solver_parameters
                            or (None if block0 else
                                condensed_solver_parameters(
@@ -702,7 +713,8 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                                    block0_rtol=block0_rtol,
                                    block0_max_it=block0_max_it,
                                    u_pc=u_pc, snes_type=snes_type,
-                                   multiplier_pc=multiplier_pc)
+                                   multiplier_pc=multiplier_pc,
+                                   dtn_representation=dtn_representation)
                                if condense else b2_solver_parameters(
                                outer_rtol=outer_rtol,
                                # `jacobi` on the Real block raises

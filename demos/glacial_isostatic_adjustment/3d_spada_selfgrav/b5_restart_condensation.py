@@ -294,6 +294,13 @@ def main():
                         default="none")
     parser.add_argument("--load-only", action="store_true")
     parser.add_argument(
+        "--dtn-representation", choices=("multiplier", "lowrank"),
+        default="multiplier",
+        help="how the exterior DtN condition enters the coupled system: one "
+             "Real unknown per harmonic mode (multiplier) or a rank-k update "
+             "on the potential rows (lowrank). lowrank needs "
+             "--arm uncondensed and --block0 condensed.")
+    parser.add_argument(
         "--block0", choices=("condensed", "condensed-pair", "sweep"),
         default="condensed",
         help="Uncondensed arm only. 'condensed' (default) is "
@@ -309,6 +316,16 @@ def main():
     args = parser.parse_args()
 
     condense = args.arm == "condensed"
+    if args.dtn_representation == "lowrank" and (
+            condense or args.block0 != "condensed"):
+        # The library refuses both combinations as well, with messages that
+        # name the fix; refusing here saves the mesh read and the checkpoint
+        # load before the same message.
+        raise SystemExit(
+            "--dtn-representation lowrank needs --arm uncondensed and "
+            "--block0 condensed: the low-rank update lives on the potential "
+            "rows of the full layout and is preconditioned on the potential "
+            "split of gadopt.CondensedBlockPC.")
     tag = (args.arm if args.ablation == "none"
            else f"{args.arm}+{args.ablation}")
     dt = Constant(args.dt_yr / T_BAR_YR)
@@ -325,7 +342,8 @@ def main():
         f"nmax={args.nmax} dtn_degree={args.dtn_degree}")
     say(f"displacement_degree={args.displacement_degree} "
         f"internal_variable_degree={args.internal_variable_degree} "
-        f"block0={args.block0 if not condense else 'condensed-layout'}")
+        f"block0={args.block0 if not condense else 'condensed-layout'} "
+        f"dtn_representation={args.dtn_representation}")
     say(f"ablation={args.ablation}")
     say(f"outer_rtol={args.outer_rtol:g} "
         f"block0_rtol={args.block0_rtol:g} block0_max_it={args.block0_max_it}")
@@ -399,7 +417,8 @@ def main():
             outer_rtol=args.outer_rtol,
             block0_max_it=args.block0_max_it,
             snes_type="ksponly",
-            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
+            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+            dtn_representation=args.dtn_representation)
         displacement_prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
 
     # The displacement preconditioner, on whichever split carries it. For
@@ -443,7 +462,8 @@ def main():
         block0_rtol=args.block0_rtol, block0_max_it=args.block0_max_it,
         multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
         solver_parameters=solver_parameters, dt=dt,
-        solver_kwargs_extra=solver_kwargs_extra, **near_nullspace_kw)
+        solver_kwargs_extra=solver_kwargs_extra,
+        dtn_representation=args.dtn_representation, **near_nullspace_kw)
     b1.SelfGravitatingGIASolver = original_solver_class
     assign_restart(solver, z, layout, displacement, potential, history)
 

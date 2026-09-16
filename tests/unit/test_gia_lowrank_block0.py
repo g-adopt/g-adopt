@@ -345,6 +345,34 @@ def test_the_columns_survive_newton_on_a_power_law(meshes):
     assert potential_pc(condensed).column_builds == 1
 
 
+@pytest.mark.parallel(nprocs=2)
+def test_two_ranks_match_the_multiplier_path(meshes):
+    """Item 6 of the stage-1 test list: the `Allreduce` paths of the new PC.
+
+    The boundary dofs are partitioned and the modes are global, so every
+    application of `LowRankPotentialPC` reduces a `k`-vector across ranks,
+    and the column build reduces `U^T Z`. A rank with no boundary dofs must
+    contribute a zero and not skip the reduction. Run on two ranks, the
+    low-rank arm must reproduce the multiplier arm's state to the outer
+    tolerance and its outer count within one, as the serial tests assert.
+    """
+    comm = fd.COMM_WORLD
+    assert comm.size == 2, "this test must run on exactly two ranks"
+    reference, z_ref, layout = build(meshes, "multiplier")
+    reference.solve()
+    solver, z, _ = build(meshes, "lowrank")
+    solver.solve()
+    assert solver.solver.snes.ksp.getConvergedReason() > 0
+    assert outer_iterations(solver) <= outer_iterations(reference) + 1
+    condensed = block0_context(solver)
+    assert isinstance(potential_pc(condensed), LowRankPotentialPC)
+    assert potential_pc(condensed).column_builds == 1
+    for field in (layout.displacement, layout.potential):
+        reference_norm = fd.norm(z_ref.subfunctions[field])
+        assert abs(fd.norm(z.subfunctions[field]) - reference_norm) < (
+            1e-8 * reference_norm)
+
+
 # ---------------------------------------------------------------------------
 # 4. What the configuration refuses
 # ---------------------------------------------------------------------------
