@@ -20,14 +20,16 @@ queried neighbors that fell inside that range, which fades smoothly to zero
 across the edge of a source cloud.
 """
 
-from __future__ import annotations
 
 from dataclasses import dataclass
 
 import numpy as np
 from scipy.spatial import cKDTree
 
-
+__all__ = [
+    "InterpolationConfig",
+    "SphericalKNNInterpolator"
+]
 # This angle gives the previous default unit-sphere chord width of 0.04.
 DEFAULT_GAUSSIAN_WIDTH_RAD = 2.0 * np.arcsin(0.04 / 2.0)
 

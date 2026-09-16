@@ -20,7 +20,6 @@ same reason: a rank-zero exception on its own leaves the other ranks blocked in
 the next collective call, so failures are broadcast before they are raised.
 """
 
-from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -36,7 +35,11 @@ from gtrack.age_sources import AgeCloudSource
 if TYPE_CHECKING:
     from .gplates import pyGplatesConnector
 
-
+__all__ = [
+    "CloudDataType",
+    "PointCloudSource",
+    "Source",
+]
 # This alias matches the inputs that ``gtrack.PointCloud.from_data`` accepts.
 CloudDataType = (
     PointCloud | tuple[npt.ArrayLike, npt.ArrayLike] | str | Path | int | float

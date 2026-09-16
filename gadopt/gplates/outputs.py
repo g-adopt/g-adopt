@@ -19,16 +19,38 @@ together. That turns a mismatched pairing into an error at construction time
 rather than a ``KeyError`` deep inside ``compute`` on the first timestep.
 """
 
-from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Protocol
+from collections.abc import Callable
 
 import numpy as np
 from scipy.special import erf
 
-
+__all__ = [
+    "InterpolatedBaseDepth",
+    "MembershipCorrectedBaseDepth",
+    "FixedBaseDepth",
+    "HalfSpaceCoolingGeotherm",
+    "LinearGeotherm",
+    "LayerIndicator",
+    "LateralWeight",
+    "MembershipField",
+    "BoundedLinearGeotherm",
+    "MembershipLateralWeight",
+    "MeshConfig",
+    "UniformLateralWeight",
+    "OutputStrategy",
+    "BoundedLayerIndicator",
+    "GlobalLayerIndicator",
+    "RadialQuinticTransition",
+    "SourceLateralWeight",
+    "MappedMembershipWeight",
+    "continental_linear",
+    "ocean_erf_normalized",
+    "radial_quintic_step",
+]
 # Mesh geometry
 @dataclass(frozen=True)
 class MeshConfig:
