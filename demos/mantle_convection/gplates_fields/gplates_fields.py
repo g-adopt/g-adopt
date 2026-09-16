@@ -484,7 +484,7 @@ crust_factory.create_source(crust_producer, plate_model, comm=mesh.comm)
 # extent from the membership channel whether the depth is constant or
 # not.  A constant-thickness region is not a special case here, it is
 # just a varying-thickness one whose variation happens to be zero.
-crust_factory.create_indicator(base_transition_width_km=10.0)
+crust_factory.create_indicator_output(base_transition_width_km=10.0)
 
 I_crust = GplatesScalarFunction(
     Q, indicator_connector=crust_factory.indicator, name="I_crust"
@@ -527,7 +527,7 @@ craton_factory.create_source(craton_producer, plate_model, comm=mesh.comm)
 # from any edge.  Reading extent and depth from separate channels
 # needs no such compromise, and the craton outlines stop depending on
 # how deep the keels happen to be.
-craton_factory.create_indicator(base_transition_width_km=10.0)
+craton_factory.create_indicator_output(base_transition_width_km=10.0)
 
 I_craton = GplatesScalarFunction(
     Q, indicator_connector=craton_factory.indicator, name="I_craton"
