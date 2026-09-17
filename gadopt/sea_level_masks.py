@@ -27,13 +27,17 @@ grid-frequency artefact below the 1.7e-7 resolution of the measure and allows
 `0.7 q / p = 3.15`. The default is `k = alpha p / h` with `alpha = 1` (no
 slope). With a frozen slope `Function`, `k = alpha p / (h max(s, grad_floor))`
 and the transition has a fixed width in arc length; see `mask_steepness`.
+`surface_slope` builds that frozen field from the initial sea level, on the
+annulus and on the sphere alike.
 
 `h` is `FacetArea ** (1 / (dim - 1))`: the facet length in 2-D and the facet
 side in 3-D. `CellDiameter` is not used because TSFC does not compile it on a
 P2-curved mesh ("Cannot handle geometric quantity type").
 """
 
-from firedrake import FacetArea, Function, max_value, min_value, sqrt, tanh
+from firedrake import (FacetArea, Function, FunctionSpace, SpatialCoordinate,
+                       dot, grad, max_value, min_value, sqrt, tanh)
+from pyadjoint.tape import stop_annotating
 
 #: Clamp of the tanh argument. Two bounds fix it.
 #:
@@ -173,6 +177,101 @@ def mask_steepness(mesh, degree, alpha=DEFAULT_ALPHA_MASK, slope=None, *,
             "derivative of 1/|grad SL| on the tape, which is not physics. "
             "Interpolate the slope into a Function first.")
     return k / max_value(slope, grad_floor)
+
+
+def surface_slope(SL_init, degree=None):
+    """The frozen surface slope `|grad_t SL_init|` of an initial sea level.
+
+    `mask_steepness` needs this field to set the mask width in arc length
+    instead of in sea level. Without it the transition of the mask is a fixed
+    width in `SL`, so on a gentle continental shelf the transition spreads over
+    many facets, and on a steep one it collapses inside a single facet. The
+    measured shelf slopes of the Martinec et al. (2018) basins are 2.51e-4
+    (B1) and 1.26e-3 (B2), which is a factor of five between two coastlines of
+    the same benchmark.
+
+    The slope is the *tangential* part of `grad SL_init`, because only the
+    change of the sea level along the surface converts a width in sea level
+    into a width in arc length. The tangential part is taken against the radial
+    direction `rhat = X / |X|` and not against `FacetNormal`, for two reasons.
+    An interpolation into a cell-wise space has no facet, so `FacetNormal` does
+    not compile there. And on the annulus and on the sphere the outer surface
+    is a level set of the radius, so the radial direction is the surface normal
+    up to the geometry error of the P2-curved mesh. That error is O(h^2) in the
+    direction and not O(h^3): a P2 facet places the surface to O(h^3), and the
+    normal is a derivative of the position, which loses one power of `h`.
+
+    The result is a `Function`, and it is built inside `stop_annotating()`. The
+    slope must not reach the tape: `mask_steepness` divides by it, so a live
+    slope would add a `1 / |grad SL|^2` term to the adjoint that is not
+    physics. `NOTES/DESIGN-SEA-LEVEL.md` section 6 records this: the gradient
+    of a sea-level run ignores how the mask steepness depends on the initial
+    topography. `mask_steepness` refuses anything that is not a `Function`, and
+    this helper is how a caller produces one.
+
+    The target space is discontinuous, because `grad SL_init` is already
+    discontinuous between cells and a continuous space would average the two
+    sides. A discontinuous field is two-valued on a facet. That is harmless
+    here: the mechanics mesh lies on one side of the surface Re only, so the
+    sea-level measure always reads the mantle-side value.
+
+    Only `grad`, `dot` and the coordinates appear, so the same code runs on the
+    2-D annulus and on the 3-D sphere.
+
+    Args:
+      SL_init: the initial sea level as a `Function` on the mechanics mesh, in
+        the length unit of the model. Its own mesh and degree set the defaults
+        below. The default degree needs a single number from
+        `ufl_element().degree()`, which a Lagrange element gives and a
+        tensor-product element does not; a caller on an extruded mesh must pass
+        `degree` instead.
+      degree: the polynomial degree of the discontinuous space that holds the
+        result. The default is one less than the degree of `SL_init`. On a
+        straight-sided cell that is exactly the degree of `grad SL_init`. The
+        meshes of this solver are P2-curved, where the inverse Jacobian makes
+        the gradient rational, and the magnitude and the projection are not
+        polynomial in any case. The space therefore adds an interpolation
+        error, of the same order as the error that the gradient already has.
+
+    Returns:
+      A `Function` on the mesh of `SL_init`, in the discontinuous space of that
+      degree: `DG` on a simplex and `DQ` on a quadrilateral or a hexahedron. It
+      holds the surface slope, which is dimensionless: a length per unit
+      length.
+    """
+    space = SL_init.function_space()
+    mesh = space.mesh()
+    if degree is None:
+        # On a straight-sided cell `grad` of a degree-p field is a
+        # degree-(p - 1) field, so this is the smallest space that carries the
+        # gradient. `max` keeps a degree-0 input (a piecewise-constant
+        # topography, whose gradient is zero) from asking for a space of
+        # degree -1.
+        degree = max(space.ufl_element().degree() - 1, 0)
+
+    # The discontinuous family of the cell. Firedrake converts "DG" into "DQ"
+    # on a quadrilateral or a hexahedron by itself, but it writes a UserWarning
+    # every time it does, and the 2-D annulus of this solver is a quadrilateral
+    # mesh. Naming the family removes that noise and changes no result.
+    # `cellname` is a property of `ufl.Cell` in this UFL, not a method.
+    cell = mesh.ufl_cell().cellname
+    family = "DQ" if cell in ("quadrilateral", "hexahedron") else "DG"
+
+    X = SpatialCoordinate(mesh)
+    # The radial direction. No origin guard is needed: every mesh of this
+    # solver is a shell or an annulus whose inner radius is far from zero.
+    rhat = X / sqrt(dot(X, X))
+    gradient = grad(SL_init)
+    # Remove the radial part, so that only the change along the surface is
+    # left. On a radial surface this is the surface gradient.
+    tangential = gradient - dot(gradient, rhat) * rhat
+
+    slope = Function(FunctionSpace(mesh, family, degree), name="surface_slope")
+    # Off the tape: see the docstring. `stop_annotating` also covers the case
+    # where a driver builds the slope inside an annotated block.
+    with stop_annotating():
+        slope.interpolate(sqrt(dot(tangential, tangential)))
+    return slope
 
 
 def ocean_function(SL, k):
