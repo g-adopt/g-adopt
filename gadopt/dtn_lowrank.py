@@ -255,7 +255,6 @@ def build_boundary_mode_rows(
     # DtN term is the Robin shift itself and there is nothing to eliminate. The
     # empty case has to be shaped correctly rather than collapsing to a
     # 1-D array, or every later index is wrong.
-    n_dofs = solution_space.dof_dset.size
     if not modes:
         return BoundaryModeRows(
             [], np.zeros((0, 0)), np.zeros(0, dtype=np.int64), np.zeros(0),
