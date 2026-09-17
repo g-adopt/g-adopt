@@ -123,7 +123,8 @@ def main():
         args.dr, args.nazim,
         path=os.path.join(HERE, f"v1_{args.dr}_{args.nazim}.msh"))
     solver, z, layout, bcs, C = demo.build_solver(
-        parent, sub, dt=args.dt, truncation=args.truncation, rotation=True)
+        parent, sub, dt=args.dt, truncation=args.truncation, rotation=True,
+        dtn_representation="multiplier")
 
     PETSc.Sys.Print(
         f"V1 - per-block Jacobian symmetry, rotation ON, M = {args.truncation}")

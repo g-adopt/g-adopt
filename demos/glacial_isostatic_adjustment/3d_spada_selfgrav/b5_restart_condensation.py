@@ -21,7 +21,8 @@ import numpy as np  # noqa: E402
 from firedrake import (CheckpointFile, COMM_WORLD, Constant, FacetNormal,  # noqa: E402
                        Function, SpatialCoordinate, TensorFunctionSpace,
                        assemble, avg, dot, ds, dx, grad, norm, sqrt)
-from gadopt.gia_gravity import selfgrav_dtn_iterative_solver_parameters  # noqa: E402
+from gadopt.gia_gravity import (  # noqa: E402
+    resolve_dtn_representation, selfgrav_dtn_iterative_solver_parameters)
 from gadopt.internal_variable_equation import (  # noqa: E402
     assign_history_slices, history_slices)
 from mpi4py import MPI  # noqa: E402
@@ -295,11 +296,13 @@ def main():
     parser.add_argument("--load-only", action="store_true")
     parser.add_argument(
         "--dtn-representation", choices=("multiplier", "lowrank"),
-        default="multiplier",
+        default=None,
         help="how the exterior DtN condition enters the coupled system: one "
              "Real unknown per harmonic mode (multiplier) or a rank-k update "
-             "on the potential rows (lowrank). lowrank needs "
-             "--arm uncondensed and --block0 condensed.")
+             "on the potential rows (lowrank). Unset follows the library: "
+             "lowrank on --arm uncondensed, multiplier on --arm condensed. "
+             "lowrank needs --arm uncondensed and --block0 condensed; the "
+             "condensed-pair and sweep arms need multiplier, named.")
     parser.add_argument(
         "--block0", choices=("condensed", "condensed-pair", "sweep"),
         default="condensed",
@@ -316,16 +319,27 @@ def main():
     args = parser.parse_args()
 
     condense = args.arm == "condensed"
+    named = args.dtn_representation is not None
+    # The library's rule, not a copy of it: unset resolves to low-rank on the
+    # full layout and multiplier on the condensed one. The nested and sweep
+    # block-0 routes exist on the multiplier representation alone and are
+    # not part of that rule, so an unset flag on those arms is refused below
+    # with the flag to pass.
+    args.dtn_representation = resolve_dtn_representation(
+        args.dtn_representation, condensed=condense)
     if args.dtn_representation == "lowrank" and (
             condense or args.block0 != "condensed"):
         # The library refuses both combinations as well, with messages that
         # name the fix; refusing here saves the mesh read and the checkpoint
         # load before the same message.
         raise SystemExit(
-            "--dtn-representation lowrank needs --arm uncondensed and "
-            "--block0 condensed: the low-rank update lives on the potential "
-            "rows of the full layout and is preconditioned on the potential "
-            "split of gadopt.CondensedBlockPC.")
+            ("--dtn-representation lowrank" if named else
+             "the default representation on --arm uncondensed is lowrank, which")
+            + " needs --arm uncondensed and --block0 condensed: the low-rank "
+            "update lives on the potential rows of the full layout and is "
+            "preconditioned on the potential split of gadopt.CondensedBlockPC. "
+            "The condensed-pair and sweep arms run on the multiplier "
+            "representation: pass --dtn-representation multiplier.")
     tag = (args.arm if args.ablation == "none"
            else f"{args.arm}+{args.ablation}")
     dt = Constant(args.dt_yr / T_BAR_YR)
@@ -399,7 +413,8 @@ def main():
             outer_rtol=args.outer_rtol,
             block0_max_it=args.block0_max_it,
             snes_type="ksponly",
-            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
+            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+            dtn_representation=args.dtn_representation)
         displacement_prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
     else:
         # `gadopt.CondensedBlockPC` on block 0: the internal-variable field is

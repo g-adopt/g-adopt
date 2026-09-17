@@ -107,8 +107,15 @@ def condensed_preset(**kwargs):
     Returns:
       The solver-parameter dictionary.
     """
+    # This file is the multiplier representation's reference for the class
+    # (the direct route it compares against is the two-block Schur preset on
+    # multiplier rows), and the library default on the full layout is
+    # low-rank, so the representation is named here and on every space
+    # this file builds. The low-rank arm of the same class has its own file,
+    # `tests/unit/test_gia_lowrank_block0.py`.
     settings = dict(condensed=False, snes_type="ksponly",
-                    outer_rtol=1e-10, block0_rtol=1e-4, block0_max_it=200)
+                    outer_rtol=1e-10, block0_rtol=1e-4, block0_max_it=200,
+                    dtn_representation="multiplier")
     settings.update(kwargs)
     return selfgrav_dtn_iterative_solver_parameters(**settings)
 
@@ -298,7 +305,7 @@ class TestThePresetSelectsTheRoute:
         Gadi job that compares the two arms selects it by this flag alone.
         """
         p = selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, block0="pair")
+            condensed=False, block0="pair", dtn_representation="multiplier")
         assert p[BLOCK0 + "pc_fieldsplit_0_fields"] == "0,1"
         assert p[BLOCK0 + "pc_fieldsplit_1_fields"] == "2"
         assert p[BLOCK0 + "fieldsplit_0_pc_python_type"] \
@@ -313,7 +320,7 @@ class TestThePresetSelectsTheRoute:
         """
         with pytest.raises(ValueError, match="block0"):
             selfgrav_dtn_iterative_solver_parameters(
-                condensed=True, block0="pair")
+                condensed=True, block0="pair", dtn_representation="multiplier")
 
     def test_the_inner_krylov_solve_carries_the_block_zero_tolerances(self):
         """`block0_rtol` and `block0_max_it` are the `(u, psi)` solve's now.
@@ -361,7 +368,7 @@ class TestThePresetSelectsTheRoute:
         for parameters in (
             selfgrav_dtn_iterative_solver_parameters(condensed=True),
             selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, block0="pair"),
+                condensed=False, block0="pair", dtn_representation="multiplier"),
         ):
             assert BLOCK0 + "ksp_converged_reason" in parameters
 
@@ -396,10 +403,20 @@ class TestThePresetSelectsTheRoute:
         assert U_SPLIT + "ksp_converged_reason" in p
 
     def test_the_potential_split_is_one_gamg_v_cycle(self):
-        """The potential block is a Laplacian; GAMG handles it in one sweep."""
-        p = selfgrav_dtn_iterative_solver_parameters(condensed=False)
+        """The potential block is a Laplacian; GAMG handles it in one sweep.
+
+        On the multiplier representation, named here because the library's
+        default on the full layout is low-rank, where the same split carries
+        `gadopt.LowRankPotentialPC` (GAMG plus the Woodbury correction); the
+        second half of the test pins that the default does select it.
+        """
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, dtn_representation="multiplier")
         assert p[PSI_SPLIT + "ksp_type"] == "preonly"
         assert p[PSI_SPLIT + "pc_type"] == "gamg"
+        default = selfgrav_dtn_iterative_solver_parameters(condensed=False)
+        assert default[PSI_SPLIT + "pc_type"] == "python"
+        assert default[PSI_SPLIT + "pc_python_type"] == "gadopt.LowRankPotentialPC"
         # Same reason as on the displacement split above: the sweep counter in
         # the 3-D drivers has nothing to count unless this split prints a
         # converged-reason line per application, and the plan's option table
@@ -473,7 +490,8 @@ def build_condensed_layout_solver(meshes, solver_parameters):
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
         n_internal_variables=1, condense_internal_variables=True,
-        self_gravity_number=LAMBDA)
+        self_gravity_number=LAMBDA,
+        dtn_representation="multiplier")
     z = fd.Function(Z)
     Xm = fd.SpatialCoordinate(sub)
     dx_m = fd.Measure("dx", domain=sub,
@@ -508,7 +526,8 @@ def build_with_nullspaces(meshes, solver_parameters):
     parent, sub = meshes
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-        n_internal_variables=1, self_gravity_number=LAMBDA)
+        n_internal_variables=1, self_gravity_number=LAMBDA,
+        dtn_representation="multiplier")
     z = fd.Function(Z)
     Xm = fd.SpatialCoordinate(sub)
     dx_m = fd.Measure("dx", domain=sub,
@@ -1107,7 +1126,8 @@ class TestOtherConfigurations:
             Z, layout = self_gravitating_gia_space(
                 sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
                 fluid_core=True, n_internal_variables=1,
-                condense_internal_variables=False, self_gravity_number=LAMBDA)
+                condense_internal_variables=False, self_gravity_number=LAMBDA,
+                dtn_representation="multiplier")
             z = fd.Function(Z)
             solver = SelfGravitatingGIASolver(
                 z, approximation(**_PowerLawSettings.POWER_LAW), layout=layout,
@@ -1206,7 +1226,8 @@ class TestOtherConfigurations:
             Z, layout = self_gravitating_gia_space(
                 sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
                 n_internal_variables=1, condense_internal_variables=False,
-                self_gravity_number=LAMBDA)
+                self_gravity_number=LAMBDA,
+                dtn_representation="multiplier")
             z = fd.Function(Z)
             C = fd.assemble(fd.dot(Xm, Xm) * dx_m)
             solver = SelfGravitatingGIASolver(

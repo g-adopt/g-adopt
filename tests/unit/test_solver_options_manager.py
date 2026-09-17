@@ -73,14 +73,22 @@ SWEEP_ROUTES = {
         dict(condensed=True),
         ("dtn_fieldsplit_0_fieldsplit_0_assembled_",
          "dtn_fieldsplit_0_fieldsplit_1_assembled_")),
+    # The two uncondensed multiplier routes are named as such: the library
+    # default on the full layout is the low-rank representation, whose
+    # potential split is `gadopt.LowRankPotentialPC` with GAMG one level
+    # down (the fourth route).
     "uncondensed-condensed-block0": (
-        dict(condensed=False),
+        dict(condensed=False, dtn_representation="multiplier"),
         ("dtn_fieldsplit_0_condensed_fieldsplit_0_",
          "dtn_fieldsplit_0_condensed_fieldsplit_1_")),
     "uncondensed-pair-block0": (
-        dict(condensed=False, block0="pair"),
+        dict(condensed=False, block0="pair", dtn_representation="multiplier"),
         ("dtn_fieldsplit_0_fieldsplit_0_condensed_field_",
          "dtn_fieldsplit_0_fieldsplit_1_assembled_")),
+    "uncondensed-default-lowrank": (
+        dict(condensed=False),
+        ("dtn_fieldsplit_0_condensed_fieldsplit_0_",
+         "dtn_fieldsplit_0_condensed_fieldsplit_1_lowrank_")),
 }
 
 

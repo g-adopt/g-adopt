@@ -814,7 +814,11 @@ def main():
                     help="print the Real block's TRUE residual, not just its "
                          "iteration count: it runs at pc_type none, and a "
                          "block that stops on iteration count rather than "
-                         "tolerance leaves the DtN constraint unsatisfied")
+                         "tolerance leaves the DtN constraint unsatisfied. On "
+                         "the library's default (low-rank) representation the "
+                         "Real block holds the core pressure and the rotation "
+                         "scalars only; the DtN multipliers exist on "
+                         "dtn_representation='multiplier'.")
     args = ap.parse_args()
 
     provenance(os.path.basename(__file__))

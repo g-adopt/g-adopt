@@ -19,9 +19,17 @@ by recursion. A parallel scaling study is in `tests/parallel_scaling_gravity/`.
 
 **The self-gravitating GIA solver.** `gadopt/gia_gravity.py` provides
 `SelfGravitatingGIASolver`. It solves displacement, the internal variable, the
-potential, the multipliers, the fluid-core pressure, and the rotation scalars
-in one mixed space.
-`DtNTwoBlockSchurPC` preconditions that system. The 3-D Spada benchmark is in
+potential, the fluid-core pressure, and the rotation scalars in one mixed
+space. The exterior condition enters in one of two representations,
+`dtn_representation="multiplier"` (one `Real` unknown for each spherical
+harmonic mode) or `"lowrank"` (a rank-k update on the potential rows, no
+multiplier unknowns). The default is low-rank on the full layout and
+multiplier on the condensed layout (`resolve_dtn_representation`); on the
+3-D Spada benchmark the low-rank arm gives the same state as the multiplier
+arm at every truncation, at 0.69 of the warm step, with a setup that does
+not grow with the truncation. `DtNTwoBlockSchurPC` preconditions the system,
+with `CondensedBlockPC` on block 0 and, on the low-rank representation,
+`LowRankPotentialPC` on its potential split. The 3-D Spada benchmark is in
 `demos/glacial_isostatic_adjustment/3d_spada_selfgrav/`.
 
 **The fluid-core volume constraint.** One uniform pressure multiplier enforces

@@ -70,7 +70,10 @@ def build(dr, nazim, truncation, m_mode, g0, rotation=True):
     }
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-        self_gravity_number=LAMBDA)
+        self_gravity_number=LAMBDA,
+        # The spike measured the multiplier route; keep it on that route
+        # whatever the library default is.
+        dtn_representation="multiplier")
     z = Function(Z)
 
     approx = CompressibleInternalVariableApproximation(

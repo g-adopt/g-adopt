@@ -128,13 +128,16 @@ def relative_difference(a, b):
 
 def build(meshes, *, rotation=True, n_internal_variables=1, truncation=3,
           condensed=False, approximation_kwargs=None, declare_nullspace=False,
-          **kwargs):
+          dtn_representation=None, **kwargs):
+    """The annulus solver. `dtn_representation=None` is the library default
+    (low-rank on the full layout, multiplier on the condensed one); a test
+    about one representation names it."""
     parent, sub = meshes
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs(parent, truncation=truncation),
         rotation=rotation, n_internal_variables=n_internal_variables,
         condense_internal_variables=condensed,
-        self_gravity_number=LAMBDA)
+        self_gravity_number=LAMBDA, dtn_representation=dtn_representation)
     z = fd.Function(Z)
     Xm = fd.SpatialCoordinate(sub)
     dx_m = fd.Measure("dx", domain=sub,
@@ -258,7 +261,7 @@ class TestSpaceLayout:
         for M in (3, 5):
             _, layout = self_gravitating_gia_space(
                 sub, parent, gravity_bcs=gravity_bcs(parent, truncation=M),
-                self_gravity_number=LAMBDA)
+                self_gravity_number=LAMBDA, dtn_representation="multiplier")
             assert len(layout.multipliers) == (2 * M) + (2 * M + 1)
 
     def test_rotation_is_named_m3_in_2d(self, meshes):
@@ -1450,8 +1453,13 @@ class TestBlockOneIsTheDiagonalItClaims:
         in this class over both settings would double the cost to re-measure a
         constant.
         """
-        condensed = real_block(*build(meshes, rotation=True, condensed=True))
-        uncondensed = real_block(*build(meshes, rotation=True, condensed=False))
+        # Both layouts on the multiplier representation: the block under
+        # test is the multiplier block, and the full layout would otherwise
+        # take the library's low-rank default and have no such block.
+        condensed = real_block(*build(meshes, rotation=True, condensed=True,
+                                      dtn_representation="multiplier"))
+        uncondensed = real_block(*build(meshes, rotation=True, condensed=False,
+                                        dtn_representation="multiplier"))
         assert np.abs(condensed - uncondensed).max() <= 1e-14 * np.abs(
             condensed).max()
 
@@ -1515,7 +1523,8 @@ class TestBlockOneIsTheDiagonalItClaims:
         `sin` within an order, orders ascending, then the interior boundary with
         its `mean` mode leading.
         """
-        solver, _, layout = build(meshes, rotation=True)
+        solver, _, layout = build(meshes, rotation=True,
+                                  dtn_representation="multiplier")
         assert solver.form.multiplier_keys == [
             (CURVE_OUTER, "cos1"), (CURVE_OUTER, "sin1"),
             (CURVE_OUTER, "cos2"), (CURVE_OUTER, "sin2"),
@@ -1853,8 +1862,10 @@ class TestPresetWiring:
         """
         solver, _, layout = build(
             meshes,
+            dtn_representation="multiplier",
             solver_parameters=selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, block0="pair"))
+                condensed=False, block0="pair",
+                dtn_representation="multiplier"))
         # A split may name a comma-separated pair (the condensed `(u, M)`
         # split), so count the fields named, not the splits.
         n_fields = sum(
@@ -1921,8 +1932,10 @@ class TestPresetWiring:
         """
         solver, _, _ = build(
             meshes,
+            dtn_representation="multiplier",
             solver_parameters=selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, block0="pair"))
+                condensed=False, block0="pair",
+                dtn_representation="multiplier"))
         p = solver.solver_parameters
         prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
         assert p["dtn_fieldsplit_0_pc_fieldsplit_0_fields"] == "0,1"
@@ -2111,7 +2124,8 @@ class TestNullCoupling:
         which builds a global dense block and is the reason every per-block
         measurement in this project is a serial one.
         """
-        solver, z, layout = build(meshes, approximation_kwargs={"B_mu": 0.0})
+        solver, z, layout = build(meshes, approximation_kwargs={"B_mu": 0.0},
+                                  dtn_representation="multiplier")
         A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
 
         def amax(i, j):
@@ -2381,6 +2395,7 @@ class TestFluidCore:
         surface_bcs = {CURVE_RE: {"normal_stress": load}}
         solver, z, layout = self.build_fluid(
             meshes, approximation_kwargs={"B_mu": 0.0},
+            dtn_representation="multiplier",
             extra_bcs=surface_bcs)
         solver.solve()
 

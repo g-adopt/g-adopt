@@ -215,12 +215,11 @@ def main():
                    help="block-0 tolerance. 1e-4 when using the dense block-1 PC.")
     p.add_argument("--snes-type", default="ksponly", choices=["ksponly", "newtonls"])
     p.add_argument("--dtn-representation", choices=["multiplier", "lowrank"],
-                   default="multiplier",
+                   default=None,
                    help="how the exterior DtN condition enters the coupled "
-                        "system. This driver runs the condensed layout, which "
-                        "the low-rank representation refuses; the flag is here "
-                        "so that the refusal is the library's message and not "
-                        "a missing option.")
+                        "system. Unset follows the library, which is "
+                        "multiplier on the condensed layout this driver runs; "
+                        "lowrank is refused there with the library's message.")
     p.add_argument("--nproj", type=int, default=None)
     p.add_argument("--label", default="b5")
     p.add_argument("--output", default=None, help="directory for h5/pvd")

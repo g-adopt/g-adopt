@@ -177,7 +177,10 @@ def build_solver(parent, sub, *, rho_core, dt=1.0, truncation=3,
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
         fluid_core=True,
-        self_gravity_number=LAMBDA)
+        self_gravity_number=LAMBDA,
+        # The spike measured the multiplier route; keep it on that route
+        # whatever the library default is.
+        dtn_representation="multiplier")
     z = Function(Z)
 
     approx = approximation()

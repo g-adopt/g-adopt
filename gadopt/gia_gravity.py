@@ -191,6 +191,7 @@ __all__ = [
     "SelfGravitatingGIASolver",
     "rigid_rotation_nullspace",
     "self_gravitating_gia_space",
+    "resolve_dtn_representation",
     "selfgrav_dtn_iterative_solver_parameters",
     "selfgrav_dtn_lowrank_direct_solver_parameters",
     "selfgrav_dtn_schur_solver_parameters",
@@ -430,6 +431,37 @@ def _displacement_krylov(max_it: int, rtol: float) -> dict:
     }
 
 
+def resolve_dtn_representation(dtn_representation, *, condensed: bool) -> str:
+    """The representation a caller left unset, decided by the layout.
+
+    The default is `"lowrank"` on the full layout and `"multiplier"` on the
+    condensed layout, because the low-rank update lives on the potential rows
+    of a block-0 operator that only the full layout assembles. Decided on the
+    3-D scan of 2026-09-17 (`NOTES/HANDOVER-2026-09-17.md` section 3.4): the
+    low-rank arm reproduces the multiplier arm's state at every truncation,
+    its warm step is 0.69 of the multiplier's at truncation 5 and does not
+    change with the truncation, and the multiplier arm's setup grows as the
+    square of the truncation and does not fit one node at truncation 20.
+
+    Args:
+      dtn_representation: `"multiplier"`, `"lowrank"` or `None`.
+      condensed: whether the internal variables are eliminated pointwise.
+
+    Returns:
+      `"multiplier"` or `"lowrank"`.
+
+    Raises:
+      ValueError: an explicit value that is neither name.
+    """
+    if dtn_representation is None:
+        return "multiplier" if condensed else "lowrank"
+    if dtn_representation not in ("multiplier", "lowrank"):
+        raise ValueError(
+            "dtn_representation must be 'multiplier' or 'lowrank' (or None "
+            f"for the layout's default), got {dtn_representation!r}.")
+    return dtn_representation
+
+
 def _potential_split(dtn_representation: str) -> dict:
     """Options for the potential split of `gadopt.CondensedBlockPC`'s nest.
 
@@ -473,7 +505,7 @@ def selfgrav_dtn_iterative_solver_parameters(
     u_ksp_max_it: int = 4,
     u_ksp_rtol: float = 1e-2,
     block0: str = "condensed",
-    dtn_representation: str = "multiplier",
+    dtn_representation: str | None = None,
 ) -> dict:
     r"""The 3-D configuration that works, and the one the measurements select.
 
@@ -559,6 +591,11 @@ def selfgrav_dtn_iterative_solver_parameters(
       block0: which block-0 route the uncondensed layout takes. It has no
         meaning on the condensed layout, where there is no `M` to eliminate,
         and a non-default value there raises rather than being ignored.
+      dtn_representation: `"multiplier"`, `"lowrank"` or `None`. `None` is
+        the default and resolves through `resolve_dtn_representation`:
+        low-rank on the full layout, multiplier on the condensed one. The
+        value must agree with the space and the solver; the solver refuses a
+        mismatch.
 
         `"condensed"`, the default, puts `gadopt.CondensedBlockPC` on block 0
         behind a `preonly` KSP. That class eliminates `M` **once** per block-0
@@ -684,10 +721,8 @@ def selfgrav_dtn_iterative_solver_parameters(
     if block0 not in ("condensed", "pair"):
         raise ValueError(
             f"block0 must be 'condensed' or 'pair', got {block0!r}.")
-    if dtn_representation not in ("multiplier", "lowrank"):
-        raise ValueError(
-            "dtn_representation must be 'multiplier' or 'lowrank', got "
-            f"{dtn_representation!r}.")
+    dtn_representation = resolve_dtn_representation(
+        dtn_representation, condensed=condensed)
     if dtn_representation == "lowrank" and block0 == "pair":
         raise ValueError(
             "block0='pair' has no low-rank route. The nested block-0 sweep "
@@ -696,7 +731,8 @@ def selfgrav_dtn_iterative_solver_parameters(
             "never assembles, so there is nowhere to put it and the outer "
             "FGMRES would pay for its absence. Use the default "
             "block0='condensed', whose potential split is a matrix this "
-            "update can be added to.")
+            "update can be added to, or name dtn_representation='multiplier' "
+            "here and on the space and the solver to run the nested route.")
     if dtn_representation == "lowrank" and condensed:
         raise ValueError(
             "dtn_representation='lowrank' needs the full layout: the "
@@ -1039,6 +1075,8 @@ class GIASpaceLayout:
     #: for the constraint rows to be written into, and the reverse leaves
     #: `n_multipliers` unknowns in the space with nothing constraining them.
     #: `SelfGravitatingGIASolver` refuses the mismatch rather than running it.
+    #: Always set by `self_gravitating_gia_space`; the field default is never
+    #: what a built layout carries.
     dtn_representation: str = "multiplier"
 
     @property
@@ -1127,7 +1165,7 @@ def self_gravitating_gia_space(
     quad_degree: int | None = None,
     alpha: Number | Constant | None = None,
     condense_internal_variables: bool = False,
-    dtn_representation: str = "multiplier",
+    dtn_representation: str | None = None,
 ) -> tuple[MixedFunctionSpace, GIASpaceLayout]:
     r"""Builds the coupled mixed space and the layout that describes it.
 
@@ -1180,6 +1218,10 @@ def self_gravitating_gia_space(
       quad_degree: boundary quadrature degree for the DtN treatment; `None`
         takes `DtNGravityForm`'s mesh-aware calibrated default.
       alpha: the Robin shift, `None` for the form's default of 1.
+      dtn_representation: `"multiplier"`, `"lowrank"` or `None`. `None` is
+        the default: low-rank on the full layout, multiplier when
+        `condense_internal_variables` is set (`resolve_dtn_representation`).
+        The layout records the value for the solver to follow.
 
     Returns:
       `(Z, layout)`.
@@ -1241,10 +1283,8 @@ def self_gravitating_gia_space(
     # The core-pressure and rotation scalars are unaffected and stay. The
     # low-rank path therefore still has a `Real` block when either feature is
     # active. With neither feature there is no `Real` block.
-    if dtn_representation not in ("multiplier", "lowrank"):
-        raise ValueError(
-            f"dtn_representation must be 'multiplier' or 'lowrank', got "
-            f"{dtn_representation!r}.")
+    dtn_representation = resolve_dtn_representation(
+        dtn_representation, condensed=condense_internal_variables)
     n_mult = 0 if dtn_representation == "lowrank" else form.n_multipliers
     n_core = int(fluid_core)
     spaces.extend([R] * (n_mult + n_core + n_rot))
@@ -1499,6 +1539,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
       Any remaining keyword goes to `CoupledInternalVariableSolver`, notably
       `bcs`, `scaling_factor`, `quad_degree`, `solver_parameters` and
       `solver_parameters_extra`.
+      dtn_representation: `"multiplier"`, `"lowrank"` or `None`. `None`
+        follows the layout, which is the library default (low-rank on the
+        full layout, multiplier on the condensed one). An explicit value
+        that disagrees with the layout is refused.
 
     A note on `sigma_load`, because it appears in three places - as
     `normal_stress` in the mechanics boundary conditions, as the sheet in the
@@ -1526,15 +1570,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         fluid_core: "FluidCore | Mapping | None" = None,
         internal_variables: "Function | list | None" = None,
         condensed_near_nullspace: str = "incompressible",
-        dtn_representation: str = "multiplier",
+        dtn_representation: str | None = None,
         **kwargs,
     ) -> None:
-        if dtn_representation not in ("multiplier", "lowrank"):
-            raise ValueError(
-                f"dtn_representation must be 'multiplier' or 'lowrank', got "
-                f"{dtn_representation!r}. The default is 'multiplier', which "
-                "is the shipped path; 'lowrank' is opt-in and under "
-                "construction.")
+        # `None` follows the space: the layout records what it was built for,
+        # and a solver that names nothing cannot disagree with it. An explicit
+        # value is checked against the layout below, as before.
+        if dtn_representation is None:
+            dtn_representation = layout.dtn_representation
+        dtn_representation = resolve_dtn_representation(
+            dtn_representation, condensed=layout.condensed)
         self.dtn_representation = dtn_representation
         # The space and the solver take the representation as INDEPENDENT
         # arguments, exactly as `condense_internal_variables` and the preset's

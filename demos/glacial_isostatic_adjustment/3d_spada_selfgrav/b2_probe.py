@@ -414,6 +414,9 @@ def main():
     solver, z, layout, *_ = b1.build_solver(
         parent, sub, nmax, dtn_degree=args.dtn_degree, ivdeg=args.ivdeg,
         block0=(None if args.config == "preset" else "lu"),
+        # The block-1 multiplier-preconditioner campaign: the rows it
+        # preconditions exist on the multiplier representation alone.
+        dtn_representation="multiplier",
         declare_nullspace=args.nullspace, condense=args.condense,
         solver_parameters_extra=extra)
     t_build = time.perf_counter() - t0

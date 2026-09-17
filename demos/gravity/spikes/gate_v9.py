@@ -209,6 +209,7 @@ def build(*, dr, nazim, truncation, dt, lam, sigma_hat, bulk_modulus,
 
     solver, z, layout, bcs, C = demo.build_solver(
         parent, sub, dt=dt, truncation=truncation, rotation=rotation,
+        dtn_representation="multiplier",
         fluid_limit=fluid_limit, lam_factor=lam)
     if seed_m1:
         # DEAD END, kept so the finding is not lost: seeding the *displacement*

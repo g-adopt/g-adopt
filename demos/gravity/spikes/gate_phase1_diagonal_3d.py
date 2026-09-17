@@ -664,7 +664,10 @@ def selfcheck():
         gravity_bcs={"top": {"dtn": SphericalDtN(1)},
                      "bottom": {"dtn": SphericalDtN(1)}},
         rotation=True, condense_internal_variables=True,
-        self_gravity_number=lam)
+        self_gravity_number=lam,
+        # The spike measured the multiplier route; keep it on that route
+        # whatever the library default is.
+        dtn_representation="multiplier")
     z = fd.Function(Z)
     X = fd.SpatialCoordinate(mesh)
     C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))

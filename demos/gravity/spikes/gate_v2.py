@@ -153,7 +153,8 @@ def run(parent, sub, B_mu, dt, truncation, rotation=True, nominal=None):
         demo.SelfGravitatingGIASolver = cls
     try:
         solver, z, layout, bcs, C = demo.build_solver(
-            parent, sub, dt=dt, truncation=truncation, rotation=rotation)
+            parent, sub, dt=dt, truncation=truncation, rotation=rotation,
+            dtn_representation="multiplier")
         # V2 is written for the rigid core and only for it. `reference` builds
         # a plain `CoupledInternalVariableSolver` from these same `bcs`, so
         # with a `FluidCore` configured the coupled side would carry a CMB
@@ -187,7 +188,8 @@ def show_degenerate(parent, sub, dt, truncation):
     saved, demo.approximation = demo.approximation, make
     try:
         solver, z, layout, _, _ = demo.build_solver(
-            parent, sub, dt=dt, truncation=truncation, rotation=True)
+            parent, sub, dt=dt, truncation=truncation, rotation=True,
+            dtn_representation="multiplier")
     finally:
         demo.approximation = saved
     A = assemble(derivative(solver.F, z), mat_type="nest").petscmat

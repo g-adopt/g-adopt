@@ -270,6 +270,9 @@ def build_annulus(args):
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=args.rotation,
         self_gravity_number=Lambda,
+        # This harness measures the multiplier baseline and labels every
+        # record so; name it, because the library default is low-rank.
+        dtn_representation="multiplier",
         condense_internal_variables=args.condense)
     z = Function(Z)
 
@@ -292,6 +295,7 @@ def build_annulus(args):
     params = selfgrav_dtn_iterative_solver_parameters(
         condensed=args.condense, block0_rtol=args.block0_rtol,
         outer_rtol=args.outer_rtol, block0_max_it=args.block0_max_it,
+        dtn_representation="multiplier",
         snes_type=args.snes_type,
         **({"u_pc": args.u_pc} if args.condense else {}))
     solver = SelfGravitatingGIASolver(

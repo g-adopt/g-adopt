@@ -62,7 +62,8 @@ def build(meshes, *, condensed=False, n_internal_variables=1,
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
         n_internal_variables=n_internal_variables,
-        condense_internal_variables=condensed, self_gravity_number=LAMBDA)
+        condense_internal_variables=condensed, self_gravity_number=LAMBDA,
+        dtn_representation="multiplier")
     z = fd.Function(Z)
     Xm = fd.SpatialCoordinate(sub)
     dx_m = fd.Measure("dx", domain=sub,
@@ -86,8 +87,12 @@ def nested_preset(**kwargs):
     `tests/unit/test_gia_condensed_block0.py` is its file. Keeping this arm
     exercised is also what keeps the T2 Gadi measurements reproducible.
     """
+    # The nested route exists on the multiplier representation alone, and
+    # the library default on the full layout is low-rank, so the
+    # representation is named here and on every space in this file.
     settings = dict(condensed=False, block0="pair", snes_type="ksponly",
-                    outer_rtol=1e-10, block0_rtol=1e-4, block0_max_it=200)
+                    outer_rtol=1e-10, block0_rtol=1e-4, block0_max_it=200,
+                    dtn_representation="multiplier")
     settings.update(kwargs)
     return selfgrav_dtn_iterative_solver_parameters(**settings)
 
@@ -593,7 +598,8 @@ class TestPowerLaw:
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
             fluid_core=True, n_internal_variables=1,
-            condense_internal_variables=False, self_gravity_number=LAMBDA)
+            condense_internal_variables=False, self_gravity_number=LAMBDA,
+            dtn_representation="multiplier")
         z = fd.Function(Z)
         Xm = fd.SpatialCoordinate(sub)
         solver = SelfGravitatingGIASolver(
@@ -676,7 +682,8 @@ class TestThreeDimensions:
                          "bottom": {"dtn": SphericalDtN(L)}},
             rotation=True, condense_internal_variables=False,
             n_internal_variables=n_internal_variables,
-            self_gravity_number=LAMBDA)
+            self_gravity_number=LAMBDA,
+            dtn_representation="multiplier")
         z = fd.Function(Z)
         X = fd.SpatialCoordinate(mesh)
         C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
@@ -735,7 +742,8 @@ class TestThreeDimensions:
             gravity_bcs={"top": {"dtn": SphericalDtN(1)},
                          "bottom": {"dtn": SphericalDtN(1)}},
             rotation=True, fluid_core=True, condense_internal_variables=False,
-            n_internal_variables=1, self_gravity_number=LAMBDA)
+            n_internal_variables=1, self_gravity_number=LAMBDA,
+            dtn_representation="multiplier")
         X = fd.SpatialCoordinate(mesh)
         C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
         return Z, layout, mesh, C

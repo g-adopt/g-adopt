@@ -134,7 +134,10 @@ def build_monolith(parent, sub, *, lam, fluid, dt=1.0, truncation=3,
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=False,
         fluid_core=fluid,
-        self_gravity_number=lam)
+        self_gravity_number=lam,
+        # The spike measured the multiplier route; keep it on that route
+        # whatever the library default is.
+        dtn_representation="multiplier")
     z = Function(Z)
     solver = SelfGravitatingGIASolver(
         z, approximation(lam), layout=layout, dt=dt,

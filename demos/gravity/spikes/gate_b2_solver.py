@@ -320,7 +320,10 @@ def build(mesh_path, phases, *, nu=0.49, truncation=5, dt=1.0, rotation=True,
         }
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-            self_gravity_number=LAMBDA)
+            self_gravity_number=LAMBDA,
+            # The spike measured the multiplier route; keep it on that route
+            # whatever the library default is.
+            dtn_representation="multiplier")
         z = Function(Z)
         z.subfunctions[layout.displacement].rename("displacement")
         z.subfunctions[layout.potential].rename("potential")

@@ -151,7 +151,7 @@ def approximation(density=1.0, g=1.0, self_gravity_number=None):
 def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
                  solver_parameters=None, solver_parameters_extra=None,
                  declare_nullspace=True, fluid_limit=False, lam_factor=1.0,
-                 fluid_core=None, **solver_kwargs):
+                 fluid_core=None, dtn_representation=None, **solver_kwargs):
     """The coupled solver, its mixed function, and the pieces a gate needs.
 
     `declare_nullspace` is on by default and is defect D-2's fix. With free slip
@@ -219,10 +219,13 @@ def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
         gen.CURVE_INNER: {"dtn": CylindricalDtN(truncation)},
         gen.CURVE_RE: {"interior_sigma": sigma},
     }
+    # `dtn_representation=None` is the library default (low-rank on this,
+    # the full, layout); the spikes that read multiplier rows name
+    # "multiplier" here.
     Z, layout = self_gravitating_gia_space(
         sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
         fluid_core=fluid_core is not None,
-        self_gravity_number=lam)
+        self_gravity_number=lam, dtn_representation=dtn_representation)
 
     z = Function(Z)
     z.subfunctions[layout.displacement].rename("displacement")

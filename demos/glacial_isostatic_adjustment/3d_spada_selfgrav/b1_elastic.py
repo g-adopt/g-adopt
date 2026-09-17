@@ -491,7 +491,7 @@ def condensed_solver_parameters(outer_rtol=1e-8, block0_rtol=1e-2,
                                 u_pc=DEFAULT_DISPLACEMENT_PC,
                                 snes_type="ksponly",
                                 multiplier_pc="none",
-                                dtn_representation="multiplier"):
+                                dtn_representation=None):
     """`gadopt.selfgrav_dtn_iterative_solver_parameters`, condensed.
 
     **This used to be a hand-copy of that dictionary and the comment above the
@@ -573,7 +573,7 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  bulk_shear_ratio=BULK_SHEAR_RATIO,
                  u_pc=DEFAULT_DISPLACEMENT_PC, snes_type="ksponly",
                  dt=None, block0_rtol=1e-2, multiplier_pc="none",
-                 solver_kwargs_extra=None, dtn_representation="multiplier"):
+                 solver_kwargs_extra=None, dtn_representation=None):
     """Build the Spada self-gravity solver of B1 and B5.
 
     `solver_kwargs_extra` is merged into the keywords handed to
@@ -585,10 +585,10 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
     `dtn_representation` selects how the exterior DtN condition enters the
     coupled system: `"multiplier"` carries one `Real` unknown per spherical
     harmonic mode, `"lowrank"` applies the condition as a rank-k update on the
-    potential rows with no multiplier unknowns. It is threaded into the space,
-    the solver and the preset, which must agree: the solver refuses a
-    mismatch. The low-rank representation needs the full layout
-    (`condense=False`).
+    potential rows with no multiplier unknowns. `None` is the library default,
+    low-rank on the full layout and multiplier on the condensed one
+    (`gadopt.resolve_dtn_representation`). It is threaded into the space, the
+    solver and the preset, which must agree: the solver refuses a mismatch.
     """
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
