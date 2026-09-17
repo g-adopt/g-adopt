@@ -134,6 +134,21 @@ RUN
         python3 spada_benchmark.py --case cap --displacement-degree 2 \
             --internal-variable-degree 1 --epochs 0 1
 
+THE CENTRE-OF-MASS FRAME (--centre-of-mass)
+    By default the degree-1 translation of the body is left to the solver:
+    the load has no degree-1 content, so nothing drives it. With
+    `--centre-of-mass` the space gets one `Real` Lagrange multiplier per
+    Cartesian direction that holds the first mass moment D of mantle, core
+    and load at zero (`SelfGravitatingGIASolver.centre_of_mass_energy`). That
+    is the frame of the sea-level benchmarks. For this load the continuous
+    multipliers are zero, so the run must reproduce the default run, and the
+    multipliers measure the discretisation error of the frame rows. The flag
+    names the low-rank DtN representation explicitly, because
+    `centre_of_mass=True` with no named representation resolves to the
+    multiplier path. After every solve the driver prints one `FRAME` line
+    with the multipliers, D and D divided by the load moment scale (see
+    `load_moment_scale`).
+
 OUTPUT
     <output>/spada-<label>.h5   A Firedrake `CheckpointFile` with both meshes
                                 and, at each epoch in order, the displacement,
@@ -193,7 +208,7 @@ import numpy as np  # noqa: E402
 from firedrake import (COMM_WORLD, CheckpointFile, Constant,  # noqa: E402
                        Function, FunctionSpace, Mesh, SpatialCoordinate,
                        Submesh, VTKFile, as_vector, assemble, avg,
-                       conditional, dot, ds, sqrt)
+                       conditional, dS, dot, ds, sqrt)
 from gadopt import (CompressibleInternalVariableApproximation,  # noqa: E402
                     SphericalDtN)
 from gadopt.gia_gravity import (FluidCore, SelfGravitatingGIASolver,  # noqa: E402
@@ -548,11 +563,24 @@ def build_solver(parent, mantle, args, dt):
 
     # The library defaults: internal variables in the mixed space, and the
     # DtN representation that the library chooses for that layout.
+    #
+    # With `--centre-of-mass` the space gets the three frame multipliers, and
+    # both the space and the solver name the low-rank representation. The
+    # name is required: `centre_of_mass=True` with no named representation
+    # resolves to the multiplier path (72 `Real` rows at L 5), which is not
+    # the path the default run takes and not the path the sea-level runs
+    # use. Without the flag no keyword is added, so the space and the solver
+    # are the library defaults.
+    space_kwargs, frame_kwargs = {}, {}
+    if args.centre_of_mass:
+        frame_kwargs = {"dtn_representation": "lowrank"}
+        space_kwargs = {"centre_of_mass": True, **frame_kwargs}
     Z, layout = self_gravitating_gia_space(
         mantle, parent, gravity_bcs=gravity_bcs, rotation=rotation,
         fluid_core=True, self_gravity_number=LAMBDA,
         displacement_degree=args.displacement_degree,
-        internal_variable_degree=args.internal_variable_degree)
+        internal_variable_degree=args.internal_variable_degree,
+        **space_kwargs)
     z = Function(Z)
     z.subfunctions[layout.displacement].rename("displacement")
     z.subfunctions[layout.potential].rename("potential")
@@ -583,12 +611,62 @@ def build_solver(parent, mantle, args, dt):
 
     solver = SelfGravitatingGIASolver(
         z, approximation, layout=layout, dt=dt, bcs=bcs, fluid_core=core,
+        **frame_kwargs,
         rotation_moments={"C": refstate.C_NONDIM,
                           "C_minus_A": refstate.C_MINUS_A_PRIMARY},
         Omega_sq=refstate.OMEGA_SQ,
         nullspace=nullspace, transpose_nullspace=nullspace,
         solver_parameters=solver_parameters)
     return solver, z, layout, sigma_parent
+
+
+def load_moment_scale(sigma_parent):
+    """The scale of the first mass moment that the load could carry, int |sigma| Re dS.
+
+    The frame constraint drives the first mass moment D of mantle, core and
+    load to zero. A printed D is only small or large against a scale. This
+    one is the moment that the load mass would have if all of it sat at one
+    point of the surface: the integral of |sigma| over Re, times Re. For the
+    cap, whose series has no degree 0 or 1, the true load moment is zero,
+    and D over this scale is the fraction of the load moment that the solve
+    leaves unbalanced. Both factors are non-dimensional (density rho_bar,
+    length D), so the ratio is dimensionless.
+
+    Args:
+      sigma_parent: the load on the parent mesh, as built by `load_field`.
+
+    Returns:
+      The scale as a float, non-dimensional.
+    """
+    parent = sigma_parent.function_space().mesh()
+    # Re is a set of interior facets of the parent, so the integrand needs
+    # `avg`. `sigma` is continuous, so `avg` is the value on the facet. The
+    # quadrature degree is explicit, because `abs` of a CG2 field on a P2
+    # surface has no exact rule, and a scale needs two digits at most.
+    return float(gen.RE) * float(assemble(
+        avg(abs(sigma_parent))
+        * dS(gen.SURF_RE, domain=parent, metadata={"quadrature_degree": 8})))
+
+
+def frame_line(solver, tag, scale):
+    """Print one `FRAME` line: the multipliers and the mass moment of the state.
+
+    Collective: `mass_dipole` assembles on every rank, so every rank must call
+    this, and `say` prints on rank 0 only.
+
+    Args:
+      solver: the solver; its space must carry the centre-of-mass fields.
+      tag: a `key=value` string that names the state, for example the time.
+      scale: `load_moment_scale` of the load, the reference for |D|.
+    """
+    lam = solver.centre_of_mass_multipliers()
+    dip = solver.mass_dipole()
+    norm = float(np.linalg.norm(dip))
+    say(f"FRAME {tag} "
+        f"lambda=({', '.join(f'{v:.6e}' for v in lam)}) "
+        f"max_abs_lambda={max(abs(v) for v in lam):.6e} "
+        f"D=({', '.join(f'{v:.6e}' for v in dip)}) "
+        f"abs_D={norm:.6e} abs_D_over_load_moment={norm / scale:.6e}")
 
 
 def time_ladder(epochs_kyr, ladder):
@@ -827,6 +905,11 @@ def parse_args():
                    help="directory for the checkpoint and the VTK files")
     p.add_argument("--vtk", action="store_true",
                    help="also write VTK files at each epoch")
+    p.add_argument("--centre-of-mass", action="store_true",
+                   help="add the centre-of-mass frame (three Lagrange "
+                        "multipliers on the first mass moment) on the "
+                        "low-rank DtN representation, and print the "
+                        "multipliers and the mass moment after every solve")
     p.add_argument("--dry-run", action="store_true",
                    help="build the meshes, the load, the solver and the "
                         "reference, assemble the residual once, and exit "
@@ -886,13 +969,22 @@ def main():
     dt = Constant(first_dt)
 
     tic = time.time()
-    solver, z, layout, _ = build_solver(parent, mantle, args, dt)
+    solver, z, layout, sigma_parent = build_solver(parent, mantle, args, dt)
     say(f"  solver built ({time.time() - tic:.1f} s): layout "
         f"{'condensed' if layout.condensed else 'full'}, DtN representation "
         f"{layout.dtn_representation}, "
         f"{len(layout.multipliers)} DtN multipliers, core pressure field "
         f"{layout.core_pressure}, rotation fields {layout.rotation}")
     say(f"  unknowns: {z.function_space().dim()}")
+    # The frame lines are printed only with the flag. Without the flag the
+    # driver prints no frame line.
+    moment_scale = None
+    if args.centre_of_mass:
+        moment_scale = load_moment_scale(sigma_parent)
+        say(f"  centre-of-mass frame: fields {tuple(layout.centre_of_mass)}, "
+            f"dtn_representation={layout.dtn_representation!r}, "
+            f"solver dtn_representation={solver.dtn_representation!r}, "
+            f"load moment scale {moment_scale:.6e}")
 
     if args.dry_run:
         tic = time.time()
@@ -901,6 +993,8 @@ def main():
             norm = vec.norm()
         say(f"  residual of the zero state assembled ({time.time() - tic:.1f} s):"
             f" l2 norm {norm:.6e}")
+        if args.centre_of_mass:
+            frame_line(solver, "state=zero", moment_scale)
         if args.case == "polar-motion":
             say(f"  rotation values of the zero state: {solver.rotation_values()}")
         say(f"  reference: TABOO degrees {ref.nmin_available}.."
@@ -959,6 +1053,8 @@ def main():
             tic = time.time()
             solver.solve()
             say(f"      elastic solve {time.time() - tic:.1f} s")
+            if args.centre_of_mass:
+                frame_line(solver, "t_kyr=0", moment_scale)
             report_epoch(chk, 0.0)
             # The march starts from rest. With the load held from t = 0, the
             # first marched step reproduces the elastic response by itself;
@@ -988,6 +1084,8 @@ def main():
                 say(f"TIMESTEP t_kyr={t_step_kyr:.9g} dt_yr={dt_yr:.9g} "
                     f"segment_step={k + 1} segment_steps={nsteps} "
                     f"wall_s={elapsed:.6f}")
+                if args.centre_of_mass:
+                    frame_line(solver, f"t_kyr={t_step_kyr:.9g}", moment_scale)
             if is_epoch:
                 report_epoch(chk, t1 / 1000.0)
 
