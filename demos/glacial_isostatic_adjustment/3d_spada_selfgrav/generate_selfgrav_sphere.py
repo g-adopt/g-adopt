@@ -209,7 +209,8 @@ def radius_of_surface(tag):
 def generate(filename="selfgrav_sphere.msh", configuration="coarse",
              h=None, grade=2.0, litho_layers=None,
              min_cells_per_great_circle=None,
-             verbose=False, quality=False):
+             verbose=False, quality=False, extra_size_fields=None,
+             mesh_options=None):
     """Write the four-region sphere to a gmsh file.
 
     Args:
@@ -225,6 +226,19 @@ def generate(filename="selfgrav_sphere.msh", configuration="coarse",
         the cap.
       verbose: print gmsh's own log.
       quality: compute per-shell tetrahedron quality.
+      extra_size_fields: an optional callable `extra_size_fields(gmsh)`. It
+        is called after the graded and capped size fields exist and before
+        they are merged. It adds its own gmsh fields and returns a list of
+        their tags. The tags join the `Min` list after the graded and capped
+        fields, so the cell size is the smallest of all of them. A refined
+        mesh uses this hook for local refinement without a copy of the
+        geometry and the physical groups. With `None` (the default) the
+        size field and therefore the mesh are the same as without the hook.
+      mesh_options: an optional dictionary of numeric gmsh options, for
+        example `{"Mesh.Algorithm3D": 10}`. The options are set after the
+        size-field options of this function and before the mesh is
+        generated. With `None` (the default) no option is set, and gmsh
+        uses its own defaults, which are the options of the Spada meshes.
 
     Returns:
       `(filename, shells, stats)`: the path, the `(r_in, r_out, tag)` list of
@@ -316,6 +330,18 @@ def generate(filename="selfgrav_sphere.msh", configuration="coarse",
         gmsh.model.mesh.field.setString(
             capped, "F", f"{2 * np.pi / min_cells_per_great_circle}*{r}")
         fields.append(capped)
+    # Local refinement from the caller. Each returned field is an upper bound
+    # on the cell size in the region it describes; `Min` makes the smallest
+    # bound win, so the extra fields can only make cells smaller. With no
+    # hook the list is unchanged, and so is the mesh.
+    if extra_size_fields is not None:
+        # A Python exception in the hook must finalize gmsh, for the same
+        # reason as a meshing failure below.
+        try:
+            fields.extend(extra_size_fields(gmsh))
+        except Exception:
+            gmsh.finalize()
+            raise
     merged = gmsh.model.mesh.field.add("Min")
     gmsh.model.mesh.field.setNumbers(merged, "FieldsList", fields)
     gmsh.model.mesh.field.setAsBackgroundMesh(merged)
@@ -329,6 +355,12 @@ def generate(filename="selfgrav_sphere.msh", configuration="coarse",
     # initialised with a dirty model, and the next `generate` in the same
     # process returns an empty mesh instead of raising.
     try:
+        # Caller options, for example another 3-D algorithm. They come last,
+        # so that a caller can also override the three options above. They
+        # are inside the `try`, because gmsh raises for an unknown option
+        # name, and that error must finalize gmsh too.
+        for key, value in (mesh_options or {}).items():
+            gmsh.option.setNumber(key, value)
         gmsh.model.mesh.generate(3)
     except Exception:
         gmsh.finalize()
