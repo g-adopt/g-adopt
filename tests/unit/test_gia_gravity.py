@@ -2680,8 +2680,30 @@ class TestCentreOfMassFrame:
         return LAMBDA * mass / (2 * np.pi * r)
 
     def build(self, meshes, *, load_degree=1, rotation=False,
-              approximation_kwargs=None, **solver_kwargs):
+              approximation_kwargs=None, dtn_representation=None,
+              **solver_kwargs):
+        """The frame configuration: fluid core, degree-`load_degree` sheet on Re.
+
+        Args:
+          meshes: the module fixture `(parent, sub)`.
+          load_degree: the azimuthal degree of the load sheet on Re. Degree 1
+            has a mass dipole, which the frame multipliers must cancel.
+          rotation: carry the rotation closure and its moment of inertia.
+          approximation_kwargs: extra keywords for the approximation.
+          dtn_representation: the DtN representation, given to the space and
+            to the solver. `None` takes the library default, which is
+            `"multiplier"` for the frame without sea level.
+          solver_kwargs: passed to `SelfGravitatingGIASolver`.
+
+        Returns:
+          `(solver, z, layout)`.
+        """
         parent, sub = meshes
+        # The representation reaches the space and the solver only when a
+        # test names it, so the tests that name nothing keep checking the
+        # library default.
+        if dtn_representation is not None:
+            solver_kwargs["dtn_representation"] = dtn_representation
         X = fd.SpatialCoordinate(parent)
         bcs_psi = gravity_bcs(parent, sheet=False)
         bcs_psi[CURVE_RE] = {"interior_sigma": SIGMA_HAT * fd.cos(
@@ -2689,7 +2711,7 @@ class TestCentreOfMassFrame:
         Z, layout = self_gravitating_gia_space(
             sub, parent, gravity_bcs=bcs_psi, rotation=rotation,
             fluid_core=True, centre_of_mass=True,
-            self_gravity_number=LAMBDA)
+            self_gravity_number=LAMBDA, dtn_representation=dtn_representation)
         z = fd.Function(Z)
         Xm = fd.SpatialCoordinate(sub)
         rm = fd.sqrt(fd.dot(Xm, Xm))
@@ -2743,13 +2765,46 @@ class TestCentreOfMassFrame:
                 sub, parent, gravity_bcs=gravity_bcs(parent),
                 centre_of_mass=True, self_gravity_number=LAMBDA)
 
-    def test_refuses_the_lowrank_representation(self, meshes):
+    def test_resolves_to_the_multiplier_representation_by_default(
+            self, meshes):
+        """The frame alone, with no named representation, is the multiplier path.
+
+        The low-rank path carries the frame as well (the next test), but the
+        default for the frame without sea level is the multiplier path. Only
+        `sea_level=True` resolves to the low-rank path by default
+        (`test_sea_level.py::TestLayout`).
+        """
         parent, sub = meshes
-        with pytest.raises(NotImplementedError, match="multiplier"):
-            self_gravitating_gia_space(
-                sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
-                centre_of_mass=True, dtn_representation="lowrank",
-                self_gravity_number=LAMBDA)
+        _, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
+            centre_of_mass=True, self_gravity_number=LAMBDA)
+        assert layout.dtn_representation == "multiplier"
+
+    @pytest.mark.parametrize("rotation", [False, True])
+    def test_the_lowrank_space_carries_the_frame_fields(self, meshes, rotation):
+        """On the low-rank path the frame fields are last, after core and rotation.
+
+        The low-rank space has no DtN multiplier unknowns, so the `Real` run is
+        the core pressure, the rotation scalar if present, and one frame
+        multiplier per direction, contiguous and last. `DtNTwoBlockSchurPC`
+        needs that run contiguous and last.
+        """
+        parent, sub = meshes
+        Z, layout = self_gravitating_gia_space(
+            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=rotation,
+            fluid_core=True, centre_of_mass=True, dtn_representation="lowrank",
+            self_gravity_number=LAMBDA)
+        assert layout.dtn_representation == "lowrank"
+        assert layout.multipliers == ()
+        assert len(Z) == layout.n_fields
+        real = tuple(i for i, V in enumerate(Z)
+                     if V.ufl_element().family() == "Real")
+        # Core pressure, then the rotation scalar, then the two directions.
+        assert real == (layout.core_pressure,
+                        *layout.rotation.values(),
+                        *layout.centre_of_mass)
+        assert real == tuple(range(real[0], len(Z)))
+        assert real == layout.real_fields
 
     def test_translation_moment_is_the_total_mass(self, meshes):
         """`D[u = e] = (rho_0 V_mantle + rho_core V_core) e`, per direction.
@@ -2802,13 +2857,36 @@ class TestCentreOfMassFrame:
         where = [layout.real_fields.index(i) for i in layout.centre_of_mass]
         assert np.all(d[where] == 0.0)
 
-    def test_solve_holds_the_centre_of_mass(self, meshes):
+    @pytest.mark.parametrize("dtn_representation", ["multiplier", "lowrank"])
+    def test_solve_holds_the_centre_of_mass(self, meshes, dtn_representation):
         """After a solve with a degree-1 load, `D = 0` to the solver tolerance.
 
         The scale is the moment of the load sheet alone, which the displacement
         has to cancel.
+
+        The test runs on both DtN representations. It is the only unit test
+        that solves the frame without sea level on the low-rank path, and that
+        is the configuration of the 3-D frame run G0-on. The multiplier arm
+        uses the default solver parameters of the solver. The low-rank arm
+        uses the iterative preset on the full layout with the dense Schur
+        complement on the `Real` block, as `test_sea_level.solve_settings`
+        does, with an outer relative tolerance of 1e-12 and a Newton relative
+        tolerance of 1e-10, so that the bound on `D` below is set by the
+        discretisation and not by an inexact linear solve.
         """
-        solver, _, _ = self.build(meshes, load_degree=1)
+        solver_kwargs = {}
+        if dtn_representation == "lowrank":
+            solver_kwargs["solver_parameters"] = \
+                selfgrav_dtn_iterative_solver_parameters(
+                    condensed=False,
+                    multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+                    outer_rtol=1e-12, block0_rtol=1e-4, snes_rtol=1e-10,
+                    dtn_representation="lowrank")
+        solver, _, layout = self.build(
+            meshes, load_degree=1, dtn_representation=dtn_representation,
+            **solver_kwargs)
+        # The space and the solver run on the named representation.
+        assert layout.dtn_representation == dtn_representation
         load_moment = SIGMA_HAT * np.pi * RE ** 2
         solver.solve()
         D = solver.mass_dipole()

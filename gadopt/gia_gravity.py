@@ -1357,12 +1357,17 @@ def self_gravitating_gia_space(
       centre_of_mass: add one `Real` field per coordinate direction, the
         Lagrange multipliers that hold the centre of mass of the whole system
         (mantle, core and surface load) at the origin. It requires
-        `fluid_core=True` and the multiplier DtN representation; see
-        `SelfGravitatingGIASolver.centre_of_mass_energy` for the reasons.
+        `fluid_core=True`; see `SelfGravitatingGIASolver.centre_of_mass_energy`
+        for the reasons. It works on both DtN representations. With
+        `sea_level=False` and no named representation it resolves to
+        `"multiplier"`.
       sea_level: add the `Real` field `Shift` of the sea-level equation, last
         in the space. It requires `centre_of_mass=True`, because an ocean load
-        always has degree-1 content, and the multiplier DtN representation.
-        The solver must receive a matching `SeaLevel` object.
+        always has degree-1 content. It works on both DtN representations.
+        With no named representation it resolves to the layout default:
+        `"lowrank"` on the full layout, `"multiplier"` on the condensed
+        layout, which has no low-rank route. The solver must receive a
+        matching `SeaLevel` object.
 
     Returns:
       `(Z, layout)`.
@@ -1378,21 +1383,6 @@ def self_gravitating_gia_space(
             "centre_of_mass=True requires fluid_core=True. A rigid core (un = 0 "
             "at the core boundary) already fixes the translation of the mantle, "
             "so a centre-of-mass constraint would over-determine the system.")
-    if centre_of_mass and dtn_representation is None:
-        # The frame rows exist on the multiplier representation alone, so a
-        # caller who asks for the frame and names no representation gets that
-        # one. Without this, `resolve_dtn_representation` below would return
-        # the low-rank default of the full layout, and the refusal underneath
-        # would fire on a caller who chose nothing.
-        dtn_representation = "multiplier"
-    if centre_of_mass and dtn_representation != "multiplier":
-        # The low-rank representation carries a hand-written adjoint and a
-        # hand-built Jacobian update. Neither has been extended to these rows,
-        # so the combination is refused until a test covers it.
-        raise NotImplementedError(
-            "centre_of_mass=True is implemented for "
-            "dtn_representation='multiplier' only. The low-rank representation "
-            "has a hand-written adjoint that does not carry these rows.")
     if sea_level and not centre_of_mass:
         # The ocean load follows the geoid and the uplift, so it has degree-1
         # content whatever the ice load is. Without the frame constraint that
@@ -1402,18 +1392,27 @@ def self_gravitating_gia_space(
             "degree-1 content, and only the centre-of-mass multipliers fix the "
             "translation that it drives.")
     if sea_level and dtn_representation is None:
-        # The sea-level rows exist on the multiplier representation alone, for
-        # the same reason as the frame rows above, so a caller who asks for sea
-        # level and names no representation gets that one. Without this,
-        # `resolve_dtn_representation` would return the low-rank default of the
-        # full layout and the refusal underneath would fire on a caller who
-        # chose nothing.
+        # Sea level with no named representation follows the layout default
+        # of `resolve_dtn_representation`: low-rank on the full layout, the
+        # layout that the 3-D sea-level runs use. The multiplier path costs a
+        # dense complement of one block-0 solve per multiplier at every build,
+        # which does not fit one node at a truncation of 20. The condensed
+        # layout has no low-rank route (`selfgrav_dtn_iterative_solver_parameters`
+        # refuses it), so there the default stays the multiplier path.
+        #
+        # This rule comes before the centre-of-mass rule below on purpose.
+        # Sea level requires the frame, so the frame rule would otherwise see
+        # every sea-level caller first and name the multiplier path for them.
+        dtn_representation = resolve_dtn_representation(
+            None, condensed=condense_internal_variables)
+    if centre_of_mass and dtn_representation is None:
+        # The frame alone, with no named representation, stays on the
+        # multiplier path. Both representations carry the frame rows: they are
+        # UFL terms of `Real` fields, and the low-rank update acts on the
+        # potential rows only. The decision that puts sea level on the
+        # low-rank path by default covers sea level alone, not the frame alone
+        # (`NOTES/DECISIONS.md`, 2026-09-17).
         dtn_representation = "multiplier"
-    if sea_level and dtn_representation != "multiplier":
-        raise NotImplementedError(
-            "sea_level=True is implemented for dtn_representation='multiplier' "
-            "only. The low-rank representation has a hand-written adjoint that "
-            "does not carry the sea-level rows.")
     if n_internal_variables < 1:
         raise ValueError(
             f"n_internal_variables must be at least 1, got {n_internal_variables}.")
