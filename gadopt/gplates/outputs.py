@@ -150,10 +150,7 @@ def continental_linear(depth_m: npt.ArrayLike, z_lab_m: npt.ArrayLike) -> np.nda
     """
     depth_m = np.asarray(depth_m, dtype=float)
     z_lab_m = np.asarray(z_lab_m, dtype=float)
-    result = np.zeros_like(depth_m)
-    valid = z_lab_m > 0
-    result[valid] = depth_m[valid] / z_lab_m[valid]
-    return np.clip(result, 0.0, 1.0)
+    return np.clip(np.where(z_lab_m > 0, depth_m / z_lab_m, 0.0), 0.0, 1.0)
 
 
 # Shared radial primitive (used by every indicator output)
