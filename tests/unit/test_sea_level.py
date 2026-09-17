@@ -2016,12 +2016,17 @@ class TestNestedCondensation:
         assert solver_converged(solver)
 
 
-def taylor_forward(control, meshes, *, rotation, representation):
-    """Tape one live-mask solve of the shoreline state with ice thickness `control`.
+def taylor_forward(control, meshes, *, rotation, representation,
+                   fixed_ocean=False):
+    """Tape one solve of the shoreline state with ice thickness `control`.
 
     The functional reads the degree-1 radial displacement at Re and `Shift`,
     so that it depends on the masks through mass conservation and through the
     ocean load. The weights make the two parts of similar size.
+
+    Args:
+      fixed_ocean: the `SeaLevel.fixed_ocean` setting. `False` tapes the
+        live-mask solve.
     """
     parent, sub = meshes
     with stop_annotating():
@@ -2029,6 +2034,8 @@ def taylor_forward(control, meshes, *, rotation, representation):
         fields["I"] = control
         solver, _, layout = build(meshes, fields, rotation=rotation,
                                   representation=representation,
+                                  sea_level_overrides=dict(
+                                      fixed_ocean=fixed_ocean),
                                   **solve_settings(representation))
     solver.solve()
     u = fd.split(solver.solution)[layout.displacement]
@@ -2043,12 +2050,23 @@ def taylor_forward(control, meshes, *, rotation, representation):
         + 1e4 * shift * shift * dx_m)
 
 
-def run_taylor(meshes, rotation, representation):
+def run_taylor(meshes, rotation, representation, fixed_ocean=False):
     """The guarded Taylor test with control `I` and a direction that moves the grounding line.
 
     On the low-rank path the tape carries a `CoupledLowRankDtNSolveBlock`, and
     the adjoint goes through the hand-written low-rank adjoint, which carries
     the `Shift` and frame rows as UFL terms.
+
+    With `fixed_ocean` the functional is affine in the control apart from
+    the `Shift^2` term, because the residual is linear. The live direction
+    `sin(phi - PHASE)` is odd about the centre of the land at
+    `phi = PHASE + pi`, so it adds no net ice on the land, `Shift` does not
+    move and the Taylor remainder is round-off (measured 5e-15 to 4e-11
+    against `J = -77`, rates -2.8 and -3.7, `NOTES/team/s3-w2-fixed-ocean/
+    logs/fixed_round2.log`). The fixed arm therefore uses the direction
+    `-0.1 cos(phi - PHASE)`, which is 0.1 at the centre of the land and
+    changes the net land ice, so `Shift` and its square move with the
+    control.
     """
     from test_gravity_adjoint import assert_taylor_with_guards
 
@@ -2058,14 +2076,22 @@ def run_taylor(meshes, rotation, representation):
     with stop_annotating():
         control = fd.Function(V).interpolate(
             (1.0 - MELT) * 0.6 * fd.max_value(0.0, -fd.cos(phi - PHASE) - 0.4))
-        # Thickening on one flank and thinning on the other, of 0.1 at most,
-        # so the grounding line moves and the B mask derivative is exercised.
-        h = fd.Function(V).interpolate(0.1 * fd.sin(phi - PHASE))
+        if fixed_ocean:
+            # Thickening centred on the land, of 0.1 at most, so the net ice
+            # on the reference land changes and `Shift` responds. The part
+            # over the reference ocean is removed by `1 - C0`.
+            h = fd.Function(V).interpolate(-0.1 * fd.cos(phi - PHASE))
+        else:
+            # Thickening on one flank and thinning on the other, of 0.1 at
+            # most, so the grounding line moves and the B mask derivative is
+            # exercised.
+            h = fd.Function(V).interpolate(0.1 * fd.sin(phi - PHASE))
     continue_annotation()
     try:
         m = Control(control)
         J = taylor_forward(control, meshes, rotation=rotation,
-                           representation=representation)
+                           representation=representation,
+                           fixed_ocean=fixed_ocean)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -2097,3 +2123,361 @@ class TestRotation:
     def test_the_rotating_case_passes_the_taylor_test(
             self, meshes, representation):
         run_taylor(meshes, rotation=True, representation=representation)
+
+
+# ---------------------------------------------------------------------------
+# The fixed coastline
+# ---------------------------------------------------------------------------
+
+def coastline_fields(sub, land, *, d_ice=0.0, ocean_ice=0.0):
+    """A deep ocean with land sectors under grounded ice, as `SeaLevel` keywords.
+
+    The fields are DG0, so a sector edge sits on mesh vertices and no
+    quadrature point sees a transition (`indicator`). `SL_init` is `+DEEP` in
+    the ocean and `-DEEP` on the land, so both the fixed ocean function
+    `C0 = C(SL_init)` and the live masks are saturated. This is what makes a
+    fixed and a live coastline the same problem: the ice rests on land, so
+    the live grounded-ice function is 0 there, and the ocean is deep and free
+    of grounded ice, so the live `B C` is 1 there.
+
+    Args:
+      sub: the mechanics submesh.
+      land: `"cap"` or `"caps"`, the sectors of `indicator` that are land.
+      d_ice: the ice thickness change on the land, in units of D.
+      ocean_ice: the ice thickness that grows over the whole ocean from zero,
+        in units of D. A value above `(rho_w / rho_i) DEEP = 26.9` grounds
+        that ice on the sea floor under live masks. A fixed coastline removes
+        it through `1 - C0`.
+
+    Returns:
+      `dict(SL_init=..., I=..., I_init=..., N_init=..., ur_init=...)`.
+    """
+    on_land = indicator(sub, land)
+    Q = on_land.function_space()
+    zero = fd.Function(fd.FunctionSpace(sub, "CG", 2))
+    SL_init = fd.Function(Q).interpolate(DEEP * (1.0 - 2.0 * on_land))
+    I_init = fd.Function(Q).interpolate(GROUNDED * on_land)
+    I = fd.Function(Q).interpolate((GROUNDED + d_ice) * on_land
+                                   + ocean_ice * (1.0 - on_land))
+    return dict(SL_init=SL_init, I=I, I_init=I_init, N_init=zero.copy(True),
+                ur_init=zero.copy(True))
+
+
+def fixed(**overrides):
+    """`sea_level_overrides` of a fixed coastline, with extra `SeaLevel` keywords."""
+    return dict(fixed_ocean=True, **overrides)
+
+
+def remove_rigid_rotation(du, mesh):
+    """The displacement `du` with its L2-best rigid rotation of the mantle removed.
+
+    A rigid rotation of the whole mantle about the centre is strain free,
+    divergence free and tangential on every concentric circle or sphere
+    (`gia_gravity.rigid_rotation_nullspace`). With rotation off and no
+    nullspace declared, only the facet geometry error of the curved mesh acts
+    on it. So the multiple of that mode in a solution is set by the Krylov
+    path and by round-off, and not by the physics. Two solves of the same
+    problem can differ by it far above their solver tolerance.
+
+    The fit is a least-squares fit in L2 over the mechanics mesh: the Gram
+    matrix `G_ij = int r_i . r_j dx` of the rotation generators `r_i` and the
+    moments `b_i = int r_i . du dx` give the coefficients `c = G^-1 b`. In 2-D
+    there is one generator `(-y, x)`, in 3-D the three generators `e_i x x`.
+    Rigid translations are not removed: the centre-of-mass frame rows fix
+    them, and the fit measured them at about 1e-18 in the agreement test.
+
+    Args:
+      du: a displacement `Function` on the mechanics mesh.
+      mesh: the mechanics mesh.
+
+    Returns:
+      A new `Function` in the space of `du` with the fitted rotation removed.
+    """
+    V = du.function_space()
+    X = fd.SpatialCoordinate(mesh)
+    if len(X) == 2:
+        generators = [fd.as_vector((-X[1], X[0]))]
+    else:
+        generators = [fd.as_vector((0.0, -X[2], X[1])),
+                      fd.as_vector((X[2], 0.0, -X[0])),
+                      fd.as_vector((-X[1], X[0], 0.0))]
+    # Interpolate the generators into the displacement space, so that the
+    # removal acts on the same degrees of freedom that the max norm reads.
+    modes = [fd.Function(V).interpolate(r) for r in generators]
+    dx = fd.dx(domain=mesh)
+    gram = np.array([[fd.assemble(fd.inner(a, b) * dx) for b in modes]
+                     for a in modes])
+    moments = np.array([fd.assemble(fd.inner(a, du) * dx) for a in modes])
+    coefficients = np.linalg.solve(gram, moments)
+    residual = du.copy(deepcopy=True)
+    for coefficient, mode in zip(coefficients, modes):
+        residual.dat.data[:] -= coefficient * mode.dat.data_ro
+    return residual
+
+
+def solved_fields_agree(z_a, z_b, layout, rel):
+    """Whether the displacement, potential and `Shift` of two states agree.
+
+    Each sub-field is compared in the max norm, relative to the max norm of
+    the same sub-field of `z_b`. The displacement difference is compared
+    after `remove_rigid_rotation`. The rigid rotation of the mantle is not
+    fixed by any physical term of these equations. Its multiple follows the
+    Krylov path, so a comparison that keeps it tests round-off and not the
+    physics. The rotation does not change `u . n`, the geoid or `Shift`, so
+    the removal hides no physical difference.
+
+    The frame multipliers and the DtN multipliers are not compared. They are
+    discretisation error of order 1e-9, so the solver tolerance is not small
+    against their size.
+
+    Returns:
+      A list of `(index, difference, scale)` for the sub-fields that fail.
+      The measured relative differences are printed for every sub-field, so
+      a run with `-s` records the margin.
+    """
+    failures = []
+    for index in (layout.displacement, layout.potential, layout.sea_level):
+        f_a = z_a.subfunctions[index]
+        f_b = z_b.subfunctions[index]
+        b = f_b.dat.data_ro
+        scale = np.abs(b).max()
+        if index == layout.displacement:
+            du = fd.Function(f_b.function_space()).assign(f_a - f_b)
+            difference = np.abs(
+                remove_rigid_rotation(du, layout.mechanics_mesh).dat.data_ro
+            ).max()
+        else:
+            difference = np.abs(f_a.dat.data_ro - b).max()
+        print(f"solved_fields_agree: sub-field {index}, relative difference "
+              f"{difference / scale if scale > 0.0 else np.inf:.3e}",
+              flush=True)
+        if not (scale > 0.0 and difference <= rel * scale):
+            failures.append((index, difference, scale))
+    return failures
+
+
+class TestFixedOcean:
+    """`SeaLevel(fixed_ocean=True)`: the coastline of Martinec et al. (2018), cases B and C.
+
+        C0    = C(SL_init)
+        sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
+
+    Work item W2 of `NOTES/DESIGN-MARTINEC-3D.md`. Every test runs on both
+    DtN representations.
+    """
+
+    def test_a_saturated_coastline_gives_the_live_solution(
+            self, meshes, representation):
+        """On a coastline that cannot move, the fixed and the live solves agree.
+
+        The state is one land sector (`"cap"`) with a grounded ice change of
+        1e-2 in a deep ocean, the default Earth and the full `Lambda`. The
+        masks are saturated, so both sheets are `rho_w Delta` in the ocean and
+        `rho_i dI` on the land, and the load has degree-1 content, so the frame
+        rows are active. The design names the `"cap"` state of this module, but
+        that state puts its ice on the ocean floor (`SL_init = DEEP` under the
+        ice), which a fixed coastline removes. The land sector here is the
+        state that the design means: a saturated coastline.
+
+        Tolerance 1e-8 relative per sub-field, with the rigid rotation of the
+        mantle removed from the displacement difference
+        (`solved_fields_agree`). Before that removal the displacement
+        difference was 4.65e-9 (multiplier) and 9.67e-9 (low-rank). It did not
+        follow the outer Krylov tolerance, and a fit of one rigid rotation
+        removed it. After the removal the measured relative differences
+        (phoenix, 2026-09-18) are:
+
+            multiplier: displacement 1.8e-14, potential 1.0e-14, Shift 5.4e-16
+            low-rank:   displacement 2.5e-12, potential 2.1e-12, Shift 2.8e-13
+
+        So the tolerance has a margin above 1000 on both representations.
+        """
+        _, sub = meshes
+        fields = coastline_fields(sub, "cap", d_ice=1e-2)
+        states = {}
+        for fixed_ocean in (False, True):
+            solver, z, layout = build(
+                meshes, fields, representation=representation,
+                sea_level_overrides=dict(fixed_ocean=fixed_ocean),
+                **solve_settings(representation))
+            solver.solve()
+            assert solver_converged(solver)
+            states[fixed_ocean] = z
+        # Guard: a nonzero Shift, so the comparison has a scale.
+        assert abs(real_value(states[False], layout.sea_level)) > 1e-4
+        assert solved_fields_agree(states[True], states[False], layout,
+                                   rel=1e-8) == []
+
+    def test_ice_over_the_ocean_changes_nothing(self, meshes, representation):
+        """Ice that grows over the reference ocean does not load the fixed solve.
+
+        Two fixed solves of the land sector state with a grounded ice change
+        of 1e-2 on the land: one without ocean ice, one with `GROUNDED` ice
+        grown over the whole ocean. The factor `1 - C0` is `sech`-small in the
+        deep ocean (it evaluates to exactly 0.0 on these DG0 fields), so both
+        solves assemble the same system. The tolerance is 1e-8 relative in
+        `solved_fields_agree`, and the measured difference is 0.0.
+
+        Guard: the ice grown over the ocean is 3e4 times the mass of the land
+        ice change, so a sheet that kept it would move `Shift` by orders of
+        magnitude. Under live masks that ice rests on the sea floor
+        (`GROUNDED > (rho_w / rho_i) DEEP`) and would load the Earth.
+        """
+        _, sub = meshes
+        states = {}
+        for ocean_ice in (0.0, GROUNDED):
+            fields = coastline_fields(sub, "cap", d_ice=1e-2,
+                                      ocean_ice=ocean_ice)
+            solver, z, layout = build(meshes, fields,
+                                      representation=representation,
+                                      sea_level_overrides=fixed(),
+                                      **solve_settings(representation))
+            solver.solve()
+            assert solver_converged(solver)
+            states[ocean_ice] = (solver, z)
+
+        solver, _ = states[GROUNDED]
+        dss = re_measure(solver)
+        land = indicator(sub, "cap")
+        ocean_ice_mass = fd.assemble(RHO_I * GROUNDED * (1 - land) * dss)
+        land_ice_mass = fd.assemble(RHO_I * 1e-2 * land * dss)
+        assert ocean_ice_mass > 100 * land_ice_mass
+        assert solved_fields_agree(states[GROUNDED][1], states[0.0][1],
+                                   layout, rel=1e-8) == []
+
+    def test_newton_converges_in_one_iteration(self, meshes, representation):
+        """The fixed-coastline residual is linear: one Newton step from zero.
+
+        The shoreline state, whose `C0` is fractional over a wide arc, so the
+        test does not depend on saturated masks. `newtonls` from the zero
+        initial guess with the tolerances of `solve_settings`. The outer
+        Krylov solve reduces the residual by 1e-12, below `snes_rtol = 1e-10`,
+        so a linear residual stops at iteration 1. A live-mask solve of the
+        same state takes more (`TestLiveMaskSolve`).
+        """
+        _, sub = meshes
+        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                  representation=representation,
+                                  sea_level_overrides=fixed(),
+                                  **solve_settings(representation))
+        assert solver.solver.snes.getType() == "newtonls"
+        solver.solve()
+        assert solver_converged(solver)
+        assert solver.solver.snes.getIterationNumber() <= 1
+        assert abs(real_value(z, layout.sea_level)) > 0.0
+
+    def test_the_jacobian_is_not_state_dependent_and_ksponly_is_accepted(
+            self, meshes, representation):
+        """With a fixed coastline and a Newtonian Earth, `ksponly` solves the step.
+
+        Item 5 of W2: the solver does not declare the Jacobian state-dependent,
+        so `_refuse_ksponly_on_a_nonlinear_residual` accepts `snes_type
+        ksponly`, and the one linear solve gives the `newtonls` solution to
+        1e-8 relative.
+        """
+        _, sub = meshes
+        states = {}
+        for snes_type in ("newtonls", "ksponly"):
+            settings = solve_settings(representation)
+            if representation == "multiplier":
+                settings["solver_parameters_extra"] = dict(
+                    settings["solver_parameters_extra"], snes_type=snes_type)
+            else:
+                settings["solver_parameters"]["snes_type"] = snes_type
+            solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                      representation=representation,
+                                      sea_level_overrides=fixed(), **settings)
+            assert not solver._jacobian_depends_on_solution()
+            solver.solve()
+            assert solver_converged(solver)
+            assert solver.solver.snes.getType() == snes_type
+            states[snes_type] = z
+        assert solved_fields_agree(states["ksponly"], states["newtonls"],
+                                   layout, rel=1e-8) == []
+
+    def test_the_shift_is_the_eustatic_value(self, meshes, representation):
+        """`Shift = -rho_i int (1 - C0) dI dS / (rho_w int C0 dS)` on a rigid Earth.
+
+        Mass conservation `int sigma dS = 0` with
+        `sigma = rho_w C0 Shift + rho_i (1 - C0) dI` gives the minus sign: ice
+        that grows lowers the sea (`NOTES/DECISIONS.md`, 2026-09-18).
+
+        The state has two opposite land sectors (`"caps"`) with an ice growth
+        of 1e-2, and `GROUNDED` ice grown over the whole ocean, which the
+        formula and the fixed sheet both remove. The load has no degree-1
+        content, so the frame does not translate the Earth under the ocean.
+        `Lambda = 1e-6`, and shear and bulk moduli of 1e8 with the viscosity
+        of `stiff`. `C0` is built with the solver's own steepness, so the
+        formula reads the same mask as the sheet.
+
+        Tolerance 1e-6 relative. `Shift` differs from the formula by the
+        ocean mean of `du_r - dN`. Measured on the multiplier path
+        (`NOTES/team/s3-w2-fixed-ocean/logs/probe_eustatic.log`): the ocean
+        mean of the uplift is -2.6e-6 of the eustatic value at the moduli
+        1e6 of `stiff`, which fails this tolerance, and -2.6e-8 at 1e8. The
+        geoid change is 5.9e-8 at `Lambda = 1e-6`. The relative error at 1e8
+        is 8.5e-8. Without the minus sign the test fails by a factor of -1.
+        Without `1 - C0` the ocean ice changes the value by four orders of
+        magnitude.
+        """
+        _, sub = meshes
+        d_ice = 1e-2
+        fields = coastline_fields(sub, "caps", d_ice=d_ice,
+                                  ocean_ice=GROUNDED)
+        solver, z, layout = build(meshes, fields, lam=1e-6, stiff=True,
+                                  earth=dict(shear_modulus=1e8,
+                                             bulk_modulus=1e8),
+                                  representation=representation,
+                                  sea_level_overrides=fixed(),
+                                  **solve_settings(representation))
+        solver.solve()
+        assert solver_converged(solver)
+        dss = re_measure(solver)
+        C0 = masks().ocean_function(fields["SL_init"],
+                                    solver._sea_level_steepness())
+        dI = fields["I"] - fields["I_init"]
+        eustatic = (-RHO_I * fd.assemble((1 - C0) * dI * dss)
+                    / (RHO_W * fd.assemble(C0 * dss)))
+        assert eustatic < 0.0  # ice that grows lowers the sea
+        shift = real_value(z, layout.sea_level)
+        print(f"fixed-ocean eustatic, {representation}: Shift {shift:.12e}, "
+              f"formula {eustatic:.12e}, relative "
+              f"{abs(shift - eustatic) / abs(eustatic):.3e}")
+        assert shift == pytest.approx(eustatic, rel=1e-6)
+
+    def test_written_residual_equals_the_derivative_of_the_energy(
+            self, meshes, representation):
+        """`sea_level_residual() = derivative(sea_level_energy(), solution)` exactly.
+
+        With a fixed coastline the energy
+        `G = rho_i (I_eff - I_eff_init) Delta + 0.5 rho_w C0 Delta^2` is exact
+        for any `C0`, so the shoreline state with its fractional `C0` and its
+        melting ice is used, at a random state of amplitude 0.1. Tolerance
+        1e-11 relative per sub-field, as in
+        `TestResidualIsTheVariationOfTheEnergy`.
+        """
+        _, sub = meshes
+        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                  representation=representation,
+                                  sea_level_overrides=fixed(),
+                                  **solve_settings(representation))
+        perturb(z, 1e-1, seed=7)
+        written = fd.assemble(solver.sea_level_residual())
+        derived = fd.assemble(fd.derivative(solver.sea_level_energy(),
+                                            solver.solution))
+        checked = 0
+        for i, (a, b) in enumerate(zip(written.subfunctions,
+                                       derived.subfunctions)):
+            scale = np.abs(b.dat.data_ro).max()
+            if i in (layout.displacement, layout.potential, layout.sea_level):
+                assert scale > 0.0, f"sub-field {i} has no sea-level term"
+            tolerance = 1e-11 * max(scale, 1e-300)
+            assert np.abs(a.dat.data_ro - b.dat.data_ro).max() <= tolerance
+            checked += 1
+        assert checked == len(z.subfunctions)
+
+    def test_the_taylor_rate_with_ice_thickness_control(
+            self, meshes, representation):
+        """The guarded Taylor test of `run_taylor` on a fixed coastline."""
+        run_taylor(meshes, rotation=False, representation=representation,
+                   fixed_ocean=True)
