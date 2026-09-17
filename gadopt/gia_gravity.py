@@ -2004,6 +2004,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             "the iterations. Pass block0='condensed' and "
             "dtn_representation='lowrank' to "
             "selfgrav_dtn_iterative_solver_parameters.")
+
     def _check_sea_level_matches_layout(self, sea_level) -> None:
         """Refuses a `Shift` field without its equation, or the reverse."""
         space_has_shift = self.layout.sea_level is not None
@@ -4641,6 +4642,40 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         settings this callback **is** the correctness, not an optimisation.
         """
         install_augmented_context(Jmat, self.dtn_operator)
+
+    def adjoint_solve_keywords(self) -> dict:
+        """No adjoint keywords on the low-rank representation.
+
+        `StokesSolverBase` hands the cached adjoint solver the forward solver's
+        own keywords with the options replaced, which is what makes a Taylor
+        test complete at Earth scale on the multiplier representation.
+
+        The low-rank representation cannot take them. Its forward options put
+        `gadopt.LowRankPotentialPC` on the potential split, and that class needs
+        a matrix-free operator; the adjoint solve is built on an assembled one,
+        so it stops with `PC 'gadopt.preconditioners.LowRankPotentialPC' needs
+        pmat to have type python, but it is seqaij`. This is the failure
+        `NOTES/DECISIONS.md` records on 2026-09-15 as the reason the low-rank
+        path keeps `pc_type none` on block 1: its adjoint and tangent solves
+        reuse the forward parameters on an assembled matrix and crash
+        otherwise.
+
+        Returning nothing here leaves Firedrake's own path in place on that
+        representation, which is what the branch was measured against.
+
+        Measured on 2026-09-17 after the rebase, on
+        `tests/unit/test_gia_gravity_adjoint_lowrank.py` with the documented
+        filter for the known tangent-linear crash: the parent tip passes 128
+        and deselects 14, and this branch crashed at
+        `test_taylor_with_a_power_law[shear_modulus-iterative]` until this
+        method existed.
+
+        Returns:
+          The keywords for `solve`, empty on the low-rank representation.
+        """
+        if self.dtn_representation == "lowrank":
+            return {}
+        return super().adjoint_solve_keywords()
 
     def set_solver(self) -> None:
         """The base solver, rebuilt with the two callbacks on the low-rank path.

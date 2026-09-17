@@ -1879,6 +1879,8 @@ def internal_variable_condensation(A, keep: int = 0, eliminate: int = 1):
                           - blocks[keep, eliminate] * inverse
                           * blocks[eliminate, keep])
     return condensed_operator, inverse
+
+
 def single_domain_slate_form(form):
     """The integrals of `form` that Slate can compile on one mesh.
 
@@ -1914,7 +1916,7 @@ def single_domain_slate_form(form):
         kept.append(integral)
     if len(kept) == len(form.integrals()):
         return form
-    return UFLForm(kept)
+    return ufl_Form(kept)
 
 
 class InternalVariableSCPC(fd.SCPC):
@@ -2452,11 +2454,22 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         # two system.
         splitter = ExtractSubBlock()
         pair_indices = (self.DISPLACEMENT, self.INTERNAL_VARIABLE)
-        self._pair_form = _restrict_to_mesh(
-            _split_mixed_coefficients(
-                splitter.split(self.bilinear_form,
-                               (pair_indices, pair_indices))),
-            self.displacement_space.mesh())
+        # `single_domain_slate_form` is applied last, and it is what makes the
+        # sea-level load compile here. `_restrict_to_mesh` keeps the integrals
+        # written on the displacement mesh, and the ocean column of the
+        # sea-level load is one of them: it is an exterior-facet integral of
+        # the submesh whose integrand carries `avg(psi)` from the parent mesh.
+        # Slate meets that restriction and raises `KeyError: 'facet_1'`, which
+        # inside a pytest process arrives as a segmentation fault. Everything
+        # this class computes is preconditioner work, so dropping that one term
+        # changes the convergence rate and not the solution; see the filter's
+        # own docstring.
+        self._pair_form = single_domain_slate_form(
+            _restrict_to_mesh(
+                _split_mixed_coefficients(
+                    splitter.split(self.bilinear_form,
+                                   (pair_indices, pair_indices))),
+                self.displacement_space.mesh()))
         W_pair = self._pair_form.arguments()[0].function_space()
         # The Slate right-hand side and solution live on the `(u, M)` space;
         # the mixed `(u, M, psi)` residual and solution are the vectors PETSc

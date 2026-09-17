@@ -1673,14 +1673,59 @@ class TestNestedCondensation:
         from test_gia_nested_condensation import condensation_context
 
         _, sub = meshes
+        # Two settings are named, and both are named for a reason.
+        #
+        # `dtn_representation`: sea level runs on the multiplier representation,
+        # and the preset's own default is the low-rank one on the full layout.
+        # Leaving it unset puts `gadopt.LowRankPotentialPC` on the potential
+        # split of a solver that carries no low-rank update, and
+        # `_check_representation_matches_parameters` refuses that pairing.
+        #
+        # `block0`: `InternalVariableSCPC` is reached through the `"pair"`
+        # route, whose block 0 is a multiplicative fieldsplit. The default
+        # route is `gadopt.CondensedBlockPC`, a single preconditioner with no
+        # fieldsplit to descend into, so `condensation_context` below cannot
+        # find its sub-KSP there. `test_gia_nested_condensation.py` names the
+        # same value for the same reason. The default route has its own test
+        # underneath this one.
         parameters = selfgrav_dtn_iterative_solver_parameters(
             condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
-            outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8)
+            outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8,
+            dtn_representation="multiplier", block0="pair")
         solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
                                   solver_parameters=parameters)
         solver.solve()
         assert solver_converged(solver)
         condensation_context(solver)
+
+    def test_the_condensed_block0_route_solves_with_sea_level(self, meshes):
+        """The default block-0 route condenses `(u, M)` in Slate with sea level on.
+
+        `gadopt.CondensedBlockPC` eliminates the internal variables once per
+        application, on the `(u, M)` sub-form of block 0. With sea level on that
+        sub-form carries the ocean column of the load, an exterior-facet
+        integral of the submesh whose integrand holds `avg(psi)` from the parent
+        mesh. Slate compiles kernels of one mesh and meets that restriction as
+        `KeyError: 'facet_1'`, which inside a pytest process arrives as a
+        segmentation fault, so the failure this test guards against takes the
+        whole run with it.
+
+        `gadopt.preconditioners.single_domain_slate_form` leaves that one
+        integral out of the form the class hands to Slate. Everything the class
+        computes is preconditioner work, so the missing term changes the
+        convergence rate and not the solution.
+        """
+        _, sub = meshes
+        parameters = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+            outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8,
+            dtn_representation="multiplier")
+        assert parameters["dtn_fieldsplit_0_pc_python_type"] == \
+            "gadopt.CondensedBlockPC"
+        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                  solver_parameters=parameters)
+        solver.solve()
+        assert solver_converged(solver)
 
 
 def taylor_forward(control, meshes, *, rotation):
