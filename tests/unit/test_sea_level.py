@@ -1,9 +1,8 @@
 """The sea-level equation on the coupled self-gravitating solver, 2-D annulus.
 
-These are the acceptance tests for the task in
-`NOTES/team/TASK-sea-level-2d.md`. The design they check is in
-`NOTES/PLAN-SEA-LEVEL-2026-09-15-C.md` and
-`NOTES/HANDOVER-SEA-LEVEL-2026-09-15-B.md` section 4:
+These are the acceptance tests of the sea-level equation. The design they check
+is in `NOTES/DESIGN-SEA-LEVEL.md`, and the decisions behind it in
+`NOTES/DECISIONS.md` and `NOTES/findings/FINDING-2d-sea-level-build.md`:
 
     SL      = SL_init + (N - N_init) - (u_r - ur_init) + Shift
     Delta   = SL - SL_init
@@ -17,7 +16,7 @@ smooth_step(I - (rho_w/rho_i) SL, k)` the grounded-ice function and
 `int sigma dS = 0`, up to the frame column `lambda . dD/dShift` that keeps the
 residual the gradient of one Lagrangian. At a converged state the net sheet
 mass is therefore of order `lambda`, which is discretisation error, and not
-zero to the solver tolerance (plan C section 4d item 2).
+zero to the solver tolerance (`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 2).
 
 The configuration is the one of `TestCentreOfMassFrame.build` in
 `test_gia_gravity.py`: the coarse P2-curved annulus (dr 0.2, 32 azimuthal
@@ -432,12 +431,36 @@ class TestMasks:
         assert abs(got - expected) < 1e-15
 
     def test_smooth_step_derivative_is_finite_at_a_huge_argument(self):
-        """The clamp at +-350 keeps the derivative finite for any `k x`."""
+        """The clamp keeps the first derivative finite for any `k x`."""
         mesh = fd.UnitSquareMesh(1, 1)
         x = fd.Function(fd.FunctionSpace(mesh, "R", 0)).assign(1e6)
         form = masks().smooth_step(x, 1e3) * fd.dx(domain=mesh)
         derivative = fd.assemble(fd.derivative(form, x))
         assert np.all(np.isfinite(derivative.dat.data_ro))
+
+    def test_the_clamp_is_inside_the_bounds_that_make_it_correct(self):
+        """`19 < SMOOTH_STEP_CLAMP < 177.8`.
+
+        This is the guard on the constant, because no unit test of
+        `smooth_step` alone can reproduce the failure it prevents. The failure
+        is in the second derivative of the mask, which the Jacobian of the
+        centre-of-mass frame column holds: UFL writes the derivative of
+        `tanh(z)` as `(2 cosh(z) / (1 + cosh(2 z)))^2`, so differentiating
+        again carries `cosh(2 z)^2`. Squared, that overflows above
+        `z = 177.8`; an infinite value there multiplies the exact zero
+        derivative of the clamped branch and gives a NaN, which stops the
+        solve. Whether a given kernel forms the square or divides twice in
+        sequence is a TSFC grouping decision, and the kernel of this unit test
+        divides twice, so it stays finite at every clamp up to 350 and cannot
+        fail. What the failure was measured on is the solver: at `grad_floor`
+        7e-5 on the 78 km shelf, clamp 350 fails and clamp 170 converges.
+
+        The lower bound is the value: `tanh` reaches exactly 1.0 in double
+        precision at an argument of 19, so a smaller clamp would make the
+        saturated masks inexact. Both bounds and the solver control are in
+        `NOTES/findings/FINDING-alpha-floor-mass.md`.
+        """
+        assert 19.0 < masks().SMOOTH_STEP_CLAMP < 177.8
 
     def test_ocean_function_is_the_smooth_step_of_sea_level(self):
         m = masks()
@@ -616,7 +639,7 @@ class TestRefusals:
     def test_refuses_a_boundary_quadrature_degree_below_2p(self, meshes):
         """Degree 3 is below `2 p = 4` for the P2 displacement and potential.
 
-        The calibration (plan C section 4c) needs `q >= 2 p` for the gradient
+        The calibration (`NOTES/findings/FINDING-mask-steepness.md`) needs `q >= 2 p` for the gradient
         through the masks. The factory's `quad_degree` sets the boundary
         degree that the sea-level measure uses.
         """
@@ -644,12 +667,53 @@ class TestRefusals:
 
 class TestSeaLevelDataclass:
 
-    def test_alpha_mask_defaults_to_one_half(self, meshes):
+    @staticmethod
+    def default_sea_level(sub):
+        """A `SeaLevel` with every mask setting left at its default."""
+        fields = surface_fields(sub, "ocean")
+        return sea_level_class()(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
+                                 g_surface=G_RE, **fields)
+
+    def test_the_mask_defaults_are_the_ones_the_masks_module_carries(
+            self, meshes):
+        """The defaults live in `sea_level_masks`, so there is one copy of each.
+
+        The values are `alpha = 1` and `grad_floor = 1e-4`, from steps S1 and
+        S2 of `NOTES/findings/FINDING-alpha-floor-mass.md`. The reasons are in
+        the docstrings of the two constants.
+        """
+        _, sub = meshes
+        m, sea_level = masks(), self.default_sea_level(meshes[1])
+        assert sea_level.alpha_mask == m.DEFAULT_ALPHA_MASK == 1.0
+        assert sea_level.grad_floor == m.DEFAULT_GRAD_FLOOR == 1e-4
+
+    @pytest.mark.parametrize("floor", [1e-3, 1e-4])
+    def test_grad_floor_reaches_the_mask_steepness(self, meshes, floor):
+        """The `grad_floor` of `SeaLevel` reaches `mask_steepness`.
+
+        With a frozen slope that is zero everywhere, `max(s, grad_floor)` is
+        the floor, so `k = alpha p / (h grad_floor)` and
+        `int k h ds = alpha p L / grad_floor` over the surface of length `L`.
+        Two floors a factor of 10 apart are checked, so a steepness that
+        ignored the keyword could not pass both. 1e-12 relative: the round-off
+        of an assembled integral of a constant.
+
+        Without this keyword a caller cannot set the floor at all, which is why
+        the measurement scripts of step S2 had to reach it by scaling `alpha`
+        and the slope field together.
+        """
         _, sub = meshes
         fields = surface_fields(sub, "ocean")
-        sea_level = sea_level_class()(boundary=CURVE_RE, rho_w=RHO_W,
-                                      rho_i=RHO_I, g_surface=G_RE, **fields)
-        assert sea_level.alpha_mask == 0.5
+        # Zero everywhere, so the floor is what the steepness divides by.
+        slope = fd.Function(fd.FunctionSpace(sub, "DG", 0))
+        solver, _, _ = build(meshes, fields, sea_level_overrides=dict(
+            slope=slope, grad_floor=floor))
+        dss = fd.Measure("ds", domain=sub)(CURVE_RE)
+        length = fd.assemble(fd.Constant(1.0) * dss)
+        got = fd.assemble(solver._sea_level_steepness() * fd.FacetArea(sub)
+                          * dss)
+        assert got == pytest.approx(ALPHA_MASK * 2 * length / floor,
+                                    rel=1e-12)
 
 
 # ---------------------------------------------------------------------------
@@ -877,7 +941,7 @@ class TestSurfaceLoadSheet:
 class TestConsumers:
     """The sheet reaches `mass_dipole_form`, `inertia_form` and the net-mass scale.
 
-    It does not reach the 2-D monopole datum (plan C section 4d item 1). The
+    It does not reach the 2-D monopole datum (`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 1). The
     datum is refreshed at the start of `solve`, so it would hold the net sheet
     mass of the previous state, and at a converged state the `Shift` row makes
     that net mass zero. The correct contribution is therefore zero.
@@ -1073,7 +1137,7 @@ class TestSheetSigns:
     ocean and `Shift = S`, so its sheet is `rho_w S`. At `u = psi = 0` the
     residual rows of both are the load terms alone.
 
-    This is the check that correction 4.3 of handover B asks for: a flipped
+    This is the check that `NOTES/DESIGN-SEA-LEVEL.md` asks for: a flipped
     geoid sign in `sea_level()` flips the sign of the ocean sheet in the
     potential row against every other sheet, while all symmetry tests still
     pass.
@@ -1138,7 +1202,7 @@ def jacobian(meshes, state, rotation=False):
     `"cap"`: masks saturated, so the mask derivatives vanish (below 1e-40) and
     the Jacobian is the fixed-mask one. `"shoreline"`: live masks. The sheet
     depends on `(u, psi, Shift)` only through the one scalar `Delta`, so the
-    exact Jacobian is still symmetric (handover B, correction 4.2).
+    exact Jacobian is still symmetric (`NOTES/DESIGN-SEA-LEVEL.md`).
 
     The perturbation is 1e-3, so the shoreline masks stay fractional and the
     saturated masks stay saturated.
@@ -1341,7 +1405,7 @@ class TestLiveMaskSolve:
         assert solver_converged(solver)
 
     def test_newton_takes_at_most_five_iterations(self, shoreline_solved):
-        """Plan C: more than 4 to 5 means the exact live-mask Jacobian is wrong.
+        """`NOTES/DECISIONS.md`: more than 4 to 5 means the exact live-mask Jacobian is wrong.
 
         Logged as well, by the fixture.
         """
@@ -1356,7 +1420,7 @@ class TestLiveMaskSolve:
             -c B_mu g_s int sigma dS + c B_mu sum_i lambda_i int x_i dsigma/dShift dS
 
         because `centre_of_mass_residual` keeps the column `lambda . dD/dShift`
-        (plan C section 4d item 2, option b), so the residual stays the
+        (`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 2), so the residual stays the
         gradient of one Lagrangian. At convergence the row is zero, and the
         common factor `c B_mu` of both terms cancels:
 
@@ -1603,7 +1667,7 @@ class TestNestedCondensation:
 
         With live masks the `(u, u)` block carries parent-mesh coefficients
         through the masks. `InternalVariableSCPC` compiles that block with
-        Slate, which needs a single mesh (handover B trap 3.4.2), so this is
+        Slate, which needs a single mesh (`NOTES/DESIGN-SEA-LEVEL.md`), so this is
         where a residual that is not written term by term fails.
         """
         from test_gia_nested_condensation import condensation_context
@@ -1679,7 +1743,7 @@ class TestTaylor:
 
 
 class TestRotation:
-    """Rotation on. Acceptance (plan C): the case solves and the Taylor test passes."""
+    """Rotation on. Acceptance (`NOTES/DECISIONS.md`): it solves and the Taylor test passes."""
 
     def test_the_rotating_case_solves(self, meshes):
         _, sub = meshes

@@ -181,7 +181,8 @@ from .stokes_integrators import (
     newton_stokes_solver_parameters,
 )
 from .utility import CombinedSurfaceMeasure, ensure_constant
-from .sea_level_masks import (grounded_ice_function, mask_steepness,
+from .sea_level_masks import (DEFAULT_ALPHA_MASK, DEFAULT_GRAD_FLOOR,
+                              grounded_ice_function, mask_steepness,
                               ocean_function)
 from ufl import derivative as ufl_derivative
 from ufl.algorithms.ad import expand_derivatives
@@ -286,7 +287,7 @@ selfgrav_dtn_schur_solver_parameters = {
     # Without a preconditioner, GMRES on block 1 must resolve rows that span
     # several orders of magnitude. With the centre-of-mass rows, which have a
     # zero diagonal, that took 66 block-0 solves per warm step against 9 with
-    # the complement (`NOTES/frame/FINDINGS-2026-09-15.md`, M3). The build
+    # the complement (`NOTES/findings/FINDING-centre-of-mass-frame.md`). The build
     # costs one block-0 solve per `Real` column, which is cheap at 2-D size.
     "dtn_fieldsplit_1_pc_type": "python",
     "dtn_fieldsplit_1_pc_python_type": "gadopt.DtNMultiplierDenseSchurPC",
@@ -1086,9 +1087,15 @@ class SeaLevel:
       I, I_init: the current and the reference ice thickness.
       N_init, ur_init: the geoid height and radial displacement of the
         reference state. Zero for a run that starts undeformed.
-      alpha_mask: the factor of the mask steepness `k = alpha p / h`.
+      alpha_mask: the factor of the mask steepness `k = alpha p / h`. The
+        default is `gadopt.sea_level_masks.DEFAULT_ALPHA_MASK`, which carries
+        the measurement that fixes it and the quadrature degree it holds at.
       slope: an optional frozen `Function` of the surface slope of `SL`; see
         `gadopt.sea_level_masks.mask_steepness`.
+      grad_floor: the lower bound applied to `slope`, so that a flat region
+        gives a finite steepness. It has no effect without a `slope`. The
+        default is `gadopt.sea_level_masks.DEFAULT_GRAD_FLOOR`, which carries
+        the measurement that fixes it.
     """
 
     boundary: int | str
@@ -1100,8 +1107,9 @@ class SeaLevel:
     I_init: Any
     N_init: Any
     ur_init: Any
-    alpha_mask: float = 0.5
+    alpha_mask: float = DEFAULT_ALPHA_MASK
     slope: Any = None
+    grad_floor: float = DEFAULT_GRAD_FLOOR
 
 
 @dataclass(frozen=True)
@@ -2719,8 +2727,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         3. A surface quadrature degree below `2 p`, with `p` the highest degree
            of the displacement and the potential. The masks are integrated at
            the quadrature points, and the calibration
-           (`NOTES/PLAN-SEA-LEVEL-2026-09-15-C.md` section 4c) needs `q >= 2 p`
-           for the derivative through the masks at `alpha = 0.5`.
+           (`NOTES/findings/FINDING-mask-steepness.md`) needs `q >= 2 p`
+           for the derivative through the masks at `alpha = 0.5`. This check
+           does not know `alpha`, and the default `alpha = 1` was calibrated at
+           the solver's own `q = 9` with `p = 2`. At the floor `q = 2 p` the
+           same measurement allows only 0.5
+           (`NOTES/findings/FINDING-alpha-floor-mass.md`), so a caller who
+           lowers the degree to the floor must lower `alpha_mask` as well.
 
         Raises:
           ValueError: for any of the three.
@@ -2846,10 +2859,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         return self._sea_level_expression(self.solution_split)
 
     def _sea_level_steepness(self):
-        """The mask steepness `k = alpha p / (h s)` on the sea-level measure."""
+        """The mask steepness `k = alpha p / (h s)` on the sea-level measure.
+
+        `grad_floor` reaches `mask_steepness` from `SeaLevel`, so a caller sets
+        the floor of the frozen slope where every other mask setting is set. It
+        has no effect without a `slope`.
+        """
         sl = self.sea_level_parameters
         return mask_steepness(self.mesh, self._sea_level_polynomial_degree(),
-                              sl.alpha_mask, sl.slope)
+                              sl.alpha_mask, sl.slope,
+                              grad_floor=sl.grad_floor)
 
     def _sheet_of(self, SL, mask_SL=None):
         r"""The load sheet for the sea level `SL`, with masks from `mask_SL`.
@@ -2917,7 +2936,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           hand-derived mask derivative.
         - No unevaluated derivative node stays in the form, so `split_form`
           removes the parent-mesh terms from the blocks that do not contain
-          these test functions (handover B trap 3.4.2).
+          these test functions (`NOTES/DESIGN-SEA-LEVEL.md`).
         """
         direction = TestFunction(self._mixed_space)
         return expand_derivatives(ufl_derivative(
@@ -3990,7 +4009,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # change that the ocean has not yet balanced. Measured on the 2-D
         # annulus: a datum of 1.29e-2 and `Shift` and the geoid wrong by
         # 1.44e-3, 15 percent of the eustatic value, on that solve only
-        # (`NOTES/PLAN-SEA-LEVEL-2026-09-15-C.md` section 4d). The sheet still
+        # (`NOTES/findings/FINDING-2d-sea-level-build.md`). The sheet still
         # sets the scale of `check_net_mass`.
 
         flux = None
