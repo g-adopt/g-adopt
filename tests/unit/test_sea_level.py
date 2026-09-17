@@ -2481,3 +2481,150 @@ class TestFixedOcean:
         """The guarded Taylor test of `run_taylor` on a fixed coastline."""
         run_taylor(meshes, rotation=False, representation=representation,
                    fixed_ocean=True)
+
+
+# ---------------------------------------------------------------------------
+# The ice cap of the Martinec driver
+# ---------------------------------------------------------------------------
+
+#: Path of the 3-D Martinec driver, whose cap expression is tested below.
+MARTINEC_DRIVER = (Path(__file__).resolve().parents[2] / "demos"
+                   / "glacial_isostatic_adjustment" / "3d_martinec_sea_level"
+                   / "martinec_benchmark.py")
+
+#: The Earth radius in units of the mantle thickness D, as the mesh generator
+#: of the 3-D benchmark defines it (6371 km / 2891 km).
+RE_SPHERE = 2.203736
+
+#: The cap centre of the ice models L1 and L2, (colatitude, longitude) in
+#: degrees. Martinec et al. (2018), table 1.
+CAP_CENTRE_DEG = (25.0, 75.0)
+
+#: Two caps as `(height_m, angular_radius_deg)`. `full_L1` is the ice model L1
+#: of case B at its full size. `half_grown_L2` is the ice model L2 of cases C
+#: and D halfway through the growth of scenario T1, where the height and the
+#: angular radius are both half their full values. The second one is here
+#: because the angular radius of L1 and L2 is the same, so a pair that differs
+#: in height alone would test the same integral twice: the height is a factor
+#: of the closed form and of the expression alike.
+CAP_MODELS = {"full_L1": (1500.0, 10.0), "half_grown_L2": (250.0, 5.0)}
+
+#: The length scale D, in metres.
+D_SCALE_M = 2.891e6
+
+
+def load_martinec_driver():
+    """The 3-D Martinec driver as a module, or a skip if it is absent.
+
+    The driver is a demo script and not part of the package, so it is loaded
+    by path, the way `load_will_sea_level` loads Will Scott's solver. Its
+    module body puts the Spada demo directory on `sys.path` and imports the
+    mesh generator and the reference state from there.
+    """
+    if not MARTINEC_DRIVER.exists():
+        pytest.skip(f"The Martinec driver is not at {MARTINEC_DRIVER}.")
+    spec = importlib.util.spec_from_file_location("martinec_benchmark",
+                                                  MARTINEC_DRIVER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestMartinecCap:
+    """`cap_profile` of the 3-D driver against the closed-form cap mass.
+
+    The ice load of every Martinec case is the parabolic spherical cap of
+    Spada et al. (2011),
+
+        h(gamma) = h0 sqrt((cos gamma - cos alpha) / (1 - cos alpha)),
+
+    written as a UFL expression and never interpolated, because its slope at
+    the margin is infinite. Its surface integral has a closed form,
+
+        int h dS = (4 pi / 3) R^2 h0 (1 - cos alpha),
+
+    which is what `cap_thickness_integral` returns and what this class checks.
+    A wrong power, a missing normalisation or a cap centre in the wrong place
+    all change the integral by far more than the tolerance here.
+
+    The mesh is an icosahedral sphere of the non-dimensional Earth radius,
+    which is a 2-D manifold in 3-D: `dx` on it is the surface measure. The
+    quadrature degree is named, because the integrand is a square root of a
+    rational expression and the automatic estimate is meaningless for it.
+    """
+
+    #: Refinement levels of the icosahedral sphere: 5120 and 20480 cells.
+    LEVELS = (4, 5)
+    #: The quadrature degree of the surface integral.
+    QUADRATURE_DEGREE = 8
+    #: The tolerance at the finer level. The measured error there is 1.4e-4
+    #: for the full cap and 3.3e-5 for the half-grown one, and it is set by
+    #: the square-root edge at the cap margin, not by the quadrature degree.
+    TOLERANCE = 1e-3
+    #: How much the error must fall between the two levels. Measured: a factor
+    #: of 4.1 for the full cap and 3.4 for the half-grown one. A wrong formula
+    #: gives an error that does not fall with the mesh at all.
+    CONVERGENCE_FACTOR = 2.5
+
+    @staticmethod
+    def sphere(level):
+        """An icosahedral sphere of radius `RE_SPHERE`, with P2 geometry."""
+        return fd.IcosahedralSphereMesh(radius=RE_SPHERE,
+                                        refinement_level=level, degree=2)
+
+    def errors(self, driver, height_m, alpha_deg):
+        """The relative error of the assembled cap mass at each level."""
+        height = height_m / D_SCALE_M
+        alpha = np.radians(alpha_deg)
+        want = driver.cap_thickness_integral(RE_SPHERE, height, alpha)
+        out = []
+        for level in self.LEVELS:
+            mesh = self.sphere(level)
+            expression = driver.cap_profile(mesh, CAP_CENTRE_DEG, height,
+                                            alpha)
+            measure = fd.dx(metadata={
+                "quadrature_degree": self.QUADRATURE_DEGREE})
+            got = fd.assemble(expression * measure)
+            out.append(abs(got - want) / abs(want))
+        return out
+
+    @pytest.mark.parametrize("model", sorted(CAP_MODELS))
+    def test_the_cap_integrates_to_the_closed_form_mass(self, model):
+        """`int h dS = (4 pi / 3) R^2 h0 (1 - cos alpha)` to the mesh error.
+
+        Two statements, because one alone does not separate a discretisation
+        error from a wrong formula: the error at the finer level is below
+        `TOLERANCE`, and it falls by at least `CONVERGENCE_FACTOR` between the
+        two levels.
+        """
+        driver = load_martinec_driver()
+        height_m, alpha_deg = CAP_MODELS[model]
+        coarse, fine = self.errors(driver, height_m, alpha_deg)
+        print(f"cap {model}: relative error {coarse:.4e} at level "
+              f"{self.LEVELS[0]}, {fine:.4e} at level {self.LEVELS[1]}, "
+              f"ratio {coarse / fine:.2f}")
+        assert fine < self.TOLERANCE
+        assert coarse / fine > self.CONVERGENCE_FACTOR
+
+    def test_the_cap_carries_no_ice_outside_its_margin(self):
+        """The whole integral equals the integral over `gamma <= alpha`.
+
+        The expression cuts the outside with `max_value(cos gamma - cos alpha,
+        0)` and not with a `conditional`, so this is the check that the cut
+        really leaves nothing outside: a sign error in the numerator would put
+        ice on the far hemisphere and still integrate to something plausible
+        inside the cap.
+        """
+        driver = load_martinec_driver()
+        height_m, alpha_deg = CAP_MODELS["full_L1"]
+        height, alpha = height_m / D_SCALE_M, np.radians(alpha_deg)
+        mesh = self.sphere(self.LEVELS[0])
+        expression = driver.cap_profile(mesh, CAP_CENTRE_DEG, height, alpha)
+        cos_gamma = driver.cos_angular_distance(mesh, CAP_CENTRE_DEG)
+        inside = fd.conditional(cos_gamma >= np.cos(alpha), 1.0, 0.0)
+        measure = fd.dx(metadata={
+            "quadrature_degree": self.QUADRATURE_DEGREE})
+        total = fd.assemble(expression * measure)
+        within = fd.assemble(inside * expression * measure)
+        assert total > 0.0
+        assert within == pytest.approx(total, rel=1e-14)

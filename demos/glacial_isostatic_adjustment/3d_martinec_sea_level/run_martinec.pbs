@@ -1,0 +1,137 @@
+#!/bin/bash
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=48:00:00
+#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l wd
+# The Martinec et al. (2018) sea-level benchmark on the NCI Gadi cluster.
+#
+# Submit from this directory. Edit the project (-P), the storage list and the
+# module lines for another allocation or another cluster.
+#
+#   qsub -v CASE=B run_martinec.pbs                      # case B to 10 kyr
+#   qsub -v CASE=C run_martinec.pbs                      # case C to 15 kyr
+#   qsub -v CASE=D run_martinec.pbs                      # case D to 15 kyr
+#   qsub -v CASE=B,STEPS=2,LABEL=B-smoke -l walltime=02:00:00 run_martinec.pbs
+#   qsub -v CASE=B,RESTART=3,RESTART_FILE=martinec-B.h5,LABEL=B-cont \
+#        run_martinec.pbs
+#
+# Variables, with their defaults:
+#
+#   CASE=B            the benchmark case, B, C or D
+#   NNODES=1          how many nodes the job asks mpiexec to fill. The
+#                     resource lines above ask for one normalsr node, and PBS
+#                     reads them before this script runs. NNODES=2 therefore
+#                     needs the resources at submission as well, for example
+#                     qsub -l ncpus=208 -l mem=960GB -v NNODES=2 ...
+#                     The script stops if NNODES * NRANK is above the cpus of
+#                     the allocation.
+#   NRANK=96          ranks per node; the total is NNODES * NRANK
+#   MESH=../3d_spada_selfgrav/b2_coarse_ar7.msh
+#                     the mesh file. The coarse mesh is the smoke and G2 mesh;
+#                     the 78 km refined mesh of this directory is the mesh of
+#                     G2r, G3 and G4. Copy both files from the laptop and
+#                     check the MD5. Do not regenerate them here: another gmsh
+#                     version gives other tetrahedra, and a flat cell folds
+#                     when the mesh is curved.
+#                       b2_coarse_ar7.msh   f5072078dbf75567d9352b9cf64eec33
+#                       martinec_h78_...msh 6bd1f84eb53de7ec3e84a0b038ac489a
+#   GIA_MIP=$W/../gia-mip
+#                     the gia-mip checkout, for the case and load files. The
+#                     driver reads JSON only, so the checkout needs no install.
+#   REPRESENTATION=lowrank    the DtN representation
+#   MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC
+#                     the block-1 preconditioner; pass none for the comparison
+#   LABEL=$CASE       the label of every output file
+#   OUTPUT=$PBS_O_WORKDIR
+#   STEPS=            stop after this many steps, for a smoke run
+#   RESTART=          continue from this state index of RESTART_FILE
+#   RESTART_FILE=     the checkpoint to restart from. It is required with
+#                     RESTART. The driver refuses to write over the file it
+#                     reads, so give the continued run its own LABEL as well.
+#   EXTRA=            any other driver options
+#
+# Cost. The Spada baseline on the coarse mesh is 127 s per 100 yr step at 96
+# ranks and 78 GB (job 179238658). Case B marches 118 steps on that ladder,
+# case C and D 300 steps of 50 yr. The refined mesh has 1.8 times the
+# displacement and potential dofs, which scales the step to 219 to 229 s and
+# the memory to at most 191 GB; that estimate needs two nodes at the same
+# dofs per rank. Sea level adds the ocean column of the load to block 0 and
+# the dense Schur complement on block 1; the smoke job measures what it costs.
+source /etc/profile
+module use /g/data/fp50/modules
+module load firedrake/main-20260902
+ulimit -s unlimited 2>/dev/null || true
+
+# This directory and the repository root, which must come first on
+# PYTHONPATH so that `import gadopt` loads this checkout.
+D=$PBS_O_WORKDIR
+W=$(cd "$D/../../.." && pwd)
+export PYTHONPATH=$W:$D:$PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OMPI_MCA_io=ompio
+# PETSc options can be added at submission, for example -log_view.
+: ${PETSCOPTS:=}
+export PETSC_OPTIONS="$PETSCOPTS"
+cd "$D"
+
+: ${CASE:=B}
+: ${NNODES:=1}
+: ${NRANK:=96}
+: ${MESH:=../3d_spada_selfgrav/b2_coarse_ar7.msh}
+: ${GIA_MIP:=$W/../gia-mip}
+: ${REPRESENTATION:=lowrank}
+: ${MULTIPLIER_PC:=gadopt.DtNMultiplierDenseSchurPC}
+: ${LABEL:=$CASE}
+: ${OUTPUT:=$D}
+: ${STEPS:=}
+: ${RESTART:=}
+: ${RESTART_FILE:=}
+: ${EXTRA:=}
+
+# The optional flags, each empty unless its variable is set.
+STEPS_FLAG=
+[ -n "$STEPS" ] && STEPS_FLAG="--steps $STEPS"
+RESTART_FLAG=
+if [ -n "$RESTART" ]; then
+    # The driver requires both, and it writes martinec-$LABEL.h5, so a
+    # continued run needs a LABEL of its own. Fail here and not after the
+    # meshes: a job that stops at once costs no walltime.
+    if [ -z "$RESTART_FILE" ]; then
+        echo "RESTART needs RESTART_FILE, the checkpoint of the earlier run" >&2
+        exit 2
+    fi
+    RESTART_FLAG="--restart $RESTART --restart-file $RESTART_FILE"
+fi
+
+NTOTAL=$((NNODES * NRANK))
+
+# The resource lines at the top of this file are read by PBS before any
+# variable of this script exists, so NNODES cannot change them. Stop here if
+# the job asks mpiexec for more ranks than the allocation holds: the failure
+# is immediate either way, and this message says what to do.
+if [ -n "$PBS_NCPUS" ] && [ "$NTOTAL" -gt "$PBS_NCPUS" ]; then
+    echo "NNODES*NRANK=$NTOTAL is above the allocation PBS_NCPUS=$PBS_NCPUS." >&2
+    echo "Submit with -l ncpus=$NTOTAL and the matching -l mem." >&2
+    exit 2
+fi
+
+echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
+echo "=== git:    $(git -C "$W" rev-parse --short HEAD) ==="
+echo "=== mesh:   $MESH  md5 $(md5sum "$MESH" | cut -d' ' -f1) ==="
+echo "=== CASE=$CASE LABEL=$LABEL REPRESENTATION=$REPRESENTATION ==="
+echo "=== NNODES=$NNODES NRANK=$NRANK NTOTAL=$NTOTAL ==="
+echo "=== started $(date) on $(hostname) ==="
+
+# shellcheck disable=SC2086
+mpiexec -np $NTOTAL --map-by ppr:$NRANK:node python3 -u martinec_benchmark.py \
+    --case $CASE --mesh $MESH --gia-mip $GIA_MIP \
+    --dtn-representation $REPRESENTATION --multiplier-pc $MULTIPLIER_PC \
+    --label $LABEL --output $OUTPUT \
+    $STEPS_FLAG $RESTART_FLAG $EXTRA 2>&1
+RC=$?
+
+echo "=== finished $(date), exit $RC ==="
+exit $RC
