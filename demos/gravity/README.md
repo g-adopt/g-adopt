@@ -32,6 +32,23 @@ with `CondensedBlockPC` on block 0 and, on the low-rank representation,
 `LowRankPotentialPC` on its potential split. The 3-D Spada benchmark is in
 `demos/glacial_isostatic_adjustment/3d_spada_selfgrav/`.
 
+**Power-law rheology in 3-D.** `SelfGravitatingGIASolver` solves a power-law
+rheology on the full layout with Newton. The 3-D Spada restart driver
+`b5_restart_condensation.py` takes `--exponent`, `--transition-stress-mpa`
+and `--power-law-layers`. The exponent is a DG0 field that is 3 in the two
+upper-mantle shells (70 km to 670 km) and 1 in the other shells, as in
+`tests/3d_weerdesteijn_coupled`. The transition stress uses the sqrt(2 J2)
+convention of that test. The driver option `--stress-report` prints the
+deviatoric stress of each checkpoint state per shell, and the step size that
+keeps `dt / (tau f)` below 5, where `f` is the power-law factor. On 2026-09-17
+the low-rank arm ran three restart steps at exponent 3 and 0.2 MPa, at
+20 kyr with 500 yr steps and at 1 kyr with 25 yr steps (Gadi jobs 179212840
+and 179212841). Every Newton solve converged in 2 to 4 iterations. Each
+Newton iteration costs the same linear work as one Newtonian step (6 or 7
+block-0 applications, none at the cap). At 1 kyr a power-law step takes
+2.8 times the wall time of the Newtonian step. The record is
+`NOTES/team/power-law-3d/STRESS-CHECK.md`.
+
 **The fluid-core volume constraint.** One uniform pressure multiplier enforces
 zero integrated CMB flux. It removes the degree-zero core-mass mode that broke
 the B5 march. The local implementation and review are complete.
@@ -57,6 +74,10 @@ convergence campaign against independent `passess` references.
 
 **Cost study E6** in `ROADMAP-GRAVITY.md`. Nobody measured degrees of freedom,
 wall-clock time and Krylov counts for configuration A against configuration D.
+
+**Power-law time-step control.** No solver changes the step size when the
+stress rises. Newton failed on the 2-D annulus when `dt / (tau f)` was about
+25. No 3-D job has found the step at which Newton fails.
 
 **Coupled mechanics cost.** The P3 B5 result passes the accuracy gate. Its 351
 capped block-0 solves identify an open preconditioner problem.

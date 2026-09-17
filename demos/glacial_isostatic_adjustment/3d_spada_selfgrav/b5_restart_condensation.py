@@ -6,6 +6,14 @@ DG1 Maxwell history. It then advances two 100-year steps on the AR-7 mesh.
 The uncondensed arm is the weak finite-element reference. The condensed arm
 must match its spectra, field norms, amplification, and DG weak history
 residual. A difference above the linear-solve error rejects exact condensation.
+
+The same restart runs a power-law rheology on the uncondensed arm:
+`--exponent`, `--transition-stress-mpa`, `--background-stress-mpa` and
+`--power-law-layers` build it through `b1.power_law_rheology`, and the outer
+method becomes `newtonls`. Each step then prints a NEWTON line and the stress
+table of the solved state. `--stress-report --stress-indices I [I ...]` prints
+the per-shell deviatoric stress of the listed checkpoint states and exits
+before a solver is built; use it to choose `--dt-yr` for a power law.
 """
 
 import argparse
@@ -18,9 +26,10 @@ sys.path.insert(0, HERE)
 
 import gadopt  # noqa: E402,F401  (import gadopt before firedrake)
 import numpy as np  # noqa: E402
-from firedrake import (CheckpointFile, COMM_WORLD, Constant, FacetNormal,  # noqa: E402
-                       Function, SpatialCoordinate, TensorFunctionSpace,
-                       assemble, avg, dot, ds, dx, grad, norm, sqrt)
+from firedrake import (CellVolume, CheckpointFile, COMM_WORLD,  # noqa: E402
+                       Constant, FacetNormal, Function, FunctionSpace,
+                       SpatialCoordinate, TensorFunctionSpace, assemble, avg,
+                       conditional, dot, ds, dx, grad, norm, sqrt)
 from gadopt.gia_gravity import (  # noqa: E402
     resolve_dtn_representation, selfgrav_dtn_iterative_solver_parameters)
 from gadopt.internal_variable_equation import (  # noqa: E402
@@ -219,6 +228,120 @@ def weak_history_residual(solver, z, layout, m_old):
     return norm(riesz), norm(riesz) / denominator
 
 
+def gather_owned(field):
+    """Concatenate the owned values of a scalar field from every rank on rank 0.
+
+    Halo entries are excluded (`dat.data_ro` holds the owned part), so each
+    cell or node is counted once. Returns None on the other ranks.
+    """
+    parts = COMM_WORLD.gather(np.array(field.dat.data_ro, copy=True), root=0)
+    return np.concatenate(parts) if COMM_WORLD.rank == 0 else None
+
+
+def weighted_percentile(values, weights, q):
+    """The `q`-th percentile of `values` with each entry weighted by `weights`.
+
+    Used with cell values and cell volumes, so the percentile is a fraction of
+    the shell volume and not of the cell count, which the mesh grading would
+    otherwise bias towards the fine surface cells.
+    """
+    order = np.argsort(values)
+    cumulative = np.cumsum(weights[order])
+    cumulative /= cumulative[-1]
+    return float(values[order][np.searchsorted(cumulative, q / 100.0)])
+
+
+def power_law_factor_of(stress_ratio, exponent):
+    """f = 1 / (1 + (sigma/sigma*)^(n-1)) for zero background stress.
+
+    The Maxwell time of a power-law shell is `f` times its Newtonian value, so
+    `f` below 1 is the drop in effective viscosity. Matches
+    `CompressibleInternalVariableApproximation.power_law_factor` with
+    `background_stress = 0`; for n = 1 that method returns 1, and so does this.
+    """
+    if exponent == 1.0:
+        return np.ones_like(np.asarray(stress_ratio, dtype=float))
+    return 1.0 / (1.0 + np.asarray(stress_ratio, dtype=float) ** (exponent - 1.0))
+
+
+def stress_report(label, sub, displacement, history, *, exponent,
+                  transition_stress_mpa, layers, dt_yr, degree):
+    """Print the deviatoric stress of one state per Spada shell, and what a
+    power law would make of it.
+
+    The stress is `deviatoric_stress(u, [m])` of the Newtonian approximation,
+    `2 mu0 dev(eps(u)) - 2 mu m` in units of `MU_BAR` (1e11 Pa); the rheology
+    does not enter it, so the same numbers describe the Newtonian checkpoint
+    and the state a power-law step starts from. Its invariant is
+    `second_stress_invariant`, sqrt(J2), reported in MPa in the convention of
+    `--transition-stress-mpa` (sqrt(2 J2), see `b1.stress_mpa_to_sqrt_j2`),
+    so the two numbers compare directly.
+
+    Two samplings, because a maximum and a distribution need different ones:
+    the cell mean (projection onto DG0), weighted by cell volume, for the
+    percentiles; and the nodal values of the interpolant in DG `degree` for
+    the maximum, which a cell mean would smooth away near the load edge.
+
+    For each shell the report gives the Newtonian Maxwell time `tau`, the
+    factor `f` at each sampled stress for `exponent` and
+    `transition_stress_mpa` (1 in shells outside `layers`), and the step
+    ratio `dt / (tau f)` at `dt_yr`. On the 2-D annulus Newton converged with
+    that ratio up to about 10 and failed from about 25
+    (`NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2.1). The last column is
+    the largest step that keeps the ratio at the shell maximum below 5.
+    """
+    approx = b1.spada_approximation(sub)
+    dev = approx.deviatoric_stress(displacement, [history])
+    invariant = approx.second_stress_invariant(dev)
+    # sqrt(J2) in units of MU_BAR -> sqrt(2 J2) in MPa.
+    to_mpa = b1.MU_BAR / 1.0e6 * 2.0 ** 0.5
+
+    dg0 = FunctionSpace(sub, "DG", 0)
+    cell_mean = Function(dg0).project(invariant)
+    volume = Function(dg0).interpolate(CellVolume(sub))
+    index = b1.layer_index(sub)
+    # The nodal maximum per shell: interpolate the invariant times the shell
+    # indicator, which is exact at the nodes because the indicator is DG0.
+    dgk = FunctionSpace(sub, "DG", degree)
+    shell_nodal_max = []
+    for number in range(1, len(b1.LAYERS) + 1):
+        indicator = conditional(abs(index - float(number)) < 0.5, 1.0, 0.0)
+        nodal = Function(dgk).interpolate(invariant * indicator)
+        with nodal.dat.vec_ro as vec:
+            shell_nodal_max.append(vec.max()[1] * to_mpa)
+
+    means = gather_owned(cell_mean)
+    volumes = gather_owned(volume)
+    shells = gather_owned(index)
+    if COMM_WORLD.rank != 0:
+        return
+    means = means * to_mpa
+    say(f"STRESS state={label} transition_stress_mpa={transition_stress_mpa:g} "
+        f"exponent={exponent:g} layers={','.join(map(str, layers))} "
+        f"dt_yr={dt_yr:g}")
+    for number, row in enumerate(b1.LAYERS, start=1):
+        mask = np.abs(shells - number) < 0.5
+        values, weights = means[mask], volumes[mask]
+        tau_yr = row[4] / row[3] * T_BAR_YR
+        n = exponent if number in layers else 1.0
+        p50, p90, p99 = (weighted_percentile(values, weights, q)
+                         for q in (50, 90, 99))
+        peak = shell_nodal_max[number - 1]
+        above = float(weights[values > transition_stress_mpa].sum()
+                      / weights.sum())
+        f = power_law_factor_of(
+            np.array([p50, p90, p99, peak]) / transition_stress_mpa, n)
+        ratio = dt_yr / (tau_yr * f)
+        dt_limit = 5.0 * tau_yr * f[-1]
+        say(f"STRESS state={label} shell={number} n={n:g} tau_yr={tau_yr:.4g} "
+            f"sqrtJ2_mpa p50={p50:.4g} p90={p90:.4g} p99={p99:.4g} "
+            f"nodal_max={peak:.4g} volume_above_transition={above:.4g} "
+            f"f p50={f[0]:.3g} p90={f[1]:.3g} p99={f[2]:.3g} max={f[3]:.3g} "
+            f"dt_over_tau_f p50={ratio[0]:.3g} p90={ratio[1]:.3g} "
+            f"p99={ratio[2]:.3g} max={ratio[3]:.3g} "
+            f"dt_yr_for_ratio_5={dt_limit:.4g}")
+
+
 def report_state(tag, t_kyr, solver, z, layout, ref, sigma_dim, nmax,
                  nproj, theta_fine):
     u_norm, psi_norm, m_norm = state_norms(solver, z, layout)
@@ -294,6 +417,32 @@ def main():
                                  "gravity-core-feedback"),
                         default="none")
     parser.add_argument("--load-only", action="store_true")
+    # Power-law rheology (`b1.power_law_rheology`): exponent n in the shells
+    # of --power-law-layers (1-based rows of b1.LAYERS; 2 3 is the upper
+    # mantle from 70 to 670 km, the layering of 3d_weerdesteijn_coupled), 1
+    # elsewhere. The transition stress is in MPa in the convention of that
+    # test, sqrt(2 J2); 0.2 MPa is its production value. Exponent 1 builds the
+    # Newtonian approximation unchanged.
+    parser.add_argument("--exponent", type=float, default=1.0)
+    parser.add_argument("--transition-stress-mpa", type=float, default=0.2)
+    parser.add_argument("--background-stress-mpa", type=float, default=0.0)
+    parser.add_argument("--power-law-layers", default="2 3",
+                        help="space-separated 1-based rows of b1.LAYERS")
+    # The outer method. Unset: newtonls for a power law, ksponly for a
+    # Newtonian rheology (the solver refuses ksponly on a power law).
+    parser.add_argument("--snes-type", choices=("ksponly", "newtonls"),
+                        default=None)
+    parser.add_argument("--snes-rtol", type=float, default=None,
+                        help="Newton relative tolerance on the whole mixed "
+                             "residual; unset keeps the preset's 1e-4.")
+    # The stress check: load each listed checkpoint index, print the
+    # per-shell deviatoric stress table of `stress_report` for the power-law
+    # arguments above and --dt-yr, and exit before any solver is built.
+    parser.add_argument("--stress-report", action="store_true")
+    # Space-separated, because `qsub -v` splits its argument at commas.
+    parser.add_argument("--stress-indices", type=int, nargs="+", default=None,
+                        help="checkpoint indices for --stress-report; unset "
+                             "reads --checkpoint-index")
     parser.add_argument(
         "--dtn-representation", choices=("multiplier", "lowrank"),
         default=None,
@@ -319,6 +468,17 @@ def main():
     args = parser.parse_args()
 
     condense = args.arm == "condensed"
+    power_law_layers = tuple(int(x) for x in args.power_law_layers.split())
+    if args.snes_type is None:
+        args.snes_type = "newtonls" if args.exponent != 1.0 else "ksponly"
+    if args.exponent != 1.0 and condense:
+        # The library refuses pointwise substitution under a power law too,
+        # but its check calls float() on the exponent, which is a DG0 field
+        # here, so it would fail with a TypeError and no explanation.
+        raise SystemExit(
+            "--exponent != 1 needs --arm uncondensed: pointwise substitution "
+            "of the internal variables changes the Newton linearisation of a "
+            "power law, so the condensed layout refuses it.")
     named = args.dtn_representation is not None
     # The library's rule, not a copy of it: unset resolves to low-rank on the
     # full layout and multiplier on the condensed one. The nested and sweep
@@ -371,6 +531,24 @@ def main():
         args.checkpoint, parent, sub, args.checkpoint_index)
     say(f"RESTART u_norm={norm(displacement):.16e} "
         f"psi_norm={norm(potential):.16e} m_norm={norm(history):.16e}")
+    if args.stress_report:
+        indices = args.stress_indices or [args.checkpoint_index]
+        for idx in indices:
+            # Separate names, so the restart state loaded above is never
+            # replaced by another index's fields.
+            if idx == args.checkpoint_index:
+                u_idx, m_idx = displacement, history
+            else:
+                u_idx, _, m_idx = load_restart(
+                    args.checkpoint, parent, sub, idx)
+            stress_report(
+                f"index{idx}", sub, u_idx, m_idx,
+                exponent=args.exponent,
+                transition_stress_mpa=args.transition_stress_mpa,
+                layers=power_law_layers, dt_yr=args.dt_yr,
+                degree=args.internal_variable_degree)
+        say("RESULT stress_report=pass")
+        return
     if args.load_only:
         say("RESULT load_only=pass")
         return
@@ -381,7 +559,7 @@ def main():
         # cap and displacement options can be set below.
         solver_parameters = b1.condensed_solver_parameters(
             outer_rtol=args.outer_rtol, block0_rtol=args.block0_rtol,
-            block0_max_it=args.block0_max_it, snes_type="ksponly",
+            block0_max_it=args.block0_max_it, snes_type=args.snes_type,
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC")
         displacement_prefix = "dtn_fieldsplit_0_fieldsplit_0_"
     elif args.block0 == "sweep":
@@ -412,7 +590,7 @@ def main():
             block0_rtol=args.block0_rtol,
             outer_rtol=args.outer_rtol,
             block0_max_it=args.block0_max_it,
-            snes_type="ksponly",
+            snes_type=args.snes_type,
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
             dtn_representation=args.dtn_representation)
         displacement_prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
@@ -431,10 +609,13 @@ def main():
             block0_rtol=args.block0_rtol,
             outer_rtol=args.outer_rtol,
             block0_max_it=args.block0_max_it,
-            snes_type="ksponly",
+            snes_type=args.snes_type,
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
             dtn_representation=args.dtn_representation)
         displacement_prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
+
+    if args.snes_rtol is not None:
+        solver_parameters["snes_rtol"] = args.snes_rtol
 
     # The displacement preconditioner, on whichever split carries it. For
     # the assembled-block classes the modes are a PETSc option they read at
@@ -473,12 +654,18 @@ def main():
         ivdeg=args.internal_variable_degree,
         condense=condense, outer_rtol=args.outer_rtol,
         bulk_shear_ratio=args.bulk_shear_ratio,
-        u_pc="gadopt.RigidBodyAssembledPC", snes_type="ksponly",
+        u_pc="gadopt.RigidBodyAssembledPC", snes_type=args.snes_type,
         block0_rtol=args.block0_rtol, block0_max_it=args.block0_max_it,
         multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
         solver_parameters=solver_parameters, dt=dt,
         solver_kwargs_extra=solver_kwargs_extra,
-        dtn_representation=args.dtn_representation, **near_nullspace_kw)
+        dtn_representation=args.dtn_representation,
+        power_law=b1.power_law_rheology(
+            sub, exponent=args.exponent,
+            transition_stress_mpa=args.transition_stress_mpa,
+            background_stress_mpa=args.background_stress_mpa,
+            layers=power_law_layers),
+        **near_nullspace_kw)
     b1.SelfGravitatingGIASolver = original_solver_class
     assign_restart(solver, z, layout, displacement, potential, history)
 
@@ -491,6 +678,27 @@ def main():
         solver.solve()
         elapsed = time.time() - start
         u_norm = state_norms(solver, z, layout)[0]
+        snes = solver.solver.snes
+        # One NEWTON line per step: nonlinear and total outer Krylov
+        # iterations, the converged reason, and the final residual norm, so a
+        # power-law step's cost splits into Newton iterations without parsing
+        # the monitor.
+        say(f"NEWTON arm={tag} step={step} "
+            f"snes_its={snes.getIterationNumber()} "
+            f"outer_ksp_its={snes.getLinearSolveIterations()} "
+            f"reason={snes.getConvergedReason()} "
+            f"fnorm={snes.getFunctionNorm():.6e}")
+        if args.exponent != 1.0:
+            # The stress table of the solved state, for the shells' actual
+            # viscosity drop within this step and the step size the next
+            # one could take.
+            stress_report(
+                f"step{step}", sub, z.subfunctions[layout.displacement],
+                history_slice(internal_variable(solver, z, layout)),
+                exponent=args.exponent,
+                transition_stress_mpa=args.transition_stress_mpa,
+                layers=power_law_layers, dt_yr=args.dt_yr,
+                degree=args.internal_variable_degree)
         weak_abs, weak_rel = weak_history_residual(
             solver, z, layout, m_old)
         t_kyr = args.checkpoint_time_kyr + step * args.dt_yr / 1000.0

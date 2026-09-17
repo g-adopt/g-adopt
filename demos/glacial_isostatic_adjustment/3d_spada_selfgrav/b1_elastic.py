@@ -319,6 +319,92 @@ def layered(mesh, index, name):
     return Function(FunctionSpace(mesh, "DG", 0), name=name).interpolate(expr)
 
 
+def layer_index(mesh):
+    """A DG0 field holding the 1-based row of `LAYERS` that each cell sits in.
+
+    Row 1 is the outermost shell (the lithosphere), row 4 the innermost (the
+    lower mantle). The same outward override as `layered`, so a cell on a
+    conforming mesh takes the index of the shell that contains it. Used to
+    place the power-law exponent and to report stresses per shell.
+    """
+    X = SpatialCoordinate(mesh)
+    r = sqrt(dot(X, X))
+    expr = Constant(float(len(LAYERS)))
+    for number, row in reversed(list(enumerate(LAYERS, start=1))):
+        expr = conditional(r >= Constant(row[1]), Constant(float(number)), expr)
+    return Function(FunctionSpace(mesh, "DG", 0),
+                    name="layer_index").interpolate(expr)
+
+
+def stress_mpa_to_sqrt_j2(stress_mpa):
+    """Convert a stress in MPa to the scaled sqrt(J2) the power law reads.
+
+    The stress scale of these drivers is `MU_BAR` (1e11 Pa). The division by
+    sqrt(2) follows `tests/3d_weerdesteijn_coupled`: the production transition
+    stress of 0.2 MPa is quoted as sqrt(2 J2), and
+    `second_stress_invariant` returns sqrt(J2) = sqrt(0.5 s:s). So 0.2 MPa
+    becomes 0.2e6 / 1e11 / sqrt(2) = 1.414e-6.
+    """
+    return stress_mpa * 1.0e6 / MU_BAR / 2.0 ** 0.5
+
+
+def power_law_rheology(mesh, exponent=1.0, transition_stress_mpa=0.2,
+                       background_stress_mpa=0.0, layers=(2, 3)):
+    """Keywords for `CompressibleInternalVariableApproximation`'s power law.
+
+    The exponent is a DG0 field: `exponent` in the shells named by `layers`
+    (1-based rows of `LAYERS`) and exactly 1 elsewhere. The default rows 2 and
+    3 are the upper mantle between 70 km and 670 km depth, the layering of
+    `tests/3d_weerdesteijn_coupled` (exponents 1, 3, 3, 1 on the same four
+    Spada shells). The lithosphere must stay at 1: its scaled viscosity of
+    1e19 makes it elastic, and a stress-dependent Maxwell time there would
+    only add nonlinearity with no physical content.
+
+    A Function-valued exponent makes the solver treat the rheology as a power
+    law everywhere (`_newtonian_rheology` cannot fold a field), so Newton and
+    GMRES on the condensed field are selected even in the Newtonian shells.
+    In those shells `power_law_factor` returns 1 through its `n = 1` guard.
+
+    Returns an empty dict for `exponent == 1`, so a Newtonian run builds the
+    approximation exactly as before this option existed.
+    """
+    if exponent == 1.0:
+        return {}
+    index = layer_index(mesh)
+    expr = Constant(1.0)
+    for number in layers:
+        expr = conditional(abs(index - float(number)) < 0.5,
+                           Constant(float(exponent)), expr)
+    exponent_field = Function(FunctionSpace(mesh, "DG", 0),
+                              name="power_law_exponent").interpolate(expr)
+    return {
+        "exponent": exponent_field,
+        "transition_stress": Constant(
+            stress_mpa_to_sqrt_j2(transition_stress_mpa)),
+        "background_stress": Constant(
+            stress_mpa_to_sqrt_j2(background_stress_mpa)),
+    }
+
+
+def spada_approximation(mesh, bulk_shear_ratio=BULK_SHEAR_RATIO,
+                        power_law=None):
+    """The layered Spada mantle rheology of B1 and B5 on `mesh`.
+
+    One Maxwell element per cell with the shell values of `LAYERS`, gravity
+    from the reference state, and the optional power law of
+    `power_law_rheology` (a dict of its keywords, or None for Newtonian).
+    """
+    rho = layered(mesh, 2, "density")
+    mu = layered(mesh, 3, "shear_modulus")
+    eta = layered(mesh, 4, "viscosity")
+    X = SpatialCoordinate(mesh)
+    r = sqrt(dot(X, X))
+    return CompressibleInternalVariableApproximation(
+        bulk_modulus=mu, density=rho, shear_modulus=[mu], viscosity=[eta],
+        bulk_shear_ratio=bulk_shear_ratio, g=refstate.gravity_exact_ufl(r),
+        B_mu=B_MU, self_gravity_number=LAMBDA, **(power_law or {}))
+
+
 # --------------------------------------------------------------------------
 # Legendre machinery, shared by the load and the projection
 # --------------------------------------------------------------------------
@@ -573,7 +659,8 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
                  bulk_shear_ratio=BULK_SHEAR_RATIO,
                  u_pc=DEFAULT_DISPLACEMENT_PC, snes_type="ksponly",
                  dt=None, block0_rtol=1e-2, multiplier_pc="none",
-                 solver_kwargs_extra=None, dtn_representation=None):
+                 solver_kwargs_extra=None, dtn_representation=None,
+                 power_law=None):
     """Build the Spada self-gravity solver of B1 and B5.
 
     `solver_kwargs_extra` is merged into the keywords handed to
@@ -589,6 +676,10 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
     low-rank on the full layout and multiplier on the condensed one
     (`gadopt.resolve_dtn_representation`). It is threaded into the space, the
     solver and the preset, which must agree: the solver refuses a mismatch.
+
+    `power_law` is the keyword dict of `power_law_rheology`, or None for the
+    Newtonian rheology. A power law needs `snes_type="newtonls"`; the solver
+    refuses `ksponly` with a state-dependent Jacobian.
     """
     sigma_n = cap_sigma_hat(nmax)
     sigma_parent = load_field(parent, nmax, sigma_n)
@@ -613,17 +704,8 @@ def build_solver(parent, sub, nmax, dtn_degree=5, rotation=False,
     z.subfunctions[layout.displacement].rename("displacement")
     z.subfunctions[layout.potential].rename("potential")
 
-    rho = layered(sub, 2, "density")
-    mu = layered(sub, 3, "shear_modulus")
-    eta = layered(sub, 4, "viscosity")
-    Xm = SpatialCoordinate(sub)
-    rm = sqrt(dot(Xm, Xm))
-    g_of_r = refstate.gravity_exact_ufl(rm)
-
-    approx = CompressibleInternalVariableApproximation(
-        bulk_modulus=mu, density=rho, shear_modulus=[mu], viscosity=[eta],
-        bulk_shear_ratio=bulk_shear_ratio, g=g_of_r, B_mu=B_MU,
-        self_gravity_number=LAMBDA)
+    approx = spada_approximation(sub, bulk_shear_ratio=bulk_shear_ratio,
+                                 power_law=power_law)
 
     bcs = {gen.SURF_RE: {"normal_stress": B_MU * sigma_sub}}
     if rigid_core:
