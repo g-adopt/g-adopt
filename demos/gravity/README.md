@@ -30,13 +30,18 @@ arm at every truncation, at 0.69 of the warm step, with a setup that does
 not grow with the truncation. `DtNTwoBlockSchurPC` preconditions the system,
 with `CondensedBlockPC` on block 0 and, on the low-rank representation,
 `LowRankPotentialPC` on its potential split. The 3-D Spada benchmark is in
-`demos/glacial_isostatic_adjustment/3d_spada_selfgrav/`.
+`demos/glacial_isostatic_adjustment/3d_spada_selfgrav/`: one driver,
+`spada_benchmark.py`, runs the cap case (U, V and N against TABOO) and the
+polar-motion case, with the library's default solver configuration. Its
+`README.md` gives the mesh command, the run commands and the expected
+results.
 
 **Power-law rheology in 3-D.** `SelfGravitatingGIASolver` solves a power-law
 rheology on the full layout with Newton. The 3-D Spada restart driver
-`b5_restart_condensation.py` takes `--exponent`, `--transition-stress-mpa`
-and `--power-law-layers`. The exponent is a DG0 field that is 3 in the two
-upper-mantle shells (70 km to 670 km) and 1 in the other shells, as in
+that measured it, `b5_restart_condensation.py`, is in git history at commit
+`a8df4939` and not in the benchmark directory. It takes `--exponent`,
+`--transition-stress-mpa` and `--power-law-layers`. The exponent is a DG0
+field that is 3 in the two upper-mantle shells (70 km to 670 km) and 1 in the other shells, as in
 `tests/3d_weerdesteijn_coupled`. The transition stress uses the sqrt(2 J2)
 convention of that test. The driver option `--stress-report` prints the
 deviatoric stress of each checkpoint state per shell, and the step size that

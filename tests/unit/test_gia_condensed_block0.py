@@ -44,6 +44,8 @@ that file's `TestThreeDimensions`. `dt` is a `Constant` throughout, because the
 operator-reuse fingerprint reads its value and a plain number cannot change.
 """
 
+import re
+
 import firedrake as fd
 import numpy as np
 import pytest
@@ -339,7 +341,7 @@ class TestThePresetSelectsTheRoute:
     def test_the_default_route_drops_the_block_zero_converged_reason(self):
         """One reason line per block-0 application, not two.
 
-        `bench_dtn_baseline.parse_counts` counts a block-0 application from
+        `parse_counts` counts a block-0 application from
         every reason line whose prefix ends in `dtn_fieldsplit_0_`, and on
         this route the line that reports the work is the inner `(u, psi)`
         solve's at `dtn_fieldsplit_0_condensed_`. Block 0 itself is `preonly`,
@@ -1397,10 +1399,90 @@ def test_two_ranks_match_the_direct_route(meshes):  # noqa: F811
     assert relative_difference(m, m_direct) < 1e-8
 
 
+# --------------------------------------------------------------------------
+# The Gadi log parser
+# --------------------------------------------------------------------------
+
+#: A PETSc `ksp_converged_reason` line: the options prefix, the reason and the
+#: iteration count.
+_REASON = re.compile(
+    r"Linear\s+(\S*?)\s*solve (?:converged|did not converge) due to "
+    r"(\w+) iterations (\d+)")
+#: A PETSc `snes_converged_reason` line, in the same three groups.
+_SNES = re.compile(
+    r"Nonlinear\s+(\S*?)\s*solve (?:converged|did not converge) due to "
+    r"(\w+) iterations (\d+)")
+
+
+def parse_counts(text):
+    """Classify every converged-reason line by its options prefix.
+
+    The counters of the 3-D Gadi logs: block-0 applications and their
+    iterations, block-1 applications, multigrid sweeps per split and the
+    outer iteration count. Lines that match no pattern are returned under
+    `unclassified`, so a new route that the parser does not know shows up
+    as a non-empty list and not as a zero count.
+
+    The prefixes nest, so the order of the tests is load bearing: an inner
+    sweep's prefix CONTAINS `dtn_fieldsplit_0_`, and testing for block 0 first
+    would count every sweep as a block-0 application. That mistake inflates the
+    headline cost by roughly the sweep count and looks entirely plausible.
+    """
+    lines = [(m.group(1), m.group(2), int(m.group(3)))
+             for m in _REASON.finditer(text)]
+    out = {
+        "outer": 0, "outer_reason": None,
+        "block0_applies": 0, "block0_its": 0, "block0_diverged": 0,
+        "block1_applies": 0, "block1_its": 0,
+        "mg_sweeps": {}, "unclassified": [],
+    }
+    for prefix, reason, its in lines:
+        # `gadopt.CondensedBlockPC` (the default block-0 route of the
+        # uncondensed preset) runs block 0 as a `preonly` KSP around its own
+        # `(u, psi)` Krylov solve, so the line that reports one block-0
+        # application is that solve's, at `dtn_fieldsplit_0_condensed_`, and
+        # its two splits print at `dtn_fieldsplit_0_condensed_fieldsplit_N_`.
+        # The split test comes first for the same reason the old one does: a
+        # split's prefix CONTAINS the solve's.
+        inner = re.search(r"dtn_fieldsplit_0_(?:condensed_)?fieldsplit_(\d+)_$",
+                          prefix)
+        if inner is not None:
+            k = f"split_{inner.group(1)}"
+            out["mg_sweeps"][k] = out["mg_sweeps"].get(k, 0) + 1
+        elif prefix.endswith("dtn_fieldsplit_0_condensed_"):
+            out["block0_applies"] += 1
+            out["block0_its"] += its
+            if reason.startswith("DIVERGED"):
+                out["block0_diverged"] += 1
+        elif prefix.endswith("dtn_fieldsplit_0_"):
+            out["block0_applies"] += 1
+            out["block0_its"] += its
+            if reason.startswith("DIVERGED"):
+                out["block0_diverged"] += 1
+        elif prefix.endswith("dtn_fieldsplit_1_"):
+            out["block1_applies"] += 1
+            out["block1_its"] += its
+        elif "fieldsplit" not in prefix:
+            # The outer FGMRES. There is exactly one of these per linear solve;
+            # with `snes_type newtonls` there is one per Newton step and the
+            # last is the one that matters, so take the last and record how
+            # many there were.
+            out["outer"] = its
+            out["outer_reason"] = reason
+            out["outer_solves"] = out.get("outer_solves", 0) + 1
+        else:
+            out["unclassified"].append(prefix)
+    snes = [(m.group(1), m.group(2), int(m.group(3)))
+            for m in _SNES.finditer(text)]
+    out["newton_steps"] = snes[-1][2] if snes else None
+    out["reason_lines"] = len(lines)
+    return out
+
+
 class TestTheGadiLogCounters:
     """The 3-D drivers count block-0 applications from the reason lines.
 
-    `bench_dtn_baseline.parse_counts` classifies every
+    `parse_counts` classifies every
     `ksp_converged_reason` line by its options prefix, and the B2 cost model is
     read from its output and from nowhere else. On the new route block 0 is
     `preonly`, so the line that counts one block-0 application is the inner
@@ -1415,25 +1497,8 @@ class TestTheGadiLogCounters:
 
     @staticmethod
     def parse(text):
-        """`parse_counts` of the 3-D driver, imported on demand.
-
-        The driver hides the command line from PETSc at import by replacing
-        `sys.argv`, so it is saved and restored around the import.
-        """
-        import sys
-        from pathlib import Path
-
-        root = Path(__file__).resolve().parents[2]
-        driver = root / "demos" / "glacial_isostatic_adjustment" \
-            / "3d_spada_selfgrav"
-        saved_argv, saved_path = list(sys.argv), list(sys.path)
-        sys.path.insert(0, str(driver))
-        try:
-            import bench_dtn_baseline
-        finally:
-            sys.argv[:] = saved_argv
-            sys.path[:] = saved_path
-        return bench_dtn_baseline.parse_counts(text)
+        """The log parser `parse_counts` of this module."""
+        return parse_counts(text)
 
     #: One outer solve, two block-0 applications, two sweeps of each split.
     #:
@@ -1501,13 +1566,14 @@ class TestTheGadiLogCounters:
 
         The plan says to add the new patterns and not to remove the old ones,
         and the reason is that the T2 gate's `"pair"` measurements have to stay
-        reproducible: `bench_dtn_baseline` reduces `mg_sweeps` to one total
-        (`mg_sweeps_total`) that the B2 cost model reads, so any new pattern
-        that also matches an old line silently rewrites a published number for
+        reproducible: the removed benchmark driver `bench_dtn_baseline.py`
+        (git history at `a8df4939`) reduced `mg_sweeps` to one total
+        (`mg_sweeps_total`) that the B2 cost model read, so any new pattern
+        that also matches an old line silently rewrites a recorded number for
         a route this task does not touch.
 
         The values below are what `parse_counts` returns for this text today,
-        run against the driver as it stands and not derived from the regexes
+        run against the parser as it stands and not derived from the regexes
         by reading. They include one line the parser does not classify: the
         `"pair"` arm's displacement solve prints
         `..._dtn_fieldsplit_0_fieldsplit_0_condensed_field_`, and the sweep
@@ -1515,7 +1581,7 @@ class TestTheGadiLogCounters:
         ends up in `unclassified` and only the `psi` split is counted as a
         sweep. That is today's behaviour and this test pins it; whether it is
         the behaviour anyone wants is a separate question from this task, and
-        changing it here would change the `"pair"` arm's `mg_sweeps_total`.
+        changing it here would change the `"pair"` arm's sweep total.
         """
         counts = self.parse(self.OLD_ROUTE_LOG)
         assert counts["block0_applies"] == 1

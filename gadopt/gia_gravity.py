@@ -539,8 +539,8 @@ def selfgrav_dtn_iterative_solver_parameters(
 
     **This preset carries no iteration count of its own, and the "flat at 3"
     that used to stand here was another configuration's.**  That 3 was measured
-    in `demos/glacial_isostatic_adjustment/3d_spada_selfgrav/b2_probe.py`,
-    `--config cond`: an *algebraic* Schur split on the **uncondensed** space,
+    with a 3-D probe driver of the Spada benchmark (in git history at commit
+    `a8df4939`), in its `cond` configuration: an *algebraic* Schur split on the **uncondensed** space,
     `-pc_fieldsplit_type schur` with `pc_fieldsplit_0_fields "1"` (`m`, inverted
     exactly by `bjacobi`/ILU(0), which is exact on a block-diagonal matrix) and
     `pc_fieldsplit_1_fields "0,2"` (`u` and `psi`).  The counter that read 3,
