@@ -15,6 +15,12 @@
 #   qsub run_spada_benchmark.pbs                                  # cap case, 0 to 20 kyr
 #   qsub -v CASE=polar-motion run_spada_benchmark.pbs             # polar-motion case
 #   qsub -v EPOCHS="0 1",LABEL=cap-probe -l walltime=02:00:00 run_spada_benchmark.pbs
+#   qsub -v CENTRE_OF_MASS=1,LABEL=cap-com run_spada_benchmark.pbs  # centre-of-mass frame
+#
+# CENTRE_OF_MASS=1 adds `--centre-of-mass` to the driver: three Lagrange
+# multipliers hold the first mass moment at zero, on the low-rank DtN
+# representation, and the driver prints a FRAME line after every solve. Any
+# other value, or no value, runs the driver without the frame.
 #
 # Resources of the validated cap run to 20 kyr (96 ranks, CG3 displacement,
 # DG2 internal variables): 5 h 56 min wall time and 106 GB peak memory. That
@@ -50,6 +56,14 @@ cd "$D"
 : ${LABEL:=$CASE}
 : ${OUTPUT:=$D}
 : ${EXTRA:=}
+: ${CENTRE_OF_MASS:=0}
+# The frame flag goes in front of EXTRA, so that EXTRA stays free for other
+# driver options.
+FRAME_FLAG=
+if [ "$CENTRE_OF_MASS" = "1" ]; then
+    FRAME_FLAG=--centre-of-mass
+    echo "=== CENTRE_OF_MASS=1: the driver runs with --centre-of-mass ==="
+fi
 
 echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
 echo "=== git:    $(git -C "$W" rev-parse --short HEAD) ==="
@@ -59,7 +73,7 @@ echo "=== started $(date) on $(hostname) ==="
 # shellcheck disable=SC2086
 mpiexec -np $NRANK --map-by ppr:$NRANK:node python3 -u spada_benchmark.py \
     --case $CASE --mesh $MESH --epochs $EPOCHS --label $LABEL \
-    --output $OUTPUT $EXTRA 2>&1
+    --output $OUTPUT $FRAME_FLAG $EXTRA 2>&1
 RC=$?
 
 echo "=== finished $(date), exit $RC ==="
