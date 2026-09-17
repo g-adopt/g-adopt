@@ -17,13 +17,16 @@ with `H_k(x) = 0.5 (1 + tanh(k x / 2)) = 1 / (1 + exp(-k x))`.
 about `4 / k` wide in `SL`. The masks are integrated with the facet quadrature
 rule of the surface, so the transition must span at least about one quadrature
 point per width. The calibration on the 2-D annulus
-(`NOTES/PLAN-SEA-LEVEL-2026-09-15-C.md` section 4c) gives the rule
+(`NOTES/findings/FINDING-mask-steepness.md`) gives the rule
 `k s h / p <= 0.7 q / p`, with `h` the facet size, `s` the surface slope of `SL`,
-`p` the polynomial degree of `SL` and `q` the facet quadrature degree. The
-default is `k = alpha p / h` with `alpha = 0.5` (no slope), which gives
-`k s h / p = alpha s` and is inside that limit for `q >= 2 p` and any slope
-below about 3. With a frozen slope `Function`, `k = alpha p / (h s)` and the
-transition has a fixed width in arc length; see `mask_steepness`.
+`p` the polynomial degree of `SL` and `q` the facet quadrature degree. That
+rule is about three times too weak: the measurement of step S1
+(`NOTES/findings/FINDING-alpha-floor-mass.md`) reads "clean" as a
+grid-frequency artefact below the 1.7e-7 resolution of the measure and allows
+`alpha <= 1` at the solver's own `q = 9` with `p = 2`, where the old rule gives
+`0.7 q / p = 3.15`. The default is `k = alpha p / h` with `alpha = 1` (no
+slope). With a frozen slope `Function`, `k = alpha p / (h max(s, grad_floor))`
+and the transition has a fixed width in arc length; see `mask_steepness`.
 
 `h` is `FacetArea ** (1 / (dim - 1))`: the facet length in 2-D and the facet
 side in 3-D. `CellDiameter` is not used because TSFC does not compile it on a
@@ -32,18 +35,74 @@ P2-curved mesh ("Cannot handle geometric quantity type").
 
 from firedrake import FacetArea, Function, max_value, min_value, sqrt, tanh
 
-#: Clamp of the tanh argument. `tanh(350)` is 1 in double precision and
-#: `cosh(350)^2` is about 1e302, so the derivative `sech^2` stays finite. Without
-#: the clamp a large `k x` overflows in the derivative and the adjoint returns
-#: NaN.
-SMOOTH_STEP_CLAMP = 350.0
+#: Clamp of the tanh argument. Two bounds fix it.
+#:
+#: The lower bound is 19. `tanh` reaches exactly 1.0 in double precision at an
+#: argument of 19, so a smaller clamp would leave the saturated masks inexact,
+#: and the saturated states of the tests depend on them being exact.
+#:
+#: The upper bound comes from the second derivative of the mask, which the
+#: Jacobian of the centre-of-mass frame column holds. UFL writes the derivative
+#: of `tanh(z)` as `(2 cosh(z) / (1 + cosh(2 z)))^2`, so differentiating that
+#: again carries `cosh(2 z)^2`. Where a kernel forms that square, it overflows
+#: in double precision above `z = 177.8`, and the product of the infinite value
+#: with the exact zero derivative of the clamped branch is a NaN that stops the
+#: solve. Where a kernel divides by `cosh(2 z)` twice in sequence, the overflow
+#: comes only above `z = 355.2`. Which of the two a kernel does is a TSFC
+#: grouping decision that this module does not control, so the clamp respects
+#: the stricter bound of 177.8.
+#:
+#: 177.8 and 19 are derived. What is measured is the solver: at `grad_floor`
+#: 7e-5 on the 78 km shelf with a deformable Earth, the clamp at 350 fails with
+#: `ValueError: array must not contain infs or NaNs` inside
+#: `DtNMultiplierDenseSchurPC._solve`, and the clamp at 170 converges in 3
+#: Newton steps (`NOTES/findings/FINDING-alpha-floor-mass.md`).
+#:
+#: 150 sits inside both bounds. A third derivative of the mask would carry
+#: `cosh(2 z)^3`, which overflows above `z = 118.6`, so a second-order adjoint
+#: would need a clamp below that. Nothing here takes one today.
+SMOOTH_STEP_CLAMP = 150.0
 
 #: The default factor of the steepness, `k = alpha p / (h s)`.
-DEFAULT_ALPHA_MASK = 0.5
+#:
+#: 1.0 on the measurement of step S1
+#: (`NOTES/findings/FINDING-alpha-floor-mass.md`): at the solver's own facet
+#: quadrature degree of 9 with `p = 2`, the grid-frequency artefact in the
+#: gradient stays below the 1.7e-7 resolution of the measure up to `alpha = 1`,
+#: and the quadrature error of that gradient is 1.7e-8 there. A larger `alpha`
+#: is a narrower mask step and a smaller mass error, so the limit is what sets
+#: the value. Newton costs the same between `alpha` 0.25 and 4: three steps on
+#: a deformable Earth and two on a stiff one.
+#:
+#: The value holds at the calibrated quadrature degree only. At the refusal
+#: floor `q = 2 p` the same measurement gives 0.5, and the check in
+#: `SelfGravitatingGIASolver` tests `q >= 2 p` without knowing `alpha`. The
+#: calibrated degree in 3-D is not the 2-D value of 9, so read the limit again
+#: there.
+DEFAULT_ALPHA_MASK = 1.0
 
-#: The default floor of a frozen slope. A flat region has no shoreline, so the
-#: floor only has to keep `k` finite there.
-DEFAULT_GRAD_FLOOR = 1e-3
+#: The default floor of a frozen slope, `k = alpha p / (h max(s, grad_floor))`.
+#: A flat region has no shoreline, so the floor only has to keep `k` finite
+#: there.
+#:
+#: 1e-4 on the measurement of step S2
+#: (`NOTES/findings/FINDING-alpha-floor-mass.md`). Above the floor the mask
+#: step is `h / (alpha p)` wide in arc length on any slope; below it the width
+#: grows as `grad_floor / s`, and the error of the shift grows with it. Real
+#: continental shelves have slopes of 5e-4 to 2e-3, which the earlier floor of
+#: 1e-3 sat inside: at `s = 5e-4` it cost a factor 3.8 in that error. At 1e-4
+#: every one of those shelves is above the floor, so the floor changes nothing
+#: there and the width is `h / (alpha p)`. What the floor still sets is ground
+#: flatter than 1e-4, where it keeps `k` finite.
+#:
+#: Measured in S2: the error falls with the floor with an exponent between 1.5
+#: and 2.2 while the floor is at least twice the shelf slope, and 1e-4 beats
+#: 1e-3 at every slope measured, by factors of 3.8, 64 and 11.
+#:
+#: A floor this low needs `SMOOTH_STEP_CLAMP` below 177.8. At the earlier clamp
+#: of 350 an ocean 5.5 km deep on 78 km facets puts the mask argument at the
+#: clamp, and the solve fails with a NaN.
+DEFAULT_GRAD_FLOOR = 1e-4
 
 
 def smooth_step(x, k):
@@ -52,7 +111,9 @@ def smooth_step(x, k):
     The tanh form equals the logistic function `1 / (1 + exp(-k x))`. It has
     more headroom before overflow in the derivative, and the argument is also
     clamped at `+-SMOOTH_STEP_CLAMP`, so the value is exactly 0 or 1 far from
-    the switch and the derivative is finite for any `k x`.
+    the switch and both the first and the second derivative are finite for any
+    `k x`. The second derivative is the term that sets the clamp; see
+    `SMOOTH_STEP_CLAMP`.
 
     Args:
       x: the UFL expression whose sign selects the side. Positive gives 1.
@@ -76,8 +137,11 @@ def mask_steepness(mesh, degree, alpha=DEFAULT_ALPHA_MASK, slope=None, *,
       mesh: the mesh whose facet measure integrates the masks.
       degree: `p`, the highest polynomial degree in the sea level (the
         displacement or the potential).
-      alpha: the dimensionless factor. The calibration allows `alpha <= 0.7 q/p`
-        for a facet quadrature degree `q`.
+      alpha: the dimensionless factor; see `DEFAULT_ALPHA_MASK` for the value
+        and the measurement that fixes it. At the solver's own facet quadrature
+        degree of 9 with `p = 2` the limit is `alpha <= 1`, and it falls to 0.5
+        at the refusal floor `q = 2 p`. The older rule `alpha <= 0.7 q / p` is
+        about three times too weak.
       slope: `None` for `s = 1`, which makes the transition a fixed width in
         sea level. Otherwise a `Function` that holds a frozen surface slope
         `|grad SL|`, which makes the transition a fixed width in arc length.
