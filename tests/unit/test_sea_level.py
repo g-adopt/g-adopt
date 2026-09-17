@@ -48,11 +48,23 @@ precision, so `C = 1` exactly. The grounded ice is `GROUNDED = 100`, so
 `I - (rho_w/rho_i) SL = 73` under the ice and `-26.9` in the open ocean, which
 saturates `B` in the same way.
 
+## Two DtN representations
+
+The tests that assert physics run on both DtN representations through the
+`representation` fixture: the multiplier path with the direct preset, and the
+low-rank path with the iterative preset and the dense Schur complement on the
+`Real` block (`solve_settings`). `TestRepresentationParity` compares the two
+converged shoreline states. The layout tests of `TestLayout` that check the
+position of `Shift` and of the frame multipliers run on both representations,
+because the two spaces differ in their multiplier fields. The other structural
+tests (sheet, transposes, the energy) read `Real` rows of the multiplier space
+and stay on that path.
+
 ## What these tests are not
 
 They are 2-D structural and consistency checks. Nothing here is a benchmark:
-Martinec et al. (2018) is 3-D and out of scope, and so are the low-rank DtN
-representation, Will Scott's two-disc moving-shoreline case and Irksome.
+Martinec et al. (2018) is 3-D and out of scope, and so are Will Scott's
+two-disc moving-shoreline case and Irksome.
 """
 
 import importlib
@@ -81,6 +93,7 @@ from gadopt.gia_gravity import FluidCore, selfgrav_dtn_iterative_solver_paramete
 import test_gia_gravity
 from test_gia_gravity import (  # noqa: E402  (module-level fixture and helpers)
     B_MU,
+    CURVE_OUTER,
     CURVE_RC,
     CURVE_RE,
     LAMBDA,
@@ -134,6 +147,9 @@ SNES_RTOL = 1e-10
 SNES_ATOL = 1e-15
 TIGHT = {"snes_rtol": SNES_RTOL, "snes_atol": SNES_ATOL, "ksp_rtol": 1e-12}
 
+#: The two DtN representations that the physics tests run on.
+REPRESENTATIONS = ("multiplier", "lowrank")
+
 #: Path of Will Scott's `SeaLevelSolver`, copied into the untracked NOTES.
 WILL_SEA_LEVEL = (Path(__file__).resolve().parents[2] / "NOTES" / "will"
                   / "sea_level.py")
@@ -156,6 +172,59 @@ def clean_tape():
     if annotate_tape():
         pause_annotation()
     tape.clear_tape()
+
+
+@pytest.fixture(scope="module", params=REPRESENTATIONS)
+def representation(request):
+    """The DtN representation of one physics test: `"multiplier"` or `"lowrank"`.
+
+    Module scope, so that the module-scoped `shoreline_solved` can depend on
+    it and solves the shoreline state once per representation.
+    """
+    return request.param
+
+
+def solve_settings(representation):
+    """The solver keywords for a converged solve on one representation.
+
+    The multiplier path uses the direct preset with `TIGHT`, which needs two
+    outer iterations per Newton step there.
+
+    The low-rank path uses the iterative preset on the full layout, with the
+    dense Schur complement on the `Real` block
+    (`gadopt.DtNMultiplierDenseSchurPC`). The direct preset also converges on
+    the low-rank path, but its LU factorisation of block 0 does not contain
+    the low-rank update `B`, so it needs 7 outer iterations per Newton step
+    against 2 on the multiplier path. The 2-D probe of
+    `NOTES/PLAN-LOWRANK-SEA-LEVEL.md` section 1 measured the iterative preset
+    with the dense complement at 147 block-0 applications for the shoreline
+    solve, against 233 with `pc_type none` on the `Real` block.
+
+    The tolerances are those of `TIGHT`: the Newton tolerances are the same
+    numbers, so the thresholds that the tests compute from `SNES_RTOL` and
+    `SNES_ATOL` hold on both paths. The outer FGMRES stops at a relative
+    residual of 1e-12, as the outer Krylov solve of the direct preset. Block 0
+    is solved to 1e-4 only, because the outer FGMRES corrects an inexact block
+    0 and a tighter inner tolerance costs applications without changing the
+    converged state.
+
+    Args:
+      representation: `"multiplier"` or `"lowrank"`.
+
+    Returns:
+      A dictionary of `SelfGravitatingGIASolver` keywords.
+    """
+    if representation == "multiplier":
+        return dict(solver_parameters="direct", solver_parameters_extra=TIGHT)
+    parameters = selfgrav_dtn_iterative_solver_parameters(
+        condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+        outer_rtol=TIGHT["ksp_rtol"], block0_rtol=1e-4,
+        snes_rtol=SNES_RTOL, dtn_representation="lowrank")
+    # The preset sets `snes_atol` itself. It is set here again from the
+    # module constant, so that the thresholds of the tests read the value the
+    # solver uses.
+    parameters["snes_atol"] = SNES_ATOL
+    return dict(solver_parameters=parameters)
 
 
 def masks():
@@ -271,11 +340,16 @@ def make_sea_level(fields, **overrides):
 
 def build(meshes, fields=None, *, rotation=False, lam=LAMBDA, stiff=False,
           earth=None, sea_level=True, surface_bcs=None, gravity_sheet=None,
-          quad_degree=None, sea_level_overrides=None, **solver_kwargs):
+          quad_degree=None, sea_level_overrides=None,
+          representation="multiplier", **solver_kwargs):
     """The frame configuration of `TestCentreOfMassFrame.build`, with sea level.
 
     Args:
       meshes: the module fixture.
+      representation: the DtN representation, given to the factory and to
+        the solver. `"multiplier"` by default, so the structural tests that
+        read the `Real` rows of the multiplier space name nothing. The physics
+        tests pass the `representation` fixture.
       fields: `surface_fields(...)`; required when `sea_level` is true.
       rotation: carry the rotation closure.
       lam: `Lambda`, given to the factory and to the approximation. The
@@ -305,7 +379,8 @@ def build(meshes, fields=None, *, rotation=False, lam=LAMBDA, stiff=False,
         bcs_psi[CURVE_RE] = {"interior_sigma": gravity_sheet}
     space_kwargs = dict(gravity_bcs=bcs_psi, rotation=rotation,
                         fluid_core=True, centre_of_mass=True,
-                        self_gravity_number=lam)
+                        self_gravity_number=lam,
+                        dtn_representation=representation)
     if quad_degree is not None:
         space_kwargs["quad_degree"] = quad_degree
     if sea_level:
@@ -337,6 +412,7 @@ def build(meshes, fields=None, *, rotation=False, lam=LAMBDA, stiff=False,
         # `TestCentreOfMassFrame.build`.
         fluid_core=FluidCore(boundary=CURVE_RC, rho_core=FRAME.RHO_CORE,
                              g=fd.Constant(FRAME.gravity_of_r(RC))),
+        dtn_representation=representation,
         **solver_kwargs)
     return solver, z, layout
 
@@ -563,31 +639,53 @@ class TestLayout:
         settings.update(kwargs)
         return self_gravitating_gia_space(sub, parent, **settings)
 
+    # The next four tests name the representation explicitly and run on both.
+    # `sea_level=True` with no named representation resolves to the low-rank
+    # space on the full layout, so a test that names nothing checks only that
+    # space. The multiplier space carries the DtN multiplier fields in front of
+    # the frame multipliers and `Shift`, and the position of `Shift` must hold
+    # there too.
+
+    @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     @pytest.mark.parametrize("rotation", [False, True])
-    def test_shift_is_the_last_field(self, meshes, rotation):
+    def test_shift_is_the_last_field(self, meshes, rotation,
+                                     dtn_representation):
         """`Shift` is last in the space, after the centre-of-mass multipliers."""
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True)
+        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
+                               dtn_representation=dtn_representation)
+        assert layout.dtn_representation == dtn_representation
         assert layout.sea_level == len(Z) - 1
 
+    @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     @pytest.mark.parametrize("rotation", [False, True])
     def test_the_frame_multipliers_stay_just_before_the_shift(
-            self, meshes, rotation):
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True)
+            self, meshes, rotation, dtn_representation):
+        """The two frame multipliers are the two fields just before `Shift`."""
+        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
+                               dtn_representation=dtn_representation)
+        assert layout.dtn_representation == dtn_representation
         assert layout.centre_of_mass == (len(Z) - 3, len(Z) - 2)
 
+    @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     @pytest.mark.parametrize("rotation", [False, True])
-    def test_shift_is_a_real_field_in_the_accounting(self, meshes, rotation):
+    def test_shift_is_a_real_field_in_the_accounting(self, meshes, rotation,
+                                                     dtn_representation):
         """`n_fields` and `real_fields` count the new field, in space order."""
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True)
+        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
+                               dtn_representation=dtn_representation)
+        assert layout.dtn_representation == dtn_representation
         real = tuple(i for i, V in enumerate(Z)
                      if V.ufl_element().family() == "Real")
         assert len(Z) == layout.n_fields
         assert real == layout.real_fields
         assert real[-1] == layout.sea_level
 
-    def test_shift_lives_on_the_parent(self, meshes):
+    @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
+    def test_shift_lives_on_the_parent(self, meshes, dtn_representation):
         """Like every other `Real` field, so its rows assemble on parent measures."""
-        Z, layout = self.space(meshes, sea_level=True)
+        Z, layout = self.space(meshes, sea_level=True,
+                               dtn_representation=dtn_representation)
+        assert layout.dtn_representation == dtn_representation
         assert Z[layout.sea_level].mesh() is meshes[0]
 
     def test_absent_by_default(self, meshes):
@@ -599,15 +697,58 @@ class TestLayout:
         with pytest.raises(ValueError, match="centre_of_mass"):
             self.space(meshes, centre_of_mass=False, sea_level=True)
 
-    def test_refuses_the_lowrank_representation(self, meshes):
-        """Sea level runs on the multiplier representation only.
+    @pytest.mark.parametrize("rotation", [False, True])
+    def test_the_lowrank_space(self, meshes, rotation):
+        """The low-rank space: no DtN multipliers, and the `Real` run contiguous and last.
 
-        The centre-of-mass frame, which sea level requires, already refuses
-        the low-rank path, so this test cannot tell which of the two refusals
-        fired. It records that the combination is refused.
+        The low-rank path eliminates the DtN multipliers into a low-rank
+        update of the potential block, so the layout has none. The `Real`
+        fields are then the core pressure, the rotation scalar if present, the
+        two frame multipliers and `Shift`, in that order, contiguous and last.
+        `DtNTwoBlockSchurPC` requires that run contiguous and last.
         """
-        with pytest.raises((NotImplementedError, ValueError)):
-            self.space(meshes, sea_level=True, dtn_representation="lowrank")
+        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
+                               dtn_representation="lowrank")
+        assert layout.dtn_representation == "lowrank"
+        assert layout.multipliers == ()
+        assert len(Z) == layout.n_fields
+        real = tuple(i for i, V in enumerate(Z)
+                     if V.ufl_element().family() == "Real")
+        assert real == (layout.core_pressure, *layout.rotation.values(),
+                        *layout.centre_of_mass, layout.sea_level)
+        assert real == tuple(range(real[0], len(Z)))
+        assert real == layout.real_fields
+        assert layout.sea_level == len(Z) - 1
+
+    def test_sea_level_resolves_to_the_lowrank_representation(self, meshes):
+        """`sea_level=True` with no named representation is the low-rank path.
+
+        Sia's decision of 2026-09-17 (`NOTES/DECISIONS.md`): the 3-D sea-level
+        runs use the low-rank path, because the multiplier path does not fit
+        one node at a truncation of 20.
+        """
+        _, layout = self.space(meshes, sea_level=True)
+        assert layout.dtn_representation == "lowrank"
+        assert layout.multipliers == ()
+
+    def test_the_frame_alone_resolves_to_the_multiplier_representation(
+            self, meshes):
+        """`centre_of_mass=True` without sea level stays on the multiplier path."""
+        _, layout = self.space(meshes)
+        assert layout.dtn_representation == "multiplier"
+        assert len(layout.multipliers) > 0
+
+    def test_sea_level_on_the_condensed_layout_resolves_to_the_multiplier(
+            self, meshes):
+        """The condensed layout has no low-rank route, so its default stays.
+
+        `selfgrav_dtn_iterative_solver_parameters` refuses the low-rank path
+        on the condensed layout. A caller who names nothing there must not be
+        given a representation that no preset accepts.
+        """
+        _, layout = self.space(meshes, sea_level=True,
+                               condense_internal_variables=True)
+        assert layout.dtn_representation == "multiplier"
 
     def test_block1_diagonal_accounts_for_the_shift(self, meshes):
         """`block1_diagonal` describes the new row and does not raise.
@@ -1080,7 +1221,8 @@ class TestRepeatedSolve:
     moved by the same amount in its ocean mean.
     """
 
-    def test_a_second_solve_gives_the_same_shift_and_geoid(self, meshes):
+    def test_a_second_solve_gives_the_same_shift_and_geoid(
+            self, meshes, representation):
         """`Shift` and `psi` agree between two successive solves to 1e-8 relative.
 
         Configuration of the correctness probe: `"caps"` state with
@@ -1101,8 +1243,9 @@ class TestRepeatedSolve:
         d_ice = 1e-2
         solver, z, layout = build(meshes, surface_fields(sub, "caps",
                                                          d_ice=d_ice),
-                                  earth=WILL_EARTH, solver_parameters="direct",
-                                  solver_parameters_extra=TIGHT)
+                                  earth=WILL_EARTH,
+                                  representation=representation,
+                                  **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         shift_first = real_value(z, layout.sea_level)
@@ -1345,7 +1488,7 @@ class TestResidualIsTheVariationOfTheEnergy:
 
 class TestEustaticLimit:
 
-    def test_the_shift_is_the_eustatic_value(self, meshes):
+    def test_the_shift_is_the_eustatic_value(self, meshes, representation):
         """`Shift = -(rho_i/rho_w) int dI dS / L_ocean` on a stiff, non-gravitating Earth.
 
         `C = 1` everywhere (deep ocean), grounded ice melts on the two
@@ -1365,8 +1508,8 @@ class TestEustaticLimit:
         d_ice = -1e-2
         solver, z, layout = build(
             meshes, surface_fields(sub, "caps", d_ice=d_ice), lam=1e-6,
-            stiff=True, solver_parameters="direct",
-            solver_parameters_extra=TIGHT)
+            stiff=True, representation=representation,
+            **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         dss = re_measure(solver)
@@ -1378,24 +1521,45 @@ class TestEustaticLimit:
                                                                 rel=1e-4)
 
 
-@pytest.fixture(scope="module")
-def shoreline_solved(meshes):
-    """One live-mask solve of the shoreline state, shared by read-only tests.
+#: The solved shoreline states, one per representation, so that
+#: `TestRepresentationParity` reads the same solves as `TestLiveMaskSolve`
+#: instead of solving each state a second time.
+_SHORELINE = {}
 
-    Direct preset with `TIGHT` tolerances. The residual norm at the zero state
-    is recorded before the solve, for the Newton part of the thresholds of the
-    `Shift` row and of the net sheet mass.
+
+def solve_shoreline(meshes, representation):
+    """One live-mask solve of the shoreline state on one representation, cached.
+
+    `solve_settings(representation)` gives the tolerances. The residual norm
+    at the zero state is recorded before the solve, for the Newton part of the
+    thresholds of the `Shift` row and of the net sheet mass.
+
+    Args:
+      meshes: the module fixture.
+      representation: `"multiplier"` or `"lowrank"`.
+
+    Returns:
+      `(solver, z, layout, initial_norm)`.
     """
-    _, sub = meshes
-    solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                              solver_parameters="direct",
-                              solver_parameters_extra=TIGHT)
-    initial_norm = vector_norm(fd.assemble(solver.F))
-    solver.solve()
-    iterations = solver.solver.snes.getIterationNumber()
-    print(f"shoreline live-mask solve: {iterations} Newton iterations, "
-          f"reason {solver.solver.snes.getConvergedReason()}")
-    return solver, z, layout, initial_norm
+    if representation not in _SHORELINE:
+        _, sub = meshes
+        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                  representation=representation,
+                                  **solve_settings(representation))
+        initial_norm = vector_norm(fd.assemble(solver.F))
+        solver.solve()
+        iterations = solver.solver.snes.getIterationNumber()
+        print(f"shoreline live-mask solve, {representation}: {iterations} "
+              f"Newton iterations, reason "
+              f"{solver.solver.snes.getConvergedReason()}")
+        _SHORELINE[representation] = (solver, z, layout, initial_norm)
+    return _SHORELINE[representation]
+
+
+@pytest.fixture(scope="module")
+def shoreline_solved(meshes, representation):
+    """The shoreline solve of `solve_shoreline`, shared by read-only tests."""
+    return solve_shoreline(meshes, representation)
 
 
 class TestLiveMaskSolve:
@@ -1514,9 +1678,124 @@ class TestLiveMaskSolve:
             assert abs(D[i]) <= 1e-8 * moment
 
 
+class TestRepresentationParity:
+    """The shoreline state is the same on the multiplier and the low-rank path.
+
+    Both paths discretise the same equations: the low-rank path eliminates
+    the DtN multipliers into a rank-`n` update of the potential block, which
+    is exact algebra and not an approximation. So the converged states agree
+    to the solver tolerance. The quantities compared are the ones that sea
+    level and the frame add: `Shift`, the frame multipliers, the net sheet
+    mass and the degree-1 trace coefficients of the exterior DtN boundary,
+    which carry the degree-1 response that the frame fixes.
+
+    The probe of `NOTES/PLAN-LOWRANK-SEA-LEVEL.md` section 1 gave, on both
+    paths, `Shift` 3.891462130337e-03, frame multipliers (4.4485e-09,
+    2.4261e-09), net sheet mass 7.361e-09 and exterior degree-1 coefficients
+    (-4.159e-10, -2.269e-10). Each path is also checked against the probe
+    `Shift`, so that the two paths cannot agree on a wrong value.
+    """
+
+    #: The probe values of the shoreline state.
+    PROBE_SHIFT = 3.891462130337e-03
+    PROBE_MULTIPLIERS = (4.4485e-09, 2.4261e-09)
+
+    @pytest.fixture(scope="class")
+    def states(self, meshes):
+        """The two solved shoreline states, keyed by representation."""
+        return {name: solve_shoreline(meshes, name)
+                for name in REPRESENTATIONS}
+
+    def test_both_solves_converge(self, states):
+        for solver, _, _, _ in states.values():
+            assert solver_converged(solver)
+
+    def test_the_shift_agrees(self, states):
+        """`Shift` to 1e-9 relative between the paths and against the probe.
+
+        The Newton tolerance is `snes_rtol = 1e-10` and both outer Krylov
+        solves run to 1e-12, so the error of `Shift` is far below 1e-9 of its
+        value. The probe printed 13 significant digits, and a relative
+        tolerance of 1e-9 is well above the last printed digit. Measured
+        difference between the paths: 1.0e-14 relative.
+        """
+        shifts = {name: real_value(z, layout.sea_level)
+                  for name, (_, z, layout, _) in states.items()}
+        for value in shifts.values():
+            assert value == pytest.approx(self.PROBE_SHIFT, rel=1e-9)
+        assert shifts["lowrank"] == pytest.approx(shifts["multiplier"],
+                                                  rel=1e-9)
+
+    def test_the_frame_multipliers_agree(self, states):
+        """The frame multipliers to 1e-6 relative, and to the probe's 5 digits.
+
+        The multipliers are of order 1e-9, the discretisation error of the
+        centre of mass. They are the smallest solved quantity here, so their
+        relative accuracy is lower than that of `Shift`: an absolute residual
+        error of order 1e-15 in their rows is 1e-6 of their value. The probe
+        printed 5 digits, so the comparison with it is to 5e-5 relative.
+        Measured difference between the paths: 2.4e-10 and 9.3e-12 relative.
+        """
+        lam = {name: [real_value(z, i) for i in layout.centre_of_mass]
+               for name, (_, z, layout, _) in states.items()}
+        for values in lam.values():
+            for got, probe in zip(values, self.PROBE_MULTIPLIERS):
+                assert got == pytest.approx(probe, rel=5e-5)
+        for a, b in zip(lam["lowrank"], lam["multiplier"]):
+            assert a == pytest.approx(b, rel=1e-6)
+
+    def test_the_net_sheet_mass_agrees(self, states):
+        """`int sigma dS` to 1e-6 relative.
+
+        The net mass is of order the multipliers (`TestLiveMaskSolve`), so it
+        has the same relative accuracy. Measured difference: 5.2e-9 relative.
+        """
+        net = {name: fd.assemble(solver.surface_load_sheet()
+                                 * re_measure(solver))
+               for name, (solver, _, _, _) in states.items()}
+        assert abs(net["multiplier"]) > 0.0
+        assert net["lowrank"] == pytest.approx(net["multiplier"], rel=1e-6)
+
+    def test_the_trace_coefficients_agree(self, states):
+        """Every DtN trace coefficient agrees, the exterior degree 1 included.
+
+        The multiplier path reads each coefficient from its `Real` field; the
+        low-rank path computes it from the trace of `psi`
+        (`SelfGravitatingGIASolver.coefficients`). The tolerance is 1e-7 of
+        the largest coefficient on the boundary: the coefficients of degree 2
+        are of order 1e-4 on the exterior boundary, so the tolerance there is
+        of order 1e-11, and the exterior degree-1 coefficients of about 4e-10
+        are then compared to a few percent. A missing frame gives a degree-1
+        coefficient that is not small, and a wrong recovery on the low-rank
+        path gives an error of order the coefficient itself. Measured largest
+        difference over scale: 1.4e-14 on the exterior boundary, 2.3e-15 on
+        the interior one.
+        """
+        coefficients = {name: solver.coefficients()
+                        for name, (solver, _, _, _) in states.items()}
+        multiplier, lowrank = coefficients["multiplier"], coefficients["lowrank"]
+        assert multiplier.keys() == lowrank.keys()
+        for bc_id in multiplier:
+            assert multiplier[bc_id].keys() == lowrank[bc_id].keys()
+            scale = max(abs(v) for v in multiplier[bc_id].values())
+            assert scale > 0.0
+            for key, value in multiplier[bc_id].items():
+                assert abs(lowrank[bc_id][key] - value) <= 1e-7 * scale, (
+                    bc_id, key, value, lowrank[bc_id][key])
+        # The exterior degree-1 coefficients are small against the degree-2
+        # response, which is what the frame does to them. The bound is 1e-4
+        # of the largest coefficient on that boundary, and the measured ratio
+        # is about 4e-6.
+        exterior = multiplier[CURVE_OUTER]
+        scale = max(abs(v) for v in exterior.values())
+        for key in ("cos1", "sin1"):
+            assert abs(exterior[key]) <= 1e-4 * scale
+
+
 class TestSignAgainstPhysics:
 
-    def test_water_piles_up_towards_added_ice_on_a_stiff_earth(self, meshes):
+    def test_water_piles_up_towards_added_ice_on_a_stiff_earth(
+            self, meshes, representation):
         """The geoid bulges towards added mass, so the sea rises near the ice.
 
         Stiff Earth, so the uplift is about 1e-9 and the sea-level change is
@@ -1532,8 +1811,8 @@ class TestSignAgainstPhysics:
         d_ice = 1e-2
         fields = surface_fields(sub, "caps", d_ice=d_ice)
         solver, z, layout = build(meshes, fields, stiff=True,
-                                  solver_parameters="direct",
-                                  solver_parameters_extra=TIGHT)
+                                  representation=representation,
+                                  **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         dss = re_measure(solver)
@@ -1572,7 +1851,8 @@ WILL_EARTH = dict(shear_modulus=30.0, bulk_modulus=30.0, viscosity=1e18)
 
 class TestAgainstWillScott:
 
-    def test_the_shift_matches_the_separate_surface_solver(self, meshes):
+    def test_the_shift_matches_the_separate_surface_solver(
+            self, meshes, representation):
         """Given our `dN` and `du_r`, Will's shift equals our `Shift`.
 
         Fixed shorelines: a uniform deep ocean (Will's `C` is 1) and grounded
@@ -1606,8 +1886,8 @@ class TestAgainstWillScott:
         d_ice = 1e-2
         fields = surface_fields(sub, "caps", d_ice=d_ice)
         solver, z, layout = build(meshes, fields, earth=WILL_EARTH,
-                                  solver_parameters="direct",
-                                  solver_parameters_extra=TIGHT)
+                                  representation=representation,
+                                  **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         shift_ours = real_value(z, layout.sea_level)
@@ -1675,11 +1955,12 @@ class TestNestedCondensation:
         _, sub = meshes
         # Two settings are named, and both are named for a reason.
         #
-        # `dtn_representation`: sea level runs on the multiplier representation,
-        # and the preset's own default is the low-rank one on the full layout.
-        # Leaving it unset puts `gadopt.LowRankPotentialPC` on the potential
-        # split of a solver that carries no low-rank update, and
-        # `_check_representation_matches_parameters` refuses that pairing.
+        # `dtn_representation`: the nested route `block0="pair"` has no
+        # low-rank route, and `selfgrav_dtn_iterative_solver_parameters`
+        # refuses the pair `block0="pair"` with `"lowrank"`. The preset's own
+        # default is `"lowrank"` on the full layout, and so is the default of a
+        # sea-level space. This test therefore names `"multiplier"` here, and
+        # `build` gives the same value to the space and the solver.
         #
         # `block0`: `InternalVariableSCPC` is reached through the `"pair"`
         # route, whose block 0 is a multiplicative fieldsplit. The default
@@ -1698,7 +1979,8 @@ class TestNestedCondensation:
         assert solver_converged(solver)
         condensation_context(solver)
 
-    def test_the_condensed_block0_route_solves_with_sea_level(self, meshes):
+    def test_the_condensed_block0_route_solves_with_sea_level(
+            self, meshes, representation):
         """The default block-0 route condenses `(u, M)` in Slate with sea level on.
 
         `gadopt.CondensedBlockPC` eliminates the internal variables once per
@@ -1714,21 +1996,27 @@ class TestNestedCondensation:
         integral out of the form the class hands to Slate. Everything the class
         computes is preconditioner work, so the missing term changes the
         convergence rate and not the solution.
+
+        On the low-rank path the potential split of the class is
+        `gadopt.LowRankPotentialPC`, so this test also shows that the
+        low-rank update and the Slate elimination work together with sea
+        level on.
         """
         _, sub = meshes
         parameters = selfgrav_dtn_iterative_solver_parameters(
             condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
             outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8,
-            dtn_representation="multiplier")
+            dtn_representation=representation)
         assert parameters["dtn_fieldsplit_0_pc_python_type"] == \
             "gadopt.CondensedBlockPC"
         solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                  representation=representation,
                                   solver_parameters=parameters)
         solver.solve()
         assert solver_converged(solver)
 
 
-def taylor_forward(control, meshes, *, rotation):
+def taylor_forward(control, meshes, *, rotation, representation):
     """Tape one live-mask solve of the shoreline state with ice thickness `control`.
 
     The functional reads the degree-1 radial displacement at Re and `Shift`,
@@ -1740,8 +2028,8 @@ def taylor_forward(control, meshes, *, rotation):
         fields = surface_fields(sub, "shoreline")
         fields["I"] = control
         solver, _, layout = build(meshes, fields, rotation=rotation,
-                                  solver_parameters="direct",
-                                  solver_parameters_extra=TIGHT)
+                                  representation=representation,
+                                  **solve_settings(representation))
     solver.solve()
     u = fd.split(solver.solution)[layout.displacement]
     shift = fd.split(solver.solution)[layout.sea_level]
@@ -1755,8 +2043,13 @@ def taylor_forward(control, meshes, *, rotation):
         + 1e4 * shift * shift * dx_m)
 
 
-def run_taylor(meshes, rotation):
-    """The guarded Taylor test with control `I` and a direction that moves the grounding line."""
+def run_taylor(meshes, rotation, representation):
+    """The guarded Taylor test with control `I` and a direction that moves the grounding line.
+
+    On the low-rank path the tape carries a `CoupledLowRankDtNSolveBlock`, and
+    the adjoint goes through the hand-written low-rank adjoint, which carries
+    the `Shift` and frame rows as UFL terms.
+    """
     from test_gravity_adjoint import assert_taylor_with_guards
 
     _, sub = meshes
@@ -1771,7 +2064,8 @@ def run_taylor(meshes, rotation):
     continue_annotation()
     try:
         m = Control(control)
-        J = taylor_forward(control, meshes, rotation=rotation)
+        J = taylor_forward(control, meshes, rotation=rotation,
+                           representation=representation)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -1783,21 +2077,23 @@ def run_taylor(meshes, rotation):
 
 class TestTaylor:
 
-    def test_live_mask_taylor_rate_with_ice_thickness_control(self, meshes):
-        run_taylor(meshes, rotation=False)
+    def test_live_mask_taylor_rate_with_ice_thickness_control(
+            self, meshes, representation):
+        run_taylor(meshes, rotation=False, representation=representation)
 
 
 class TestRotation:
     """Rotation on. Acceptance (`NOTES/DECISIONS.md`): it solves and the Taylor test passes."""
 
-    def test_the_rotating_case_solves(self, meshes):
+    def test_the_rotating_case_solves(self, meshes, representation):
         _, sub = meshes
         solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  rotation=True, solver_parameters="direct",
-                                  solver_parameters_extra=TIGHT)
+                                  rotation=True, representation=representation,
+                                  **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         assert np.isfinite(real_value(z, layout.sea_level))
 
-    def test_the_rotating_case_passes_the_taylor_test(self, meshes):
-        run_taylor(meshes, rotation=True)
+    def test_the_rotating_case_passes_the_taylor_test(
+            self, meshes, representation):
+        run_taylor(meshes, rotation=True, representation=representation)
