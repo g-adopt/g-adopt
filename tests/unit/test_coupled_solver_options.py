@@ -33,8 +33,11 @@ Note:
   not a statement that they ship together.
 """
 
+from copy import deepcopy
+
 import firedrake as fd
 import pytest
+from firedrake.adjoint import continue_annotation, pause_annotation
 
 from gadopt.approximations import CompressibleInternalVariableApproximation
 from gadopt.preconditioners import (
@@ -136,6 +139,78 @@ class TestToleranceOrdering:
         """The weaker statement that the shipped preset does satisfy."""
         p = build(mesh, exponent=3, transition_stress=1.0).solver_parameters
         assert p["condensed_field"]["ksp_rtol"] <= p["snes_rtol"]
+
+
+class TestAdjointSolverOptions:
+    """The cached adjoint solve gets its own options, not the forward Newton loop.
+
+    Firedrake builds one `LinearVariationalSolver` per annotated solver and
+    keeps it for every adjoint sweep. Given nothing, it builds that solver from
+    the forward solver's own keywords, so a linear residual is solved under
+    `newtonls` with the forward tolerances, and the solution `Function`
+    persists between sweeps. Measured on the sea-level branch at Earth scale:
+    the first sweep converged in 2 FGMRES iterations, and the second restarted
+    from the first one's answer, whose residual is the round-off floor of a
+    solution of that size, was asked for the forward `snes_atol` of 1e-13, and
+    ran to `snes_max_it` with the residual flat at 1.7e-5. No Taylor test of
+    that branch completed at Earth scale until this was fixed
+    (`NOTES/findings/FINDING-alpha-floor-mass.md`, "The adjoint at Earth
+    scale").
+    """
+
+    def test_the_adjoint_asks_for_a_linear_solve(self, mesh):
+        """A power-law forward is `newtonls`; its adjoint residual is linear."""
+        solver = build(mesh, exponent=3, transition_stress=1.0)
+        assert solver.solver_parameters["snes_type"] == "newtonls"
+        assert solver.adjoint_solver_parameters()["snes_type"] == "ksponly"
+
+    def test_the_forward_newton_tolerances_do_not_reach_the_adjoint(self, mesh):
+        """The tolerances of a loop that no longer runs would only mislead."""
+        solver = build(mesh, exponent=3, transition_stress=1.0)
+        adjoint = solver.adjoint_solver_parameters()
+        for option in solver.FORWARD_ONLY_SNES_OPTIONS:
+            assert option not in adjoint
+
+    def test_every_krylov_option_is_kept(self, mesh):
+        """The adjoint operator is the forward one transposed.
+
+        Its preconditioner therefore needs the same description, so only the
+        SNES options may differ between the two.
+        """
+        solver = build(mesh, exponent=3, transition_stress=1.0)
+        adjoint = solver.adjoint_solver_parameters()
+        for key, value in solver.solver_parameters.items():
+            if not key.startswith("snes_"):
+                assert adjoint[key] == value
+
+    def test_the_forward_options_are_not_touched(self, mesh):
+        """The adjoint options are a deep copy, so no nested dict is shared."""
+        solver = build(mesh, exponent=3, transition_stress=1.0)
+        before = deepcopy(solver.solver_parameters)
+        solver.adjoint_solver_parameters()
+        assert solver.solver_parameters == before
+
+    def test_nothing_is_passed_when_no_tape_is_running(self, mesh):
+        """Firedrake pops `adj_kwargs` only while it annotates.
+
+        Without a tape the keyword would reach the real `solve`, which does not
+        take it, so a solve outside the tape must pass nothing.
+        """
+        assert build(mesh).adjoint_solve_keywords() == {}
+
+    def test_the_keywords_carry_the_options_and_the_nullspaces(self, mesh):
+        solver = build(mesh)
+        continue_annotation()
+        try:
+            keywords = solver.adjoint_solve_keywords()
+        finally:
+            pause_annotation()
+        adjoint = keywords["adj_kwargs"]
+        assert adjoint["solver_parameters"] == solver.adjoint_solver_parameters()
+        assert adjoint["nullspace"] is solver.nullspace
+        assert adjoint["transpose_nullspace"] is solver.transpose_nullspace
+        assert adjoint["near_nullspace"] is solver.near_nullspace
+        assert adjoint["options_prefix"] == solver.name
 
 
 class TestAssembledPCFactoring:
