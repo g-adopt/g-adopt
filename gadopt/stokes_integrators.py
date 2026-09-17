@@ -852,8 +852,10 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         annotates. Without annotation the keyword would reach the real `solve`,
         which does not take it, so it is passed only when the tape is running.
 
-        The keywords mirror what Firedrake would build by itself, with the
-        options replaced: the nullspaces and the options prefix are kept, and
+        The keywords are the forward solver's own, with the options replaced.
+        They are read from `_ad_kwargs`, which Firedrake sets on the solver and
+        copies on its own path, so nothing it would have kept is lost: the
+        nullspaces, the options prefix, and any callback a subclass installed.
         `appctx` is left out, which is what the stock path does as well.
 
         One caveat on the nullspaces. The two bases are passed in the slots
@@ -869,13 +871,18 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         """
         if not annotate_tape():
             return {}
-        return {"adj_kwargs": {
-            "solver_parameters": self.adjoint_solver_parameters(),
-            "nullspace": self.nullspace,
-            "transpose_nullspace": self.transpose_nullspace,
-            "near_nullspace": self.near_nullspace,
-            "options_prefix": self.name,
-        }}
+        # Start from the keywords the forward solver was built with, and change
+        # only the options. Firedrake stores them on the solver as `_ad_kwargs`
+        # and its own path copies that same dict, so this keeps every keyword
+        # it would have kept: the nullspaces, the options prefix, and the two
+        # callbacks that the low-rank DtN path installs to carry its rank-n
+        # update. Listing the keywords by hand instead dropped those callbacks,
+        # and the coupled adjoint tests fell to a Taylor rate of 1.4571.
+        # `appctx` is dropped because the stock path drops it.
+        keywords = dict(getattr(self.solver, "_ad_kwargs", {}))
+        keywords.pop("appctx", None)
+        keywords["solver_parameters"] = self.adjoint_solver_parameters()
+        return {"adj_kwargs": keywords}
 
     def solve(self) -> None:
         """Solves the system."""
