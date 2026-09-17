@@ -21,6 +21,7 @@ from types import MappingProxyType
 import firedrake as fd
 import ufl
 from mpi4py import MPI
+from pyadjoint.tape import annotate_tape
 from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
@@ -807,9 +808,80 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 options_prefix=self.name,
             )
 
+    #: SNES options that describe the forward Newton loop and have no meaning
+    #: for the adjoint solve, which is linear. They are dropped from the
+    #: adjoint options; see `adjoint_solver_parameters`.
+    FORWARD_ONLY_SNES_OPTIONS = ("snes_rtol", "snes_atol", "snes_stol",
+                                 "snes_max_it", "snes_linesearch_type")
+
+    def adjoint_solver_parameters(self) -> dict:
+        """The PETSc options for the adjoint solve that pyadjoint caches.
+
+        Firedrake builds one `LinearVariationalSolver` per annotated solver and
+        keeps it for every adjoint sweep. Given nothing, it builds that solver
+        with the forward solver's own keywords, so a linear solve runs under a
+        Newton method with the forward tolerances. That is wrong in two ways.
+        The adjoint residual is linear, so the outer Newton loop has nothing to
+        do; and the cached solution `Function` persists between sweeps, so the
+        second sweep starts from the first sweep's answer, whose residual is
+        already at the round-off floor of a solution of that size, and is then
+        asked for the forward's absolute tolerance. Measured on the sea-level
+        branch: the first adjoint solve converges in 2 FGMRES iterations, and
+        the second runs to `snes_max_it` with the residual flat at 1.7e-5
+        (`NOTES/findings/FINDING-alpha-floor-mass.md`, "The adjoint at Earth
+        scale").
+
+        The options here are the forward ones with the Newton loop removed:
+        `snes_type ksponly` and no SNES tolerance. Every KSP option is kept,
+        because the preconditioner of the adjoint operator is the forward one
+        transposed and needs the same description.
+
+        Returns:
+          A `dict` of PETSc options. Override this method to change them.
+        """
+        parameters = deepcopy(self.solver_parameters)
+        for option in self.FORWARD_ONLY_SNES_OPTIONS:
+            parameters.pop(option, None)
+        parameters["snes_type"] = "ksponly"
+        return parameters
+
+    def adjoint_solve_keywords(self) -> dict:
+        """The `adj_kwargs` for `solve`, or `{}` when nothing is taped.
+
+        Firedrake pops `adj_kwargs` from the keywords of `solve` only while it
+        annotates. Without annotation the keyword would reach the real `solve`,
+        which does not take it, so it is passed only when the tape is running.
+
+        The keywords mirror what Firedrake would build by itself, with the
+        options replaced: the nullspaces and the options prefix are kept, and
+        `appctx` is left out, which is what the stock path does as well.
+
+        One caveat on the nullspaces. The two bases are passed in the slots
+        Firedrake's own path uses, which puts the forward basis on the adjoint
+        operator. Strictly the two swap for the adjoint, because `J^T` has the
+        forward transpose nullspace as its kernel. Every taped caller in this
+        repository passes the same basis in both slots, so the two readings
+        agree; a caller that declares two different bases needs this corrected
+        first.
+
+        Returns:
+          A `dict` to expand into `solve`.
+        """
+        if not annotate_tape():
+            return {}
+        return {"adj_kwargs": {
+            "solver_parameters": self.adjoint_solver_parameters(),
+            "nullspace": self.nullspace,
+            "transpose_nullspace": self.transpose_nullspace,
+            "near_nullspace": self.near_nullspace,
+            "options_prefix": self.name,
+        }}
+
     def solve(self) -> None:
         """Solves the system."""
-        self.solver.solve()
+        # The adjoint keywords are read on the first annotated solve only:
+        # Firedrake builds the cached adjoint solver then and keeps it.
+        self.solver.solve(**self.adjoint_solve_keywords())
         self.solution_old.assign(self.solution)
 
 
