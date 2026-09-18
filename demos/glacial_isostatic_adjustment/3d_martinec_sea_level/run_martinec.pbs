@@ -61,6 +61,38 @@
 # the memory to at most 191 GB; that estimate needs two nodes at the same
 # dofs per rank. Sea level adds the ocean column of the load to block 0 and
 # the dense Schur complement on block 1; the smoke job measures what it costs.
+#
+# Job G2-smoke: four arms of case B on the coarse mesh, two steps each. The
+# four arms give two comparisons. The two representations must give the same
+# solution, and the two block-1 preconditioners must give the same solution at
+# a different cost. Each arm has its own label, so the four runs write
+# different files into this directory. Submit the four lines from here. The
+# walltime of each line is an estimate from job 179271032 (the frame on the
+# low-rank path at `MULTIPLIER_PC=none`, 549 s for the elastic solve and 388 s
+# and 424 s for the first two steps of 10 yr).
+#
+#   qsub -N g2s-lr-dense -j oe -o martinec-g2s-lowrank-dense.out \
+#        -l walltime=02:00:00 \
+#        -v CASE=B,STEPS=2,LABEL=g2s-lowrank-dense,REPRESENTATION=lowrank,MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC \
+#        run_martinec.pbs
+#   qsub -N g2s-lr-none -j oe -o martinec-g2s-lowrank-none.out \
+#        -l walltime=03:00:00 \
+#        -v CASE=B,STEPS=2,LABEL=g2s-lowrank-none,REPRESENTATION=lowrank,MULTIPLIER_PC=none \
+#        run_martinec.pbs
+#   qsub -N g2s-mult-dense -j oe -o martinec-g2s-multiplier-dense.out \
+#        -l walltime=03:00:00 \
+#        -v CASE=B,STEPS=2,LABEL=g2s-multiplier-dense,REPRESENTATION=multiplier,MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC \
+#        run_martinec.pbs
+#   qsub -N g2s-mult-none -j oe -o martinec-g2s-multiplier-none.out \
+#        -l walltime=06:00:00 \
+#        -v CASE=B,STEPS=2,LABEL=g2s-multiplier-none,REPRESENTATION=multiplier,MULTIPLIER_PC=none \
+#        run_martinec.pbs
+#
+# The last arm is the most expensive one. Block 1 holds 77 rows on the
+# multiplier representation at L = 5, and with `MULTIPLIER_PC=none` each
+# block-1 GMRES iteration costs one block-0 solve. If that arm stops at the
+# walltime, read the counts of the steps it finished: the comparison is a
+# ratio of block-0 applications per solve, not a total.
 source /etc/profile
 module use /g/data/fp50/modules
 module load firedrake/main-20260902
@@ -122,6 +154,9 @@ echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
 echo "=== git:    $(git -C "$W" rev-parse --short HEAD) ==="
 echo "=== mesh:   $MESH  md5 $(md5sum "$MESH" | cut -d' ' -f1) ==="
 echo "=== CASE=$CASE LABEL=$LABEL REPRESENTATION=$REPRESENTATION ==="
+# The block-1 preconditioner is the second variable of the smoke comparison,
+# so the banner names it beside the representation. The driver prints it too.
+echo "=== MULTIPLIER_PC=$MULTIPLIER_PC STEPS=${STEPS:-all} ==="
 echo "=== NNODES=$NNODES NRANK=$NRANK NTOTAL=$NTOTAL ==="
 echo "=== started $(date) on $(hostname) ==="
 
