@@ -124,6 +124,7 @@ qsub -v CASE=B,STEPS=2,LABEL=B-smoke -l walltime=02:00:00 run_martinec.pbs
 | `--epochs` | per time scenario | the output times in kyr |
 | `--dt-yr`, `--ladder` | the ladder of the case | the time steps |
 | `--steps` | all | stop after this many steps |
+| `--block0-max-it` | `200` | the iteration cap of the mechanics-potential block solve. Lower it for a cheap check only |
 | `--restart`, `--restart-file` | none | continue from a checkpoint state; the two are given together |
 | `--export-ocean-function` | none | write `C0` on the radopt grid |
 | `--label`, `--output` | the case letter, this directory | the output files |
@@ -139,7 +140,7 @@ Every file name carries the label, which is the case letter by default.
 |---|---|
 | `martinec-<label>.h5` | the meshes and the state at every output time and every 50 steps |
 | `martinec-<label>-profiles_<t>kyr.npz` | U, N, S and RSL in metres along the two meridians |
-| `martinec-<label>-timeseries.npz` | the uniform water layer, the shift, the net sheet mass, the ocean area, the two ice masses, the mass dipole and the Newton and outer iteration counts, at every step |
+| `martinec-<label>-timeseries.npz` | the uniform water layer, the shift, the net sheet mass, the ocean area, the two ice masses, the mass dipole with its moment scale `load_moment` and its scaled value `dipole_rel`, and the Newton and outer iteration counts, at every step |
 | `martinec-<label>-steptimes.npz` | the end time of every step in kyr, as the array `t_kyr` |
 | `martinec-<label>-ocean_function_C0_nglv<N>.npz` | the fixed ocean function on the radopt grid |
 
@@ -147,7 +148,16 @@ The driver prints one `TIMESTEP` line and one `FRAME` line for each step. The
 `TIMESTEP` line gives the cost: the Newton iterations, the outer iterations,
 the block-0 applications and the three preconditioner counters, the wall-clock
 time, and the sea-level quantities. The `FRAME` line gives the centre-of-mass
-multipliers and the first mass moment of the perturbation.
+multipliers, the first mass moment of the perturbation `D`, its norm `abs_D`,
+the moment scale `load_moment` and the scaled moment `rel_D`.
+
+`load_moment` is `Re int |sigma| dS`, the largest first moment that this
+surface load could carry. `rel_D` is `abs_D` divided by it, so it says which
+fraction of the load's own moment the centre of mass still carries. Read
+`rel_D` to judge the frame, because `abs_D` alone grows with the load. In
+cases C and D the load grows from zero, so `rel_D` divides by a small number in
+the first steps and is larger there for a reason that is not a frame error.
+Read `abs_D` beside it in those cases.
 
 The four preconditioner counters (`block0`, `assembly`, `columns` and
 `dense_builds`) are running totals from the build of the preconditioner. The
@@ -186,6 +196,16 @@ independent mesh, and the coupled system needs the mantle to be a submesh of
 the parent. The driver therefore reads the parent mesh from the file, cuts the
 mantle from it, and interpolates the two fields down. That interpolation is
 exact in both directions.
+
+CAUTION: restart on the rank count that wrote the checkpoint. The parent copy
+of the displacement leaves a parent dof that the mantle does not cover at zero,
+and which dofs those are comes from point location, which is a local operation.
+The set therefore depends on the partition. The driver stores the rank count
+with each state and prints a `WARNING` when the restart runs on another one.
+Measured in W8 on the 900 km mesh, 27 dofs of 355 890 differ between one rank
+and two, which is 3.5e-05 in the L2 norm of the displacement copy and above the
+outer tolerance. A checkpoint written before the rank count was stored is read
+without the warning.
 
 ## The matched radopt runs
 
