@@ -722,8 +722,8 @@ def build_solver(parent, mantle, case, args, dt, t_kyr):
     snes_type = "ksponly" if case.fixed_ocean else "newtonls"
     solver_parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=layout.condensed, outer_rtol=args.outer_rtol,
-        block0_rtol=args.block0_rtol, snes_type=snes_type,
-        multiplier_pc=args.multiplier_pc,
+        block0_rtol=args.block0_rtol, block0_max_it=args.block0_max_it,
+        snes_type=snes_type, multiplier_pc=args.multiplier_pc,
         dtn_representation=layout.dtn_representation)
     # The two rebuild rules of W4. They are PETSc options of
     # `LowRankPotentialPC` and `DtNMultiplierDenseSchurPC`, so they are set
@@ -751,6 +751,59 @@ def build_solver(parent, mantle, case, args, dt, t_kyr):
 # Diagnostics of one solved state
 # --------------------------------------------------------------------------
 
+def python_context(pc):
+    """The Python preconditioner behind `pc`, or `None` if there is not one.
+
+    Ask the type first. `getPythonContext` on another type kills the process.
+    `PETSc.PC.getPythonContext` on a preconditioner whose type is not `python`
+    reads a pointer that holds no Python object and kills the process with
+    `SIGSEGV`. Measured with petsc4py 3.25.5: a bare
+    `PETSc.PC().create(); setType("gamg"); getPythonContext()` segmentation
+    faults, while `none`, `jacobi`, `lu` and `fieldsplit` return `None`. So a
+    `try/except` around the call catches nothing: there is no exception, the
+    run dies. The same trap is recorded in `tests/unit/test_gia_condensed_block0.py`.
+
+    This is reached in the driver because the potential split of the block-0
+    nest carries `gadopt.LowRankPotentialPC` on the low-rank representation and
+    plain GAMG on the multiplier representation
+    (`gadopt.gia_gravity._potential_split`), and the driver runs both.
+
+    Args:
+      pc: a `PETSc.PC`, at any point of the nest.
+
+    Returns:
+      The Python context, or `None` when the preconditioner is of another type
+      or carries no context.
+    """
+    try:
+        if pc.getType() != "python":
+            return None
+        return pc.getPythonContext()
+    except Exception:
+        return None
+
+
+def fieldsplit_sub_ksps(pc):
+    """The sub-KSPs of a fieldsplit preconditioner, or `()` if it is not one.
+
+    Same reasoning as `python_context`: ask the type first, then the question.
+    A fieldsplit query on a preconditioner of another type, or on one that has
+    not been set up, is not something to find out by trying.
+
+    Args:
+      pc: a `PETSc.PC`.
+
+    Returns:
+      A tuple of `PETSc.KSP`, empty when `pc` is not a set-up fieldsplit.
+    """
+    try:
+        if pc.getType() != "fieldsplit":
+            return ()
+        return tuple(pc.getFieldSplitSubKSP())
+    except Exception:
+        return ()
+
+
 def preconditioner_counters(solver):
     """The four rebuild and application counters of the preconditioners.
 
@@ -764,10 +817,12 @@ def preconditioner_counters(solver):
     difference between two lines. The counters say whether the rebuild rules
     of W4 did what they were set to do.
 
-    The nest is walked defensively: every entry is `None` when that
-    preconditioner is not in this configuration, because the driver runs both
-    DtN representations and both block-1 settings and a missing counter must
-    not stop a run.
+    The nest is walked through `python_context` and `fieldsplit_sub_ksps`,
+    which ask each preconditioner's type before they ask it anything else.
+    Every entry is `None` when that preconditioner is not in this
+    configuration, because the driver runs both DtN representations and both
+    block-1 settings and a missing counter must not stop a run. A missing
+    counter prints as `-`.
 
     Args:
       solver: the `SelfGravitatingGIASolver` after a solve.
@@ -778,31 +833,30 @@ def preconditioner_counters(solver):
     """
     out = {"assembly": None, "block0": None, "columns": None,
            "dense_builds": None}
+    outer = python_context(solver.solver.snes.ksp.pc)
+    if outer is None:
+        return out
     try:
-        outer = solver.solver.snes.ksp.pc.getPythonContext()
         block0_ksp, block1_ksp = outer.pc.getFieldSplitSchurGetSubKSP()
     except Exception:
         return out
-    try:
-        condensed = block0_ksp.getPC().getPythonContext()
-        out["assembly"] = getattr(condensed, "assembly_count", None)
-        out["block0"] = getattr(condensed, "elimination_count", None)
-    except Exception:
-        condensed = None
-    if condensed is not None:
-        try:
-            # The potential split of the block-0 nest carries
-            # `LowRankPotentialPC` on the low-rank representation.
-            split = condensed.condensed_ksp.getPC().getFieldSplitSubKSP()[1]
-            out["columns"] = getattr(split.getPC().getPythonContext(),
+    condensed = python_context(block0_ksp.getPC())
+    out["assembly"] = getattr(condensed, "assembly_count", None)
+    out["block0"] = getattr(condensed, "elimination_count", None)
+    # The potential split of the block-0 nest carries `LowRankPotentialPC` on
+    # the low-rank representation and GAMG on the multiplier one, so only the
+    # first has a column counter. `block0="pair"` has no `condensed_ksp` at
+    # all, which is why the attribute is asked for and not assumed.
+    condensed_ksp = getattr(condensed, "condensed_ksp", None)
+    if condensed_ksp is not None:
+        splits = fieldsplit_sub_ksps(condensed_ksp.getPC())
+        if len(splits) > 1:
+            out["columns"] = getattr(python_context(splits[1].getPC()),
                                      "column_builds", None)
-        except Exception:
-            pass
-    try:
-        out["dense_builds"] = getattr(block1_ksp.getPC().getPythonContext(),
-                                      "build_count", None)
-    except Exception:
-        pass
+    # Block 1 runs `DtNMultiplierDenseSchurPC` or `pc_type none`; only the
+    # first has a build counter.
+    out["dense_builds"] = getattr(python_context(block1_ksp.getPC()),
+                                  "build_count", None)
     return out
 
 
@@ -880,11 +934,21 @@ def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
     shift = float(solver.solution.subfunctions[layout.sea_level])
     multipliers = solver.centre_of_mass_multipliers()
     dipole = solver.mass_dipole()
-    net_mass = float(assemble(solver.surface_load_sheet()
-                              * surface_measure(solver)))
+    dss = surface_measure(solver)
+    sheet = solver.surface_load_sheet()
+    net_mass = float(assemble(sheet * dss))
+    # The scale of the first mass moment: the largest moment that this load
+    # could carry if all of its mass sat on one side of the sphere. The
+    # moment arm is Re and the mass is the total absolute surface mass, so
+    # `load_moment` has the units of `mass_dipole` and is never smaller than
+    # the moment of the load itself. `abs(sigma)` and not `sigma`, because the
+    # ocean and the ice carry opposite signs and the net mass of the sheet is
+    # zero by construction, which would make a ratio against it meaningless.
+    load_moment = float(assemble(gen.RE * abs(sheet) * dss))
     area, grounded, floating = ocean_and_ice(solver, case, pieces)
     counters = preconditioner_counters(solver)
     snes = solver.solver.snes
+    abs_dipole = float(np.linalg.norm(dipole))
     return dict(
         step=step, t_kyr=t_kyr, dt_yr=dt_yr, wall_s=wall_s,
         newton=int(snes.getIterationNumber()),
@@ -894,7 +958,14 @@ def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
         shift=shift, h_UF_m=shift * D_M,
         multipliers=[float(v) for v in multipliers],
         dipole=[float(v) for v in dipole],
-        abs_dipole=float(np.linalg.norm(dipole)),
+        abs_dipole=abs_dipole, load_moment=load_moment,
+        # The frame criterion of W8.2. A bare `abs_D` has no scale: it is a
+        # non-dimensional moment whose size follows the load. The ratio is the
+        # fraction of the load's own moment that the centre of mass still
+        # carries, so it is comparable between two cases, two meshes and two
+        # DtN representations. Before any load exists the ratio is 0 by
+        # definition.
+        dipole_rel=(abs_dipole / load_moment if load_moment > 0.0 else 0.0),
         net_sheet_mass=net_mass, ocean_area=area,
         ice_mass_grounded_kg=grounded, ice_mass_floating_kg=floating)
 
@@ -911,6 +982,12 @@ def print_step(row):
     (see `preconditioner_counters`), so the cost of one step is the difference
     between two lines. A `-` means that this configuration has no such
     counter.
+
+    The `FRAME` line carries the frame multipliers, the mass dipole `D`, its
+    norm, the moment scale `Re int |sigma| dS` and `rel_D`, the norm divided
+    by that scale. `rel_D` is the number to read: it says which fraction of
+    the load's own first moment the centre of mass still carries, and it is
+    comparable between cases, meshes and DtN representations.
     """
     def count(value):
         """A counter that the configuration may not carry."""
@@ -930,7 +1007,9 @@ def print_step(row):
     say(f"FRAME t_kyr={row['t_kyr']:.9g} "
         f"lambda=({', '.join(f'{v:.6e}' for v in row['multipliers'])}) "
         f"D=({', '.join(f'{v:.6e}' for v in row['dipole'])}) "
-        f"abs_D={row['abs_dipole']:.6e}")
+        f"abs_D={row['abs_dipole']:.6e} "
+        f"load_moment={row['load_moment']:.6e} "
+        f"rel_D={row['dipole_rel']:.6e}")
 
 
 # --------------------------------------------------------------------------
@@ -1495,6 +1574,26 @@ def save_state(chk, solver, layout, index, t_kyr, step, dt_yr):
     fields are not written: they are not state that a step carries forward,
     and the next solve recomputes them.
 
+    **The displacement copy on the parent depends on the rank count**, which is
+    why the rank count is stored with the state and `load_state` warns when it
+    changes. `allow_missing_dofs=True` leaves a parent dof that the mantle does
+    not cover at zero, and the set of covered dofs comes from point location,
+    which is a local operation. Measured in W8 on the 900 km mesh, the same
+    state written on one rank and on two ranks: the displacement copy holds
+    113 493 zero dofs of 355 890 on one rank and 113 520 on two, a difference of
+    27 dofs, all of them on the mantle boundary where a CG3 dof is shared with
+    a cell outside the mantle. The internal-variable copy is DG2, so a dof
+    belongs to exactly one cell and the two counts are identical (538 080). The
+    potential is a genuine parent field and has no such copy at all.
+
+    The same measurement puts the effect at 3.5e-05 in the L2 norm of the
+    displacement copy, against 5.6e-09 for the potential. A restart therefore
+    reads a state that is right to that order when the rank count changed, and
+    exactly right when it did not (measured at 5.3e-22 in
+    `team/s6-w7-driver/review-round2.md` section 2, and at 5.8e-11 in `Shift`
+    across a change from 8 ranks to 4 in W8 check 3). Restart on the rank count
+    that wrote the checkpoint.
+
     Args:
       chk: the open `CheckpointFile`.
       solver: the solver whose `solution` holds the state.
@@ -1537,6 +1636,10 @@ def save_state(chk, solver, layout, index, t_kyr, step, dt_yr):
     chk.set_attr(STATE_GROUP, f"t_kyr_{index}", float(t_kyr))
     chk.set_attr(STATE_GROUP, f"step_{index}", int(step))
     chk.set_attr(STATE_GROUP, f"dt_yr_{index}", float(dt_yr))
+    # The rank count of the run that wrote the state. `load_state` warns when
+    # the restart uses another one, because the displacement copy above is
+    # partition dependent on the mantle boundary.
+    chk.set_attr(STATE_GROUP, f"ranks_{index}", int(COMM_WORLD.size))
     chk.set_attr(STATE_GROUP, "n_states", int(index + 1))
 
 
@@ -1605,6 +1708,24 @@ def load_state(path, index, args):
         t_kyr = float(chk.get_attr(STATE_GROUP, f"t_kyr_{index}"))
         step = int(chk.get_attr(STATE_GROUP, f"step_{index}"))
         dt_yr = float(chk.get_attr(STATE_GROUP, f"dt_yr_{index}"))
+        # The displacement copy on the parent is partition dependent on the
+        # mantle boundary (`save_state`), so a restart on another rank count
+        # reads a state that differs there. The measured size is 3.5e-05 in the
+        # L2 norm of the displacement, which is above the outer tolerance, so
+        # the log says it rather than leaving it to be rediscovered. A file
+        # written before this attribute existed has no rank count and the
+        # warning is skipped.
+        try:
+            written_ranks = int(chk.get_attr(STATE_GROUP, f"ranks_{index}"))
+        except Exception:
+            written_ranks = None
+    if written_ranks is not None and written_ranks != COMM_WORLD.size:
+        say(f"  WARNING: state {index} of {path} was written on "
+            f"{written_ranks} ranks and this restart runs on "
+            f"{COMM_WORLD.size}. The displacement copy on the parent mesh is "
+            "partition dependent on the mantle boundary, so the restored "
+            "state differs there by about 3.5e-05 relative (see save_state). "
+            "Restart on the rank count that wrote the checkpoint.")
     return parent, mantle, fields, t_kyr, step, dt_yr
 
 
@@ -1687,6 +1808,26 @@ def parse_args(argv=None):
     p.add_argument("--block0-rtol", type=float, default=1e-4,
                    help="relative tolerance of the mechanics-potential block "
                         "solve inside the outer FGMRES")
+    # The outer Krylov is FGMRES, so block 0 is allowed to stop early: an
+    # inexact block-0 solve costs outer iterations and does not move the
+    # converged answer, because the outer tolerance is what the answer is
+    # measured against. The preset caps block 0 at 200 by default, and on a
+    # coarse or badly shaped mesh that cap is reached at every application,
+    # which makes the wall clock of one step a multiple of the cap. Lower the
+    # cap to trade block-0 iterations for outer iterations, and record the
+    # setting with the counts.
+    #
+    # CAUTION: this flag is for a cheap check and not for a production run. A
+    # capped block-0 solve builds the dense Schur complement of block 1 from an
+    # inexact operator, in the same way a loose `--block0-rtol` does. Measured
+    # in W8 on the 900 km mesh: the relative asymmetry of the 5x5 complement is
+    # 5.1e-06 at cap 200 and 6.0e-04 at cap 20, and at the low cap the step
+    # after the elastic solve cost 56 block-0 applications where the run at cap
+    # 200 needed 17. A low enough cap can stop the outer solve converging at
+    # all.
+    p.add_argument("--block0-max-it", type=int, default=200,
+                   help="iteration cap of the mechanics-potential block "
+                        "solve (the preset default is 200)")
     p.add_argument("--multiplier-pc", default="gadopt.DtNMultiplierDenseSchurPC",
                    help="the preconditioner of the Real block. Pass 'none' "
                         "for the comparison of the smoke run.")
@@ -1779,7 +1920,7 @@ def main(argv=None):
         f"DG{args.internal_variable_degree}, potential CG2, initial sea level "
         f"CG{args.sea_level_degree}, K/mu {args.bulk_shear_ratio:g}")
     say(f"  tolerances: outer {args.outer_rtol:g}, block 0 "
-        f"{args.block0_rtol:g}")
+        f"{args.block0_rtol:g}, block-0 iteration cap {args.block0_max_it}")
     say(f"  masks: alpha {args.alpha_mask:g}, grad_floor {args.grad_floor:g}, "
         f"clamp {SMOOTH_STEP_CLAMP:g}")
     say(f"  Lambda {LAMBDA:.6f}, B_mu {B_MU:.6f}, t_bar {T_BAR_YR} yr")
@@ -1923,7 +2064,8 @@ def main(argv=None):
         if COMM_WORLD.rank == 0 and rows:
             keys = ("t_kyr", "dt_yr", "wall_s", "shift", "h_UF_m",
                     "net_sheet_mass", "ocean_area", "ice_mass_grounded_kg",
-                    "ice_mass_floating_kg", "abs_dipole", "newton", "outer")
+                    "ice_mass_floating_kg", "abs_dipole", "load_moment",
+                    "dipole_rel", "newton", "outer")
             arrays = {key: np.array([row[key] for row in rows], dtype=float)
                       for key in keys}
             arrays["step"] = np.array([row["step"] for row in rows], dtype=int)
