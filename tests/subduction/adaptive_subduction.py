@@ -97,13 +97,11 @@ class AdaptiveSimulation:
             # Rescale metric to achieve the desired target complexity
             overall_metric.normalise()
 
+            # Adapting the mesh can generate new nodes outside of the original mesh
+            # Increase tolerance to ensure point location does not fail
+            self.mesh.tolerance = 5.0
             # Generate new mesh based on overall metric
-            self.mesh = adapt(self.mesh, overall_metric)
-            # Ensure boundary coordinates are not exceeded
-            for i in range(self.mesh.geometric_dimension):
-                self.mesh.coordinates.dat.data[:, i].clip(
-                    0.0, prms.domain_dims[i], out=self.mesh.coordinates.dat.data[:, i]
-                )
+            self.mesh = adapt(self.mesh, overall_metric, serialise=True)
 
             if initial:
                 break

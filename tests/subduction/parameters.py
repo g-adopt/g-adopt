@@ -100,19 +100,19 @@ eta_bounds = {
     "maximum": {"mantle": 1e25, "weak layer": 1e25},
 }
 plastic_deformation_params = {
-    "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.25},
+    "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.15},
     "weak layer": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.015},
 }
 viscous_creep_params = {
     "upper": {
-        "diffusion": {"prefactor": 1e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
+        "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 1e-17,
+            "prefactor": 1.5e-17,
             "n": 3.5,
             "act_nrg": 5.4e5,
             "act_vol": 1.2e-5,
         },
-        "Peierls": {"prefactor": 1e-142, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
+        "Peierls": {"prefactor": 1e-145, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
         "diffusion": {"prefactor": 1e-15, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
@@ -133,10 +133,10 @@ initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
-        "target_complexity": 150_000,  # Metric complexity, analogous to cell count
+        "target_complexity": 300_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
-        "a_max": 2.0,  # Maximum metric anisotropy (cell aspect ratio)
+        "a_max": 5.0,  # Maximum metric anisotropy (cell aspect ratio)
         "p": np.inf,  # Metric normalisation order
         "gradation_factor": 1.5,  # Maximum variation in length between adjacent edges
     }
@@ -150,8 +150,8 @@ checkpoint_frequency = 5.0 * myr_to_seconds
 output_frequency = 0.4 * myr_to_seconds
 
 # Field initialisation
-age_plate = 100.0 * myr_to_seconds
-age_overriding = 20.0 * myr_to_seconds
+age_plate = 140.0 * myr_to_seconds
+age_overriding = 50.0 * myr_to_seconds
 plate_extremity_coords = (0.0, domain_dims[1])
 trench_coords = (domain_dims[0] / 2.0, domain_dims[1])
 weak_layer_thickness = 6e3 / distance_scale
