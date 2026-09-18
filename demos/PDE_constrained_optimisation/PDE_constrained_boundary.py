@@ -138,7 +138,8 @@ T0.project(T_wrong)
 # Note that L2 is the default Riesz map if none is explicitly specified.
 
 # +
-m = Control(T0, riesz_map="L2")
+riesz_map = RieszMap(Q, "L2", constant_jacobian=True)
+m = Control(T0, riesz_map=riesz_map)
 
 J = AdjFloat(0.0)  # Initialise functional
 factor = AdjFloat(0.5)  # First & final boundary integral weighted by 0.5 to implement mid-point rule time-integration.

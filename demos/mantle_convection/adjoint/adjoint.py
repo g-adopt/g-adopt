@@ -194,7 +194,8 @@ T0_bcs = [DirichletBC(Q1, 0., boundary.top), DirichletBC(Q1, 1., boundary.bottom
 T0 = Function(Q1, name="Initial_Guess_Temperature").project(Tic, bcs=T0_bcs)
 
 # We next make pyadjoint aware of our control problem:
-control = Control(Tic)
+riesz_map = RieszMap(Q1, "L2", constant_jacobian=True)
+control = Control(Tic, riesz_map=riesz_map)
 
 # Take our initial guess and project to T, simultaneously applying boundary conditions in the Q2 space:
 T.project(Tic, bcs=energy_solver.strong_bcs)

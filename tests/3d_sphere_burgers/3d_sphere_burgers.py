@@ -55,6 +55,8 @@ parser.add_argument("--geometric_dt_steps", default=0, type=int,
 parser.add_argument("--split_dt_steps", default=0, type=int,
                     help="No. of steps used for a split timestep approach nsteps before and after characteristic maxwell time")
 parser.add_argument("--write_output", action='store_true',
+                    help="Write out HDF5 files and other diagnostic data")
+parser.add_argument("--write_vtk_output", action='store_true',
                     help="Write out Paraview VTK files")
 parser.add_argument("--optional_name", default="", type=str,
                     help="Optional string to add to simulation name for outputs",
@@ -263,6 +265,7 @@ disc = 0.5*(1-tanh((abs(colatitude-disc1_centre) - disc_halfwidth1) / (2*surface
 
 
 OUTPUT = args.write_output
+VTK_OUTPUT = args.write_vtk_output
 
 if args.lateral_visc:
     phi = atan2(X[1], X[0])  # (longitude )
@@ -284,7 +287,7 @@ else:
     viscosity_2.interpolate(10**viscosity_2)
 
 
-if OUTPUT:
+if VTK_OUTPUT:
     discfunc = Function(P1).interpolate(disc)
     discfile = VTKFile(f"{args.output_path}discfile.pvd").write(discfunc)
     viscfile = VTKFile(f"{args.output_path}viscfile.pvd").write(viscosity_1, viscosity_2)
@@ -312,24 +315,6 @@ approximation = approx(
     bulk_shear_ratio=args.bulk_shear_ratio)
 
 
-iterative_parameters = {"mat_type": "matfree",
-                        "snes_monitor": None,
-                        "snes_converged_reason": None,
-                        "snes_type": "ksponly",
-                        "ksp_type": "cg",
-                        "ksp_rtol": 1e-5,
-                        "ksp_converged_reason": None,
-                        "ksp_monitor": None,
-                        "pc_type": "python",
-                        "pc_python_type": "gadopt.SPDAssembledPC",
-                        "assembled_pc_type": "gamg",
-                        "assembled_mg_levels_pc_type": "sor",
-                        "assembled_pc_gamg_threshold": 0.01,
-                        "assembled_pc_gamg_square_graph": 100,
-                        "assembled_pc_gamg_coarse_eq_limit": 1000,
-                        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-                        }
-
 Z_nullspace = rigid_body_modes(V, rotational=True)
 Z_near_nullspace = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
 
@@ -339,7 +324,7 @@ coupled_solver = InternalVariableSolver(
     dt=dt,
     internal_variables=m_list,
     bcs=stokes_bcs,
-    solver_parameters=iterative_parameters,
+    solver_parameters_extra={"snes_converged_reason": None},
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
@@ -351,24 +336,26 @@ vertical_displacement = Function(V.sub(2), name="radial displacement")
 velocity = Function(V, name="velocity")  # Function to store velocity for output
 old_disp = Function(V, name="old disp").interpolate(u)
 
-if OUTPUT:
+if VTK_OUTPUT:
     output_file = VTKFile(f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.pvd")
     output_file.write(u, *m_list, vertical_displacement, velocity, viscosity_1, viscosity_2)
 
-plog = ParameterLog("params.log", mesh)
-plog.log_str(
-    "timestep time dt u_rms u_rms_surf ux_max uv_min"
-)
+if OUTPUT:
+    plog = ParameterLog("params.log", mesh)
+    plog.log_str(
+        "timestep time dt u_rms u_rms_surf ux_max uv_min"
+    )
+    checkpoint_filename = f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
+    displacement_filename = f"{args.output_path}displacement-{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
+
 gd = GIADiagnostics(u, boundary.bottom, boundary.top)
-
-checkpoint_filename = f"{args.output_path}{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulktoshear{args.bulk_shear_ratio}-nondim-chk.h5"
-
-displacement_filename = f"{args.output_path}displacement-{name}-reflevel{args.reflevel}-nz{nz}-dt{dt_years}years-bulk{args.bulk_shear_ratio}-nondim.dat"
 
 # Initial displacement at time zero is zero
 displacement_min_array = [[0.0, 0.0]]
 
 # -
+# Timing info:
+stokes_stage = PETSc.Log.Stage("stokes_solve")
 
 for timestep in range(1, max_timesteps+1):
     # update time first so that ice load begins
@@ -377,12 +364,15 @@ for timestep in range(1, max_timesteps+1):
     elif args.split_dt_steps:
         dt.assign(conditional(time < 1, elastic_dt, viscous_dt))
     time.assign(time+dt)
-    coupled_solver.solve()
+
+    with stokes_stage:
+        coupled_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
-                 f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
-                 f"{gd.uv_min(boundary.top)}")
+    if OUTPUT:
+        plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+                     f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
+                     f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
     velocity.interpolate((u-old_disp)/dt)
     old_disp.interpolate(u)
@@ -391,21 +381,27 @@ for timestep in range(1, max_timesteps+1):
     displacement_min = gd.uv_min(boundary.top)
     log("Greatest (-ve) displacement", displacement_min)
     log("Greatest (+ve) displacement", gd.uv_max(boundary.top))
-    displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds),
-                                   displacement_min])
 
-    if timestep % output_frequency == 0:
-        log("timestep", timestep)
+    if OUTPUT:
+        displacement_min_array.append(
+            [
+                float(characteristic_maxwell_time * time.dat.data[0] / year_in_seconds),
+                displacement_min,
+            ]
+        )
+        if timestep % output_frequency == 0:
 
-        if OUTPUT:
-            output_file.write(u, *m_list, vertical_displacement, velocity, viscosity_1, viscosity_2)
-
-        with CheckpointFile(checkpoint_filename, "w") as checkpoint:
-            checkpoint.save_function(u, name="Stokes")
-            checkpoint.save_function(m1, name="Internal variable 1")
-            checkpoint.save_function(m2, name="Internal variable 2")
+            with CheckpointFile(checkpoint_filename, "w") as checkpoint:
+                checkpoint.save_function(u, name="Stokes")
+                checkpoint.save_function(m1, name="Internal variable 1")
+                checkpoint.save_function(m2, name="Internal variable 2")
 
         if MPI.COMM_WORLD.rank == 0:
             np.savetxt(displacement_filename, displacement_min_array)
 
-plog.close()
+    if VTK_OUTPUT and timestep % output_frequency == 0:
+        log("timestep", timestep)
+        output_file.write(u, *m_list, vertical_displacement, velocity, viscosity_1, viscosity_2)
+
+if OUTPUT:
+    plog.close()
