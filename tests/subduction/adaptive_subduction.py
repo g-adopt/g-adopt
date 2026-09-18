@@ -50,11 +50,12 @@ class AdaptiveSimulation:
         self.write_output(initial=True)
 
     def adapt_mesh(self, initial: bool = False) -> None:
-        def add_metric(field: Function):
+        def add_metric(field: Function, scale: float = 1.0, log: bool = False):
             # Firedrake function for a metric over a mesh where a field lives
             metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
             metric.set_parameters(prms.metric_parameters)  # Set metric parameters
-            metric.compute_hessian(field)  # Field Hessian
+            # Field Hessian
+            metric.compute_hessian(ln(field) / ln(10.0) if log else field)
             metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
 
             metric_magnitude.interpolate(sqrt(inner(metric, metric)))  # Frobenius norm
@@ -62,7 +63,7 @@ class AdaptiveSimulation:
                 metric_magnitude.dat.data_ro.max(), MPI.MAX
             )
             # Scale metric by the maximum value of its Frobenius norm across the mesh
-            metric.assign(metric / metric_magnitude_max)
+            metric.assign(scale * metric / metric_magnitude_max)
 
             metrics.append(metric)
 
@@ -84,9 +85,13 @@ class AdaptiveSimulation:
 
                 if isinstance(field_specs["field"].ufl_element(), VectorElement):
                     for dim in range(field_specs["field"].ufl_shape[0]):
-                        add_metric(field_specs["field"][dim])
+                        add_metric(
+                            field_specs["field"][dim],
+                            field_specs["metric_mods"]["scale"][dim],
+                            field_specs["metric_mods"]["log"][dim],
+                        )
                 else:
-                    add_metric(field_specs["field"])
+                    add_metric(field_specs["field"], **field_specs["metric_mods"])
 
             overall_metric = metrics[0].copy(deepcopy=True)  # Overall metric
             overall_metric.rename("Metric (overall)")
@@ -283,6 +288,7 @@ class AdaptiveSimulation:
 
         for field_name, field_specs in self.fields.items():
             field_specs["include_in_metric"] = field_name in prms.metric_fields
+            field_specs["metric_mods"] = prms.metric_fields.get(field_name)
             field_specs["scale"] = prms.scales[field_name]
 
         if prms.free_surface:

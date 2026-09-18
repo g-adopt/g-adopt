@@ -133,7 +133,7 @@ initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
-        "target_complexity": 300_000,  # Metric complexity, analogous to cell count
+        "target_complexity": 250_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
         "a_max": 5.0,  # Maximum metric anisotropy (cell aspect ratio)
@@ -141,7 +141,13 @@ metric_parameters = {  # For further information: `set_parameters` in animate/me
         "gradation_factor": 1.5,  # Maximum variation in length between adjacent edges
     }
 }
-metric_fields = {"Level set", "Temperature", "Velocity", "Viscosity"}
+metric_fields = {
+    "Level set": {"scale": 1.0, "log": False},
+    "Strain-rate (second invariant)": {"scale": 1.0, "log": True},
+    "Temperature": {"scale": 1.0, "log": False},
+    "Velocity": {"scale": [1.0, 1.0], "log": [False, False]},
+    "Viscosity": {"scale": 1.0, "log": False},
+}
 
 # Time loop
 subcycles = 1
