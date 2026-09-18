@@ -86,7 +86,7 @@ NON-DIMENSIONAL SCALES
     at Re and not the case file's 9.8155 m s^-2. The energy needs the gravity
     that divides the potential to be the reference gravity at the surface, or
     the displacement row and the potential row weigh the same load
-    differently. The two values differ by about 2e-4 relative and the driver
+    differently. The two values differ by about 5e-6 relative and the driver
     prints both.
 
 DISCRETISATION AND SOLVER
@@ -622,7 +622,7 @@ def surface_gravity(parent):
     multiplies the load by `g_s` to make its weight, so `g_s` must be the
     reference gravity that the mechanics uses at the surface. The case file's
     9.8155 m s^-2 is the same quantity rounded, and the two differ by about
-    2e-4 relative; the driver prints both.
+    5e-6 relative; the driver prints both.
 
     The value is read from the very expression the approximation uses,
     `reference_state.gravity_exact_ufl`, through a `Real` space, so that a
