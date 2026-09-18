@@ -52,8 +52,8 @@ of gia-mip. That script needs `netCDF4`; the driver does not.
 | `write_profile_json.py` | Writes `martinec_profiles.json` from the gia-mip reference data. |
 | `run_martinec.pbs` | The PBS job script for the NCI Gadi cluster. |
 
-The driver imports `build_meshes`, `spada_approximation`, `layered`,
-`truncated_ladder` and `time_ladder` from `../3d_spada_selfgrav/`, and the mesh
+The driver imports `build_meshes`, `spada_approximation`, `truncated_ladder`
+and `time_ladder` from `../3d_spada_selfgrav/`, and the mesh
 generator imports the geometry of `generate_selfgrav_sphere.py` from the same
 directory. Nothing is copied, so the two benchmarks keep the same Earth model
 and the same mesh construction.
