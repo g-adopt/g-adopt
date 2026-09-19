@@ -100,6 +100,14 @@ epochs. The feedback is a third of the answer, not a perturbation. What
 `Omega_sq` being small does control is the size of `psi_rot` itself, which is a
 statement about the centrifugal potential and not about the loop gain.
 
+The same relation says that `C - A` and `k_s` are not independent inputs. The
+solver's feedback is `Q k_T(t)` with `Q = a^5 Omega^2 / (3 G)`, an identity of
+the degree-2 exterior field (MacCullagh), so the closure it actually solves,
+`[(C - A) - Q k_T(t)] m = dI_direct`, is the secular relation above only when
+`C - A = Q k_s`. A caller can state either constant;
+`SelfGravitatingGIASolver._resolve_rotation_moments` computes the other and
+refuses a pair that disagrees.
+
 The derivations of the two scalings are in
 `SelfGravitatingGIASolver.theta_psi` and `SelfGravitatingGIASolver._theta_rot`;
 both are one line and neither is the line the road map originally claimed.
@@ -148,6 +156,7 @@ from warnings import warn
 
 import numpy as np
 from firedrake import *
+from mpi4py import MPI
 from ufl import Form
 
 from .approximations import BaseGIAApproximation
@@ -1495,16 +1504,31 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         and `self_gravity_number`.
       layout: the `GIASpaceLayout` from the factory.
       dt: time step.
-      rotation_moments: `{"C": ..., "C_minus_A": ...}`, the principal moments of
-        the reference hydrostatic figure. `C_minus_A` is required only in 3-D,
+      rotation_moments: `{"C": ..., "C_minus_A": ..., "k_s": ...}`, the
+        reference hydrostatic figure. `C_minus_A` is required only in 3-D,
         where it is the dynamical ellipticity and *cannot* be computed from a
         spherically symmetric reference density at all (`C = A` identically),
         so it is an input. In 2-D, `C` is the disc's polar second moment
         `int rho_0 r^2 dV`, which the caller can assemble; it is still an input
         here so that the 3-D promotion supplies one more key rather than
-        rewriting the row.
+        rewriting the row. `k_s` is the secular (fluid-limit) tidal Love number
+        of the same figure, and it is the *consistent* way to state `C - A`:
+        see `tidal_inertia_factor` and `_resolve_rotation_moments` for the
+        identity `C - A = Q k_s` that ties the two together, and for what
+        happens when both keys are given. No other key is accepted, because a
+        misspelt `k_s` would be a silently unchecked `C - A`.
       Omega_sq: the squared rotation rate non-dimensionalised by `g_bar / L`;
         see `OMEGA_SQ_EARTH`.
+      surface_radius: the non-dimensional radius `ahat = a / L` of the free
+        surface. Required exactly when `rotation_moments["k_s"]` is given,
+        because `Q = a^5 Omega^2 / (3 G)` needs it; ignored otherwise. It is a
+        separate argument and not measured from the mesh, because the mesh the
+        solver holds does not say which of its radii is the *figure* radius of
+        MacCullagh's relation - the parent carries a stand-off buffer past the
+        surface, and the mechanics submesh stops at the surface only by the
+        convention of these GIA problems. What the value is checked against is
+        the mechanics mesh's outer radius, which is that convention made
+        explicit rather than assumed.
       fluid_core: a `FluidCore` (or its keyword mapping) to give the core its
         buoyancy and its mass sheet, or `None` for the legacy rigid core, which
         the caller then spells as `{Rc: {"un": 0.0}}` in `bcs`. The two are
@@ -1567,6 +1591,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         dt: float,
         rotation_moments: dict[str, Any] | None = None,
         Omega_sq: Number | Constant = OMEGA_SQ_EARTH,
+        surface_radius: Number | None = None,
         fluid_core: "FluidCore | Mapping | None" = None,
         internal_variables: "Function | list | None" = None,
         condensed_near_nullspace: str = "incompressible",
@@ -1637,6 +1662,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self._mesh = layout.mechanics_mesh
         self.potential_mesh = layout.potential_mesh
         self.Omega_sq = ensure_constant(Omega_sq)
+        self.surface_radius = surface_radius
         self.rotation_moments = dict(rotation_moments or {})
 
         if approximation.self_gravity_number is None:
@@ -1647,6 +1673,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "g_bar.")
         self.Lambda = approximation.self_gravity_number
         self._check_self_gravity_number()
+        # After `Lambda`, `Omega_sq` and `surface_radius`, because the rotation
+        # constant `Q` is built from all three, and before any form is built,
+        # because `_closure_constant` reads the resolved dictionary.
+        self._resolve_rotation_moments()
 
         self.set_measures()
         # Before the base class, which builds a residual and a solver: a
@@ -1921,6 +1951,205 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"({scalar_value(self.Lambda)!r}). The first scales the mass sheets "
                 "and the second the volume source; they must be the same "
                 "number.")
+
+    # -- The rotational closure's two constants -----------------------------
+
+    #: The keys `rotation_moments` accepts. Anything else is refused rather
+    #: than ignored: the whole point of `k_s` is that it is *checked* against
+    #: `C_minus_A`, so a misspelt key would restore in silence exactly the
+    #: unchecked `C - A` this machinery exists to remove.
+    ROTATION_MOMENT_KEYS = ("C", "C_minus_A", "k_s")
+
+    #: Relative tolerance of `C_minus_A` against `Q k_s`.
+    #:
+    #: The number is set by how far an error in `C - A` travels, not by
+    #: floating point. Eliminating the displacement from the closure gives the
+    #: secular Liouville relation `m = (1 + k_L) dI_direct / [(C - A) - Q k_T(t)]`,
+    #: so a fractional error `eps` in `C - A` changes `m` by
+    #: `eps (C - A) / [(C - A) - Q k_T(t)]`. Near the fluid limit that
+    #: amplification is large: on the Spada M3-L70-V01 benchmark
+    #: `C - A = 0.2421`, `Q = 0.2505` and `k_T(20 kyr) = 0.957`, so the
+    #: denominator is 0.0024 and the amplification is about 100.
+    #:
+    #: `1e-4` therefore bounds the induced error in the polar motion at about
+    #: 1 % at 20 kyr, while still admitting the four-to-five-digit rounding a
+    #: caller does when it writes a constant down - the benchmark driver's
+    #: `2.6952e35` against the exact `Q k_s = 2.6952068e35` is 2.5e-6, forty
+    #: times inside this tolerance. It refuses the benchmark's own
+    #: inconsistent pair (2.4 %) by a factor of 240. A caller that needs
+    #: better than 1 % at the fluid limit must give `k_s` alone and let the
+    #: solver compute `C - A`, which is exact by construction.
+    ROTATION_CONSISTENCY_RTOL = 1e-4
+
+    #: Relative tolerance of `surface_radius` against the mechanics mesh's own
+    #: outer radius. Loose, because it is a check on the *meaning* of the
+    #: argument and not on the mesh: it must catch a radius given in metres, or
+    #: the CMB radius given by mistake, and must not grade a coarse annulus
+    #: whose straight facets already cost 4e-4 (`check_geometry`). Two percent
+    #: is ten times the largest faceting error measured there, and a `Q` built
+    #: from a radius 2 % wrong is 10 % wrong, since `Q ~ ahat^5`.
+    #:
+    #: So this check does not bound the accuracy of `Q`, and the "exact by
+    #: construction" of `ROTATION_CONSISTENCY_RTOL` holds only as far as the
+    #: caller's own `surface_radius` is exact. A radius 1 % wrong passes here
+    #: and leaves `C - A` 5 % wrong.
+    SURFACE_RADIUS_RTOL = 2e-2
+
+    @property
+    def tidal_inertia_factor(self) -> float:
+        r"""`Q`: the inertia perturbation per unit rotation-vector change and Love number.
+
+        MacCullagh's relation for the degree-2 response. A body whose inertia
+        tensor is perturbed by `dI_13` has exterior potential
+        `3 G dI_13 x z / r^5`; setting that equal to `k_T` times the applied
+        centrifugal perturbation `Omega^2 m_1 x z` at the surface `r = a` gives
+
+            dI_13 = a^5 Omega^2 k_T m_1 / (3 G) = Q k_T m_1,  Q = a^5 Omega^2 / (3 G)
+
+        so `Q` is an identity of the degree-2 exterior field, not a model
+        parameter, and the solver's rotational feedback is `Q k_T(t)` whatever
+        `rotation_moments` says. In the solver's non-dimensional variables,
+        with `a = ahat L`, `Omega^2 = Omega_sq g_bar / L` and
+        `G = Lambda g_bar / (4 pi rho_bar L)`, the moment scale `rho_bar L^5`
+        divides out and
+
+            Qhat = Q / (rho_bar L^5) = 4 pi ahat^5 Omega_sq / (3 Lambda)
+
+        which is what this returns. On the Spada benchmark's constants it is
+        0.25047547, and `Qhat k_s = 0.2421406` against the driver's
+        `C - A = 0.2421400`.
+
+        Raises:
+          ValueError: if no `surface_radius` was given, since `ahat` is the one
+            factor the solver cannot get from `Lambda` and `Omega_sq`.
+        """
+        if self.surface_radius is None:
+            raise ValueError(
+                "`tidal_inertia_factor` needs `surface_radius`, the "
+                "non-dimensional radius of the free surface: Q = a^5 Omega^2 "
+                "/ (3 G) carries the fifth power of it. Pass "
+                "`surface_radius=a / L` to SelfGravitatingGIASolver.")
+        ahat = scalar_value(self.surface_radius)
+        return (4 * np.pi * ahat ** 5 * scalar_value(self.Omega_sq)
+                / (3 * scalar_value(self.Lambda)))
+
+    def _measured_surface_radius(self) -> float:
+        """The mechanics mesh's largest vertex radius, over all ranks.
+
+        Used only to check `surface_radius`. The maximum over the *vertices* is
+        the nominal radius exactly on any mesh whose outer vertices sit on the
+        sphere, whether or not the facets between them are straight, so it is a
+        sharper probe of the intended radius than an area would be. The halo
+        vertices a rank owns are included and would only repeat a value another
+        rank already has, so the reduction is a plain maximum.
+        """
+        coords = self.mesh.coordinates.dat.data_ro
+        local = float(np.sqrt((coords ** 2).sum(axis=1)).max()) if coords.size \
+            else 0.0
+        return self.mesh.comm.allreduce(local, MPI.MAX)
+
+    def _resolve_rotation_moments(self) -> None:
+        r"""Ties `C - A` to the solver's own rotational feedback. Called from `__init__`.
+
+        The rotation row closes as `K_i m_i = s_i dI_i3`, and `dI_i3` contains
+        the solver's *own* degree-2 response to the centrifugal perturbation,
+        which by `tidal_inertia_factor` is `Q k_T(t) m_i`. So the polar-wander
+        closure the solver actually solves is
+
+            [(C - A) - Q k_T(t)] m_i = dI_direct,i
+
+        against the classical secular form `(C - A)(1 - k_T/k_s) m_i =
+        dI_direct,i`. The two are the same equation **only** when
+        `C - A = Q k_s`, because `Q` is an identity that the caller cannot
+        change and `k_s` is the fluid limit of the same `k_T`. A `C - A` that
+        does not satisfy it describes a body whose hydrostatic flattening and
+        whose fluid-limit tidal response disagree, and the error it makes is
+        not the fractional error in `C - A`: it is amplified by
+        `(C - A) / [(C - A) - Q k_T(t)]`, which grows without bound as the
+        model relaxes towards its fluid limit.
+
+        The Spada et al. (2011) benchmark contains exactly that inconsistency -
+        `C - A = 2.63e35 kg m^2` in its load excitation against
+        `Q k_s = 2.6952e35 kg m^2` implied by the `k_s = 0.96672389` of its
+        transfer function, a 2.4 % difference that shows as 3.6 % in `|m|` at
+        `t = 0` and more later (`NOTES/SPADA-BENCHMARK-2026-09-17.md`). It
+        cannot be expressed through this solver once `k_s` is named.
+
+        Three ways to spell the rotation moments, and what each does:
+
+        - `C_minus_A` alone: taken as given, unchecked. This is what the
+          solver has always done and what the benchmark driver still does. The
+          solver has no second opinion to check it against, since `k_s` appears
+          nowhere else in the system.
+        - `k_s` alone, with `surface_radius`: `C - A = Q k_s` is computed here.
+          Consistent by construction, and the route to prefer.
+        - Both, with `surface_radius`: refused unless they agree to
+          `ROTATION_CONSISTENCY_RTOL`. The message carries both values, their
+          relative difference and the `k_s` that the given `C - A` implies,
+          because which of the two the caller meant is not knowable here.
+
+        `C` (the polar moment, which closes the `m_3` row) is untouched: it is
+        a moment of the reference density that the caller can assemble, and no
+        Love number constrains it.
+        """
+        unknown = set(self.rotation_moments) - set(self.ROTATION_MOMENT_KEYS)
+        if unknown:
+            raise ValueError(
+                f"Unknown rotation_moments key(s) {sorted(unknown)!r}. The "
+                f"accepted keys are {list(self.ROTATION_MOMENT_KEYS)!r}.")
+
+        # Kept in the dictionary, not consumed: `k_s` is part of the record of
+        # what the caller asked for, and a second call of this method must see
+        # the same inputs and reach the same answer.
+        k_s = self.rotation_moments.get("k_s")
+        if self.surface_radius is not None:
+            # A `Q` built from the wrong radius would make the check below
+            # meaningless rather than absent, so the radius is checked first.
+            ahat = scalar_value(self.surface_radius)
+            measured = self._measured_surface_radius()
+            if abs(ahat - measured) > self.SURFACE_RADIUS_RTOL * measured:
+                raise ValueError(
+                    f"surface_radius={ahat:.6g} against the mechanics mesh's "
+                    f"outer radius {measured:.6g}. Q = a^5 Omega^2 / (3 G) "
+                    f"carries the fifth power of this radius, so the "
+                    f"difference is a factor {(ahat / measured) ** 5:.4g} in "
+                    "the rotational feedback. Give the *non-dimensional* "
+                    "radius of the free surface, a / L.")
+        elif k_s is not None:
+            raise ValueError(
+                "rotation_moments['k_s'] needs `surface_radius`, the "
+                "non-dimensional radius a / L of the free surface: the "
+                "identity that ties k_s to C - A is C - A = Q k_s with "
+                "Q = a^5 Omega^2 / (3 G), and the radius is the one factor "
+                "that is neither `Lambda` nor `Omega_sq`.")
+
+        if k_s is None:
+            return
+
+        Q = self.tidal_inertia_factor
+        consistent = Q * scalar_value(ensure_constant(k_s))
+        given = self.rotation_moments.get("C_minus_A")
+        if given is None:
+            self.rotation_moments["C_minus_A"] = consistent
+            return
+
+        given = scalar_value(ensure_constant(given))
+        relative = abs(given - consistent) / abs(consistent)
+        if relative > self.ROTATION_CONSISTENCY_RTOL:
+            raise ValueError(
+                f"rotation_moments gives C_minus_A={given!r} and "
+                f"k_s={scalar_value(ensure_constant(k_s))!r}, which disagree "
+                f"by {relative:.3%}: the k_s implies "
+                f"C - A = Q k_s = {consistent!r} with "
+                f"Q = 4 pi ahat^5 Omega_sq / (3 Lambda) = {Q!r}, and the given "
+                f"C - A implies k_s = {given / Q!r}. The solver's rotational "
+                "feedback is Q k_T(t) by MacCullagh's relation and is not a "
+                "free parameter, so the two spellings are the same closure "
+                "only when C - A = Q k_s. Give one of them, not both, or "
+                "reconcile them. (The tolerance is "
+                f"{type(self).__name__}.ROTATION_CONSISTENCY_RTOL = "
+                f"{self.ROTATION_CONSISTENCY_RTOL:g}, set by the "
+                "amplification of this error near the fluid limit.)")
 
     def set_measures(self) -> None:
         """The two volume measures of road-map §5.4.
@@ -2640,7 +2869,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "polar second moment `int rho_0 r^2 dV`, which you can "
                 "assemble; in 3-D `C - A` is the dynamical ellipticity of the "
                 "hydrostatic figure and cannot be computed from a spherically "
-                "symmetric reference density at all.")
+                "symmetric reference density at all - give it directly, or "
+                "give `k_s` and `surface_radius` and let "
+                "`_resolve_rotation_moments` compute the consistent value.")
         return ensure_constant(self.rotation_moments[key])
 
     # -- Fields -------------------------------------------------------------
