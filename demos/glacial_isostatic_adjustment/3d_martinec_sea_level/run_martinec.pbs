@@ -1,16 +1,34 @@
 #!/bin/bash
-#PBS -P xd2
+#PBS -P vo05
 #PBS -q normalsr
 #PBS -l ncpus=104
 #PBS -l mem=480GB
 #PBS -l jobfs=100GB
 #PBS -l walltime=48:00:00
-#PBS -l storage=scratch/xd2+gdata/fp50
+#PBS -l storage=scratch/xd2+gdata/fp50+gdata/vo05
 #PBS -l wd
 # The Martinec et al. (2018) sea-level benchmark on the NCI Gadi cluster.
 #
-# Submit from this directory. Edit the project (-P), the storage list and the
-# module lines for another allocation or another cluster.
+# Submit from this directory. Edit the storage list and the module lines for
+# another cluster.
+#
+# The project and the storage are two independent things, and this script
+# splits them. `-P` names the allocation that pays the service units, and the
+# storage list names the filesystems the job can read and write. The default
+# project is vo05 and the data stays on the scratch filesystem of xd2 (Sia,
+# 2026-09-19: xd2 has 3.68 KSU left in 2026.q3 against 789 KSU in vo05, and
+# the whole worktree with every earlier output sits under /scratch/xd2). The
+# storage list also holds gdata/vo05, so that a run can read or write the data
+# of the paying project without a change of this file, and gdata/fp50, which
+# holds the Firedrake module.
+#
+# The `-P` directive is a default and `qsub` overrides it at submission:
+#
+#   qsub -P xd2 -v CASE=B run_martinec.pbs         # charge xd2 instead
+#
+# CAUTION: check the units of the project that pays before a long run, with
+# `nci_account -P vo05`. A job that stops at the walltime keeps its checkpoint
+# and `RESTART` continues it, but the units it used are spent.
 #
 #   qsub -v CASE=B run_martinec.pbs                      # case B to 10 kyr
 #   qsub -v CASE=C run_martinec.pbs                      # case C to 15 kyr
@@ -93,6 +111,130 @@
 # block-1 GMRES iteration costs one block-0 solve. If that arm stops at the
 # walltime, read the counts of the steps it finished: the comparison is a
 # ratio of block-0 applications per solve, not a total.
+#
+# Job G2: case B on the production coarse mesh, to 10 kyr, on one node. The
+# references are the VEGA profiles and the matched radopt run. The setting is
+# the one G2-smoke measured as the cheapest of the four arms, the low-rank
+# representation with the dense Schur complement on block 1, and both are the
+# defaults of this script, so the line names only the case and the label.
+#
+#   qsub -N g2 -j oe -o martinec-g2.out -l walltime=24:00:00 \
+#        -v CASE=B,LABEL=g2 run_martinec.pbs
+#
+# Job G2-K: the same run to 1 kyr with the bulk modulus at 1000 times the shear
+# modulus, against G2 at 1 kyr. `STEPS=28` stops the march at 1 kyr: the ladder
+# reaches 1 kyr in 10 steps of 10 yr and 18 steps of 50 yr, and the elastic
+# solve at t = 0 is not one of the counted steps. The driver then writes the
+# profiles of the last row it has, which is the row at 1 kyr. Write the ratio
+# flag in the `=` form, because a `-v` list is separated by commas and a value
+# with a space in it does not survive it: `--bulk-shear-ratio=1000` is one
+# token and `--epochs 0 1` cannot go there at all.
+#
+#   qsub -N g2k -j oe -o martinec-g2k.out -l walltime=08:00:00 \
+#        -v CASE=B,STEPS=28,LABEL=g2k,EXTRA=--bulk-shear-ratio=1000 \
+#        run_martinec.pbs
+#
+# The walltime of both lines comes from arm 1 of G2-smoke (job 179341215, the
+# same mesh and the same 96 ranks on one node): 476 s for the elastic solve,
+# 260 s and 220 s for the first two steps of 10 yr, and 72.56 GB of memory.
+# The Spada baseline is the only measured cost of a larger step on this mesh
+# family, 64 s at 10 yr against 78 s at 50 yr and 127 s at 100 yr, which are
+# factors of 1.22 and 1.98 on the 10 yr step. The ladder of case B to 10 kyr
+# is 10 steps of 10 yr, 18 of 50 yr and 90 of 100 yr, that is 118 steps:
+#
+#   G2:    476 + 10 x 220 + 18 x 268 + 90 x 436 = 46 711 s = 13.0 h, 118 steps
+#   G2-K:  476 + 10 x 220 + 18 x 268            =  7 507 s =  2.1 h,  28 steps
+#
+#   job     steps  estimate  request   margin  SU at the estimate
+#   G2      118    13.0 h    24:00:00  1.85    2 700
+#   G2-K     28     2.1 h    08:00:00  3.8       440
+#
+# normalsr charges 2 SU per cpu-hour and PBS charges the 104 cpus of the
+# allocation, so one node costs 208 SU per hour of wall (measured: arm 1 used
+# 19 minutes and 65.87 SU). Gadi reserves the units of the request while the
+# job waits and runs, and it returns the part the job does not use, so the two
+# requests hold 4 992 SU and 1 664 SU. vo05 holds 789 KSU in 2026.q3, so the
+# units do not limit the request.
+#
+# Three reasons for the margins. The cost per step is not constant: the mean
+# inner iterations per block-0 application rise 57, 62 and 118 over the three
+# solves of G2-smoke, so a linear scale of the cheapest measured step is a
+# lower bound. The factors 1.22 and 1.98 come from the Spada load and not from
+# case B. And G2-K moves the elasticity nearer the incompressible limit, which
+# can raise the block-0 iteration count above every measured value, so it keeps
+# the larger relative margin although it is the shorter run.
+#
+# Memory: one node gives 480 GB against the 72.56 GB of arm 1, a factor of 6.6,
+# so neither line needs a memory option.
+#
+# Job G2r: case B on the 78 km refined mesh, to 10 kyr, on two nodes. The
+# references are job G2 on the coarse mesh and the VEGA profiles. Two lines,
+# in this order. The first line measures the cost and the memory of two steps.
+# The second line marches the 118 steps of the ladder.
+#
+#   qsub -N g2r-smoke -j oe -o martinec-g2r-smoke.out \
+#        -l ncpus=208 -l mem=960GB -l walltime=03:00:00 \
+#        -v NNODES=2,CASE=B,STEPS=2,LABEL=g2r-smoke,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        run_martinec.pbs
+#   qsub -N g2r -j oe -o martinec-g2r.out \
+#        -l ncpus=208 -l mem=960GB \
+#        -v NNODES=2,CASE=B,LABEL=g2r,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        run_martinec.pbs
+#
+# The smoke line comes first because every number below is a linear scale of a
+# coarse-mesh measurement. Two steps cost about 25 minutes of wall and give the
+# real memory, the real step time and the count of the block-0 solves that
+# reach the iteration cap. Submit the second line after you read those three.
+#
+# Resources: two nodes, 208 cpus, 192 ranks at NRANK=96. The reasons:
+#
+#   Cores. The refined mesh has 8 511 866 unknowns against 4 942 922 on the
+#   coarse mesh. At the dofs per rank of the Spada baseline the refined mesh
+#   needs 165 to 173 ranks, which is more than the 104 cpus of one node.
+#   Memory. The largest estimate is 191 GB and one node has 480 GB, so the
+#   second node is for the cores and not for the memory.
+#   Walltime. One node gives an estimate of 23 to 24 hours against the 48 hour
+#   limit of normalsr. Two nodes give about 15 hours. The larger margin covers
+#   the rise of the block-0 iteration count (see the block-0 paragraph).
+#
+# NRANK stays at 96, as in every measured job of this branch. PBS charges the
+# 104 cpus of the allocation at any value of NRANK, and 96 ranks per node keep
+# the step time comparable with G2 and with the Spada baseline.
+#
+# The walltime estimate. G2-smoke measured 220 s for a converged 10 yr step on
+# the coarse mesh at 96 ranks, and 476 s for the elastic solve. The Spada run
+# of G0 cost 127 s per 100 yr step against 64 s per 10 yr step, a factor of
+# 1.98 for the larger dt. The ladder of case B has 10 steps of 10 yr, 18 steps
+# of 50 yr and 90 steps of 100 yr, which gives 13.4 hours on the coarse mesh.
+# The dof ratio of 1.72 to 1.80 gives 23 to 24 hours at 96 ranks, and 192 ranks
+# at 80 percent parallel efficiency give about 15 hours. The default walltime of
+# 48:00:00 is the maximum of normalsr at 208 cpus, so the second line above
+# needs no walltime option.
+#
+# The cost. normalsr charges 2 SU per cpu-hour, so 208 cpus cost 416 SU per
+# hour of wall. The smoke line costs about 200 SU and the march about 6 200 SU.
+# CAUTION: check the available service units of the paying project with
+# `nci_account -P vo05` before you submit the second line. A job that stops at
+# the walltime keeps its checkpoint, and `RESTART` continues it, but the units
+# it used are spent.
+#
+# Block 0. The iteration cap of 200 binds in 2 of the 52 block-0 applications
+# of G2-smoke on the coarse mesh, and the largest CG2 Laplacian diagonal of the
+# refined mesh is 13.5 times the median against 8.7 times on the coarse mesh.
+# So more applications can reach the cap here. Count the block-0 solves that
+# exit `DIVERGED_ITS` in the smoke log:
+#
+#   grep -c "condensed_ solve did not converge" martinec-g2r-smoke.out
+#
+# If that count is above a tenth of the block-0 applications of the same log,
+# add `EXTRA=--block0-max-it=400` to the `-v` list of the second line. Write the
+# flag in the `=` form: a `-v` list is separated by commas and a value with a
+# space in it does not survive it. A block-0 solve that
+# stops at the cap builds the dense Schur complement of block 1 from an inexact
+# operator, and it also costs the outer solve more iterations. A larger cap
+# costs wall clock in the applications that reach it and changes nothing in the
+# applications that do not, so it is the safe direction. Record the setting
+# with the counts, because every other 3-D number of this branch is at 200.
 source /etc/profile
 module use /g/data/fp50/modules
 module load firedrake/main-20260902
