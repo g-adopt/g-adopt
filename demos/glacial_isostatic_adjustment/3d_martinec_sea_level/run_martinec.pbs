@@ -130,11 +130,11 @@
 # with a space in it does not survive it: `--bulk-shear-ratio=1000` is one
 # token and `--epochs 0 1` cannot go there at all.
 #
-#   qsub -N g2k -j oe -o martinec-g2k.out -l walltime=08:00:00 \
+#   qsub -N g2k -j oe -o martinec-g2k.out -l walltime=18:00:00 \
 #        -v CASE=B,STEPS=28,LABEL=g2k,EXTRA=--bulk-shear-ratio=1000 \
 #        run_martinec.pbs
 #
-# The walltime of both lines comes from arm 1 of G2-smoke (job 179341215, the
+# The walltime of the G2 line comes from arm 1 of G2-smoke (job 179341215, the
 # same mesh and the same 96 ranks on one node): 476 s for the elastic solve,
 # 260 s and 220 s for the first two steps of 10 yr, and 72.56 GB of memory.
 # The Spada baseline is the only measured cost of a larger step on this mesh
@@ -143,26 +143,50 @@
 # is 10 steps of 10 yr, 18 of 50 yr and 90 of 100 yr, that is 118 steps:
 #
 #   G2:    476 + 10 x 220 + 18 x 268 + 90 x 436 = 46 711 s = 13.0 h, 118 steps
-#   G2-K:  476 + 10 x 220 + 18 x 268            =  7 507 s =  2.1 h,  28 steps
+#
+# The walltime of the G2-K line is measured and not scaled from G2-smoke. Job
+# 179385225 ran the line above at 08:00:00 and had to be stopped, because at a
+# bulk modulus of 1000 times the shear modulus a step costs about 3.5 times a
+# step of G2 and the run cannot reach 1 kyr in 8 hours. Over the same first
+# four solves the two jobs measured:
+#
+#   quantity                              G2       G2-K    ratio
+#   wall of the four solves          1 123 s    3 945 s     3.51
+#   block-0 applications                  70        142     2.03
+#   block-0 inner iterations           5 355     26 484     4.95
+#   applications at the cap of 200     6 (9%)  121 (85%)
+#
+# The reason is block 0. At 1000 times the shear modulus nearly every block-0
+# application runs the full 200 iterations and exits DIVERGED_ITS, so it never
+# reaches its relative tolerance of 1e-4. The outer solve still converges in 5
+# or 6 iterations, because FGMRES accepts a preconditioner that changes between
+# iterations, so the answer is right to the outer tolerance of 1e-6 and only
+# the cost changes. Do not raise the cap for this line: a larger cap makes the
+# applications that reach it more expensive and buys nothing that the outer
+# tolerance does not already give.
+#
+#   G2-K:  1 111 + 10 x 945 + 18 x 1 682         = 40 835 s = 11.3 h,  28 steps
+#
+# The factor 1.78 from a 10 yr step to a 50 yr step is the one G2 measured on
+# this mesh and this case, a mean of 382 s over 5 steps against 215 s over 10,
+# and not the 1.22 of the Spada load.
 #
 #   job     steps  estimate  request   margin  SU at the estimate
 #   G2      118    13.0 h    24:00:00  1.85    2 700
-#   G2-K     28     2.1 h    08:00:00  3.8       440
+#   G2-K     28    11.3 h    18:00:00  1.58    2 350
 #
 # normalsr charges 2 SU per cpu-hour and PBS charges the 104 cpus of the
 # allocation, so one node costs 208 SU per hour of wall (measured: arm 1 used
 # 19 minutes and 65.87 SU). Gadi reserves the units of the request while the
 # job waits and runs, and it returns the part the job does not use, so the two
-# requests hold 4 992 SU and 1 664 SU. vo05 holds 789 KSU in 2026.q3, so the
+# requests hold 4 992 SU and 3 744 SU. vo05 holds 789 KSU in 2026.q3, so the
 # units do not limit the request.
 #
-# Three reasons for the margins. The cost per step is not constant: the mean
-# inner iterations per block-0 application rise 57, 62 and 118 over the three
-# solves of G2-smoke, so a linear scale of the cheapest measured step is a
-# lower bound. The factors 1.22 and 1.98 come from the Spada load and not from
-# case B. And G2-K moves the elasticity nearer the incompressible limit, which
-# can raise the block-0 iteration count above every measured value, so it keeps
-# the larger relative margin although it is the shorter run.
+# Two reasons for the margin of the G2 line. The cost per step is not constant:
+# the mean inner iterations per block-0 application rise 57, 62 and 118 over
+# the three solves of G2-smoke, so a linear scale of the cheapest measured step
+# is a lower bound. And the factors 1.22 and 1.98 come from the Spada load and
+# not from case B.
 #
 # Memory: one node gives 480 GB against the 72.56 GB of arm 1, a factor of 6.6,
 # so neither line needs a memory option.
