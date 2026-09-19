@@ -66,6 +66,14 @@ THE TWO CASES
         lambda_c + 180 deg = -105 degrees at all epochs: it depends on the load
         geometry and on nothing else.
 
+        The reference of this test is internally inconsistent: it uses
+        C - A = 2.63e35 kg m^2 in its excitation and a secular Love number
+        k_s = 0.96672389 in its transfer function, and a hydrostatic figure
+        with that k_s has C - A = 2.6952e35 kg m^2. `--c-minus-a` selects
+        which half of the reference the run matches, and `--c-minus-a taboo`
+        matches both by scaling Omega^2 as well. See `parse_args` and
+        `reference_state.OMEGA_SQ_SCALE`.
+
     The two cases need separate runs. Rotational feedback adds a degree-2,
     order-1 signal to U, V and N, so a rotating run does not reproduce the
     non-rotating cap reference, and an off-axis load has no zonal spectrum.
@@ -142,6 +150,10 @@ OUTPUT
                                 VTK files for Paraview, with `--vtk` only. The
                                 displacement and the potential live on
                                 different meshes, so they go to two files.
+    <output>/params-<label>.log One line for each epoch: the checkpoint index,
+                                the epoch and the summary quantities of the
+                                case with their TABOO values, in full
+                                precision.
     stdout                      The per-epoch comparison with the reference
                                 and a summary table at the end.
 
@@ -188,18 +200,21 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-import gadopt  # noqa: E402,F401  (import gadopt before firedrake)
 import numpy as np  # noqa: E402
-from firedrake import (COMM_WORLD, CheckpointFile, Constant,  # noqa: E402
-                       Function, FunctionSpace, Mesh, SpatialCoordinate,
-                       Submesh, VTKFile, as_vector, assemble, avg,
-                       conditional, dot, ds, sqrt)
-from gadopt import (CompressibleInternalVariableApproximation,  # noqa: E402
-                    SphericalDtN)
+# Everything from Firedrake is taken through `gadopt`, which re-exports the
+# Firedrake namespace. Importing it this way is also what makes gadopt import
+# before firedrake, which the library requires.
+from gadopt import (CheckpointFile,  # noqa: E402
+                    CompressibleInternalVariableApproximation, Constant,
+                    Function, FunctionSpace, Mesh, ParameterLog,
+                    SpatialCoordinate, SphericalDtN, Submesh, VTKFile,
+                    as_vector, assemble, avg, conditional, dot, ds, log, sqrt)
 from gadopt.gia_gravity import (FluidCore, SelfGravitatingGIASolver,  # noqa: E402
                                 rigid_rotation_nullspace,
                                 selfgrav_dtn_iterative_solver_parameters,
                                 self_gravitating_gia_space)
+from gadopt.utility import (initialise_background_field,  # noqa: E402
+                            vertical_component)
 
 import generate_selfgrav_sphere as gen  # noqa: E402
 import reference_state as refstate  # noqa: E402
@@ -254,11 +269,24 @@ LOAD_CENTRE_DEG = {"cap": (0.0, 0.0), "polar-motion": (25.0, 75.0)}
 #: (-180, 180]. It is exact and does not depend on time.
 REFERENCE_PHASE_DEG = LOAD_CENTRE_DEG["polar-motion"][1] + 180.0 - 360.0
 
-
-def say(msg):
-    """Print on rank 0 only; every quantity printed is collective."""
-    if COMM_WORLD.rank == 0:
-        print(msg, flush=True)
+#: The keys of the epoch summary that the log file carries, per case, in the
+#: order they are written. They are the quantities of the final summary table
+#: and their TABOO values; the checkpoint index precedes them, so a line of
+#: The log file names the checkpoint state it describes.
+PARAMS_LOG_FIELDS = {
+    "cap": ("t_kyr", "U0", "U0_ref", "N0", "N0_ref", "Vmax", "Vmax_ref",
+            "Vth", "Vth_ref"),
+    "polar-motion": ("t_kyr", "mx", "my", "absm", "phase", "mx_ref", "my_ref",
+                     "absm_ref"),
+}
+#: The header line of the log file, with the unit of each column: lengths in
+#: metres, angles in degrees.
+PARAMS_LOG_HEADER = {
+    "cap": "index t_kyr U0_m U0_taboo_m N0_m N0_taboo_m Vmax_m Vmax_taboo_m "
+           "Vpeak_deg Vpeak_taboo_deg",
+    "polar-motion": "index t_kyr mx_deg my_deg absm_deg phase_deg "
+                    "mx_taboo_deg my_taboo_deg absm_taboo_deg",
+}
 
 
 # --------------------------------------------------------------------------
@@ -297,17 +325,19 @@ def build_meshes(path):
 def layered(mesh, column, name):
     """A DG0 field that takes `MANTLE_LAYERS[*][column]` inside each layer.
 
-    The innermost layer's value is the default, and each layer overrides it
-    above its own inner radius, so the layers are applied from the inside
-    out. The mesh conforms to every interface, so each cell lies inside one
-    layer and the DG0 field is exact.
+    `gadopt.utility.initialise_background_field` is the library's own way to
+    build a discontinuous radial profile, and every other GIA case uses it.
+    It wants the interface radii outermost first, one more radius than there
+    are values, so the inner radius of the innermost layer closes the list.
+    The mesh is spherical, so `vertical_component` inside it measures the
+    radius and the interfaces are the mesh surfaces the profile jumps on;
+    each cell therefore lies inside one layer and the DG0 field is exact.
     """
-    X = SpatialCoordinate(mesh)
-    r = sqrt(dot(X, X))
-    expr = Constant(MANTLE_LAYERS[-1][column])
-    for row in reversed(MANTLE_LAYERS):
-        expr = conditional(r >= Constant(row[1]), Constant(row[column]), expr)
-    return Function(FunctionSpace(mesh, "DG", 0), name=name).interpolate(expr)
+    radii = [row[0] for row in MANTLE_LAYERS] + [MANTLE_LAYERS[-1][1]]
+    values = [row[column] for row in MANTLE_LAYERS]
+    field = Function(FunctionSpace(mesh, "DG", 0), name=name)
+    initialise_background_field(field, values, SpatialCoordinate(mesh), radii)
+    return field
 
 
 def spada_approximation(mesh, bulk_shear_ratio):
@@ -490,7 +520,9 @@ def surface_spectra(solver, parent, mantle, nmax, quad_degree):
     u = solver.displacement
     Xm = SpatialCoordinate(mantle)
     rm = sqrt(dot(Xm, Xm))
-    U_n = project_surface(dot(u, Xm / rm), mantle, nmax, ds_mantle,
+    # The mantle mesh is marked non-Cartesian, so the library's "vertical"
+    # direction is the radial one and `vertical_component` is u . X / |X|.
+    U_n = project_surface(vertical_component(u), mantle, nmax, ds_mantle,
                           interior=False, quad_degree=quad_degree)
 
     # e_theta |X| sin(theta) = (z x, z y, -(x^2 + y^2)): the unnormalised
@@ -581,11 +613,22 @@ def build_solver(parent, mantle, args, dt):
         block0_rtol=args.block0_rtol, snes_type="ksponly",
         dtn_representation=layout.dtn_representation)
 
+    # The moments of the rotation rows. In the "taboo" mode the secular Love
+    # number is named as well, together with the surface radius it needs, so
+    # that the solver's own check confirms C - A = Q k_s for the scaled Omega^2
+    # of `refstate.omega_sq_for`. The other two modes pass C - A alone, which
+    # the solver takes as given: neither of them is consistent with any k_s.
+    rotation_moments = {"C": refstate.C_NONDIM,
+                        "C_minus_A": refstate.C_MINUS_A[args.c_minus_a]}
+    surface_radius = None
+    if args.c_minus_a == "taboo":
+        rotation_moments["k_s"] = refstate.K_S
+        surface_radius = refstate.SURFACE_RADIUS
+
     solver = SelfGravitatingGIASolver(
         z, approximation, layout=layout, dt=dt, bcs=bcs, fluid_core=core,
-        rotation_moments={"C": refstate.C_NONDIM,
-                          "C_minus_A": refstate.C_MINUS_A_PRIMARY},
-        Omega_sq=refstate.OMEGA_SQ,
+        rotation_moments=rotation_moments, surface_radius=surface_radius,
+        Omega_sq=refstate.omega_sq_for(args.c_minus_a),
         nullspace=nullspace, transpose_nullspace=nullspace,
         solver_parameters=solver_parameters)
     return solver, z, layout, sigma_parent
@@ -664,7 +707,7 @@ def compare_cap_epoch(t_kyr, U_n, V_n, N_n, ref, sigma_dim, nmax, theta_fine):
     # fluid core keeps its volume, so |U_0| / |U_2| must be small.
     u0_over_u2 = abs(U_n[0]) / max(abs(U_n[2]), 1.0e-300)
     n0_over_n2 = abs(N_n[0]) / max(abs(N_n[2]), 1.0e-300)
-    say(f"DEGREE_ZERO t_kyr={t_kyr:g} "
+    log(f"DEGREE_ZERO t_kyr={t_kyr:g} "
         f"U_0={U_n[0]:.16e} U0_over_U2={u0_over_u2:.16e} "
         f"N_0={N_n[0]:.16e} N0_over_N2={n0_over_n2:.16e}")
 
@@ -675,15 +718,15 @@ def compare_cap_epoch(t_kyr, U_n, V_n, N_n, ref, sigma_dim, nmax, theta_fine):
     # positive, and a maximum of |V| would hide a sign error in the model.
     jm, jr = int(np.argmax(Vm)), int(np.argmax(V_ref))
 
-    say(f"\n  t = {t_kyr:g} kyr")
-    say(f"    {'quantity':<12}{'model':>13}{'TABOO':>13}{'ratio':>9}")
+    log(f"\n  t = {t_kyr:g} kyr")
+    log(f"    {'quantity':<12}{'model':>13}{'TABOO':>13}{'ratio':>9}")
     for name, mod, rf in (("U(0)", Um[0], U_ref[0]),
                           ("N(0)", Nm[0], N_ref[0]),
                           ("U(180)", Um[-1], U_ref[-1]),
                           ("N(180)", Nm[-1], N_ref[-1])):
         r = mod / rf if abs(rf) > 1e-30 else float("nan")
-        say(f"    {name:<12}{mod:>13.5f}{rf:>13.5f}{r:>9.4f}")
-    say(f"    {'max V':<12}{Vm[jm]:>13.5f}{V_ref[jr]:>13.5f}"
+        log(f"    {name:<12}{mod:>13.5f}{rf:>13.5f}{r:>9.4f}")
+    log(f"    {'max V':<12}{Vm[jm]:>13.5f}{V_ref[jr]:>13.5f}"
         f"{Vm[jm] / V_ref[jr]:>9.4f}"
         f"   at {np.rad2deg(theta_fine[jm]):.2f} vs "
         f"{np.rad2deg(theta_fine[jr]):.2f} deg")
@@ -697,7 +740,7 @@ def compare_cap_epoch(t_kyr, U_n, V_n, N_n, ref, sigma_dim, nmax, theta_fine):
     hb, lb, kb = ref.love_time(t_kyr, nmax)
     nn = np.arange(ref.nmin_available, nmax + 1)
     cc = 3.0 / taboo.RHO_BAR * sigma_dim[ref.nmin_available:nmax + 1] / (2 * nn + 1)
-    say(f"    per-degree   {'n':>3} {'U_n model':>12} {'U_n TABOO':>12} "
+    log(f"    per-degree   {'n':>3} {'U_n model':>12} {'U_n TABOO':>12} "
         f"{'ratio':>8} {'V_n ratio':>10} {'N_n ratio':>10}")
     for j, n in enumerate(nn):
         um, ur = U_n[n], cc[j] * hb[j]
@@ -705,7 +748,7 @@ def compare_cap_epoch(t_kyr, U_n, V_n, N_n, ref, sigma_dim, nmax, theta_fine):
         # `love_time` already includes the direct term 1 in kbar, so the geoid
         # coefficient is cc * kbar and not cc * (1 + kbar).
         nm_, nr = N_n[n], cc[j] * kb[j]
-        say(f"    {'':<12} {n:>3} {um:>12.6f} {ur:>12.6f} "
+        log(f"    {'':<12} {n:>3} {um:>12.6f} {ur:>12.6f} "
             f"{um / ur if abs(ur) > 1e-30 else float('nan'):>8.4f} "
             f"{vm / vr if abs(vr) > 1e-30 else float('nan'):>10.4f} "
             f"{nm_ / nr if abs(nr) > 1e-30 else float('nan'):>10.4f}")
@@ -747,12 +790,15 @@ def compare_polar_motion_epoch(t_kyr, solver, npz_path):
     """Print the polar-motion comparison at one epoch and return its row."""
     mx, my, absm, phase = polar_motion_deg(solver)
     mxr, myr, absr, phr = reference_polar_motion(npz_path, t_kyr)
-    say(f"\n  t = {t_kyr:g} kyr   polar motion (degrees)")
-    say(f"    {'quantity':<12}{'model':>14}{'TABOO':>14}{'ratio':>9}")
+    log(f"\n  t = {t_kyr:g} kyr   polar motion (degrees)")
+    log(f"    {'quantity':<12}{'model':>14}{'TABOO':>14}{'ratio':>11}")
+    # Six digits on the ratio: the elastic tidal Love number extracted from a
+    # pair of runs with the two C - A values is ill-conditioned, and a change
+    # of 1e-4 in a ratio moves that Love number by 0.002.
     for name, mod, rf in (("m_x", mx, mxr), ("m_y", my, myr),
                           ("|m|", absm, absr)):
-        say(f"    {name:<12}{mod:>14.7f}{rf:>14.7f}{mod / rf:>9.4f}")
-    say(f"    {'phase':<12}{phase:>14.4f}{phr:>14.4f}"
+        log(f"    {name:<12}{mod:>14.7f}{rf:>14.7f}{mod / rf:>11.6f}")
+    log(f"    {'phase':<12}{phase:>14.4f}{phr:>14.4f}"
         f"   difference {phase - REFERENCE_PHASE_DEG:+.4f} deg")
     return dict(t_kyr=t_kyr, mx=mx, my=my, absm=absm, phase=phase,
                 mx_ref=mxr, my_ref=myr, absm_ref=absr)
@@ -819,6 +865,35 @@ def parse_args():
     p.add_argument("--block0-rtol", type=float, default=1e-4,
                    help="relative tolerance of the mechanics-potential block "
                         "solve inside the outer FGMRES")
+    # The two values of the moment difference C - A, and why the choice is a
+    # flag. The TABOO reference of test 3/2 uses the prescribed 2.63e35 in the
+    # load excitation of eq. (31), and the secular Love number k_s = 0.96672389
+    # in the transfer function of eq. (7). Those two are inconsistent by 2.4
+    # percent: a hydrostatic figure with that k_s has C - A = 2.6952e35. The
+    # solver has one C - A and its rotational feedback is the physical
+    # a^5 Omega^2 k_T(t) / (3 G), so "ks" makes the solver's transfer function
+    # equal the reference's, and "prescribed" makes its excitation equal the
+    # reference's. Neither reproduces both with the physical Omega^2.
+    #
+    # "taboo" reproduces both, by taking the prescribed C - A and scaling
+    # Omega^2 by 0.97580637, so that Q = a^5 Omega^2 / (3 G) drops from the
+    # physical 2.78798e35 to the 2.72056e35 = 2.63e35 / k_s that the
+    # reference's transfer function implies. It reproduces the reference's
+    # inconsistency and it is not a model of the Earth. Its deformation is the
+    # same as "ks": the mechanics feels Omega^2 times m, Omega^2 falls by the
+    # factor and m rises by it. See reference_state.OMEGA_SQ_SCALE.
+    p.add_argument("--c-minus-a", choices=["ks", "prescribed", "taboo"],
+                   default="ks",
+                   help="which moment difference C - A the rotation uses: "
+                        "ks (2.6952e35, consistent with the benchmark's "
+                        "secular Love number), prescribed (2.63e35, the "
+                        "value of the benchmark's Table 2), or taboo "
+                        "(2.63e35 with Omega^2 scaled by 0.97580637, which "
+                        "reproduces the published inconsistency of the TABOO "
+                        "reference of test 3/2 and so its numbers; the "
+                        "deformation in the checkpoint equals that of ks, "
+                        "because Omega^2 falls and m rises by the same "
+                        "factor)")
     p.add_argument("--quad-degree", type=int, default=40,
                    help="quadrature degree of the Legendre projections")
     p.add_argument("--label", default=None,
@@ -842,28 +917,43 @@ def main():
     theta_fine = np.linspace(0.0, np.pi, 4001)
     npz_path = os.path.join(HERE, "reference.npz")
 
-    say("=" * 78)
-    say(f"Spada et al. (2011) benchmark, case '{args.case}'")
-    say("=" * 78)
+    log("=" * 78)
+    log(f"Spada et al. (2011) benchmark, case '{args.case}'")
+    log("=" * 78)
     colat, lon = LOAD_CENTRE_DEG[args.case]
-    say(f"  mesh {args.mesh}")
-    say(f"  load: parabolic ice cap, 1500 m, 10 deg half width, 931 kg/m^3, "
+    log(f"  mesh {args.mesh}")
+    log(f"  load: parabolic ice cap, 1500 m, 10 deg half width, 931 kg/m^3, "
         f"Heaviside step, centre at colatitude {colat:g}, longitude {lon:g}")
-    say(f"  rotation {'on' if args.case == 'polar-motion' else 'off'}   "
+    log(f"  rotation {'on' if args.case == 'polar-motion' else 'off'}   "
         f"load and projection degrees 2..{args.nmax}   "
         f"SphericalDtN(L={args.dtn_degree})   K/mu {args.bulk_shear_ratio:g}")
-    say(f"  displacement CG{args.displacement_degree}   internal variables "
+    log(f"  displacement CG{args.displacement_degree}   internal variables "
         f"DG{args.internal_variable_degree}   potential CG2")
-    say(f"  tolerances: outer {args.outer_rtol:g}, block 0 "
+    log(f"  tolerances: outer {args.outer_rtol:g}, block 0 "
         f"{args.block0_rtol:g}")
-    say(f"  Lambda {LAMBDA:.6f}   B_mu {B_MU:.6f}   t_bar {T_BAR_YR} yr")
+    log(f"  Lambda {LAMBDA:.6f}   B_mu {B_MU:.6f}   t_bar {T_BAR_YR} yr")
     if args.case == "polar-motion":
-        say(f"  C {refstate.C_NONDIM:.6f}   C-A {refstate.C_MINUS_A_PRIMARY:.8f}"
-            f"   Omega^2 {refstate.OMEGA_SQ:.7e}")
+        omega_sq = refstate.omega_sq_for(args.c_minus_a)
+        log(f"  C {refstate.C_NONDIM:.6f}   C-A "
+            f"{refstate.C_MINUS_A[args.c_minus_a]:.8f} ({args.c_minus_a})"
+            f"   Omega^2 {omega_sq:.7e}")
+        if args.c_minus_a == "taboo":
+            # Q is linear in Omega^2, so the scaled Q k_s is the scaled
+            # Omega^2 put through the same identity. Printed because the whole
+            # mode is the statement Q k_s = C - A, and this line is where a
+            # reader can check it.
+            q = refstate.Q_TIDAL * refstate.OMEGA_SQ_SCALE["taboo"]
+            log(f"  taboo mode: Omega^2 scaled by "
+                f"{refstate.OMEGA_SQ_SCALE['taboo']:.8f} from the physical "
+                f"{refstate.OMEGA_SQ:.7e}, so Q = 4 pi ahat^5 Omega^2 / "
+                f"(3 Lambda) = {q:.8f} and Q k_s = {q * refstate.K_S:.8f} "
+                f"= C-A. This reproduces the inconsistency of the TABOO "
+                f"reference. The deformation is unchanged: m rises by the "
+                f"same factor, and the mechanics feels Omega^2 times m.")
 
     tic = time.time()
     parent, mantle = build_meshes(args.mesh)
-    say(f"  meshes: parent {parent.comm.allreduce(parent.cell_set.size)} "
+    log(f"  meshes: parent {parent.comm.allreduce(parent.cell_set.size)} "
         f"cells, mantle {mantle.comm.allreduce(mantle.cell_set.size)} cells "
         f"({time.time() - tic:.1f} s)")
 
@@ -874,9 +964,9 @@ def main():
     t_end_yr = max(epochs) * 1000.0
     ladder = truncated_ladder(t_end_yr, args.dt_yr)
     segments = time_ladder(epochs, ladder)
-    say(f"  epochs (kyr) {epochs}")
-    say(f"  time-step ladder (t_end_yr, dt_yr) {ladder}")
-    say(f"  {len(segments)} segments, {sum(s[3] for s in segments)} steps")
+    log(f"  epochs (kyr) {epochs}")
+    log(f"  time-step ladder (t_end_yr, dt_yr) {ladder}")
+    log(f"  {len(segments)} segments, {sum(s[3] for s in segments)} steps")
 
     # One live time step for the whole run. Its first value is the elastic
     # step if t = 0 is requested, and the first ladder step otherwise.
@@ -887,26 +977,26 @@ def main():
 
     tic = time.time()
     solver, z, layout, _ = build_solver(parent, mantle, args, dt)
-    say(f"  solver built ({time.time() - tic:.1f} s): layout "
+    log(f"  solver built ({time.time() - tic:.1f} s): layout "
         f"{'condensed' if layout.condensed else 'full'}, DtN representation "
         f"{layout.dtn_representation}, "
         f"{len(layout.multipliers)} DtN multipliers, core pressure field "
         f"{layout.core_pressure}, rotation fields {layout.rotation}")
-    say(f"  unknowns: {z.function_space().dim()}")
+    log(f"  unknowns: {z.function_space().dim()}")
 
     if args.dry_run:
         tic = time.time()
         residual = assemble(solver.F)
         with residual.dat.vec_ro as vec:
             norm = vec.norm()
-        say(f"  residual of the zero state assembled ({time.time() - tic:.1f} s):"
+        log(f"  residual of the zero state assembled ({time.time() - tic:.1f} s):"
             f" l2 norm {norm:.6e}")
         if args.case == "polar-motion":
-            say(f"  rotation values of the zero state: {solver.rotation_values()}")
-        say(f"  reference: TABOO degrees {ref.nmin_available}.."
+            log(f"  rotation values of the zero state: {solver.rotation_values()}")
+        log(f"  reference: TABOO degrees {ref.nmin_available}.."
             f"{ref.nmax_available}; polar motion at t = 0: "
             f"{reference_polar_motion(npz_path, 0.0)}")
-        say("DRY RUN complete: no solve was run.")
+        log("DRY RUN complete: no solve was run.")
         return
 
     h5 = os.path.join(args.output, f"spada-{label}.h5")
@@ -918,6 +1008,21 @@ def main():
                                              f"spada-{label}-mechanics.pvd"))
         vtk_potential = VTKFile(os.path.join(args.output,
                                              f"spada-{label}-potential.pvd"))
+
+    # `params.log`, the machine-readable record that every G-ADOPT case
+    # writes. The reported unit of this benchmark is the epoch and not the
+    # time step, so one line holds one epoch: the quantities of the summary
+    # table together with their TABOO values, in full precision and
+    # unformatted, so that a reader can form any ratio without re-running.
+    # Lengths are in metres and angles in degrees, as on stdout.
+    #
+    # The label is in the name, where the other cases of this repository write
+    # one `params.log`. The two cases of this benchmark carry different columns
+    # and are often run into one output directory, so one name for both would
+    # make the second run overwrite the first.
+    plog = ParameterLog(os.path.join(args.output, f"params-{label}.log"),
+                        parent)
+    plog.log_str(PARAMS_LOG_HEADER[args.case])
 
     rows = []
 
@@ -936,12 +1041,15 @@ def main():
         else:
             row = compare_polar_motion_epoch(t_kyr, solver, npz_path)
         rows.append(row)
+        plog.log_str(" ".join([str(len(rows) - 1)]
+                              + [str(row[k])
+                                 for k in PARAMS_LOG_FIELDS[args.case]]))
         save_state(chk, z, layout, len(rows) - 1)
         if vtk_mechanics is not None:
             vtk_mechanics.write(z.subfunctions[layout.displacement],
                                 time=t_kyr)
             vtk_potential.write(z.subfunctions[layout.potential], time=t_kyr)
-        say(f"      written: checkpoint index {len(rows) - 1}, "
+        log(f"      written: checkpoint index {len(rows) - 1}, "
             f"t = {t_kyr:g} kyr")
 
     with CheckpointFile(h5, "w") as chk:
@@ -953,12 +1061,12 @@ def main():
             # instantaneous elastic response: the limit dt -> 0 of one step.
             # The first marched step already includes some relaxation, so this
             # state is solved on its own.
-            say(f"\n  t = 0: the elastic response, one step of "
+            log(f"\n  t = 0: the elastic response, one step of "
                 f"{DT_ELASTIC:g} Maxwell times")
             dt.assign(DT_ELASTIC)
             tic = time.time()
             solver.solve()
-            say(f"      elastic solve {time.time() - tic:.1f} s")
+            log(f"      elastic solve {time.time() - tic:.1f} s")
             report_epoch(chk, 0.0)
             # The march starts from rest. With the load held from t = 0, the
             # first marched step reproduces the elastic response by itself;
@@ -977,7 +1085,7 @@ def main():
                 # rebuild the operators they cache when its value changes.
                 dt.assign(dt_yr / T_BAR_YR)
                 previous_dt_yr = dt_yr
-            say(f"\n  {t0 / 1000:7.3f} -> {t1 / 1000:7.3f} kyr   "
+            log(f"\n  {t0 / 1000:7.3f} -> {t1 / 1000:7.3f} kyr   "
                 f"dt {dt_yr:7.2f} yr ({float(dt):.6g} Maxwell times)   "
                 f"{nsteps:4d} steps")
             for k in range(nsteps):
@@ -985,32 +1093,33 @@ def main():
                 solver.solve()
                 elapsed = time.time() - tic
                 t_step_kyr = (t0 + (k + 1) * dt_yr) / 1000.0
-                say(f"TIMESTEP t_kyr={t_step_kyr:.9g} dt_yr={dt_yr:.9g} "
+                log(f"TIMESTEP t_kyr={t_step_kyr:.9g} dt_yr={dt_yr:.9g} "
                     f"segment_step={k + 1} segment_steps={nsteps} "
                     f"wall_s={elapsed:.6f}")
             if is_epoch:
                 report_epoch(chk, t1 / 1000.0)
 
-    say("\n" + "=" * 78)
-    say("SUMMARY  model / TABOO")
-    say("=" * 78)
+    log("\n" + "=" * 78)
+    log("SUMMARY  model / TABOO")
+    log("=" * 78)
     if args.case == "cap":
-        say(f"  {'t (kyr)':>8}{'U(0)':>10}{'N(0)':>10}{'max V':>10}"
+        log(f"  {'t (kyr)':>8}{'U(0)':>10}{'N(0)':>10}{'max V':>10}"
             f"{'V peak deg':>12}{'ref deg':>10}")
         for r in rows:
-            say(f"  {r['t_kyr']:>8g}{r['U0'] / r['U0_ref']:>10.4f}"
+            log(f"  {r['t_kyr']:>8g}{r['U0'] / r['U0_ref']:>10.4f}"
                 f"{r['N0'] / r['N0_ref']:>10.4f}"
                 f"{r['Vmax'] / r['Vmax_ref']:>10.4f}"
                 f"{r['Vth']:>12.2f}{r['Vth_ref']:>10.2f}")
     else:
-        say(f"  {'t (kyr)':>8}{'|m| model':>12}{'|m| TABOO':>12}{'ratio':>8}"
+        log(f"  {'t (kyr)':>8}{'|m| model':>12}{'|m| TABOO':>12}{'ratio':>8}"
             f"{'phase':>10}{'difference':>12}")
         for r in rows:
-            say(f"  {r['t_kyr']:>8g}{r['absm']:>12.7f}{r['absm_ref']:>12.7f}"
+            log(f"  {r['t_kyr']:>8g}{r['absm']:>12.7f}{r['absm_ref']:>12.7f}"
                 f"{r['absm'] / r['absm_ref']:>8.4f}{r['phase']:>10.4f}"
                 f"{r['phase'] - REFERENCE_PHASE_DEG:>+12.4f}")
-    say(f"\n  checkpoint: {h5}")
-    say(f"RESULT case={args.case} label={label} completed_epochs="
+    plog.close()
+    log(f"\n  checkpoint: {h5}")
+    log(f"RESULT case={args.case} label={label} completed_epochs="
         f"{','.join(f'{e:g}' for e in epochs)} checkpoint={h5}")
 
 

@@ -393,8 +393,11 @@ def curve_mesh(linear_mesh, name=None):
     `Submesh` does not inherit the parent's coordinate field, so the driver
     applies this to the parent and to the mantle submesh separately.
 
-    Firedrake is imported here and not at module level, so that the mesh
-    generator runs in a Python environment that has gmsh and no Firedrake.
+    G-ADOPT, and with it Firedrake, is imported here and not at module level,
+    so that the mesh generator runs in a Python environment that has gmsh and
+    no Firedrake. The names come from `gadopt`, which re-exports the Firedrake
+    namespace, so that gadopt imports before firedrake as the library
+    requires.
 
     Args:
       linear_mesh: a Firedrake mesh with P1 coordinates.
@@ -404,8 +407,8 @@ def curve_mesh(linear_mesh, name=None):
     Returns:
       A new Firedrake mesh with P2 coordinates.
     """
-    from firedrake import (Function, FunctionSpace, Mesh,  # noqa: PLC0415
-                           SpatialCoordinate, VectorFunctionSpace, dot, sqrt)
+    from gadopt import (Function, FunctionSpace, Mesh,  # noqa: PLC0415
+                        SpatialCoordinate, VectorFunctionSpace, dot, sqrt)
 
     X = SpatialCoordinate(linear_mesh)
     r = sqrt(dot(X, X))

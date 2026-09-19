@@ -113,6 +113,12 @@ project, the storage, the queue and the module lines.
   epoch. The label is the case name by default.
 - `spada-<label>-mechanics.pvd` and `spada-<label>-potential.pvd`: VTK files
   for Paraview. The driver writes them only with `--vtk`.
+- `params-<label>.log`: one line for each epoch, with a header line of column names.
+  Each line has the checkpoint index, the epoch in kyr and the summary
+  quantities of the case with their TABOO values. The cap case gives U(0),
+  N(0), the maximum of V in metres and the colatitude of the peak in degrees.
+  The polar-motion case gives m_x, m_y, |m| and the phase in degrees. The
+  values are in full precision. A dry run writes no log file.
 - Standard output: a comparison table at each epoch and a summary table at
   the end.
 
@@ -151,4 +157,53 @@ For the first run with the defaults, run the cap case with `--epochs 0 0.1`.
 Compare the result with the 0 kyr and 0.1 kyr rows of the table.
 
 For the polar-motion case, the reference phase is exactly -105 degrees at all
-epochs. No validated time series of |m| from this solver exists yet.
+epochs. The next section gives the results for |m|.
+
+## Polar motion and the moment difference C - A
+
+The reference of test 3/2 is not consistent with itself. It uses the moment
+difference C - A = 2.63e35 kg m^2 in the load excitation of its eq. (31). It
+uses the secular Love number k_s = 0.96672389 in the transfer function of its
+eq. (7). A hydrostatic figure with that k_s has C - A = 2.6952e35 kg m^2. The
+two values differ by 2.4 percent.
+
+The solver has one C - A, and its rotational feedback is the physical
+Q k_T(t), with Q = a^5 Omega^2 / (3 G). Therefore one option cannot match both
+halves of the reference at the physical rotation rate. The option
+`--c-minus-a` selects the half that the run matches:
+
+| `--c-minus-a` | C - A (kg m^2) | Omega^2 | the run matches |
+|---|---|---|---|
+| `ks` (default) | 2.6952e35 | physical | the transfer function of the reference |
+| `prescribed` | 2.63e35 | physical | the excitation of the reference |
+| `taboo` | 2.63e35 | 0.97580637 of physical | both, and thus the numbers of TABOO |
+
+Q is proportional to Omega^2. The factor 0.97580637 decreases Q from
+2.78798e35 to 2.72056e35 kg m^2, which is 2.63e35 / k_s. The pair (C - A, k_s)
+is then consistent, and the solver closes the polar motion with the same
+equation as the reference.
+
+If you compare the code with the published numbers of TABOO, use
+`--c-minus-a taboo`. If you model a rotating Earth, use the default `ks`.
+The option `taboo` reproduces a published inconsistency and is not a model of
+the Earth.
+
+The factor on Omega^2 also decreases the centrifugal potential that the
+mechanics feels. The polar motion and its phase are correct for the reference,
+because the factor is part of the closure.
+
+The mechanics feels the product of Omega^2 and m. The factor decreases Omega^2
+and increases m by the same factor, so the product does not change. The
+displacement, the potential and the geoid in a `taboo` checkpoint are equal to
+the values of a default `ks` run to about 4e-6. They are 2.4 percent below the
+values that the physical Omega^2 gives with the m that this mode reports. Do
+not multiply these fields by 1 / 0.97580637.
+
+Three runs at t = 0 gave |m| against TABOO: 0.974382 with `ks`, 1.010012 with
+`prescribed` and 0.998537 with `taboo`. All three used 96 ranks, the mesh
+`b2_coarse_ar7.msh`, an outer tolerance of 1e-9 and a block-0 tolerance of
+1e-7. A run to 20 kyr with `ks` and the default tolerances gave 0.9744 at
+t = 0 and 0.9682 at 20 kyr.
+
+The remaining difference of 0.15 percent at t = 0 is the model's own error:
+its elastic tidal Love number is 0.107 percent above the value of TABOO.
