@@ -152,9 +152,21 @@
 #
 #   quantity                              G2       G2-K    ratio
 #   wall of the four solves          1 123 s    3 945 s     3.51
-#   block-0 applications                  70        142     2.03
-#   block-0 inner iterations           5 355     26 484     4.95
-#   applications at the cap of 200     6 (9%)  121 (85%)
+#   block-0 applications                  61        118     1.93
+#   block-0 inner iterations           4 382     21 899     5.00
+#   applications at the cap of 200  4 (6.6%)   99 (84%)
+#
+# Read the counts of that table at the right step. The `block0=` field of a
+# TIMESTEP line is cumulative over the whole run, so the count of the first
+# four solves is the field of step 3 and not of step 4, and the four solves are
+# the elastic step 0 and the steps 1, 2 and 3. The count of the 29 solves to
+# 1 kyr is the field of step 28, which is the step the 1 kyr epoch falls on.
+# Counting the lines `Linear SelfGravitatingGIA_dtn_fieldsplit_0_condensed_
+# solve ... iterations <n>` of the log gives the same numbers, one line per
+# application and `n` inner iterations. Count the lines that did not converge
+# as well: an application that reaches the cap prints `did not converge due to
+# DIVERGED_ITS`, and a count of the converged lines alone misses every
+# application at the cap.
 #
 # The reason is block 0. At 1000 times the shear modulus nearly every block-0
 # application runs the full 200 iterations and exits DIVERGED_ITS, so it never
