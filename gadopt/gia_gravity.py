@@ -401,6 +401,13 @@ def _prefixed(d, prefix):
 #: rigid modes alone.
 DEFAULT_DISPLACEMENT_PC = "gadopt.NearlyIncompressibleAssembledPC"
 
+#: The block-1 preconditioner that forms the exact Schur complement and factors
+#: it. Named here because the iterative preset both selects it by default on the
+#: low-rank representation and treats it specially: it is the one block-1
+#: preconditioner that is an exact inverse, so the block-1 KSP above it is
+#: `preonly`.
+_DENSE_MULTIPLIER_PC = "gadopt.DtNMultiplierDenseSchurPC"
+
 
 def _displacement_krylov(max_it: int, rtol: float) -> dict:
     """The Krylov options of the displacement split, with no option prefix.
@@ -505,16 +512,17 @@ def _potential_split(dtn_representation: str) -> dict:
 
 
 def selfgrav_dtn_iterative_solver_parameters(
-    *, condensed: bool = True, block0_rtol: float = 1e-2,
+    *, condensed: bool = True, block0_rtol: float = 1e-4,
     outer_rtol: float = 1e-6, block0_max_it: int = 200,
     snes_rtol: float = 1e-4,
     snes_type: str = "newtonls",
     u_pc: str = DEFAULT_DISPLACEMENT_PC,
-    multiplier_pc: str = "none",
+    multiplier_pc: str | None = None,
     u_ksp_max_it: int = 4,
     u_ksp_rtol: float = 1e-2,
     block0: str = "condensed",
     dtn_representation: str | None = None,
+    ainvb: bool = False,
 ) -> dict:
     r"""The 3-D configuration that works, and the one the measurements select.
 
@@ -528,7 +536,7 @@ def selfgrav_dtn_iterative_solver_parameters(
     got it wrong.
 
         outer FGMRES
-         +- DtNTwoBlockSchurPC, schur_fact_type full
+         +- DtNTwoBlockSchurPC, schur_fact_type lower (`full` under `ainvb`)
              +- block 0, condensed layout: FGMRES + multiplicative fieldsplit
              |   +- u  : CG 4 + NearlyIncompressibleAssembledPC + GAMG
              |   +- psi: SPDAssembledPC + GAMG   (GravitySolver's preset)
@@ -544,7 +552,11 @@ def selfgrav_dtn_iterative_solver_parameters(
              |   |          every inner iteration; CG 4 + GAMG on the
              |   |          condensed operator under `condensed_field_`
              |   +- psi   : SPDAssembledPC + GAMG
-             +- block 1: GMRES on the Real block, pc_type none
+             +- block 1, low-rank representation: preonly +
+             |  gadopt.DtNMultiplierDenseSchurPC, the exact complement formed
+             |  once and factored (`multiplier_pc`)
+             +- block 1, multiplier representation: GMRES on the Real block,
+                pc_type none; under `ainvb` the block-1 KSP is never entered
 
     **This preset carries no iteration count of its own, and the "flat at 3"
     that used to stand here was another configuration's.**  That 3 was measured
@@ -582,12 +594,16 @@ def selfgrav_dtn_iterative_solver_parameters(
       displacement; it does not raise, does not warn, and shows up only as
       block 0 hitting its iteration cap. The sweep is built from one list here
       so the two cannot disagree.
-    - **The multiplier block runs at `pc_type: none`** because `jacobi` needs
-      `MatGetDiagonal`, which on a matfree block goes through TSFC's
+    - **The multiplier block takes no matrix-based preconditioner.** `jacobi`
+      needs `MatGetDiagonal`, which on a matfree block goes through TSFC's
       `diagonal=True` path and cannot handle `Real` arguments, and
-      `AssembledPC` is structurally unavailable for the same family of reasons.
-      So its iteration counts are an **upper bound** rather than a tuned
-      figure.
+      `AssembledPC` is structurally unavailable for the same family of
+      reasons. What works there is a python PC that forms its own data from
+      the operator, which is what `gadopt.DtNMultiplierDenseSchurPC` does with
+      one `A.mult` per column. On the multiplier representation that block is
+      about 76 columns wide at L = 5 and the default leaves it at
+      `pc_type: none`, so its iteration counts are an **upper bound** rather
+      than a tuned figure.
 
     Args:
       condensed: whether the caller passes `condense_internal_variables=True`.
@@ -624,6 +640,18 @@ def selfgrav_dtn_iterative_solver_parameters(
         per 500 yr step at 96 ranks - and a job that compares the two arms
         selects one by this flag alone.
       block0_rtol, outer_rtol, block0_max_it, snes_rtol: the tolerances.
+        `block0_rtol` is 1e-4 because the dense complement on block 1 is only
+        as linear as the block-0 solve that builds its columns: at 1e-2 that
+        arm stagnates, with 642 non-convergent block-0 calls and a wall worse
+        than no block-1 preconditioner at all (Gadi job 176078939). At 1e-4 it
+        is 19 block-0 calls and 69 s per marching step against `none`'s 354
+        and 1036 s (job 176103130, medium rung, L = 5, 104 ranks). See
+        NOTES/fastdtn/HANDOVER.md. On the multiplier and condensed arms, where
+        the complement is off, the same tolerance is a choice and not a
+        measurement: the `none` arm costs 354 block-0 calls and 1036 s at 1e-4
+        (job 176103130) against 265 calls and about 891 s at 1e-2 (job
+        176078939), about 15 percent, and one tolerance for the whole preset
+        is what keeps the two arms comparable.
         `block0_max_it` caps the block-0 FGMRES at 200 iterations, which is
         what A2's anisotropic lithosphere needs: the condensed `[u, psi]`
         sweep sits in the 174-388 band and a smaller cap binds on every
@@ -671,15 +699,96 @@ def selfgrav_dtn_iterative_solver_parameters(
         Newtonian one. This preset names `snes_atol` (1e-15) and so overrides
         it; `selfgrav_dtn_schur_solver_parameters` does not name the key and so
         inherits it.
-      multiplier_pc: the preconditioner on the block-1 (`Real`) split. The
-        default `"none"` is the historical behaviour. Pass
-        `"gadopt.DtNMultiplierDenseSchurPC"` for the build-once dense Schur
-        complement, **and tighten `block0_rtol` to 1e-4 when you do**: `S` is
-        only as linear as the block-0 solve that builds it, and at the default
-        1e-2 the dense arm STAGNATES (measured: 642+ non-convergent block-0
-        calls, worse than no block-1 PC at all). At 1e-4 it is 19 block-0 calls
-        and 69 s per marching step against `none`'s 354 and 1036 s -- Gadi job
-        176103130, medium rung, L = 5, 104 ranks. See NOTES/fastdtn/HANDOVER.md.
+      multiplier_pc: the preconditioner on the block-1 (`Real`) split, named
+        as a `pc_python_type` string, or `"none"`. The default `None` is a
+        sentinel meaning "the preset chooses", and it chooses by the resolved
+        `dtn_representation` and by `ainvb`:
+
+        * `"gadopt.DtNMultiplierDenseSchurPC"` on the low-rank representation
+          with `ainvb` off. The `Real` block is then 4 rows with rotation and
+          1 without, so one build of the exact complement is 4 block-0 solves,
+          and those are the cheap kind: a solve whose right-hand side is a
+          column of `A01` takes 63 inner iterations and stops at the cap in 5
+          of 628 solves, against 131 to 138 iterations for one carrying the
+          mechanics residual (100 yr step, 96 ranks; a labelled pass over the
+          production log, `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 4,
+          which separates the three block-0 positions and so names no arm).
+          The block-1 KSP above it is `preonly`, because the factored
+          complement is an exact inverse; the whole arm costs 88.2 s per step
+          (arm B4, job 179385036, section 24 of the same record) against 269 s
+          for the unpreconditioned block 1 (arms B0 and C0, the same
+          section).
+        * `"none"` on the multiplier representation. The block is about 76
+          columns wide at L = 5, so a build costs more than a whole outer
+          solve and has to amortise over a segment of the march before it
+          pays. Nobody has measured over how long, so the default stays off
+          and a caller who wants it names it.
+        * `"none"` under `ainvb`, because the cached apply solves block 1 with
+          its own dense factors and a preconditioner there would be built,
+          configured and never applied.
+
+        A named string is taken as written on either representation, and
+        naming one together with `ainvb=True` is refused.
+
+        **The sentinel refuses the dense complement at a loose block-0
+        tolerance.** When the preset would choose it and `block0_rtol` is
+        looser than 1e-4, the call raises a `ValueError`: the columns of the
+        complement are block-0 solves, and at 1e-2 the arm stagnates with 642
+        non-convergent block-0 calls and a wall worse than no block-1
+        preconditioner at all (Gadi job 176078939). The refusal scopes to the
+        preset's own choice and not to the caller's, so
+        `multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"` named explicitly is
+        accepted at any tolerance, and `multiplier_pc="none"` is the way to
+        keep a loose tolerance. The 1e-4 threshold is one measurement at one
+        configuration and not a law of the method.
+
+        The block-1 KSP follows from the choice. The dense complement is an
+        exact inverse of the block, so it runs under `preonly` and the preset
+        writes no block-1 tolerance and no iteration cap: a Krylov method
+        there would spend one Schur-complement `MatMult`, and so one block-0
+        solve, per extra iteration, which measures 120.4 s per 100 yr step
+        against `preonly`'s 99.8 under `full` (arms B1 and B2, job 179385036,
+        `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24, 96 ranks).
+        `"none"` and an approximate inverse such as
+        `"gadopt.DtNMultiplierDiagPC"` keep the GMRES at `rtol` 1e-4 and 200
+        iterations, because neither solves the block on its own.
+      ainvb: whether `gadopt.DtNTwoBlockSchurPC` owns the apply and caches the
+        columns `Z = A00^{-1} A01`. The default `False` keeps the delegating
+        path, whose one block-0 solve per outer iteration comes from
+        `dtn_pc_fieldsplit_schur_fact_type lower` instead. With `True`
+        the class runs `n` block-0 solves at every operator change, keeps from
+        them both `Z` and the exact complement `S = A11 - A10 Z`, and then
+        spends ONE block-0 solve per outer iteration while keeping the outer
+        iteration count of `full`, which this argument therefore writes above
+        it. The two routes are alternatives, not a stack: `lower` buys the
+        same single solve by spending more outer iterations: 88.2 s per 100 yr
+        step at 96 ranks (arm B4, job 179385036,
+        `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 3) against the cached
+        apply's 47.5 s (arm W1, job 179402871, section 28 of the same record,
+        where W2 adds the block-0 restart to W1 and reaches 26.3 s). `ainvb`
+        is off by default because it is new code whose only measurements are
+        at one step size. Block 1 is solved by
+        the dense factors of `S`, so this argument writes `preonly` and
+        `pc_type none` there and writes no block-1 tolerance, iteration cap or
+        converged-reason key: no block-1 Krylov solve runs, and a tolerance in
+        the log for a solve that never happens is worse than no line at all.
+        The cost model of a log therefore becomes
+        `block-0 applications = n * builds + outer iterations`.
+        `n` is the number of `Real` rows, which is what decides whether the
+        option pays for itself: about 4 with `dtn_representation="lowrank"`
+        (the three rotation rows and the core pressure) and about 76 with
+        `dtn_representation="multiplier"` (72 DtN multipliers at L = 5, plus
+        those four). On the low-rank path a build is 4 block-0 solves and the
+        option saves one solve per outer iteration from the first step. On the
+        multiplier path a build is the same 76 block-0 solves the dense
+        complement spends, so the saving has to amortise a build that costs
+        more than a whole outer solve.
+        The columns are only as good as the block-0 solve that produced them,
+        which is the other half of why `block0_rtol` defaults to 1e-4; a
+        caller who loosens it loosens the cached complement with it.
+        `ainvb=True` together with a named `multiplier_pc` is refused: the cached
+        path solves block 1 with its own factors and a preconditioner named for
+        that block would be built, configured and never applied.
       u_pc: the preconditioner on the displacement split, condensed layout
         only. The default `DEFAULT_DISPLACEMENT_PC` builds the rigid-body
         modes **and** the low-degree divergence-free fields on the block
@@ -749,6 +858,13 @@ def selfgrav_dtn_iterative_solver_parameters(
             "gadopt.CondensedBlockPC is refused there and the potential split "
             "the update belongs in does not exist. Pass condensed=False, "
             "with a space built with condense_internal_variables=False.")
+    if ainvb and multiplier_pc not in (None, "none"):
+        raise ValueError(
+            "ainvb=True solves block 1 with gadopt.DtNTwoBlockSchurPC's own "
+            "dense factors of the exact Schur complement, so the block-1 KSP "
+            "is never entered and a preconditioner there would be built, "
+            f"configured and never applied; got multiplier_pc={multiplier_pc!r}"
+            ". Choose one of the two.")
     if condensed and block0 != "condensed":
         raise ValueError(
             f"block0={block0!r} has no meaning with condensed=True: the "
@@ -756,6 +872,82 @@ def selfgrav_dtn_iterative_solver_parameters(
             "nothing for block 0 to eliminate and its sweep is over `u` and "
             "`psi` alone. Drop the argument, or pass condensed=False if the "
             "space was built with condense_internal_variables=False.")
+    # `None` is the sentinel that hands the choice to the preset; a caller who
+    # names a string, `"none"` included, gets exactly that string. The dense
+    # complement is worth its build only where the `Real` block is small: on
+    # the low-rank representation it is 4 rows with rotation and 1 without, so
+    # a build is 4 block-0 solves of the cheap kind (63 inner iterations for a
+    # column of `A01` against 131-138 for the mechanics residual, 100 yr step;
+    # `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 4, a labelled pass over
+    # the production log, which names no arm).
+    # On the multiplier representation it is about 76 rows at L = 5, so a
+    # build costs more than a whole outer solve and nobody has measured over
+    # how many steps that amortises. Under `ainvb` the cached apply solves
+    # block 1 with its own factors, so a preconditioner there would never be
+    # applied.
+    chosen_by_preset = multiplier_pc is None
+    if multiplier_pc is None:
+        multiplier_pc = (_DENSE_MULTIPLIER_PC
+                         if dtn_representation == "lowrank" and not ainvb
+                         else "none")
+    # The refusal scopes to the preset's own choice, not to the caller's: the
+    # columns of the dense complement come out of block-0 solves, so a loose
+    # block-0 tolerance makes the factored complement the complement of a
+    # different operator, and the preset must not SELECT a pair it documents as
+    # stagnating. A caller who names the class has taken that decision, so the
+    # pair is allowed at any tolerance. 1e-4 is where the one measurement sits
+    # and not a law.
+    if (chosen_by_preset and multiplier_pc == _DENSE_MULTIPLIER_PC
+            and block0_rtol > 1e-4):
+        raise ValueError(
+            f"block0_rtol={block0_rtol!r} is looser than 1e-4, and the preset "
+            f"would choose {_DENSE_MULTIPLIER_PC} on block 1 here. The columns "
+            "of that dense complement are block-0 solves, so at 1e-2 the arm "
+            "stagnates: 642 non-convergent block-0 calls and a wall worse than "
+            "no block-1 preconditioner at all (Gadi job 176078939). Pass "
+            "multiplier_pc='none' to keep the loose tolerance, or tighten "
+            "block0_rtol to 1e-4. Naming "
+            f"multiplier_pc='{_DENSE_MULTIPLIER_PC}' is accepted at any "
+            "tolerance, because then the pair is the caller's decision and not "
+            "the preset's.")
+    # How block 1 is solved follows from what preconditions it, so the three
+    # cases are written out together.
+    if ainvb:
+        # The cached apply owns block 1: it applies the dense factors of the
+        # exact complement itself, nothing enters the block-1 KSP, and
+        # `DtNTwoBlockSchurPC` refuses anything but `preonly` and `none` there
+        # so that no arm can configure a solve that never runs.
+        block1 = {"dtn_schur_ainvb": True,
+                  "dtn_fieldsplit_1_ksp_type": "preonly",
+                  "dtn_fieldsplit_1_pc_type": "none"}
+    elif multiplier_pc == _DENSE_MULTIPLIER_PC:
+        # The dense complement is the exact inverse of block 1, up to the
+        # linearity of the block-0 solves that built its columns, so one
+        # application solves the block and a Krylov method above it spends a
+        # Schur-complement `MatMult` -- one block-0 solve -- per extra
+        # iteration for nothing. Measured at 96 ranks on the 100 yr step:
+        # GMRES there costs 120.4 s per step against `preonly`'s 99.8 under
+        # `full` (arms B1 and B2, job 179385036,
+        # `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24). With no Krylov
+        # solve on the block, a
+        # relative tolerance and an iteration cap would describe a solve that
+        # never runs, so neither is written.
+        block1 = {"dtn_fieldsplit_1_ksp_type": "preonly",
+                  "dtn_fieldsplit_1_ksp_converged_reason": None,
+                  "dtn_fieldsplit_1_pc_type": "python",
+                  "dtn_fieldsplit_1_pc_python_type": _DENSE_MULTIPLIER_PC}
+    else:
+        # An unpreconditioned block 1, or one carrying an approximate inverse
+        # such as `gadopt.DtNMultiplierDiagPC`, needs the Krylov method: the
+        # preconditioner does not solve the block on its own.
+        block1 = {"dtn_fieldsplit_1_ksp_type": "gmres",
+                  "dtn_fieldsplit_1_ksp_rtol": 1e-4,
+                  "dtn_fieldsplit_1_ksp_max_it": 200,
+                  "dtn_fieldsplit_1_ksp_converged_reason": None,
+                  **({"dtn_fieldsplit_1_pc_type": "none"}
+                     if multiplier_pc == "none" else
+                     {"dtn_fieldsplit_1_pc_type": "python",
+                      "dtn_fieldsplit_1_pc_python_type": multiplier_pc})}
     # The default route does the whole block-0 solve inside
     # `gadopt.CondensedBlockPC`, so block 0's own KSP is `preonly`. The
     # tolerances and the converged-reason line move down to the class's own
@@ -779,7 +971,21 @@ def selfgrav_dtn_iterative_solver_parameters(
 
         "pc_type": "python",
         "pc_python_type": "gadopt.DtNTwoBlockSchurPC",
-        "dtn_pc_fieldsplit_schur_fact_type": "full",
+        # `full` applies the block-0 inverse twice per outer iteration and
+        # `lower` applies it once (PETSc
+        # `src/ksp/pc/impls/fieldsplit/fieldsplit.c:1184-1330`, confirmed by
+        # counting: 2 block-0 applications per outer iteration against 1).
+        # `lower` pays 14 outer iterations where `full` spends 8 over the same
+        # four solves and still wins, 88.2 s against 99.8 s per 100 yr step at
+        # 96 ranks (arms B4 and B2, job 179385036,
+        # `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24). Under `ainvb`
+        # the cached apply IS the `full`
+        # factorisation with its second block-0 solve replaced by the cached
+        # columns, so it reaches one solve per outer iteration while keeping
+        # `full`'s iteration count (47.5 s per step, arm W1 of job 179402871).
+        # The two routes are alternatives and the class refuses anything but
+        # `full`.
+        "dtn_pc_fieldsplit_schur_fact_type": "full" if ainvb else "lower",
 
         **({"dtn_fieldsplit_0_ksp_type": "preonly",
             "dtn_fieldsplit_0_pc_type": "python",
@@ -788,18 +994,23 @@ def selfgrav_dtn_iterative_solver_parameters(
            {"dtn_fieldsplit_0_ksp_type": "fgmres",
             "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
             "dtn_fieldsplit_0_ksp_max_it": block0_max_it,
+            # The restart equals the cap, so the solve is not restarted: FGMRES
+            # restarts every 30 by default
+            # (`src/ksp/ksp/impls/gmres/fgmres/fgmres.c:15`) and a solve
+            # allowed 200 iterations would throw away its Krylov space six
+            # times. Measured on the condensed route below, with the restart
+            # as its only change: 126 s per 100 yr step against 269, and
+            # block-0 solves stopping at the cap fall from 11 to 2 over five
+            # steps (arm F1, job 179386296,
+            # `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 7; the 269 is
+            # arms B0 and C0 of section 24). The cost is `block0_max_it`
+            # Krylov vectors on block 0 instead of 30.
+            "dtn_fieldsplit_0_ksp_gmres_restart": block0_max_it,
             "dtn_fieldsplit_0_ksp_converged_reason": None,
             "dtn_fieldsplit_0_pc_type": "fieldsplit",
             "dtn_fieldsplit_0_pc_fieldsplit_type": "multiplicative"}),
 
-        # `pc_type: none` is not laziness; see the docstring.
-        "dtn_fieldsplit_1_ksp_type": "gmres",
-        "dtn_fieldsplit_1_ksp_rtol": 1e-4,
-        "dtn_fieldsplit_1_ksp_max_it": 200,
-        "dtn_fieldsplit_1_ksp_converged_reason": None,
-        **({"dtn_fieldsplit_1_pc_type": "none"} if multiplier_pc == "none"
-           else {"dtn_fieldsplit_1_pc_type": "python",
-                 "dtn_fieldsplit_1_pc_python_type": multiplier_pc}),
+        **block1,
     }
 
     def inner(pc_python, extra=None):
@@ -857,6 +1068,9 @@ def selfgrav_dtn_iterative_solver_parameters(
                 "ksp_type": "fgmres",
                 "ksp_rtol": block0_rtol,
                 "ksp_max_it": block0_max_it,
+                # Not restarted: the restart equals the cap, for the reason and
+                # the measurement given on the other block-0 route above.
+                "ksp_gmres_restart": block0_max_it,
                 "ksp_converged_reason": None,
                 "pc_type": "fieldsplit",
                 "pc_fieldsplit_type": "multiplicative",
@@ -3637,9 +3851,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         #
         # Building it unconditionally costs nothing: `block1_diagonal` does no
         # assembly and no solves, and returns `None` when the space has no
-        # `Real` fields. It changes no default -- both presets still run block
-        # 1 at `pc_type: none`, so the entry is inert unless a caller names the
-        # preconditioner.
+        # `Real` fields. No preset names `gadopt.DtNMultiplierDiagPC`, the one
+        # class that reads this entry, so it is inert unless a caller names
+        # that class.
         #
         # This is also the argument for the design rule the successor obeys: a
         # preconditioner that reads its data off the operator has no such
@@ -4116,9 +4330,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         `DtNMultiplierDiagPC` reads this out of the appctx. Supplied
         unconditionally, costs nothing to compute -- no assembly, no solves --
-        and **changes no default**: block 1 stays at `pc_type: none` in both
-        shipped presets, so this is inert unless a caller selects the
-        preconditioner by name.
+        and **no preset names that class**, so the entry is inert unless a
+        caller selects it by name. The block-1 preconditioner the iterative
+        preset does select on the low-rank representation,
+        `gadopt.DtNMultiplierDenseSchurPC`, reads nothing from the appctx: it
+        forms its data from the operator it is handed.
 
         Three contributions:
 

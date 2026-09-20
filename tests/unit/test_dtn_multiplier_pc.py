@@ -252,26 +252,146 @@ class TestTheDiagonalPreconditioner:
             pc.initialize(_PC())
 
 
-class TestItChangesNoDefault:
-    """The constraint that matters most: these are opt-in.
+#: The dense complement, named the way a `pc_python_type` entry names it.
+DENSE_PC = "gadopt.DtNMultiplierDenseSchurPC"
 
-    Flipping a default would move every number the running campaign produces
-    and would make two arms of it incomparable. A test, not a comment, because
-    a comment does not fail.
+#: The block-0 Krylov prefix of each layout of the iterative preset. On the
+#: condensed layout block 0 is an FGMRES over the whole block; on the full
+#: layout `gadopt.CondensedBlockPC` owns the solve and the tolerances move down
+#: to its own `(u, psi)` Krylov solve.
+BLOCK0_PREFIX = {True: "dtn_fieldsplit_0_",
+                 False: "dtn_fieldsplit_0_condensed_"}
+
+
+class TestItChangesNoDefault:
+    """The defaults of the shipped presets, each pinned by one assertion.
+
+    A default nobody pins is a default that drifts, and a drifting default
+    moves every number a campaign produces without anybody asking. A test, not
+    a comment, because a comment does not fail.
+
+    These pin the state the 2026-09-20 Gadi runs measured: on the low-rank
+    representation block 1 carries the exact complement, the Schur
+    factorisation is `lower`, block 0 is solved to 1e-4 and its FGMRES is not
+    restarted. The direct preset is untouched by all of it.
     """
 
-    def test_both_shipped_presets_still_run_block_one_unpreconditioned(self):
+    def test_the_low_rank_arm_preconditions_block_one_with_the_complement(self):
+        """4 `Real` rows, so a build is 4 cheap block-0 solves and it pays."""
+        p = selfgrav_dtn_iterative_solver_parameters(condensed=False)
+        assert p["dtn_fieldsplit_1_pc_type"] == "python"
+        assert p["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+        # and the same when the representation is named rather than resolved
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, dtn_representation="lowrank")[
+                "dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+
+    def test_the_complement_runs_under_preonly_with_no_krylov_keys(self):
+        """The factored complement is an exact inverse, so nothing iterates.
+
+        A Krylov method above it spends one Schur-complement `MatMult`, and so
+        one block-0 solve, per extra iteration: 120.4 s per 100 yr step against
+        `preonly`'s 99.8 under `full` (arms B1 and B2, job 179385036,
+        `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24). A tolerance and a
+        cap written for a
+        solve that never runs would describe a configuration that is not there.
+        """
+        p = selfgrav_dtn_iterative_solver_parameters(condensed=False)
+        assert p["dtn_fieldsplit_1_ksp_type"] == "preonly"
+        for dropped in ("dtn_fieldsplit_1_ksp_rtol",
+                        "dtn_fieldsplit_1_ksp_max_it"):
+            assert dropped not in p, (
+                f"{dropped} is written for a block-1 Krylov solve that the "
+                "exact complement makes unnecessary")
+        # An approximate inverse does not solve the block, so it keeps the
+        # Krylov method and both of its stopping keys.
+        diag = selfgrav_dtn_iterative_solver_parameters(
+            condensed=True, multiplier_pc="gadopt.DtNMultiplierDiagPC")
+        assert diag["dtn_fieldsplit_1_ksp_type"] == "gmres"
+        assert diag["dtn_fieldsplit_1_ksp_rtol"] == 1e-4
+        assert diag["dtn_fieldsplit_1_ksp_max_it"] == 200
+
+    def test_the_multiplier_arm_still_runs_block_one_unpreconditioned(self):
+        """About 76 columns there, so a build costs more than an outer solve."""
+        for kwargs in ({"condensed": True},
+                       {"condensed": True, "dtn_representation": "multiplier"},
+                       {"condensed": False, "block0": "pair",
+                        "dtn_representation": "multiplier"}):
+            p = selfgrav_dtn_iterative_solver_parameters(**kwargs)
+            assert p["dtn_fieldsplit_1_pc_type"] == "none", kwargs
+            assert "dtn_fieldsplit_1_pc_python_type" not in p, kwargs
+
+    def test_the_direct_preset_runs_block_one_unpreconditioned(self):
+        """The 2-D preset is not in the campaign and does not move with it."""
         assert selfgrav_dtn_schur_solver_parameters[
             "dtn_fieldsplit_1_pc_type"] == "none"
-        for condensed in (True, False):
-            assert selfgrav_dtn_iterative_solver_parameters(
-                condensed=condensed)["dtn_fieldsplit_1_pc_type"] == "none"
-
-    def test_neither_preset_names_a_python_pc_on_block_one(self):
         assert "dtn_fieldsplit_1_pc_python_type" not in \
             selfgrav_dtn_schur_solver_parameters
-        assert "dtn_fieldsplit_1_pc_python_type" not in \
-            selfgrav_dtn_iterative_solver_parameters()
+        assert selfgrav_dtn_schur_solver_parameters[
+            "dtn_pc_fieldsplit_schur_fact_type"] == "full"
+
+    def test_a_named_multiplier_pc_beats_the_sentinel_both_ways(self):
+        """`None` means "the preset chooses"; a string means what it says."""
+        off = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, multiplier_pc="none")
+        assert off["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in off
+        on = selfgrav_dtn_iterative_solver_parameters(
+            condensed=True, multiplier_pc="gadopt.DtNMultiplierDiagPC")
+        assert on["dtn_fieldsplit_1_pc_python_type"] == \
+            "gadopt.DtNMultiplierDiagPC"
+
+    def test_the_cache_leaves_block_one_unpreconditioned(self):
+        """Under `ainvb` block 1 is never entered, so nothing is named there."""
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, ainvb=True)
+        assert p["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in p
+
+    def test_the_factorisation_type_is_lower_unless_the_cache_owns_the_apply(
+            self):
+        """`lower` applies block 0 once per outer iteration, `full` twice.
+
+        The cached apply IS `full` with its second block-0 solve replaced, and
+        it refuses any other factorisation type, so the two are alternatives
+        and the preset must not stack them.
+        """
+        for condensed in (True, False):
+            assert selfgrav_dtn_iterative_solver_parameters(
+                condensed=condensed)[
+                    "dtn_pc_fieldsplit_schur_fact_type"] == "lower"
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, ainvb=True)[
+                "dtn_pc_fieldsplit_schur_fact_type"] == "full"
+
+    def test_block_zero_is_solved_to_the_tolerance_the_complement_needs(self):
+        """The complement is only as linear as the solve that builds it.
+
+        At 1e-2 the dense arm stagnates (642 non-convergent block-0 calls, job
+        176078939), so
+        the default tolerance and the default block-1 preconditioner are one
+        decision and this pins the tolerance half of it.
+        """
+        for condensed in (True, False):
+            p = selfgrav_dtn_iterative_solver_parameters(condensed=condensed)
+            assert p[BLOCK0_PREFIX[condensed] + "ksp_rtol"] == 1e-4
+
+    def test_the_block_zero_krylov_solve_is_not_restarted(self):
+        """Restart equals the cap, so the Krylov space is never discarded.
+
+        PETSc restarts FGMRES every 30 by default and this solve is allowed
+        200 iterations, which without this key throws the space away six times.
+        """
+        for condensed in (True, False):
+            p = selfgrav_dtn_iterative_solver_parameters(condensed=condensed)
+            prefix = BLOCK0_PREFIX[condensed]
+            assert p[prefix + "ksp_gmres_restart"] == p[prefix + "ksp_max_it"]
+            assert p[prefix + "ksp_max_it"] == 200
+        # and the restart follows a caller who moves the cap, rather than
+        # staying at a number that silently becomes a restart again
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=True, block0_max_it=37)
+        assert p["dtn_fieldsplit_0_ksp_gmres_restart"] == 37
 
 
 class TestTheSolveAgrees:

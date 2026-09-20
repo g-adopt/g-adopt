@@ -70,7 +70,7 @@ def near_nullspace_basis(V, modes: str, *, max_degree: int = 1,
     Split out of `SPDAssembledPC.initialize` so that the name can be validated
     without a PETSc `PC` in hand. That matters because a `ValueError` raised
     inside a python PC callback does not reach the caller as itself - see
-    `_RealBlockPCBase._loud`.
+    `_loud`.
 
     Args:
       V: the function space the modes are built on.
@@ -214,9 +214,9 @@ class _AssembledBlockPC(fd.AssembledPC):
             )
         except ValueError as exc:
             # PETSc flattens a Python exception raised inside a python PC, so
-            # the message has to be printed before it is raised - see
-            # `_RealBlockPCBase._loud`, which measured that behaviour.
-            raise _RealBlockPCBase._loud(exc)
+            # the message has to be printed before it is raised - see `_loud`,
+            # which records the measurement of that behaviour.
+            raise _loud(exc)
         mat.setNearNullSpace(basis.nullspace())
 
     def update(self, pc: PETSc.PC):
@@ -336,6 +336,703 @@ class NearlyIncompressibleAssembledPC(_AssembledBlockPC):
     _near_nullspace = "incompressible"
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers for the preconditioners that own the `Real` block
+#
+# `DtNTwoBlockSchurPC` and `DtNMultiplierDenseSchurPC` both form a small dense
+# object out of block-0 solves, both decide when it is stale from the solver's
+# two staleness markers, and both have to name a refusal on stderr before PETSc
+# flattens it. Those three concerns are written once here. The classes below
+# keep their own names for them as thin delegates, because tests and callers
+# read those names.
+# ---------------------------------------------------------------------------
+def _loud(exc):
+    """Write the message to stderr, then hand the exception back to raise.
+
+    **PETSc flattens a Python exception raised inside a python PC into
+    `PETSc.Error: error code 101`** -- measured, on exactly the misuse these
+    classes most expect. The exception object is then useless to whoever reads
+    the log, because the text never reaches them. Printing it first puts the
+    named cause directly above the 101 in the output, which is the only place
+    it can still be read.
+
+    Args:
+      exc: the exception the caller is about to raise.
+
+    Returns:
+      The same exception, so the call site keeps `raise` and static analysis
+      still sees a raise.
+    """
+    print(f"\n[{__name__}] {type(exc).__name__}: {exc}\n",
+          file=sys.stderr, flush=True)
+    return exc
+
+
+def _gather(comm, vec, n_global):
+    """Read a distributed vector of length `n_global` redundantly onto every rank.
+
+    Zero-fill a buffer of the global length, write only the slice this rank
+    owns, and `Allreduce` the sum. Nothing here assumes where the entries live,
+    so it is correct under any distribution of the `Real` block, and the result
+    is bit-identical on every rank because `Allreduce` returns the same value
+    everywhere.
+
+    Args:
+      comm: the mpi4py communicator of the vector.
+      vec: the distributed PETSc `Vec`.
+      n_global: its global length, which must be the same on every rank.
+
+    Returns:
+      A numpy array of length `n_global`, identical on every rank.
+    """
+    buf = np.zeros(n_global)
+    lo, hi = vec.owner_range
+    buf[lo:hi] = vec.array_r
+    out = np.zeros(n_global)
+    comm.Allreduce(buf, out)
+    return out
+
+
+def _solver_appctx(pc):
+    """The solver's application context, or an empty mapping.
+
+    `PCBase.get_appctx` resolves the context through `pc.getDM()`, and a PETSc
+    PC that Firedrake did not build carries no DM: `pc.getDM()` returns a
+    wrapper around a NULL handle, and Firedrake's `dmhooks.get_appctx` then
+    dereferences it and **crashes the process** with a segmentation violation
+    rather than raising (measured on the bare dense `Mat` the unit tests of
+    `DtNMultiplierDenseSchurPC` drive it over). So the handle test comes first
+    and is not tidiness: it is what keeps a hand-built PC from killing the run.
+    Reading `dm.handle` is a pure Python attribute lookup on the petsc4py
+    wrapper and touches no PETSc object, so it is safe where everything else is
+    not.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      The application context mapping, or `{}` when there is none to read.
+    """
+    dm = pc.getDM()
+    if dm.handle == 0:
+        return {}
+    try:
+        # The resolution itself is Firedrake's, so this helper owns nothing but
+        # the NULL-DM guard above and the two empty-context cases below.
+        return fd.preconditioners.base.PCBase.get_appctx(pc) or {}
+    except AttributeError:
+        # A Firedrake DM with no solver context pushed onto it:
+        # `dmhooks.get_appctx` returns None and the `.appctx` lookup on it
+        # raises. Read that as "no markers", exactly like an empty context.
+        return {}
+
+
+def _staleness_markers(pc):
+    """The solver's statement of when the mechanics block last changed.
+
+    `operator_version` is the same value `gadopt.InternalVariableSCPC` keys its
+    reassembly on, so the caches of pieces of one operator agree by
+    construction. `gia_solve_index` covers the case that version cannot
+    express, a Jacobian that moves inside one nonlinear solve.
+
+    Both are rank-consistent: the version is bumped by a reduction over the
+    communicator in `_refresh_operator_version`, and the solve index is
+    incremented by the collective `solve()`. So the rebuild decision taken from
+    these is identical on every rank and a collective rebuild is entered by all
+    ranks together.
+
+    These two are the only things the `Real`-block caches read from the
+    application context, and neither is data a solve needs. That is what lets a
+    context which carries neither -- the multiplier path's adjoint solve, whose
+    kwargs pyadjoint strips of `appctx` -- leave the cached object in place and
+    still be a correct solve.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      `(operator_version, solve_index, present)`. `present` is False when the
+      context names neither marker, which is the signal to leave the cached
+      object alone.
+    """
+    appctx = _solver_appctx(pc)
+    present = "operator_version" in appctx or "gia_solve_index" in appctx
+    solve_index = appctx.get("gia_solve_index")
+    return (appctx.get("operator_version"),
+            None if solve_index is None else int(solve_index),
+            present)
+
+
+class _RebuildRule:
+    """When a cached piece of the mechanics block has to be built again.
+
+    The rule is the solver's own statement of when its operator moved, not a
+    second rule that could drift out of step with it, and it is keyed on the
+    two markers rather than on the Jacobian's object state because that state
+    moves at every assembly -- every Newton iteration of every solve -- while
+    the operator itself moves far less often.
+
+    Three branches, in the order they are tested:
+
+    1. `operator_version` is an integer and differs from the one the cached
+       object was built at: rebuild. The solver bumps it for any change of a
+       Jacobian coefficient, so this one test covers `dt.assign`, a viscosity
+       field written between steps and `invalidate_jacobian` alike. A time step
+       is a different operator because the effective bulk/shear ratio is
+       `bulk_shear_ratio * (1 + dt/tau)`.
+    2. `operator_version` is `None` -- a power law, whose Jacobian depends on
+       the state, so no version number can describe it -- and `gia_solve_index`
+       moved: rebuild. That is one build per nonlinear solve, from the state
+       the solve starts at, never one per Newton iteration.
+    3. The context carries neither marker: leave the cached object alone.
+    """
+
+    def __init__(self):
+        self._operator_version = None
+        self._solve_index = None
+
+    @property
+    def operator_version(self):
+        """The `operator_version` the current cached object was built at."""
+        return self._operator_version
+
+    @property
+    def solve_index(self):
+        """The `gia_solve_index` the current cached object was built at."""
+        return self._solve_index
+
+    def record(self, pc):
+        """Adopt the markers a build that is about to run will describe.
+
+        Called before the first build rather than lazily at the first `update`,
+        because a fixed-step Newtonian solver does not call `update` at all
+        inside a one-step solve: the first `update` it sees belongs to the
+        *second* solve, and a marker adopted there instead of compared against
+        would miss a coefficient changed between the two.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        self._operator_version, self._solve_index, _ = _staleness_markers(pc)
+
+    def moved(self, pc):
+        """Whether the operator moved since the last recorded build.
+
+        Updates the stored markers when it answers True, so that the next call
+        compares against the build that is about to happen.
+
+        Args:
+          pc: PETSc preconditioner.
+
+        Returns:
+          True when the caller must build again.
+        """
+        version, solve_index, present = _staleness_markers(pc)
+        if not present:
+            return False
+        if version is not None:
+            if version != self._operator_version:
+                self._operator_version = version
+                # Carry the solve index across with it, so that a later switch
+                # to the state-dependent branch compares against this build and
+                # not against an older one.
+                self._solve_index = solve_index
+                return True
+            return False
+        if solve_index is None or self._solve_index is None:
+            return False
+        if solve_index != self._solve_index:
+            self._operator_version = version
+            self._solve_index = solve_index
+            return True
+        return False
+
+
+class _DenseLU:
+    """A factored small dense matrix, redundant on every rank.
+
+    The blocks these preconditioners factor are tiny -- 4 rows at production
+    with the low-rank representation, 75 with the multiplier one -- so the
+    factorisation is done in numpy on every rank, which at that size is free
+    and needs no parallel dense solver. The array it is built from comes out of
+    an `Allreduce`, so it is bit-identical everywhere and the factors are too.
+
+    Args:
+      S: the dense array to factor, shape `(n, n)`.
+      description: what the array is, used in the zero-pivot message so that a
+        singular block names itself in the log.
+    """
+
+    def __init__(self, S, description):
+        n = S.shape[0]
+        if _HAVE_SCIPY:
+            lu = _lu_factor(S)
+            # lu_factor never raises on a singular matrix -- it returns a U with
+            # a zero pivot and a LinAlgWarning. Catch the zero pivot here so the
+            # failure is a NAMED ValueError above the eventual PETSc 101, never a
+            # silent NaN solve.
+            if not np.all(np.abs(np.diag(lu[0])) > 0.0):
+                raise _loud(ValueError(
+                    f"the {n}x{n} {description} is singular: a zero pivot "
+                    "appeared in its LU factorisation. A mode with zero scale "
+                    "or a boundary with zero discrete area would do that, and "
+                    "both are bugs upstream."))
+            self.lu = lu
+        else:  # pragma: no cover - scipy ships in the firedrake venv
+            try:
+                self.inv = np.linalg.inv(S)
+            except np.linalg.LinAlgError as exc:
+                raise _loud(ValueError(
+                    f"the {n}x{n} {description} is singular: {exc}")) from None
+            self.invT = self.inv.T.copy()
+
+    def solve(self, rhs):
+        """Solve `S x = rhs`.
+
+        Args:
+          rhs: a numpy array of length `n`, identical on every rank.
+
+        Returns:
+          The solution, a numpy array of length `n`.
+        """
+        if _HAVE_SCIPY:
+            return _lu_solve(self.lu, rhs, trans=0)
+        return self.inv @ rhs
+
+    def solve_transpose(self, rhs):
+        """Solve `S^T x = rhs`, off the same factorisation.
+
+        Args:
+          rhs: a numpy array of length `n`, identical on every rank.
+
+        Returns:
+          The solution, a numpy array of length `n`.
+        """
+        if _HAVE_SCIPY:
+            return _lu_solve(self.lu, rhs, trans=1)
+        return self.invT @ rhs
+
+
+class _SchurAinvBCache:
+    r"""The cached columns `Z = A00^{-1} A01` and the exact complement `S`.
+
+    Installed on `DtNTwoBlockSchurPC` by the option `dtn_schur_ainvb`, and the
+    owner of the apply while it is there. Write the two-block operator as
+
+        P = [[A00, A01], [A10, A11]]
+
+    with block 1 the `n` `Real` rows. The full Schur factorisation inverts it as
+
+        P^{-1} = U D L,
+        L = [[I, 0], [-A10 M0, I]],   D = [[M0, 0], [0, S^{-1}]],
+        U = [[I, -Z], [0, I]],
+
+    with `M0` the block-0 solve, `Z = M0 A01` and `S = A11 - A10 Z` the exact
+    complement. PETSc's own `full` spends a second block-0 solve on the upper
+    factor, `M0(x0 - A01 y1)`. Holding `Z` as `n` distributed vectors turns that
+    solve into `n` local AXPYs, so one apply costs ONE block-0 solve.
+
+    ## One block-0 solve per column gives both objects
+
+    Column `k` of the complement is
+
+        S e_k = A11 e_k - A10 (A00^{-1} A01 e_k) = A11 e_k - A10 z_k,
+
+    and `z_k` is column `k` of `Z`. So the same solve produces both, and the
+    build is `n` block-0 solves rather than the `2n` that forming `S` through
+    `n` applications of PETSc's `MATSCHURCOMPLEMENT` and then solving again for
+    `Z` would cost -- `MatMult_SchurComplement` computes `z_k` internally and
+    discards it.
+
+    ## What is exact and what is not
+
+    With an exact, linear `M0` -- a `preonly` KSP over an LU -- `S` is the exact
+    complement and `P^{-1} A` is the identity. At production `M0` is an FGMRES
+    to a relative tolerance, which is not a linear operator, so each column is
+    built with a slightly different effective inverse and both `Z` and `S` are
+    approximate. That is harmless: this is a preconditioner, it changes no
+    residual, and the outer FGMRES absorbs the difference. It is also why the
+    block-0 tolerance matters -- the columns are only as good as the solve that
+    produced them.
+
+    ## Parallel layout
+
+    `Z[k]` is distributed in the block-0 layout. `S`, its factors and every
+    length-`n` intermediate are redundant on every rank: `n` is at most a few
+    dozen, so the redundancy is free and no parallel dense solver is needed.
+    The redundant values are identical everywhere because `_gather` ends in an
+    `Allreduce`, and the rebuild decision is identical everywhere because both
+    staleness markers are rank-consistent, so every rank enters the collective
+    build together.
+
+    Args:
+      pc: the outer PETSc `PC`, used for its communicator, its operator layout
+        and the staleness markers on its DM.
+      inner: the `PCFIELDSPLIT` the outer PC owns. The cache borrows its
+        block-0 KSP and its extracted sub-matrices and never creates either.
+      is0: the merged index set of the non-`Real` rows in the monolithic space.
+      is1: the merged index set of the `Real` rows, in `real_fields` order.
+    """
+
+    def __init__(self, pc, inner, is0, is1):
+        self.inner = inner
+        self.ksp0, self.ksp1 = inner.getFieldSplitSchurGetSubKSP()
+
+        #: Builds over the life of this cache, `initialize` included. Tests read
+        #: these four to pin the rebuild rule and the cost model; nothing in the
+        #: solve path branches on any of them.
+        self.build_count = 0
+        self.apply_count = 0
+        self.apply_transpose_count = 0
+        self.block0_solve_count = 0
+        #: Diagnostics of the last build, printed at every build.
+        self.condition_number = None
+        self.relative_asymmetry = None
+
+        self.A01, self.A10, self.A11 = self._sub_blocks()
+        self._handles = self._sub_block_handles()
+        self.n = self._block1_size()
+
+        # The block vectors take their layouts from the sub-block that couples
+        # them: the rows of A01 are block 0 and its columns are block 1.
+        self.x0 = self.A01.createVecLeft()
+        self.y0 = self.A01.createVecLeft()
+        self.w0 = self.A01.createVecLeft()
+        self.x1 = self.A01.createVecRight()
+        self.y1 = self.A01.createVecRight()
+        self.c1 = self.A01.createVecRight()
+        self.e1 = self.A01.createVecRight()
+
+        # The two scatters are PETSc's own: `PCSetUp_FieldSplit` builds each
+        # ilink's scatter as `VecScatterCreate(x, ilink->is, ilink->x, NULL)`,
+        # which maps the index set's entries, in its order, onto the block
+        # vector's local entries in their order. The same construction here
+        # keeps the block ordering of `Z` and `S` equal to the fieldsplit's.
+        monolithic = pc.getOperators()[0].createVecRight()
+        self.sct0 = PETSc.Scatter().create(monolithic, is0, self.x0, None)
+        self.sct1 = PETSc.Scatter().create(monolithic, is1, self.x1, None)
+        monolithic.destroy()
+
+        self.Z = []
+        self.S = np.zeros((self.n, self.n))
+        self._factors = None
+        self._rule = _RebuildRule()
+        self._rule.record(pc)
+        self.build(pc)
+
+    # -- the sub-matrices the fieldsplit already extracted -------------------
+    def _sub_blocks(self):
+        """`(A01, A10, A11)`, read off the fieldsplit's own Schur operator.
+
+        The block-1 KSP's `Amat` is the `MATSCHURCOMPLEMENT` that
+        `PCSetUp_FieldSplit` assembled out of the sub-matrices it extracted, so
+        these are those very objects: no second extraction, no second set of
+        matrix-free action kernels, and they are refreshed in place with
+        `MAT_REUSE_MATRIX` whenever the fieldsplit sets itself up again.
+
+        Returns:
+          The `(block 0, Real)`, `(Real, block 0)` and `(Real, Real)` blocks.
+        """
+        schur = self.ksp1.getOperators()[0]
+        if schur.getType() != "schurcomplement":
+            raise _loud(ValueError(
+                "dtn_schur_ainvb needs the block-1 operator to be PETSc's "
+                f"MATSCHURCOMPLEMENT, but it is {schur.getType()!r}. That is "
+                "what a Schur fieldsplit with "
+                "dtn_pc_fieldsplit_schur_fact_type full hands block 1."))
+        _A00, _Ap00, A01, A10, A11 = schur.getSchurComplementSubMatrices()
+        return A01, A10, A11
+
+    def _sub_block_handles(self):
+        """The three sub-block pointers, as integers, to detect a re-extraction.
+
+        With a matrix-free Jacobian the nonzero structure never changes, so the
+        fieldsplit reuses the same `Mat` objects at every setup and these stay
+        equal. A handle that does move means the fieldsplit built new objects
+        and everything built from the old ones describes nothing.
+
+        Returns:
+          A tuple of three integers.
+        """
+        return (self.A01.handle, self.A10.handle, self.A11.handle)
+
+    def _block1_size(self):
+        """The global row count of the `Real` block, checked for consistency.
+
+        `n` must be the GLOBAL count on every rank. Keying it on the local count
+        makes a rank that owns no `Real` degree of freedom form a 0x0 complement
+        and skip the collective block-0 solves while the owning rank blocks
+        inside them -- the failure a 104-rank Gadi run produced for
+        `DtNMultiplierDenseSchurPC`, invisible to any serial test.
+
+        Returns:
+          The number of `Real` rows.
+        """
+        n = self.A01.getSizes()[1][1]
+        rows10 = self.A10.getSizes()[0][1]
+        rows11 = self.A11.getSizes()[0][1]
+        if not n == rows10 == rows11:
+            raise _loud(ValueError(
+                f"the Real block is {n} columns of A01, {rows10} rows of A10 "
+                f"and {rows11} rows of A11; dtn_schur_ainvb needs one size."))
+        return n
+
+    # -- the build ----------------------------------------------------------
+    def build(self, pc):
+        """Run `n` block-0 solves and keep both `Z` and `S` from them.
+
+        For each `Real` row `k`: form `A01 e_k` (one action of the coupling
+        block), solve block 0 against it to get `z_k`, then form
+        `S[:, k] = A11 e_k - A10 z_k`, which is column `k` of the exact
+        complement. `n` solves, `3n` matrix-free actions of small sub-blocks and
+        `n` `Allreduce`s of length `n`.
+
+        The three cached objects -- the columns, the array and its factors --
+        are replaced together at the end, so a build that raises leaves the
+        previous cache whole and does not increment the counter. An
+        implementation that refreshed one of the three and not another would
+        still converge and would cost outer iterations for the rest of a march.
+
+        Args:
+          pc: PETSc preconditioner, for its communicator and to carry the
+            failed reason of a broken-down column solve.
+        """
+        comm = pc.comm.tompi4py()
+        n = self.n
+        S = np.zeros((n, n))
+        columns = []
+        lo, hi = self.e1.owner_range
+        for k in range(n):
+            # e_k on the rank that owns global Real row k, zero elsewhere.
+            self.e1.set(0.0)
+            if lo <= k < hi:
+                self.e1.setValue(k, 1.0)
+            self.e1.assemble()
+            self.A01.mult(self.e1, self.w0)
+            # One block-0 solve, from a zero initial guess, is the whole cost of
+            # this column. Its result is column k of Z and the only term of
+            # column k of S that is not free.
+            z = self.A01.createVecLeft()
+            z.set(0.0)
+            self.ksp0.solve(self.w0, z)
+            self.block0_solve_count += 1
+            # A column solve that breaks down puts a garbage vector straight
+            # into Z and into S, so the rest of this operator's life runs on a
+            # wrong preconditioner with no error message. The same check the
+            # forward apply makes is the cheapest way to say so; it lets a
+            # merely capped solve through, because an inexact column costs
+            # outer iterations and not correctness.
+            self._check_block0(pc)
+            self.A10.mult(z, self.c1)
+            self.A11.mult(self.e1, self.y1)
+            self.y1.axpy(-1.0, self.c1)
+            S[:, k] = _gather(comm, self.y1, n)
+            columns.append(z)
+
+        factors = _DenseLU(S, "Real-block Schur complement")
+        # The old columns are dropped rather than destroyed: a test or a caller
+        # may still hold a reference to one, and petsc4py frees each Vec when
+        # the last reference to it goes.
+        self.Z = columns
+        self.S = S
+        self._factors = factors
+        self.build_count += 1
+        scale = max(np.abs(S).max(), 1e-300)
+        self.condition_number = float(np.linalg.cond(S))
+        self.relative_asymmetry = float(np.abs(S - S.T).max() / scale)
+        PETSc.Sys.Print(
+            f"    [ainvb] {n}x{n} complement and {n} cached columns from {n} "
+            f"block-0 solves; cond {self.condition_number:.3e}  "
+            f"relative asymmetry {self.relative_asymmetry:.3e}")
+
+    def update(self, pc):
+        """Rebuild when the mechanics block moved, or when the blocks were replaced.
+
+        Only the three sub-block handles are refreshed here. The work vectors
+        and the two scatters stay as `__init__` built them, and that is safe
+        because a re-extraction cannot change a LAYOUT in this solver: the two
+        index sets are built once in `DtNTwoBlockSchurPC.initialize` from
+        `W.dof_dset.field_ises` and handed to the inner fieldsplit with
+        `PCFieldSplitSetIS`, so every extraction, reusing the old `Mat` objects
+        or building new ones, addresses the same rows of the same mixed space
+        on the same communicator. A different space or a different communicator
+        is a different solver, hence a different PC and a fresh cache from
+        `initialize`. Nothing in this library calls `PCFieldSplitSetIS` on a
+        live PC.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        A01, A10, A11 = self._sub_blocks()
+        self.A01, self.A10, self.A11 = A01, A10, A11
+        handles = self._sub_block_handles()
+        replaced = handles != self._handles
+        self._handles = handles
+        # Both tests are evaluated: `moved` records the markers of the build it
+        # asks for, and skipping it when the handles moved would leave the rule
+        # comparing against an older state.
+        moved = self._rule.moved(pc)
+        if replaced or moved:
+            self.build(pc)
+
+    # -- the applies --------------------------------------------------------
+    def apply(self, pc, x, y):
+        """`y = P^{-1} x`, the full factorisation with the upper solve cached.
+
+        In order: the lower factor `y0 = M0 x0`, `x1 <- x1 - A10 y0`, which is
+        PETSc's `full` unchanged; the block-1 solve `y1 = S^{-1} x1`, done by
+        the dense factors instead of by a Krylov method over the complement;
+        and the upper factor `y0 <- y0 - Z y1`, where the second block-0 solve
+        is replaced by `n` AXPYs over the cached columns.
+
+        Args:
+          pc: PETSc preconditioner.
+          x: Vector the preconditioner is applied to.
+          y: Vector receiving the result, not guaranteed zero on entry and
+            written in full by the two reverse scatters.
+        """
+        comm = pc.comm.tompi4py()
+        insert = PETSc.InsertMode.INSERT_VALUES
+        forward = PETSc.ScatterMode.FORWARD
+        reverse = PETSc.ScatterMode.REVERSE
+        self.sct0.scatter(x, self.x0, insert, forward)
+        self.sct1.scatter(x, self.x1, insert, forward)
+
+        self.y0.set(0.0)
+        self.ksp0.solve(self.x0, self.y0)
+        self.block0_solve_count += 1
+        self._check_block0(pc)
+
+        # x1 <- x1 - A10 y0, the lower factor's correction to the Real rows.
+        self.A10.mult(self.y0, self.c1)
+        self.x1.axpy(-1.0, self.c1)
+
+        # The Real block is solved redundantly in numpy and only the owned
+        # slice is written back, so nothing here assumes where a Real row lives.
+        s1 = self._factors.solve(_gather(comm, self.x1, self.n))
+        lo, hi = self.y1.owner_range
+        self.y1.array_w[:] = s1[lo:hi]
+
+        # y0 <- y0 - sum_k s1[k] z_k. This is the upper factor: local, no
+        # communication, and the block-0 solve PETSc spends here.
+        self.y0.maxpy(-s1, self.Z)
+
+        self.sct0.scatter(self.y0, y, insert, reverse)
+        self.sct1.scatter(self.y1, y, insert, reverse)
+        self.apply_count += 1
+
+    def applyTranspose(self, pc, x, y):
+        r"""`y = P^{-T} x`, which is one transpose solve and not PETSc's two.
+
+        Transposing the product gives `P^{-T} = L^T D^T U^T`, whose two block-0
+        transpose solves merge into one by linearity:
+
+            w1 = x1 - Z^T x0,   y1 = S^{-T} w1,   y0 = M0^T (x0 - A10^T y1).
+
+        The columns of `Z` enter as inner products here (`VecMDot`) where the
+        forward apply used them as update directions (`VecMAXPY`), the dense
+        factors are used transposed, and `A10` acts through `multTranspose`.
+        PETSc's own transpose does not use the cached columns at all and pays
+        two transpose solves.
+
+        Args:
+          pc: PETSc preconditioner.
+          x: Vector the preconditioner is applied to.
+          y: Vector receiving the result.
+        """
+        comm = pc.comm.tompi4py()
+        insert = PETSc.InsertMode.INSERT_VALUES
+        forward = PETSc.ScatterMode.FORWARD
+        reverse = PETSc.ScatterMode.REVERSE
+        self.sct0.scatter(x, self.x0, insert, forward)
+        self.sct1.scatter(x, self.x1, insert, forward)
+
+        # Z^T x0 in one collective reduction, in place of the transpose solve
+        # PETSc spends on `A01^T A00^{-T} x0`, which is the same vector.
+        w1 = _gather(comm, self.x1, self.n) - np.asarray(self.x0.mDot(self.Z))
+        t1 = self._factors.solve_transpose(w1)
+        lo, hi = self.y1.owner_range
+        self.y1.array_w[:] = t1[lo:hi]
+
+        # w0 <- x0 - A10^T y1, the single right-hand side of the one solve.
+        self.A10.multTranspose(self.y1, self.w0)
+        self.w0.aypx(-1.0, self.x0)
+        self.y0.set(0.0)
+        self._solve_transpose_block0()
+        self.block0_solve_count += 1
+        self._check_block0(pc)
+
+        self.sct0.scatter(self.y0, y, insert, reverse)
+        self.sct1.scatter(self.y1, y, insert, reverse)
+        self.apply_transpose_count += 1
+
+    def _solve_transpose_block0(self):
+        """`y0 = M0^T w0`, or a named refusal when block 0 has no transpose.
+
+        `KSPSolveTranspose` on the block-0 KSP reaches `PCApplyTranspose` on its
+        preconditioner, and the production one, `gadopt.CondensedBlockPC`, has
+        none by design. Without this wrap the log carries a bare PETSc error
+        code from two levels down and names nothing the reader can act on.
+        """
+        # Read the block-0 preconditioner's identity before the solve, so that
+        # the message is assembled from objects no failed solve has touched.
+        pc0 = self.ksp0.getPC()
+        name = pc0.getType()
+        if name == PETSc.PC.Type.PYTHON:
+            name = f"{name} ({type(pc0.getPythonContext()).__name__})"
+        try:
+            self.ksp0.solveTranspose(self.w0, self.y0)
+        except PETSc.Error:
+            raise _loud(NotImplementedError(
+                "the transpose of the dtn_schur_ainvb apply needs a transpose "
+                f"solve of block 0, and its preconditioner ({name}) has none. "
+                "gadopt.CondensedBlockPC refuses the transpose application by "
+                "design. An adjoint solve does not come this way: pyadjoint "
+                "solves adjoint(J) with the forward options, so it reaches the "
+                "forward apply over the transposed operator.")) from None
+
+    def _check_block0(self, pc):
+        """Mirror `KSPCheckSolve`: a diverged block 0 must stop the outer solve.
+
+        A negative converged reason means the solve failed. Telling the outer PC
+        makes the outer Krylov exit `DIVERGED_PC_FAILED` instead of iterating on
+        a vector of NaNs.
+
+        The iteration cap is excluded, exactly as PETSc's own `KSPCheckSolve`
+        excludes it (`src/ksp/ksp/interface/iterativ.c`: `reason < 0 && reason
+        != KSP_DIVERGED_ITS`; petsc4py spells that reason `DIVERGED_MAX_IT` and
+        it is -3 either way). Block 0 is an inner solve of a preconditioner, so
+        stopping it at `block0_max_it` is a budget the preset sets on purpose
+        and not a breakdown: the outer FGMRES is flexible and absorbs the
+        resulting inexactness in extra outer iterations. Flagging it would be
+        worse than useless, because the flag is sticky -- `PCSetUp` never clears
+        `pc->failedreason` and `KSPSetUp` reads it
+        (`src/ksp/ksp/interface/itfunc.c`) -- so the step that hits the cap
+        would succeed and the NEXT step would die at setup after zero nonlinear
+        iterations, with a message naming nothing about block 0.
+
+        Args:
+          pc: PETSc preconditioner.
+        """
+        reason = self.ksp0.getConvergedReason()
+        if reason < 0 and reason != PETSc.KSP.ConvergedReason.DIVERGED_MAX_IT:
+            pc.setFailedReason(PETSc.PC.FailedReason.SUBPC_ERROR)
+
+    def view(self, viewer):
+        """Print what is cached and what is consequently never solved.
+
+        Args:
+          viewer: an ASCII PETSc viewer.
+        """
+        viewer.printfASCII(
+            f"cached A00^-1 A01: {self.n} Real rows, {self.build_count} "
+            f"builds, last build cond {self.condition_number:.3e}, relative "
+            f"asymmetry {self.relative_asymmetry:.3e}\n")
+        viewer.printfASCII(
+            "block 1 solved by the dense LU of the exact complement; "
+            "dtn_fieldsplit_1_ is not solved\n")
+
+
 class DtNTwoBlockSchurPC(fd.PCBase):
     """Schur fieldsplit whose two blocks are described by index sets.
 
@@ -410,12 +1107,60 @@ class DtNTwoBlockSchurPC(fd.PCBase):
 
     The gravitational Poisson solver is the special case where nothing is ever
     rebuilt, because its Jacobian is constant by construction (see `update`).
+
+    ## `dtn_schur_ainvb`: one block-0 solve per apply instead of two
+
+    The boolean option `<prefix>dtn_schur_ainvb`, off by default, makes this
+    class own the apply instead of delegating it. The inner fieldsplit stays
+    and keeps doing what it does well -- the two index sets, the sub-matrix
+    extraction, the block-0 KSP with its `dtn_fieldsplit_0_` prefix and its
+    sub-DM -- and the private `_SchurAinvBCache` runs the arithmetic on it.
+    At every operator change the cache spends `n` block-0 solves, one per
+    `Real` row, and keeps from them both the columns `Z = A00^{-1} A01` and the
+    exact complement `S = A11 - A10 Z`. Each apply then costs ONE block-0 solve
+    where `pc_fieldsplit_schur_fact_type full` costs two, and block 1 is solved
+    by the dense factors of `S` rather than by a Krylov method, so the block-0
+    cost of one outer solve is `n * builds + outer iterations`. The option is
+    read once in `initialize`; changing it afterwards has no effect, like every
+    other option of this class.
+
+    `pc_fieldsplit_schur_fact_type: lower` reaches the same one block-0 solve
+    per apply on the delegating path, which is why
+    `selfgrav_dtn_iterative_solver_parameters` writes it when this option is
+    off. The two are alternatives: `lower` gets there by spending more outer
+    iterations (14 against `full`'s 8 over the same four solves) and the cached
+    apply gets there while keeping `full`'s count: 47.5 s per 100 yr step at 96
+    ranks (arm W1, job 179402871, `NOTES/team/rotation-pc/03-CAMPAIGN.md`
+    section 28) against `lower`'s 88.2 (arm B4, job 179385036, section 3 of the
+    same record).
+
+    Three things are refused under the option, each before the first block-0
+    solve and each named on stderr first: any factorisation type other than
+    `full`, because the apply IS `full` and an arm that asked for `lower` would
+    believe it measured `lower`; a block-1 KSP that is not `preonly` with
+    `pc_type none`, because that block is never solved and a configuration that
+    is written and silently unused is unreadable afterwards in a cost model;
+    and the transpose apply when block 0 has no transpose solve, which is the
+    production case.
+
+    **Under the option the lag settings above change meaning.** The inner
+    fieldsplit's setup does not happen inside `apply`, because nothing calls
+    `PCApply` on it; `update` runs it instead. So a lagged outer python PC
+    freezes the whole nested preconditioner, `gadopt.CondensedBlockPC`
+    included, where on the delegating path it freezes nothing below this class.
     """
 
     needs_python_pmat = True
 
     def initialize(self, pc: PETSc.PC):
         """Initialises the preconditioner.
+
+        Builds the two index sets and the inner fieldsplit, threads the sub-DMs
+        that let the sub-preconditioners resolve their contexts, and -- when
+        `dtn_schur_ainvb` is set -- checks the configuration the cached apply
+        needs and builds the cache. The build's first block-0 solve reaches the
+        block-0 preconditioner through the sub-DM threaded just before, which is
+        the same order the delegating path reaches it in.
 
         Args:
           pc: PETSc preconditioner.
@@ -427,21 +1172,21 @@ class DtNTwoBlockSchurPC(fd.PCBase):
         real = [i for i, V in enumerate(W)
                 if V.ufl_element().family() == "Real"]
         if not real:
-            raise ValueError(
+            raise _loud(ValueError(
                 f"{type(self).__name__} needs Real sub-fields to split off, "
-                "but the mixed space has none; use a plain fieldsplit.")
+                "but the mixed space has none; use a plain fieldsplit."))
         i_R, n = real[0], len(real)
         # Anything but a contiguous trailing run of Real sub-fields would
         # leave sub-fields out of both blocks - a silently wrong split.
         if real != list(range(i_R, len(W))):
-            raise ValueError(
+            raise _loud(ValueError(
                 f"{type(self).__name__} requires the Real sub-fields to be "
                 f"contiguous and last, but sub-fields {real} of {len(W)} are "
-                "Real.")
+                "Real."))
         if i_R == 0:
-            raise ValueError(
+            raise _loud(ValueError(
                 f"{type(self).__name__} requires at least one non-Real "
-                "sub-field to form the first block, but sub-field 0 is Real.")
+                "sub-field to form the first block, but sub-field 0 is Real."))
 
         # field_ises is Firedrake's own authority on where each sub-field lives
         # in the monolithic row space, and the merged sets are exact in-order
@@ -454,13 +1199,16 @@ class DtNTwoBlockSchurPC(fd.PCBase):
             return PETSc.IS().createGeneral(
                 indices.astype(PETSc.IntType), comm=pc.comm)
 
+        is0 = merge(field_ises[:i_R])
+        is1 = merge(field_ises[i_R:i_R + n])
+
+        inner_prefix = (pc.getOptionsPrefix() or "") + "dtn_"
         inner = PETSc.PC().create(comm=pc.comm)
         inner.incrementTabLevel(1, parent=pc)
-        inner.setOptionsPrefix((pc.getOptionsPrefix() or "") + "dtn_")
+        inner.setOptionsPrefix(inner_prefix)
         inner.setOperators(A, P)
         inner.setType(PETSc.PC.Type.FIELDSPLIT)
-        inner.setFieldSplitIS(("0", merge(field_ises[:i_R])),
-                              ("1", merge(field_ises[i_R:i_R + n])))
+        inner.setFieldSplitIS(("0", is0), ("1", is1))
         inner.setFieldSplitType(PETSc.PC.CompositeType.SCHUR)
         inner.setFromOptions()
         inner.setUp()
@@ -473,6 +1221,16 @@ class DtNTwoBlockSchurPC(fd.PCBase):
         # split context onto the new DM as a side effect. The DM is left
         # inactive so that KSPSetUp does not try to build operators from it.
         ksp_potential, ksp_real = inner.getFieldSplitSchurGetSubKSP()
+        # `createSubDM` invokes Firedrake's own hook, which dereferences the DM
+        # without testing it. On a PC that Firedrake did not build, `getDM()`
+        # returns a wrapper around a NULL handle and the call ends in a
+        # segmentation violation instead of an error. Reading `.handle` is a
+        # pure Python attribute lookup and touches no PETSc object.
+        if pc.getDM().handle == 0:
+            raise _loud(ValueError(
+                f"{type(self).__name__} needs the DM Firedrake attaches to a "
+                "solver's PC, so that it can thread a sub-DM onto block 0; "
+                "this PC carries none."))
         _, subdm = pc.getDM().createSubDM(list(range(i_R)))
         ksp_potential.setDM(subdm)
         ksp_potential.setDMActive(PETSc.KSP.DMActive.ALL, False)
@@ -497,17 +1255,75 @@ class DtNTwoBlockSchurPC(fd.PCBase):
             ksp_real.setDMActive(PETSc.KSP.DMActive.ALL, False)
 
         self.pc = inner
+        #: The `Z`/`S` cache when `dtn_schur_ainvb` is set, `None` otherwise.
+        #: Its absence is what selects the delegating apply below.
+        self.ainvb = None
+        if not PETSc.Options(pc.getOptionsPrefix() or "").getBool(
+                "dtn_schur_ainvb", False):
+            return
+
+        # The cached apply IS the full factorisation with the upper factor's
+        # block-0 solve replaced by the stored columns, so an arm that asked
+        # for a partial factorisation and got this one would believe it
+        # measured something it did not run. PETSc's own default is `full`, so
+        # an unset key passes.
+        fact_type = PETSc.Options(inner_prefix).getString(
+            "pc_fieldsplit_schur_fact_type", "full")
+        if fact_type.lower() != "full":
+            raise _loud(ValueError(
+                f"dtn_schur_ainvb implements pc_fieldsplit_schur_fact_type "
+                f"full with the second block-0 solve replaced by the cached "
+                f"columns A00^-1 A01, but {inner_prefix}"
+                f"pc_fieldsplit_schur_fact_type is {fact_type!r}. An arm that "
+                "wants lower, upper or diag must leave dtn_schur_ainvb off."))
+        # Block 1 is solved by the factors of the exact complement, so its KSP
+        # is never entered. A Krylov method left configured there means
+        # something specific in every other arm -- its converged-reason lines
+        # are half of the block-application cost model -- and one that is
+        # configured and silently never run makes a campaign's numbers
+        # unreadable after the fact.
+        if (ksp_real.getType() != PETSc.KSP.Type.PREONLY
+                or ksp_real.getPC().getType() != PETSc.PC.Type.NONE):
+            raise _loud(ValueError(
+                "dtn_schur_ainvb solves block 1 with its own dense factors of "
+                "the exact complement, so the block-1 KSP is never entered; "
+                f"set dtn_fieldsplit_1_ksp_type preonly and "
+                f"dtn_fieldsplit_1_pc_type none, not "
+                f"{ksp_real.getType()!r} and "
+                f"{ksp_real.getPC().getType()!r}."))
+        self.ainvb = _SchurAinvBCache(pc, inner, is0, is1)
 
     def update(self, pc: PETSc.PC):
-        """Updates the preconditioner state; nothing to do here.
+        """Updates the preconditioner state.
 
-        This class owns the two index sets and nothing else, and the index sets
-        are a property of the mixed space, so a repeated setup can only rebuild
-        what is already held. Everything that does depend on the operator lives
-        in the inner fieldsplit, which keeps its own setup state and rebuilds
-        itself inside `apply`; the class docstring gives the mechanism and the
-        measurement. So this no-op is correct for a state-dependent Jacobian as
-        well as for a constant one.
+        On the delegating path there is nothing to do; see below. Under
+        `dtn_schur_ainvb` this method carries the whole of the setup that the
+        delegating path gets for free, in two steps.
+
+        **`self.pc.setUp()` first, and it is not a formality.** On the
+        delegating path `PCApply` on the inner fieldsplit calls `PCSetUp` on it,
+        which re-extracts the sub-matrices with `MAT_REUSE_MATRIX`, and
+        Firedrake's `createSubMatrix` assembles into the reused target, which
+        moves every sub-block's object state, which is what makes every
+        sub-preconditioner's `update` run. Under the option nothing calls
+        `PCApply` on the inner fieldsplit, so without this call the block-0
+        sub-operator's state never moves, `gadopt.CondensedBlockPC` keeps the
+        blocks of the first Jacobian for the whole march, every answer stays
+        right and only the iteration count says so. `PCSetUp` compares the
+        stored matrix state with the current one and returns at once when they
+        agree, so the call costs nothing when nothing moved.
+
+        Then the cache decides whether to rebuild, from the solver's two
+        staleness markers.
+
+        **On the delegating path there is nothing to do.** This class owns the
+        two index sets and nothing else, and the index sets are a property of
+        the mixed space, so a repeated setup can only rebuild what is already
+        held. Everything that does depend on the operator lives in the inner
+        fieldsplit, which keeps its own setup state and rebuilds itself inside
+        `apply`; the class docstring gives the mechanism and the measurement.
+        So doing nothing is correct for a state-dependent Jacobian as well as
+        for a constant one.
 
         For the gravitational Poisson solver nothing anywhere is rebuilt,
         because that Jacobian is constant by construction: the density and the
@@ -519,27 +1335,36 @@ class DtNTwoBlockSchurPC(fd.PCBase):
         Args:
           pc: PETSc preconditioner.
         """
-        pass
+        if self.ainvb is None:
+            return
+        self.pc.setUp()
+        self.ainvb.update(pc)
 
     def apply(self, pc: PETSc.PC, x: PETSc.Vec, y: PETSc.Vec):
-        """Applies the inner fieldsplit.
+        """Applies the inner fieldsplit, or the cached two-block apply.
 
         Args:
           pc: PETSc preconditioner.
           x: Vector the preconditioner is applied to.
           y: Vector receiving the result.
         """
-        self.pc.apply(x, y)
+        if self.ainvb is None:
+            self.pc.apply(x, y)
+        else:
+            self.ainvb.apply(pc, x, y)
 
     def applyTranspose(self, pc: PETSc.PC, x: PETSc.Vec, y: PETSc.Vec):
-        """Applies the transpose of the inner fieldsplit.
+        """Applies the transpose of the inner fieldsplit, or of the cached apply.
 
         Args:
           pc: PETSc preconditioner.
           x: Vector the preconditioner is applied to.
           y: Vector receiving the result.
         """
-        self.pc.applyTranspose(x, y)
+        if self.ainvb is None:
+            self.pc.applyTranspose(x, y)
+        else:
+            self.ainvb.applyTranspose(pc, x, y)
 
     def view(self, pc: PETSc.PC, viewer=None):
         """Prints a description of the preconditioner.
@@ -556,6 +1381,8 @@ class DtNTwoBlockSchurPC(fd.PCBase):
         if hasattr(self, "pc"):
             viewer.printfASCII("Two-block Schur fieldsplit defined by index sets\n")
             self.pc.view(viewer)
+        if getattr(self, "ainvb", None) is not None:
+            self.ainvb.view(viewer)
 
 
 class _RealBlockPCBase(fd.preconditioners.base.PCBase):
@@ -609,31 +1436,22 @@ class _RealBlockPCBase(fd.preconditioners.base.PCBase):
           pc: PETSc preconditioner.
         """
 
-    @staticmethod
-    def _loud(exc):
-        """Write the message to stderr, then hand the exception back to raise.
-
-        **PETSc flattens a Python exception raised inside a python PC into
-        `PETSc.Error: error code 101`** -- measured, on exactly the misuse this
-        class most expects. The exception object is then useless to whoever
-        reads the log, because the text never reaches them. Printing it first
-        puts the named cause directly above the 101 in the output, which is the
-        only place it can still be read.
-
-        Returns the exception rather than raising it, so the call site keeps
-        `raise` and static analysis still sees a raise.
-        """
-        print(f"\n[{__name__}] {type(exc).__name__}: {exc}\n",
-              file=sys.stderr, flush=True)
-        return exc
+    #: The module-level `_loud` under this class's own name, so that this class
+    #: and its subclasses keep writing their refusals as `raise self._loud(...)`.
+    _loud = staticmethod(_loud)
 
     def _gather(self, comm, vec, n_global):
-        buf = np.zeros(n_global)
-        lo, hi = vec.owner_range
-        buf[lo:hi] = vec.array_r
-        out = np.zeros(n_global)
-        comm.Allreduce(buf, out)
-        return out
+        """Read a distributed vector redundantly onto every rank.
+
+        Args:
+          comm: the mpi4py communicator of the vector.
+          vec: the distributed PETSc `Vec`.
+          n_global: its global length.
+
+        Returns:
+          A numpy array of length `n_global`, identical on every rank.
+        """
+        return _gather(comm, vec, n_global)
 
     def apply(self, pc, x, y):
         self._apply(pc, x, y, self._solve)
@@ -678,10 +1496,11 @@ class _RealBlockPCBase(fd.preconditioners.base.PCBase):
 class DtNMultiplierDiagPC(_RealBlockPCBase):
     r"""Invert the multiplier block's diagonal exactly. It is diagonal, and known.
 
-    **Opt-in. This is not any preset's default and must not be made one** --
-    both shipped presets run block 1 at `pc_type: none`, and flipping that would
-    silently move every number the current campaign is producing. Select it by
-    name::
+    **Opt-in. This class is no preset's default.** `DtNMultiplierDenseSchurPC`
+    is what `selfgrav_dtn_iterative_solver_parameters` selects on the low-rank
+    representation, because the exact complement is 4 columns there and the
+    diagonal misses the Schur correction; this one has never been measured
+    against it on a production system. Select it by name::
 
         "dtn_fieldsplit_1_pc_type": "python",
         "dtn_fieldsplit_1_pc_python_type": "gadopt.DtNMultiplierDiagPC",
@@ -803,26 +1622,59 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
 
 
 class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
-    r"""Form the whole multiplier Schur complement once at setup and factor it.
+    r"""Form the whole `Real`-block Schur complement once at setup and factor it.
 
-    **Opt-in, exactly like `DtNMultiplierDiagPC`. This is not any preset's
-    default and must not be made one** -- both shipped presets run block 1 at
-    `pc_type: none`, and flipping that would silently move every number the
-    current campaign is producing. Select it by name on the multiplier block::
+    The class name comes from the multiplier representation, where the `Real`
+    block holds the DtN multipliers. What it actually preconditions is whatever
+    trailing run of `Real` fields block 1 is: on the low-rank representation
+    that is the core pressure and the three rotation rows, and no multiplier at
+    all. Every message this class prints names the block and not the
+    representation, so the two arms read the same.
+
+    **The default of `selfgrav_dtn_iterative_solver_parameters` on the
+    low-rank representation**, where the `Real` block is 4 rows with rotation
+    and 1 without, so one build is 4 block-0 solves and each of them is cheap:
+    a solve whose right-hand side is a column of `A01` takes 63 inner
+    iterations and stops at the iteration cap in 5 of 628 solves, against 131
+    to 138 iterations for one carrying the mechanics residual (100 yr step, 96
+    ranks; a labelled pass over the production log,
+    `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 4, which separates the
+    three block-0 positions and so names no arm). The preset runs it under
+    `preonly`, because the factored complement is an exact inverse and a
+    Krylov method above it would spend a block-0 solve per extra iteration
+    (120.4 s per step against 99.8 under `full`, arms B1 and B2, job
+    179385036, section 24 of the same record), and under
+    `dtn_pc_fieldsplit_schur_fact_type: lower`, which brings the step to
+    88.2 s (arm B4, job 179385036) against 269 s with block 1
+    unpreconditioned (arms B0 and C0).
+
+    **It stays opt-in on the multiplier representation and on the direct
+    preset.** There the block is about 76 columns at L = 5, so a build costs
+    more than a whole outer solve and has to amortise over a segment of the
+    march; how long that takes is unmeasured. Select it there by name on the
+    multiplier block::
 
         "dtn_fieldsplit_1_pc_type": "python",
         "dtn_fieldsplit_1_pc_python_type": "gadopt.DtNMultiplierDenseSchurPC",
 
-    with a full Schur factorisation above it
-    (`dtn_pc_fieldsplit_schur_fact_type: full`), so that the `Amat` this PC is
-    handed is PETSc's `MATSCHURCOMPLEMENT`. **One `A.mult(e_k)` is then one
-    application of the Schur complement S**, and the block is only 72 columns
-    wide at L = 5 (75 with rotation), so that many `MatMult`s build S entirely,
-    each costing one block-0 solve. Contract the columns into a dense array on
-    every rank, factor it once, and apply the factors from then on. No Firedrake
-    assembly is involved anywhere, which is why this works where `jacobi`,
-    `selfp`, `AssembledPC` and `-pc_fieldsplit_schur_precondition full` all fail
-    on the `Real` block -- the same reason `DtNMultiplierDiagPC` above works.
+    **Tighten the block-0 relative tolerance to 1e-4 wherever this runs.** S is
+    only as linear as the block-0 solve that builds its columns, and at 1e-2
+    the arm stagnates: 642 non-convergent block-0 calls, worse than leaving
+    block 1 unpreconditioned (Gadi job 176078939). At 1e-4 it is 19 block-0
+    calls and 69 s per marching step against `none`'s 354 and 1036 s (job
+    176103130, medium rung, L = 5, 104 ranks; NOTES/fastdtn/HANDOVER.md). The
+    iterative preset's `block0_rtol` default is 1e-4 for this reason; a
+    hand-written dictionary must set it.
+
+    The class needs a Schur fieldsplit above it, of any factorisation type, so
+    that the `Amat` it is handed is PETSc's `MATSCHURCOMPLEMENT`. **One
+    `A.mult(e_k)` is then one application of the Schur complement S**, and that
+    many `MatMult`s build S entirely, each costing one block-0 solve. Contract
+    the columns into a dense array on every rank, factor it once, and apply the
+    factors from then on. No Firedrake assembly is involved anywhere, which is
+    why this works where `jacobi`, `selfp`, `AssembledPC` and
+    `-pc_fieldsplit_schur_precondition full` all fail on the `Real` block --
+    the same reason `DtNMultiplierDiagPC` above works.
 
     Unlike the diagonal PC, this one takes **no data** from the appctx. It needs
     no `dtn_block1_diagonal`, no module global and no per-solver wiring: it forms
@@ -872,8 +1724,10 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
       a preconditioner through the rest of that solve's Newton iterations.
 
     Cost rules out the alternative of one build per Newton iteration. One build
-    is one block-0 solve per column, 72 columns at L = 5 and 75 with rotation,
-    so a build at every Newton iteration roughly triples the block-0 work of a
+    is one block-0 solve per column: 4 columns on the low-rank representation,
+    which is where the preset selects this class, and 72 at L = 5 on the
+    multiplier one (75 with rotation), so on the multiplier representation a
+    build at every Newton iteration roughly triples the block-0 work of a
     three-iteration step. A complement that lags the state costs outer
     iterations and changes no residual, so the cheap rule is the right trade.
 
@@ -942,12 +1796,23 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         Args:
           pc: PETSc preconditioner.
         """
-        self._operator_version, self._solve_index, _ = self._markers(pc)
+        self._rule = _RebuildRule()
+        self._rule.record(pc)
         # Counts builds over the life of this PC instance, `initialize`
         # included. Tests read it to pin the rebuild rule; nothing in the
         # solve path branches on it.
         self.build_count = 0
         self._build(pc)
+
+    @property
+    def _operator_version(self):
+        """The `operator_version` the current complement was built at."""
+        return self._rule.operator_version
+
+    @property
+    def _solve_index(self):
+        """The `gia_solve_index` the current complement was built at."""
+        return self._rule.solve_index
 
     def update(self, pc):
         """Rebuild the complement when the mechanics block it describes moved.
@@ -976,38 +1841,11 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         Args:
           pc: PETSc preconditioner.
         """
-        version, solve_index, present = self._markers(pc)
-        if not present:
-            return
-        if version is not None:
-            if version != self._operator_version:
-                self._operator_version = version
-                # Carry the solve index across with it, so that a later
-                # switch to the state-dependent branch compares against this
-                # build and not against an older one.
-                self._solve_index = solve_index
-                self._build(pc)
-            return
-        if solve_index is None or self._solve_index is None:
-            return
-        if solve_index != self._solve_index:
-            self._operator_version = version
-            self._solve_index = solve_index
+        if self._rule.moved(pc):
             self._build(pc)
 
     def _appctx(self, pc):
         """The solver's application context, or an empty mapping.
-
-        `PCBase.get_appctx` resolves the context through `pc.getDM()`, and a
-        PETSc PC that Firedrake did not build carries no DM: `pc.getDM()`
-        returns a wrapper around a NULL handle, and Firedrake's
-        `dmhooks.get_appctx` then dereferences it and **crashes the process**
-        with a segmentation violation rather than raising (measured on the
-        bare dense `Mat` the unit tests of this class drive it over). So the
-        handle test comes first and is not tidiness: it is what keeps a
-        hand-built PC from killing the run. Reading `dm.handle` is a pure
-        Python attribute lookup on the petsc4py wrapper and touches no PETSc
-        object, so it is safe where everything else is not.
 
         Args:
           pc: PETSc preconditioner.
@@ -1015,30 +1853,10 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         Returns:
           The application context mapping, or `{}` when there is none to read.
         """
-        dm = pc.getDM()
-        if dm.handle == 0:
-            return {}
-        try:
-            return self.get_appctx(pc) or {}
-        except AttributeError:
-            # A Firedrake DM with no solver context pushed onto it:
-            # `dmhooks.get_appctx` returns None and the `.appctx` lookup on it
-            # raises. Read that as "no markers", exactly like an empty context.
-            return {}
+        return _solver_appctx(pc)
 
     def _markers(self, pc):
         """The solver's statement of when the mechanics block last changed.
-
-        `operator_version` is the same value `gadopt.InternalVariableSCPC`
-        keys its reassembly on, so the two caches of pieces of one operator
-        agree by construction. `gia_solve_index` covers the case that version
-        cannot express, a Jacobian that moves inside one nonlinear solve.
-
-        Both are rank-consistent: the version is bumped by a reduction over
-        the communicator in `_refresh_operator_version`, and the solve index is
-        incremented by the collective `solve()`. So the rebuild decision this
-        returns is identical on every rank and the collective `_build` is
-        entered by all ranks together.
 
         Args:
           pc: PETSc preconditioner.
@@ -1048,12 +1866,7 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
           the context names neither marker, which is the signal to leave the
           complement alone.
         """
-        appctx = self._appctx(pc)
-        present = "operator_version" in appctx or "gia_solve_index" in appctx
-        solve_index = appctx.get("gia_solve_index")
-        return (appctx.get("operator_version"),
-                None if solve_index is None else int(solve_index),
-                present)
+        return _staleness_markers(pc)
 
     def _build(self, pc):
         A, _ = pc.getOperators()
@@ -1072,8 +1885,10 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
             raise self._loud(ValueError(
                 f"DtNMultiplierDenseSchurPC needs a square operator to form the "
                 f"Schur complement, but its Amat is {m}x{n}. The block-1 PC must "
-                "be handed the MATSCHURCOMPLEMENT of a full Schur factorisation "
-                "(dtn_pc_fieldsplit_schur_fact_type: full)."))
+                "be handed the MATSCHURCOMPLEMENT of a Schur fieldsplit "
+                "(pc_fieldsplit_type: schur), which every factorisation type "
+                "hands to the block-1 KSP alike; the shipped preset runs this "
+                "class under dtn_pc_fieldsplit_schur_fact_type: lower."))
         comm = pc.comm.tompi4py()
         e = A.createVecRight()
         col = A.createVecLeft()
@@ -1106,42 +1921,31 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     def _factorise(self, S):
         """Factor S so that both S x = b and S^T x = b are cheap from here on.
 
-        Prefer an LU factorisation (scipy `lu_factor`/`lu_solve`), which does the
-        forward and the transpose solve off one factoring; fall back to storing
-        the inverse and its transpose when scipy is absent.
+        Args:
+          S: the dense complement, shape `(n, n)`, identical on every rank.
         """
-        n = S.shape[0]
-        if _HAVE_SCIPY:
-            lu = _lu_factor(S)
-            # lu_factor never raises on a singular matrix -- it returns a U with
-            # a zero pivot and a LinAlgWarning. Catch the zero pivot here so the
-            # failure is a NAMED ValueError above the eventual PETSc 101, never a
-            # silent NaN solve.
-            if not np.all(np.abs(np.diag(lu[0])) > 0.0):
-                raise self._loud(ValueError(
-                    f"the {n}x{n} multiplier Schur complement is singular: a "
-                    "zero pivot appeared in its LU factorisation. A mode with "
-                    "zero scale or a boundary with zero discrete area would do "
-                    "that, and both are bugs upstream."))
-            self._lu = lu
-        else:  # pragma: no cover - scipy ships in the firedrake venv
-            try:
-                self._inv = np.linalg.inv(S)
-            except np.linalg.LinAlgError as exc:
-                raise self._loud(ValueError(
-                    f"the {n}x{n} multiplier Schur complement is singular: "
-                    f"{exc}")) from None
-            self._invT = self._inv.T.copy()
+        self._factors = _DenseLU(S, "Real-block Schur complement")
+
+    @property
+    def _lu(self):
+        """The scipy LU factors of S, absent when scipy is not installed."""
+        return self._factors.lu
+
+    @property
+    def _inv(self):
+        """The explicit inverse of S, the fallback when scipy is absent."""
+        return self._factors.inv
+
+    @property
+    def _invT(self):
+        """The transpose of the explicit inverse, the same fallback."""
+        return self._factors.invT
 
     def _solve(self, rhs):
-        if _HAVE_SCIPY:
-            return _lu_solve(self._lu, rhs, trans=0)
-        return self._inv @ rhs
+        return self._factors.solve(rhs)
 
     def _solve_transpose(self, rhs):
-        if _HAVE_SCIPY:
-            return _lu_solve(self._lu, rhs, trans=1)
-        return self._invT @ rhs
+        return self._factors.solve_transpose(rhs)
 
 
 class _LowRankPotentialOperator:

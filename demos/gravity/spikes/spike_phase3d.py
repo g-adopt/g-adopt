@@ -384,9 +384,16 @@ def solve_phase(configuration, mesh_file, tolerances, untangle=True,
         # and it belongs to whoever owns the preconditioner; this ladder wants
         # a phase, so it runs the uncondensed sweep, which is the measured and
         # working one.
+        # `multiplier_pc="none"` is named because this ladder sweeps
+        # `block0_rtol` down to 1e-2, and the preset refuses to CHOOSE the
+        # dense complement on block 1 at a tolerance looser than 1e-4: the
+        # complement's columns are block-0 solves, so a loose one makes the
+        # arm stagnate. An unpreconditioned block 1 is also the one thing that
+        # does not change between the rungs, which is what a tolerance ladder
+        # needs: every rung must differ in the tolerance alone.
         params = selfgrav_dtn_iterative_solver_parameters(
             condensed=condense, block0_rtol=block0, outer_rtol=ksp_rtol,
-            snes_rtol=snes_rtol)
+            snes_rtol=snes_rtol, multiplier_pc="none")
         solver, z, layout = b4.build_solver(
             parent, sub, dt=dt, fluid_core=True, solver_parameters=params)
         solver.solve()
