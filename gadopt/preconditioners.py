@@ -552,21 +552,70 @@ class _DenseLU:
     """A factored small dense matrix, redundant on every rank.
 
     The blocks these preconditioners factor are tiny -- 4 rows at production
-    with the low-rank representation, 75 with the multiplier one -- so the
+    with the low-rank representation, 76 with the multiplier one -- so the
     factorisation is done in numpy on every rank, which at that size is free
     and needs no parallel dense solver. The array it is built from comes out of
     an `Allreduce`, so it is bit-identical everywhere and the factors are too.
+
+    **The array is scaled symmetrically by its own diagonal before it is
+    factored.** The rows of the `Real` block measure different physical things
+    at different scales -- a core pressure, three rotation rows, a
+    centre-of-mass row, a sea-level shift, a DtN multiplier -- so the condition
+    number of the raw array is dominated by the spread of those scales and says
+    almost nothing about how the rows couple. With `d = sqrt(abs(diag(S)))` and
+    `D = diag(d)`, this class factors `T = D^-1 S D^-1`, whose diagonal is plus
+    or minus one, and reports `cond(T)`. Measured on the complements saved in
+    `NOTES/frame3d/` of the `sghelichkhani/sea-level` worktree:
+
+    ====================================  ===  ===========  ===============
+    arm                                    n   cond(S)      cond(T)
+    ====================================  ===  ===========  ===============
+    low-rank, cap, frame on                 4  2.89e4       1.02
+    low-rank, sea level, frame on           5  9.29e5       1.71
+    multiplier, sea level                  77  1.24e4       90.6
+    ====================================  ===  ===========  ===============
+
+    So the whole condition number of the low-rank block is the spread of the
+    row scales, and after the scaling the number describes the coupling between
+    the rows and can be compared between two cases that hold different kinds of
+    row. The array is at most a few dozen rows, so the scaling costs nothing.
+
+    The absolute value is what keeps `d` real: a complement row may carry a
+    negative diagonal, and the scale of that row is still its magnitude. A row
+    whose diagonal is exactly zero has no known scale, so **the scaling is
+    refused as a whole in that case** and the raw array is factored instead.
+    The zero-pivot refusal runs on whichever array was factored and means the
+    same thing either way: a diagonal scaling by strictly positive numbers
+    cannot turn a singular matrix into a regular one, because
+    `det T = det S / prod(d)^2`.
 
     Args:
       S: the dense array to factor, shape `(n, n)`.
       description: what the array is, used in the zero-pivot message so that a
         singular block names itself in the log.
+
+    Attributes:
+      condition_number: `numpy.linalg.cond` of the array that was factored, so
+        the scaled one wherever the scaling applied. This is what the two
+        owners of this class print.
+      scaled: whether the symmetric scaling was applied. `False` says that some
+        row had a zero diagonal and the condition number is the raw one.
     """
 
     def __init__(self, S, description):
         n = S.shape[0]
+        # `d` holds the square root of each row's own scale, so that dividing
+        # the array by `outer(d, d)` leaves a diagonal of plus or minus one and
+        # keeps the array symmetric when it started symmetric. A single zero
+        # entry makes the whole scaling undefined, so the raw array is factored
+        # in that case and `scaled` records which of the two ran.
+        d = np.sqrt(np.abs(np.diag(S)))
+        self.scaled = bool(np.all(d > 0.0))
+        self._d = d if self.scaled else None
+        factored = S / np.outer(d, d) if self.scaled else S
+        self.condition_number = float(np.linalg.cond(factored))
         if _HAVE_SCIPY:
-            lu = _lu_factor(S)
+            lu = _lu_factor(factored)
             # lu_factor never raises on a singular matrix -- it returns a U with
             # a zero pivot and a LinAlgWarning. Catch the zero pivot here so the
             # failure is a NAMED ValueError above the eventual PETSc 101, never a
@@ -580,37 +629,64 @@ class _DenseLU:
             self.lu = lu
         else:  # pragma: no cover - scipy ships in the firedrake venv
             try:
-                self.inv = np.linalg.inv(S)
+                self.inv = np.linalg.inv(factored)
             except np.linalg.LinAlgError as exc:
                 raise _loud(ValueError(
                     f"the {n}x{n} {description} is singular: {exc}")) from None
             self.invT = self.inv.T.copy()
 
     def solve(self, rhs):
-        """Solve `S x = rhs`.
+        """Solve `S x = rhs`, on the original, unscaled array.
+
+        The factors are those of `T = D^-1 S D^-1`, so `S = D T D` and the
+        solve is three steps, `x = D^-1 T^-1 D^-1 rhs`: divide by `d`, apply
+        the factors, divide by `d` again. The two divisions wrap both the scipy
+        path and the numpy-inverse fallback, because `inv` is the inverse of
+        the same scaled array.
 
         Args:
           rhs: a numpy array of length `n`, identical on every rank.
 
         Returns:
-          The solution, a numpy array of length `n`.
+          The solution of the ORIGINAL system, a numpy array of length `n`.
         """
-        if _HAVE_SCIPY:
-            return _lu_solve(self.lu, rhs, trans=0)
-        return self.inv @ rhs
+        if self.scaled:
+            x = self._apply(rhs / self._d, trans=0)
+            return x / self._d
+        return self._apply(rhs, trans=0)
 
     def solve_transpose(self, rhs):
         """Solve `S^T x = rhs`, off the same factorisation.
 
+        `D` is diagonal and so symmetric, which makes `S^T = D T^T D` and gives
+        the transposed solve the same three steps as `solve` with the
+        transposed factors.
+
         Args:
           rhs: a numpy array of length `n`, identical on every rank.
+
+        Returns:
+          The solution of the ORIGINAL transposed system, a numpy array of
+          length `n`.
+        """
+        if self.scaled:
+            x = self._apply(rhs / self._d, trans=1)
+            return x / self._d
+        return self._apply(rhs, trans=1)
+
+    def _apply(self, rhs, trans):
+        """Apply the factors of the scaled array, with no scaling around them.
+
+        Args:
+          rhs: a numpy array of length `n`.
+          trans: `0` for `T x = rhs`, `1` for `T^T x = rhs`.
 
         Returns:
           The solution, a numpy array of length `n`.
         """
         if _HAVE_SCIPY:
-            return _lu_solve(self.lu, rhs, trans=1)
-        return self.invT @ rhs
+            return _lu_solve(self.lu, rhs, trans=trans)
+        return (self.invT if trans else self.inv) @ rhs
 
 
 class _SchurAinvBCache:
@@ -686,6 +762,10 @@ class _SchurAinvBCache:
         self.apply_transpose_count = 0
         self.block0_solve_count = 0
         #: Diagnostics of the last build, printed at every build.
+        #: `condition_number` is the SCALED one, `cond(D^-1 S D^-1)` with
+        #: `D` the square root of the magnitude of the diagonal of `S`, so that
+        #: it describes how the `Real` rows couple and not the spread of their
+        #: physical scales; see `_DenseLU` for the measurement behind that.
         self.condition_number = None
         self.relative_asymmetry = None
 
@@ -838,11 +918,16 @@ class _SchurAinvBCache:
         self._factors = factors
         self.build_count += 1
         scale = max(np.abs(S).max(), 1e-300)
-        self.condition_number = float(np.linalg.cond(S))
+        # The number comes off the factors, so it is the condition number of
+        # the diagonally scaled array and two arms holding different kinds of
+        # `Real` row can be compared by it. The asymmetry stays a measure of
+        # the raw array, because that is a property of the operator and not of
+        # any scaling put on it.
+        self.condition_number = factors.condition_number
         self.relative_asymmetry = float(np.abs(S - S.T).max() / scale)
         PETSc.Sys.Print(
             f"    [ainvb] {n}x{n} complement and {n} cached columns from {n} "
-            f"block-0 solves; cond {self.condition_number:.3e}  "
+            f"block-0 solves; scaled cond {self.condition_number:.3e}  "
             f"relative asymmetry {self.relative_asymmetry:.3e}")
 
     def update(self, pc):
@@ -1026,7 +1111,7 @@ class _SchurAinvBCache:
         """
         viewer.printfASCII(
             f"cached A00^-1 A01: {self.n} Real rows, {self.build_count} "
-            f"builds, last build cond {self.condition_number:.3e}, relative "
+            f"builds, last build scaled cond {self.condition_number:.3e}, relative "
             f"asymmetry {self.relative_asymmetry:.3e}\n")
         viewer.printfASCII(
             "block 1 solved by the dense LU of the exact complement; "
@@ -1913,9 +1998,13 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         # of them.
         self.build_count = getattr(self, "build_count", 0) + 1
         scale = max(np.abs(S).max(), 1e-300)
+        # As in `_SchurAinvBCache`: the condition number is the scaled one, off
+        # the factors, so that it measures the coupling between the `Real` rows
+        # and not the spread of their physical scales. The asymmetry stays a
+        # measure of the raw array.
         PETSc.Sys.Print(
             f"    [dense Schur] {n}x{n} built in {n} block-0 applications; "
-            f"cond {np.linalg.cond(S):.3e}  "
+            f"scaled cond {self._factors.condition_number:.3e}  "
             f"relative asymmetry {np.abs(S - S.T).max() / scale:.3e}")
 
     def _factorise(self, S):

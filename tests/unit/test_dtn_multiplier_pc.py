@@ -805,3 +805,271 @@ class TestTheNullCouplingConfiguration:
         from gadopt.gia_gravity import NULL_COUPLING_ROW_SCALE
         obj.theta = float(NULL_COUPLING_ROW_SCALE)
         assert np.all(obj.block1_diagonal() != 0.0)
+
+
+#: Every key `selfgrav_dtn_iterative_solver_parameters()` writes at its
+#: defaults, sorted, as measured at commit `c24685ac` on
+#: `sghelichkhani/gia-preconditioner`. Written out rather than counted so that
+#: a key which is renamed, or one which is added while another is dropped,
+#: fails here instead of passing a count check.
+KEYS_AT_C24685AC = (
+    "dtn_fieldsplit_0_fieldsplit_0_assembled_mg_levels_pc_type",
+    "dtn_fieldsplit_0_fieldsplit_0_assembled_pc_gamg_coarse_eq_limit",
+    "dtn_fieldsplit_0_fieldsplit_0_assembled_pc_gamg_mis_k_minimum_degree_"
+    "ordering",
+    "dtn_fieldsplit_0_fieldsplit_0_assembled_pc_gamg_square_graph",
+    "dtn_fieldsplit_0_fieldsplit_0_assembled_pc_gamg_threshold",
+    "dtn_fieldsplit_0_fieldsplit_0_assembled_pc_type",
+    "dtn_fieldsplit_0_fieldsplit_0_ksp_converged_maxits",
+    "dtn_fieldsplit_0_fieldsplit_0_ksp_converged_reason",
+    "dtn_fieldsplit_0_fieldsplit_0_ksp_max_it",
+    "dtn_fieldsplit_0_fieldsplit_0_ksp_rtol",
+    "dtn_fieldsplit_0_fieldsplit_0_ksp_type",
+    "dtn_fieldsplit_0_fieldsplit_0_pc_python_type",
+    "dtn_fieldsplit_0_fieldsplit_0_pc_type",
+    "dtn_fieldsplit_0_fieldsplit_1_assembled_mg_levels_pc_type",
+    "dtn_fieldsplit_0_fieldsplit_1_assembled_pc_gamg_coarse_eq_limit",
+    "dtn_fieldsplit_0_fieldsplit_1_assembled_pc_gamg_mis_k_minimum_degree_"
+    "ordering",
+    "dtn_fieldsplit_0_fieldsplit_1_assembled_pc_gamg_square_graph",
+    "dtn_fieldsplit_0_fieldsplit_1_assembled_pc_gamg_threshold",
+    "dtn_fieldsplit_0_fieldsplit_1_assembled_pc_type",
+    "dtn_fieldsplit_0_fieldsplit_1_ksp_converged_reason",
+    "dtn_fieldsplit_0_fieldsplit_1_ksp_type",
+    "dtn_fieldsplit_0_fieldsplit_1_pc_python_type",
+    "dtn_fieldsplit_0_fieldsplit_1_pc_type",
+    "dtn_fieldsplit_0_ksp_converged_reason",
+    "dtn_fieldsplit_0_ksp_gmres_restart",
+    "dtn_fieldsplit_0_ksp_max_it",
+    "dtn_fieldsplit_0_ksp_rtol",
+    "dtn_fieldsplit_0_ksp_type",
+    "dtn_fieldsplit_0_pc_fieldsplit_0_fields",
+    "dtn_fieldsplit_0_pc_fieldsplit_1_fields",
+    "dtn_fieldsplit_0_pc_fieldsplit_type",
+    "dtn_fieldsplit_0_pc_type",
+    "dtn_fieldsplit_1_ksp_converged_reason",
+    "dtn_fieldsplit_1_ksp_max_it",
+    "dtn_fieldsplit_1_ksp_rtol",
+    "dtn_fieldsplit_1_ksp_type",
+    "dtn_fieldsplit_1_pc_type",
+    "dtn_pc_fieldsplit_schur_fact_type",
+    "ksp_converged_reason",
+    "ksp_max_it",
+    "ksp_rtol",
+    "ksp_type",
+    "mat_type",
+    "pc_python_type",
+    "pc_type",
+    "snes_atol",
+    "snes_converged_reason",
+    "snes_linesearch_type",
+    "snes_max_it",
+    "snes_rtol",
+    "snes_type",
+)
+
+
+class TestTheBlockOneChoiceKeysOnTheNumberOfRealRows:
+    """`n_real` decides block 1, and the name of the representation does not.
+
+    The cost of `gadopt.DtNMultiplierDenseSchurPC` is `n` block-0 solves for
+    each build, so the width of the `Real` block is the quantity the choice
+    depends on. The name of the DtN representation tracks that width on this
+    branch only, because the two cases here are 1 or 4 rows on the low-rank
+    representation and about 76 on the multiplier one. They separate on
+    `sghelichkhani/sea-level`, which adds three centre-of-mass rows and a
+    sea-level `Shift`: a low-rank block is 5 or 8 rows wide there and a
+    multiplier one is 80 at L = 5.
+
+    Every case here reads the dictionary the preset returns and solves nothing,
+    which is what makes the widths 5 and 8 testable on a branch that cannot
+    build them.
+    """
+
+    #: The widths at which the shipped limit selects the dense complement. 1
+    #: and 4 exist on this branch (core pressure alone, and core pressure with
+    #: the three rotation rows); 5 and 8 are the sea-level branch's.
+    SELECTED = (1, 4, 5, 8, 16)
+
+    #: The widths at which it does not. 0 is an empty block, with nothing to
+    #: form; 17 is one row above the limit; 76 is the multiplier block at
+    #: L = 5, where a build costs more than a whole outer solve.
+    REFUSED = (0, 17, 76)
+
+    @pytest.mark.parametrize("n_real", SELECTED)
+    @pytest.mark.parametrize("condensed", (True, False))
+    def test_a_narrow_block_takes_the_complement_on_either_representation(
+            self, n_real, condensed):
+        """The rule is on the width alone, so both arms obey it.
+
+        `condensed=True` resolves to the multiplier representation and
+        `condensed=False` to the low-rank one, and at these widths the two
+        return the same block-1 configuration. Before the rule, the multiplier
+        arm took `pc_type: none` at every width.
+        """
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=condensed, n_real=n_real)
+        assert p["dtn_fieldsplit_1_pc_type"] == "python"
+        assert p["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+
+    @pytest.mark.parametrize("n_real", REFUSED)
+    @pytest.mark.parametrize("condensed", (True, False))
+    def test_a_wide_or_empty_block_is_left_unpreconditioned(
+            self, n_real, condensed):
+        """Above the limit the build costs more than it removes."""
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=condensed, n_real=n_real)
+        assert p["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in p
+
+    @pytest.mark.parametrize("n_real", SELECTED + REFUSED)
+    def test_the_block_one_ksp_follows_the_choice_at_every_width(self, n_real):
+        """The choice and the KSP type must be written by the same code.
+
+        A class that decided at setup to form nothing would leave block 1
+        unsolved under `preonly`, so the decision cannot move into the
+        preconditioner. The exact complement runs under `preonly` with no
+        tolerance and no cap, because neither describes a solve that happens;
+        everything else keeps GMRES at 1e-4 under 200.
+        """
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=n_real)
+        if p["dtn_fieldsplit_1_pc_type"] == "python":
+            assert p["dtn_fieldsplit_1_ksp_type"] == "preonly"
+            assert "dtn_fieldsplit_1_ksp_rtol" not in p
+            assert "dtn_fieldsplit_1_ksp_max_it" not in p
+        else:
+            assert p["dtn_fieldsplit_1_ksp_type"] == "gmres"
+            assert p["dtn_fieldsplit_1_ksp_rtol"] == 1e-4
+            assert p["dtn_fieldsplit_1_ksp_max_it"] == 200
+
+    def test_the_limit_is_a_caller_argument_and_moves_the_boundary(self):
+        """16 is a choice with a margin, so a caller can move it.
+
+        4 rows win (88.2 s per step against 269, arm B4, job 179385036) and
+        about 76 lose, and no arm measures a width between 5 and 75. So the
+        limit has to be movable without a new release, and a test that pins it
+        at 16 alone would not show that it is.
+        """
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=16)["dtn_fieldsplit_1_pc_type"] == "python"
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=17)["dtn_fieldsplit_1_pc_type"] == "none"
+        # a caller who has measured a narrower break-even moves it down
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=5, dense_schur_max_rows=4)[
+                "dtn_fieldsplit_1_pc_type"] == "none"
+        # and one who has measured a wider one moves it up
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=True, n_real=76, dense_schur_max_rows=80)[
+                "dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+        # 0 switches the preset's choice off at every width
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=1, dense_schur_max_rows=0)[
+                "dtn_fieldsplit_1_pc_type"] == "none"
+
+    @pytest.mark.parametrize("n_real", SELECTED + REFUSED)
+    def test_a_named_preconditioner_is_taken_as_written_at_every_width(
+            self, n_real):
+        """The rule is the sentinel's, so it never overrides a caller."""
+        named = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=n_real,
+            multiplier_pc="gadopt.DtNMultiplierDiagPC")
+        assert named["dtn_fieldsplit_1_pc_python_type"] == \
+            "gadopt.DtNMultiplierDiagPC"
+        off = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=n_real, multiplier_pc="none")
+        assert off["dtn_fieldsplit_1_pc_type"] == "none"
+
+    def test_the_cache_wins_over_a_narrow_block(self):
+        """Under `ainvb` block 1 is never entered, at any width.
+
+        The cached apply solves block 1 with its own dense factors, so a
+        preconditioner named for that block would be built, configured and
+        never applied. The width is tested after `ainvb` for exactly this
+        reason.
+        """
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=4, ainvb=True)
+        assert p["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in p
+        assert p["dtn_fieldsplit_1_ksp_type"] == "preonly"
+        # and a named preconditioner beside it is still refused, width or no
+        with pytest.raises(ValueError, match="ainvb=True"):
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, n_real=4, ainvb=True, multiplier_pc=DENSE_PC)
+        # The order of the two cases is observable only here. The block-1
+        # dictionary is written from `ainvb` whichever branch chose `"none"`,
+        # so a width tested FIRST would select the dense complement, and the
+        # `block0_rtol` refusal would then fire for a class that is never
+        # applied. A loose tolerance under `ainvb` is the caller's business.
+        loose = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=4, ainvb=True, block0_rtol=1e-2)
+        assert loose[BLOCK0_PREFIX[False] + "ksp_rtol"] == 1e-2
+        assert loose["dtn_fieldsplit_1_pc_type"] == "none"
+
+    def test_a_loose_block_zero_tolerance_is_refused_where_the_rule_selects(
+            self):
+        """The columns of the complement are block-0 solves.
+
+        At 1e-2 the dense arm stagnates: 642 non-convergent block-0 calls and a
+        wall worse than no block-1 preconditioner at all (Gadi job 176078939).
+        The refusal is scoped to the preset's own choice, and the rule on the
+        width is one of the preset's choices.
+        """
+        with pytest.raises(ValueError, match="block0_rtol"):
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, n_real=4, block0_rtol=1e-2)
+        # the multiplier arm now reaches the same refusal, because the rule
+        # selects the class there at a narrow width
+        with pytest.raises(ValueError, match="block0_rtol"):
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=True, n_real=4, block0_rtol=1e-2)
+        # above the limit nothing is selected, so the tolerance is the
+        # caller's business
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=True, n_real=76, block0_rtol=1e-2)[
+                "dtn_fieldsplit_1_pc_type"] == "none"
+        # and a named class at a refused width is the caller's decision
+        assert selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=4, block0_rtol=1e-2,
+            multiplier_pc=DENSE_PC)[
+                "dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+
+    @pytest.mark.parametrize("condensed", (True, False))
+    def test_no_count_keeps_the_choice_by_representation(self, condensed):
+        """Every caller that passes no count keeps its whole dictionary.
+
+        This is the compatibility half of the change: the fallback is the rule
+        that shipped at `c24685ac`, so the 40 call sites in `tests/` and
+        `demos/` that build the dictionary themselves are untouched.
+        """
+        p = selfgrav_dtn_iterative_solver_parameters(condensed=condensed)
+        expected = "none" if condensed else "python"
+        assert p["dtn_fieldsplit_1_pc_type"] == expected
+        assert p == selfgrav_dtn_iterative_solver_parameters(
+            condensed=condensed, n_real=None)
+
+    def test_the_defaults_write_the_same_keys_they_wrote_at_c24685ac(self):
+        """Adding two arguments must add no key and drop none.
+
+        The five preset defaults the 2026-09-20 campaign selected are pinned by
+        value in `TestItChangesNoDefault`; this pins the shape of the whole
+        dictionary around them.
+        """
+        assert tuple(sorted(
+            selfgrav_dtn_iterative_solver_parameters())) == KEYS_AT_C24685AC
+        assert len(KEYS_AT_C24685AC) == 51
+
+    def test_a_negative_count_or_limit_is_refused(self):
+        """A count comes from `len(layout.real_fields)` and cannot be negative.
+
+        A negative value means whatever computed it has a bug, and silently
+        taking the `"none"` branch would hide that.
+        """
+        with pytest.raises(ValueError, match="n_real"):
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, n_real=-1)
+        with pytest.raises(ValueError, match="dense_schur_max_rows"):
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, n_real=4, dense_schur_max_rows=-1)

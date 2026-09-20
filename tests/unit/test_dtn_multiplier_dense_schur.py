@@ -39,6 +39,7 @@ from gadopt import (
     SelfGravitatingGIASolver,
     self_gravitating_gia_space,
 )
+from gadopt.preconditioners import _DenseLU
 from gadopt.gia_gravity import (
     FluidCore,
     OMEGA_SQ_EARTH,
@@ -532,3 +533,175 @@ def test_T7_parallel_build_keys_on_global_size(meshes, fluid_core):
     other = comm.bcast(ctx._S.copy(), root=1)
     rel = np.linalg.norm(ctx._S - other) / np.linalg.norm(ctx._S)
     assert rel < PARITY_FLOOR, f"S differs across ranks by {rel:.3e}"
+
+
+# ---------------------------------------------------------------------------
+# The scaled dense factorisation, `gadopt.preconditioners._DenseLU`.
+#
+# These two are the exact `Real`-block Schur complements the sea-level branch
+# saved in `NOTES/frame3d/` of the `sghelichkhani/sea-level` worktree, on
+# 2026-09-18: `cond_block1-lr-cap_S.npy`, the low-rank cap arm with the frame
+# on, and `cond_block1-lr-sl_S.npy`, the same with the sea-level row added.
+# They are embedded as literals because a test in this repository cannot read
+# another worktree's `NOTES/`, and because this branch cannot build a 5-row
+# block at all: it has no centre-of-mass row and no sea-level row, so its `n`
+# takes the values 1, 4 and about 76 only.
+#
+# Their rows measure different physical things at different scales -- a core
+# pressure against three rotation rows against a sea-level shift -- which is
+# the whole reason the factorisation scales the array by its own diagonal.
+# ---------------------------------------------------------------------------
+SAVED_COMPLEMENT_CAP = np.array([
+    [-2.91831147659889716e+01, -3.47603115811944008e+00,
+     -3.53325723344460130e+00, -1.05414416396342858e+00],
+    [2.12640184260603604e-01, -8.40316249301178614e+05,
+     5.96223567070399986e+03, -4.46132549162621581e+03],
+    [-4.48395639935665891e-01, 5.95751481456575766e+03,
+     -8.28900919284902862e+05, 3.42109671244343645e+03],
+    [6.73769487912463383e-02, -4.45047842248389861e+03,
+     3.42070632531966248e+03, -8.20771594843685161e+05],
+])
+
+SAVED_COMPLEMENT_SEA_LEVEL = np.array([
+    [-3.13236114869367483e+01, -3.53295923054429295e+00,
+     -3.77751513522525784e+00, -1.21314085266567417e+00,
+     -1.44682547471877965e+00],
+    [1.74318151128364440e+00, -8.40315015228123637e+05,
+     5.96398467817361598e+03, -4.46321945661501104e+03,
+     3.34416905102248085e-01],
+    [-1.70701537491730226e+00, 5.95583423489545748e+03,
+     -8.28903770601395518e+05, 3.42093270515404765e+03,
+     -3.02228589414197280e-01],
+    [-2.71252644023900147e-01, -4.45180713147611641e+03,
+     3.41671492740287385e+03, -8.20770764378747321e+05,
+     -7.31674933188322940e-02],
+    [-1.44681966185083066e+00, -3.83889597430613350e-02,
+     -1.64252928313302848e-01, -1.07434554555380840e-01,
+     -9.77961724107316299e-01],
+])
+
+#: The two saved complements, with the names the assertions use.
+SAVED_COMPLEMENTS = (("cap", SAVED_COMPLEMENT_CAP),
+                     ("sea level", SAVED_COMPLEMENT_SEA_LEVEL))
+
+#: `numpy.linalg.cond` of each array as it stands, and of the same array after
+#: the symmetric diagonal scaling. Measured 2026-09-20. The raw numbers are the
+#: spread of the row scales; the scaled ones describe how the rows couple.
+SAVED_CONDITION_NUMBERS = {
+    "cap": (2.8925e4, 1.0187),
+    "sea level": (9.2850e5, 1.7079),
+}
+
+
+class TestTheDenseFactorisationScalesByItsOwnDiagonal:
+    """`_DenseLU` factors `D^-1 S D^-1`, and solves the original system.
+
+    With `d = sqrt(abs(diag(S)))` and `D = diag(d)` the array that is factored
+    is `T = D^-1 S D^-1`, whose diagonal is plus or minus one. `S = D T D`, so
+    a solve is three steps, and `D` is symmetric, so the transposed solve is
+    the same three steps with the transposed factors. Nothing about the
+    original system changes; what changes is the condition number the class
+    reports, which now measures the coupling between the `Real` rows instead of
+    the spread of their physical scales.
+
+    FAILS IF the scaling is dropped, applied on one side only, or left on the
+    returned solution.
+    """
+
+    @pytest.mark.parametrize("name, S", SAVED_COMPLEMENTS)
+    def test_it_solves_the_original_system_to_machine_precision(self, name, S):
+        """The scaling must be invisible from outside.
+
+        CHECK: against `numpy.linalg.solve` on the RAW array, which knows
+        nothing about the scaling. Floor 1e-12 relative, far above the 1e-15
+        these actually reach and far below the 1e-2 that dropping one of the
+        two divisions by `d` would produce on a block whose row scales span
+        five orders of magnitude.
+        """
+        n = S.shape[0]
+        factors = _DenseLU(S, f"{name} complement")
+        rhs = np.arange(1.0, n + 1.0)
+        x = factors.solve(rhs)
+        assert np.allclose(x, np.linalg.solve(S, rhs), rtol=1e-12), (
+            f"the {name} complement's solve does not solve the raw system")
+
+    @pytest.mark.parametrize("name, S", SAVED_COMPLEMENTS)
+    def test_the_transposed_solve_uses_the_same_factors_and_is_right(
+            self, name, S):
+        """`S^T = D T^T D`, because `D` is diagonal and so symmetric.
+
+        The transposed solve exists for the adjoint of the cached apply, so it
+        has to be as exact as the forward one.
+        """
+        n = S.shape[0]
+        factors = _DenseLU(S, f"{name} complement")
+        rhs = np.arange(1.0, n + 1.0)
+        x = factors.solve_transpose(rhs)
+        assert np.allclose(x, np.linalg.solve(S.T, rhs), rtol=1e-12), (
+            f"the {name} complement's transposed solve is wrong")
+
+    @pytest.mark.parametrize("name, S", SAVED_COMPLEMENTS)
+    def test_the_reported_condition_number_is_the_scaled_one(self, name, S):
+        """This is what the change is for.
+
+        The raw condition number of the low-rank block IS the spread of the row
+        scales -- 2.89e4 at 4 rows and 9.29e5 at 5 -- so two arms holding
+        different kinds of row cannot be compared by it. After the scaling both
+        are near 1 and the number describes the coupling.
+        """
+        raw, scaled = SAVED_CONDITION_NUMBERS[name]
+        factors = _DenseLU(S, f"{name} complement")
+        assert factors.scaled, "the saved complements have nonzero diagonals"
+        assert np.isclose(np.linalg.cond(S), raw, rtol=1e-3)
+        assert np.isclose(factors.condition_number, scaled, rtol=1e-3)
+        assert factors.condition_number < np.linalg.cond(S) / 1e3
+
+    def test_a_zero_diagonal_refuses_the_scaling_and_factors_the_raw_array(
+            self):
+        """A row with a zero diagonal has no known scale.
+
+        The scaling is refused as a whole in that case, so the class falls back
+        to the raw array and still solves it. The exchange matrix below is
+        regular with a zero diagonal, which is exactly that case.
+        """
+        S = np.array([[0.0, 1.0], [1.0, 0.0]])
+        factors = _DenseLU(S, "zero-diagonal block")
+        assert not factors.scaled
+        rhs = np.array([1.0, 2.0])
+        assert np.allclose(factors.solve(rhs), np.linalg.solve(S, rhs))
+        assert np.allclose(factors.solve_transpose(rhs),
+                           np.linalg.solve(S.T, rhs))
+        assert factors.condition_number == pytest.approx(np.linalg.cond(S))
+
+    def test_a_singular_block_still_raises_the_named_error(self):
+        """The zero-pivot refusal must survive the scaling.
+
+        A diagonal scaling by strictly positive numbers cannot turn a singular
+        matrix into a regular one -- `det T = det S / prod(d)^2` -- so the test
+        detects the same blocks it detected before, and the message still names
+        the block so that a singular one identifies itself in the log.
+        """
+        with pytest.raises(ValueError, match="is singular"):
+            _DenseLU(np.array([[1.0, 2.0], [2.0, 4.0]]), "singular block")
+        # and a singular block that ALSO has a zero diagonal, which is the
+        # path where the scaling is refused and the raw array is factored
+        with pytest.raises(ValueError, match="is singular"):
+            _DenseLU(np.array([[0.0, 0.0], [0.0, 1.0]]), "singular block")
+
+    def test_a_negative_diagonal_is_scaled_by_its_magnitude(self):
+        """Which is why `d` is the square root of the ABSOLUTE diagonal.
+
+        A complement row may carry a negative diagonal, and the scale of that
+        row is still its magnitude. Without the absolute value `d` would be
+        complex and the factorisation would fail on every arm here, because
+        these complements are negative definite on their mechanics rows.
+        """
+        S = np.diag([-4.0, -1.0e8])
+        factors = _DenseLU(S, "negative-diagonal block")
+        assert factors.scaled
+        rhs = np.array([1.0, 1.0])
+        assert np.allclose(factors.solve(rhs), np.linalg.solve(S, rhs))
+        # the raw array's condition number is the ratio of the two scales, and
+        # the scaled one is 1 because the rows do not couple at all
+        assert np.isclose(np.linalg.cond(S), 2.5e7, rtol=1e-6)
+        assert np.isclose(factors.condition_number, 1.0, rtol=1e-12)

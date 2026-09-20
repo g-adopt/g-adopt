@@ -523,6 +523,8 @@ def selfgrav_dtn_iterative_solver_parameters(
     block0: str = "condensed",
     dtn_representation: str | None = None,
     ainvb: bool = False,
+    n_real: int | None = None,
+    dense_schur_max_rows: int = 16,
 ) -> dict:
     r"""The 3-D configuration that works, and the one the measurements select.
 
@@ -699,10 +701,54 @@ def selfgrav_dtn_iterative_solver_parameters(
         Newtonian one. This preset names `snes_atol` (1e-15) and so overrides
         it; `selfgrav_dtn_schur_solver_parameters` does not name the key and so
         inherits it.
+      n_real: the number of `Real` rows in the mixed space, which a caller
+        takes as `len(layout.real_fields)`. When it is given, the sentinel
+        `multiplier_pc=None` chooses the block-1 preconditioner from this width
+        and not from the name of the DtN representation; see
+        `dense_schur_max_rows` for the limit and for what is measured. When it
+        is `None`, the default, the choice is made by `dtn_representation`
+        exactly as it always was, so **every caller that passes no count keeps
+        its dictionary**.
+
+        The width is the direct quantity and the name of the representation is
+        an indirect one. The cost of `gadopt.DtNMultiplierDenseSchurPC` is `n`
+        block-0 solves for each build, so in block-0 applications per step:
+
+            full  + Krylov on block 1 : 2*K + I1 + n*b
+            lower + preonly + dense   : K'      + n*b
+            ainvb                     : K       + n*b
+
+        with `K` the outer iteration count, `K'` the larger count that `lower`
+        pays, `I1` the block-1 iteration count and `b` the number of builds in
+        a step. `n` enters in one term only, and the dense complement pays for
+        itself while `n*b` stays below the block-1 iterations it removes, which
+        puts the break-even near `n = K`, at 3 to 12 outer iterations per step.
+        The name tracks `n` on this branch only because the two cases here are
+        1 or 4 rows on the low-rank representation and about 76 on the
+        multiplier one. They separate as soon as another kind of `Real` row
+        exists: `sghelichkhani/sea-level` adds three centre-of-mass rows and a
+        sea-level `Shift`, which make a low-rank block 5 or 8 rows wide and a
+        multiplier one 80 at L = 5.
+      dense_schur_max_rows: the widest `Real` block the preset will choose
+        `gadopt.DtNMultiplierDenseSchurPC` on when `n_real` is given. It has no
+        meaning without a count.
+
+        **What is measured.** 4 rows win: 88.2 s per step against 269 s with
+        block 1 unpreconditioned (arm B4 against arms B0 and C0, job
+        179385036, `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24). About
+        76 rows lose, because a build then costs more than a whole outer solve
+        and nobody has measured over how many steps that amortises. **No arm
+        measures a width between 5 and 75.** So the default 16 is a choice with
+        a margin above the widest measured win and not a measurement; the
+        argument exists so that a caller can move it without a new release. The
+        widths 5 and 8 will be measured on `sghelichkhani/sea-level` once it
+        rebases onto this tip, and that measurement is what sets the production
+        value.
       multiplier_pc: the preconditioner on the block-1 (`Real`) split, named
         as a `pc_python_type` string, or `"none"`. The default `None` is a
-        sentinel meaning "the preset chooses", and it chooses by the resolved
-        `dtn_representation` and by `ainvb`:
+        sentinel meaning "the preset chooses", and it chooses by `ainvb`, then
+        by `n_real` when a count was given, and otherwise by the resolved
+        `dtn_representation`:
 
         * `"gadopt.DtNMultiplierDenseSchurPC"` on the low-rank representation
           with `ainvb` off. The `Real` block is then 4 rows with rotation and
@@ -725,10 +771,17 @@ def selfgrav_dtn_iterative_solver_parameters(
           and a caller who wants it names it.
         * `"none"` under `ainvb`, because the cached apply solves block 1 with
           its own dense factors and a preconditioner there would be built,
-          configured and never applied.
+          configured and never applied. This case is tested first, so a narrow
+          `n_real` cannot override it.
 
-        A named string is taken as written on either representation, and
-        naming one together with `ainvb=True` is refused.
+        With `n_real` given, the first two of those three cases are replaced by
+        one rule on the width: `"gadopt.DtNMultiplierDenseSchurPC"` when the
+        block is between 1 and `dense_schur_max_rows` rows, `"none"` at every
+        other width, on either representation. A block of zero rows takes
+        `"none"`, because there is nothing for the class to form.
+
+        A named string is taken as written on either representation and at
+        every width, and naming one together with `ainvb=True` is refused.
 
         **The sentinel refuses the dense complement at a loose block-0
         tolerance.** When the preset would choose it and `block0_rtol` is
@@ -885,11 +938,48 @@ def selfgrav_dtn_iterative_solver_parameters(
     # how many steps that amortises. Under `ainvb` the cached apply solves
     # block 1 with its own factors, so a preconditioner there would never be
     # applied.
+    #
+    # The name of the representation is an INDIRECT test. The direct quantity
+    # is `n`, the width of the `Real` block, because the cost of the class is
+    # `n` block-0 solves for each build and `n` enters the cost in that one
+    # term only. The name tracks `n` on this branch because the two cases here
+    # are 1 or 4 rows on the low-rank representation and about 76 on the
+    # multiplier one, and the two separate as soon as another kind of `Real`
+    # row exists: the centre-of-mass rows and the sea-level `Shift` of
+    # `sghelichkhani/sea-level` make a low-rank block 5 or 8 rows wide. So a
+    # caller that knows its own width passes it and gets one rule that covers
+    # every combination of the switches; a caller that passes nothing keeps
+    # the choice by representation and so keeps its dictionary.
+    if n_real is not None and n_real < 0:
+        raise ValueError(
+            f"n_real={n_real!r} is negative. It is the number of `Real` rows "
+            "in the mixed space, which a caller normally takes as "
+            "len(layout.real_fields), so a negative value is a bug in "
+            "whatever computed it.")
+    if dense_schur_max_rows < 0:
+        raise ValueError(
+            f"dense_schur_max_rows={dense_schur_max_rows!r} is negative. It is "
+            "the widest `Real` block the preset will form the dense complement "
+            "on; pass 0 to switch that choice off entirely.")
     chosen_by_preset = multiplier_pc is None
     if multiplier_pc is None:
-        multiplier_pc = (_DENSE_MULTIPLIER_PC
-                         if dtn_representation == "lowrank" and not ainvb
-                         else "none")
+        if ainvb:
+            # First, and before the width is looked at: under `ainvb` the
+            # cached apply solves block 1 with its own dense factors, so the
+            # block-1 KSP is never entered and a preconditioner named for that
+            # block would be built, configured and never applied. That holds at
+            # every width.
+            multiplier_pc = "none"
+        elif n_real is not None:
+            # The rule on `n`. A block of zero rows has nothing to form, so it
+            # falls through to "none" with everything above the limit.
+            multiplier_pc = (_DENSE_MULTIPLIER_PC
+                             if 0 < n_real <= dense_schur_max_rows else "none")
+        else:
+            # No count given: the earlier rule, kept so that every caller which
+            # passes no count keeps exactly the dictionary it had.
+            multiplier_pc = (_DENSE_MULTIPLIER_PC
+                             if dtn_representation == "lowrank" else "none")
     # The refusal scopes to the preset's own choice, not to the caller's: the
     # columns of the dense complement come out of block-0 solves, so a loose
     # block-0 tolerance makes the factored complement the complement of a
@@ -3923,9 +4013,26 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             # low-rank solver, which `gadopt.CondensedBlockPC` hands the
             # Python block `A_psipsi + B`, and GAMG refuses that inside
             # `PCSetUp` with a PETSc type error.
+            #
+            # The width of the `Real` block is passed as well, so that the
+            # block-1 choice is made on the quantity the cost depends on: a
+            # build of the dense complement is one block-0 solve per row. The
+            # layout is the one place that composition is written down, so
+            # `len(real_fields)` covers every combination of the switches -
+            # core pressure, rotation, DtN multipliers, and the centre-of-mass
+            # and sea-level rows that `sghelichkhani/sea-level` adds - without
+            # this call having to know which of them are on.
+            #
+            # This moves one case that the earlier rule decided by name: a
+            # multiplier run whose block is at most `dense_schur_max_rows` wide
+            # now gets the dense complement where it got `pc_type: none`. That
+            # is a low degree only. The production arms do not move: low-rank
+            # is 1 or 4 rows and already had the class, and the multiplier arm
+            # at L = 5 is about 76 rows and keeps `"none"`.
             self.add_to_solver_config(selfgrav_dtn_iterative_solver_parameters(
                 condensed=self.layout.condensed,
-                dtn_representation=self.dtn_representation))
+                dtn_representation=self.dtn_representation,
+                n_real=len(self.layout.real_fields)))
         if solver_extras:
             self.add_to_solver_config(solver_extras)
         # The extras are the last thing that can name `snes_type`, so the
