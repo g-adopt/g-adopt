@@ -100,9 +100,16 @@ DISCRETISATION AND SOLVER
     Two settings differ. The DtN condition uses the low-rank representation by
     default, because the multiplier path costs one block-0 solve per
     multiplier in the dense Schur complement and does not fit one node at
-    L = 20. And block 1 carries `gadopt.DtNMultiplierDenseSchurPC`: with the
-    frame rows and the `Shift` row present, `pc_type none` there needed 66
-    block-0 solves against 9 on the 2-D annulus.
+    L = 20. And block 1 is left to the preset, which chooses by the width of
+    the `Real` block: 5 rows here (core pressure, three centre-of-mass rows,
+    the sea-level `Shift`), and at that width the choice is the cached apply
+    of `gadopt.DtNTwoBlockSchurPC` under `schur_fact_type full`. Something
+    has to own that block: with the frame rows and the `Shift` row present,
+    `pc_type none` needed 66 block-0 solves against 9 on the 2-D annulus.
+    `--multiplier-pc` names a class instead, which keeps the older delegating
+    path under `schur_fact_type lower`. Every job before 2026-09-21 ran that
+    path, so an arm that compares its counts against one of those jobs must
+    name the class.
 
     Cases B and C have a fixed coastline, so the sea-level rows are linear in
     the unknowns and the driver runs `snes_type ksponly`. Case D has live
@@ -720,11 +727,18 @@ def build_solver(parent, mantle, case, args, dt, t_kyr):
     # linear solve is exact to the outer tolerance. With live masks (case D)
     # the masks follow the solution and Newton is the method.
     snes_type = "ksponly" if case.fixed_ocean else "newtonls"
+    # `n_real` is what the preset selects the block-1 treatment by when
+    # `multiplier_pc` is left at the sentinel `None`: the width of the `Real`
+    # block, not the name of the DtN representation. Here that block holds the
+    # core pressure, the three centre-of-mass rows and the sea-level `Shift`,
+    # and it gains the three rotation rows when polar motion is on, so the
+    # count has to come from the layout and not from a constant in this file.
     solver_parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=layout.condensed, outer_rtol=args.outer_rtol,
         block0_rtol=args.block0_rtol, block0_max_it=args.block0_max_it,
         snes_type=snes_type, multiplier_pc=args.multiplier_pc,
-        dtn_representation=layout.dtn_representation)
+        dtn_representation=layout.dtn_representation,
+        n_real=len(layout.real_fields))
     # The two rebuild rules of W4. They are PETSc options of
     # `LowRankPotentialPC` and `DtNMultiplierDenseSchurPC`, so they are set
     # only when the caller names one and the default behaviour of those
@@ -741,9 +755,21 @@ def build_solver(parent, mantle, case, args, dt, t_kyr):
         dtn_representation=args.dtn_representation,
         nullspace=nullspace, transpose_nullspace=nullspace,
         solver_parameters=solver_parameters)
+    # The resolved block-1 route, read back out of the dictionary the preset
+    # returned, so that the run records which of the three routes it took
+    # rather than the sentinel the caller passed in. `dtn_schur_ainvb` is the
+    # cached apply of `gadopt.DtNTwoBlockSchurPC`, which owns block 1 itself.
+    if solver_parameters.get("dtn_schur_ainvb"):
+        block1 = "gadopt.DtNTwoBlockSchurPC cached apply (ainvb)"
+    else:
+        block1 = solver_parameters.get("dtn_fieldsplit_1_pc_python_type",
+                                       "none")
     pieces = {"SL_init": SL_init, "slope": slope, "ice": ice,
               "control": control, "g_surface": g_surface,
-              "sea_level": sea_level, "snes_type": snes_type}
+              "sea_level": sea_level, "snes_type": snes_type,
+              "n_real": len(layout.real_fields), "block1": block1,
+              "schur_fact_type":
+                  solver_parameters["dtn_pc_fieldsplit_schur_fact_type"]}
     return solver, z, layout, pieces
 
 
@@ -1828,9 +1854,15 @@ def parse_args(argv=None):
     p.add_argument("--block0-max-it", type=int, default=200,
                    help="iteration cap of the mechanics-potential block "
                         "solve (the preset default is 200)")
-    p.add_argument("--multiplier-pc", default="gadopt.DtNMultiplierDenseSchurPC",
-                   help="the preconditioner of the Real block. Pass 'none' "
-                        "for the comparison of the smoke run.")
+    p.add_argument("--multiplier-pc", default=None,
+                   help="the preconditioner of the Real block. The default "
+                        "leaves the preset to choose it from the number of "
+                        "Real rows: at a narrow block that is the cached "
+                        "apply of gadopt.DtNTwoBlockSchurPC under "
+                        "schur_fact_type full, and nothing is put in the "
+                        "block-1 KSP. Naming a class here, or 'none', keeps "
+                        "the older delegating path under schur_fact_type "
+                        "lower.")
     p.add_argument("--lowrank-reuse-rtol", type=float, default=None,
                    help="W4: rebuild the low-rank columns only when the "
                         "potential block moved by more than this relative "
@@ -1915,7 +1947,8 @@ def main(argv=None):
     say(case.describe())
     say(f"  mesh {args.mesh}")
     say(f"  DtN {args.dtn_representation}, SphericalDtN(L={args.dtn_degree}), "
-        f"block-1 preconditioner {args.multiplier_pc}")
+        f"block-1 preconditioner "
+        f"{args.multiplier_pc if args.multiplier_pc is not None else 'chosen by the preset'}")
     say(f"  displacement CG{args.displacement_degree}, internal variables "
         f"DG{args.internal_variable_degree}, potential CG2, initial sea level "
         f"CG{args.sea_level_degree}, K/mu {args.bulk_shear_ratio:g}")
@@ -1982,6 +2015,8 @@ def main(argv=None):
         f"{layout.dtn_representation}, {len(layout.multipliers)} DtN "
         f"multipliers, frame fields {tuple(layout.centre_of_mass)}, Shift "
         f"field {layout.sea_level}, snes_type {pieces['snes_type']}")
+    say(f"  block 1: {pieces['n_real']} Real rows, preconditioner "
+        f"{pieces['block1']}, schur_fact_type {pieces['schur_fact_type']}")
     say(f"  unknowns: {z.function_space().dim()}")
     say(f"  g_surface: model {pieces['g_surface']:.9f} (non-dimensional), "
         f"{pieces['g_surface'] * refstate.G_BAR:.6f} m/s^2; case file "

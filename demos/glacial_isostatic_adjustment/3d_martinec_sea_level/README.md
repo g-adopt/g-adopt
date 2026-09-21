@@ -120,7 +120,7 @@ qsub -v CASE=B,STEPS=2,LABEL=B-smoke -l walltime=02:00:00 run_martinec.pbs
 | `--gia-mip` | `$GIA_MIP` or `~/Workplace/gia-mip` | the gia-mip checkout |
 | `--mesh` | the 78 km refined mesh | the gmsh file |
 | `--dtn-representation` | `lowrank` | the representation of the exterior DtN condition |
-| `--multiplier-pc` | `gadopt.DtNMultiplierDenseSchurPC` | the preconditioner of the `Real` block |
+| `--multiplier-pc` | chosen by the preset | the preconditioner of the `Real` block. The default lets `selfgrav_dtn_iterative_solver_parameters` choose from the number of `Real` rows: at the 5 rows of this benchmark it selects the cached apply of `gadopt.DtNTwoBlockSchurPC`. Naming a class or `none` keeps the older delegating path |
 | `--epochs` | per time scenario | the output times in kyr |
 | `--dt-yr`, `--ladder` | the ladder of the case | the time steps |
 | `--steps` | all | stop after this many steps |

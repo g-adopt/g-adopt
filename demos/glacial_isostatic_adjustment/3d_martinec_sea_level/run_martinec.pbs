@@ -61,8 +61,18 @@
 #                     the gia-mip checkout, for the case and load files. The
 #                     driver reads JSON only, so the checkout needs no install.
 #   REPRESENTATION=lowrank    the DtN representation
-#   MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC
-#                     the block-1 preconditioner; pass none for the comparison
+#   MULTIPLIER_PC=    the block-1 preconditioner. Empty is the default, and it
+#                     is not the same as naming a class: with no
+#                     `--multiplier-pc` the preset chooses from the number of
+#                     `Real` rows, which is 5 for this benchmark (core
+#                     pressure, three centre-of-mass rows, the sea-level
+#                     Shift), and at that width it selects the cached apply of
+#                     gadopt.DtNTwoBlockSchurPC under schur_fact_type full.
+#                     Name gadopt.DtNMultiplierDenseSchurPC, or none, to keep
+#                     the older delegating path under schur_fact_type lower,
+#                     which is what every job before 2026-09-21 ran. The
+#                     driver prints the route it resolved, on the `block 1:`
+#                     line after "solver built".
 #   LABEL=$CASE       the label of every output file
 #   OUTPUT=$PBS_O_WORKDIR
 #   STEPS=            stop after this many steps, for a smoke run
@@ -120,11 +130,17 @@
 # Job G2: case B on the production coarse mesh, to 10 kyr, on one node. The
 # references are the VEGA profiles and the matched radopt run. The setting is
 # the one G2-smoke measured as the cheapest of the four arms, the low-rank
-# representation with the dense Schur complement on block 1, and both are the
-# defaults of this script, so the line names only the case and the label.
+# representation with the dense Schur complement on block 1.
+#
+# CAUTION: the dense complement is no longer the default of this script. The
+# line below names it, so that it still runs the configuration the recorded
+# wall and service units were measured on. A line that leaves MULTIPLIER_PC
+# empty runs the cached apply under schur_fact_type full, which is a different
+# preconditioner and gives different counts.
 #
 #   qsub -N g2 -j oe -o martinec-g2.out -l walltime=24:00:00 \
-#        -v CASE=B,LABEL=g2 run_martinec.pbs
+#        -v CASE=B,LABEL=g2,MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC \
+#        run_martinec.pbs
 #
 # Job G2-K: the same run to 1 kyr with the bulk modulus at 1000 times the shear
 # modulus, against G2 at 1 kyr. `STEPS=28` stops the march at 1 kyr: the ladder
@@ -136,8 +152,13 @@
 # token and `--epochs 0 1` cannot go there at all.
 #
 #   qsub -N g2k -j oe -o martinec-g2k.out -l walltime=18:00:00 \
-#        -v CASE=B,STEPS=28,LABEL=g2k,EXTRA=--bulk-shear-ratio=1000 \
+#        -v CASE=B,STEPS=28,LABEL=g2k,EXTRA=--bulk-shear-ratio=1000,MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC \
 #        run_martinec.pbs
+#
+# MULTIPLIER_PC is named on that line for the same reason as on the G2 line:
+# the recorded 12 h 53 min and 2 679.33 SU were measured on the delegating
+# path. A repeat of G2-K on the default needs its own smoke line first, and
+# the reason is in the block-0 paragraph below.
 #
 # The walltime of the G2 line comes from arm 1 of G2-smoke (job 179341215, the
 # same mesh and the same 96 ranks on one node): 476 s for the elastic solve,
@@ -223,14 +244,17 @@
 # second line marches the 118 steps of the ladder, and it carries a dependency
 # on the first, so that it starts only after a clean smoke run.
 #
+# Both lines below ran before the block-1 default moved, so both name the
+# dense complement, and so does the g2r2 pair recorded beside them.
+#
 #   qsub -N g2r-smoke -j oe -o martinec-g2r-smoke.out \
 #        -l ncpus=208 -l mem=960GB -l walltime=03:00:00 \
-#        -v NNODES=2,CASE=B,STEPS=2,LABEL=g2r-smoke,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        -v NNODES=2,CASE=B,STEPS=2,LABEL=g2r-smoke,MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
 #        run_martinec.pbs
 #   qsub -N g2r -j oe -o martinec-g2r.out \
 #        -l ncpus=208 -l mem=960GB -l walltime=48:00:00 \
 #        -W depend=afterok:<the job id of the smoke line> \
-#        -v NNODES=2,CASE=B,LABEL=g2r,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        -v NNODES=2,CASE=B,LABEL=g2r,MULTIPLIER_PC=gadopt.DtNMultiplierDenseSchurPC,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
 #        run_martinec.pbs
 #
 # Submitted on 2026-09-20 as 179428772 (the smoke line) and 179428774 (the
@@ -441,7 +465,7 @@ cd "$D"
 : ${MESH:=../3d_spada_selfgrav/b2_coarse_ar7.msh}
 : ${GIA_MIP:=$W/../gia-mip}
 : ${REPRESENTATION:=lowrank}
-: ${MULTIPLIER_PC:=gadopt.DtNMultiplierDenseSchurPC}
+: ${MULTIPLIER_PC:=}
 : ${LABEL:=$CASE}
 : ${OUTPUT:=$D}
 : ${STEPS:=}
@@ -450,6 +474,15 @@ cd "$D"
 : ${EXTRA:=}
 
 # The optional flags, each empty unless its variable is set.
+# The block-1 preconditioner. Empty is the default and it is not the same as
+# naming a class: with no `--multiplier-pc` the preset chooses from the number
+# of `Real` rows, which is 5 here (core pressure, three centre-of-mass rows,
+# the sea-level Shift) and selects the cached apply of
+# gadopt.DtNTwoBlockSchurPC with schur_fact_type full. Naming a class or
+# "none" keeps the older delegating path under schur_fact_type lower, which
+# is what every job before 2026-09-21 ran.
+MULTIPLIER_PC_FLAG=
+[ -n "$MULTIPLIER_PC" ] && MULTIPLIER_PC_FLAG="--multiplier-pc $MULTIPLIER_PC"
 STEPS_FLAG=
 [ -n "$STEPS" ] && STEPS_FLAG="--steps $STEPS"
 RESTART_FLAG=
@@ -482,14 +515,14 @@ echo "=== mesh:   $MESH  md5 $(md5sum "$MESH" | cut -d' ' -f1) ==="
 echo "=== CASE=$CASE LABEL=$LABEL REPRESENTATION=$REPRESENTATION ==="
 # The block-1 preconditioner is the second variable of the smoke comparison,
 # so the banner names it beside the representation. The driver prints it too.
-echo "=== MULTIPLIER_PC=$MULTIPLIER_PC STEPS=${STEPS:-all} ==="
+echo "=== MULTIPLIER_PC=${MULTIPLIER_PC:-chosen by the preset} STEPS=${STEPS:-all} ==="
 echo "=== NNODES=$NNODES NRANK=$NRANK NTOTAL=$NTOTAL ==="
 echo "=== started $(date) on $(hostname) ==="
 
 # shellcheck disable=SC2086
 mpiexec -np $NTOTAL --map-by ppr:$NRANK:node python3 -u martinec_benchmark.py \
     --case $CASE --mesh $MESH --gia-mip $GIA_MIP \
-    --dtn-representation $REPRESENTATION --multiplier-pc $MULTIPLIER_PC \
+    --dtn-representation $REPRESENTATION $MULTIPLIER_PC_FLAG \
     --label $LABEL --output $OUTPUT \
     $STEPS_FLAG $RESTART_FLAG $EXTRA 2>&1
 RC=$?

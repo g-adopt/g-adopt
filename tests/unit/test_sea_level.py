@@ -52,8 +52,9 @@ saturates `B` in the same way.
 
 The tests that assert physics run on both DtN representations through the
 `representation` fixture: the multiplier path with the direct preset, and the
-low-rank path with the iterative preset and the dense Schur complement on the
-`Real` block (`solve_settings`). `TestRepresentationParity` compares the two
+low-rank path with the iterative preset, letting the preset choose block 1
+itself (`solve_settings`), which at this width is the cached apply of
+`gadopt.DtNTwoBlockSchurPC` under `schur_fact_type full`. `TestRepresentationParity` compares the two
 converged shoreline states. The layout tests of `TestLayout` that check the
 position of `Shift` and of the frame multipliers run on both representations,
 because the two spaces differ in their multiplier fields. The other structural
@@ -190,15 +191,30 @@ def solve_settings(representation):
     The multiplier path uses the direct preset with `TIGHT`, which needs two
     outer iterations per Newton step there.
 
-    The low-rank path uses the iterative preset on the full layout, with the
-    dense Schur complement on the `Real` block
-    (`gadopt.DtNMultiplierDenseSchurPC`). The direct preset also converges on
-    the low-rank path, but its LU factorisation of block 0 does not contain
-    the low-rank update `B`, so it needs 7 outer iterations per Newton step
-    against 2 on the multiplier path. The 2-D probe of
-    `NOTES/PLAN-LOWRANK-SEA-LEVEL.md` section 1 measured the iterative preset
-    with the dense complement at 147 block-0 applications for the shoreline
-    solve, against 233 with `pc_type none` on the `Real` block.
+    The low-rank path uses the iterative preset on the full layout and names
+    no block-1 preconditioner, so the preset chooses one. At the width of this
+    `Real` block that choice is the cached apply of
+    `gadopt.DtNTwoBlockSchurPC` under `schur_fact_type full`, which is the
+    configuration the Martinec driver runs in production. Naming a class here
+    would pin the test to a route production no longer takes, and it would
+    hide a change of the library default; leaving the key out lets the test
+    see whatever that default becomes.
+
+    The direct preset also converges on the low-rank path, but its LU
+    factorisation of block 0 does not contain the low-rank update `B`, so it
+    needs 7 outer iterations per Newton step against 2 on the multiplier path.
+
+    The delegating path under `schur_fact_type lower` does not converge here.
+    On 2026-09-21, after the rebase onto `bd414346`,
+    `TestFixedOcean::test_the_taylor_rate_with_ice_thickness_control` on the
+    low-rank arm ran the adjoint solve to the outer cap of 200 iterations
+    without converging, while the forward solve of the same configuration
+    converged. The cause is not settled.
+    `NOTES/team/rebase-2026-09-21/10-REVIEW.md` holds the hypothesis and the
+    experiment that would test it. The earlier measurement of that path, 147
+    block-0 applications for the shoreline solve against 233 with `pc_type
+    none` (`NOTES/PLAN-LOWRANK-SEA-LEVEL.md` section 1), was made before the
+    preset defaults moved and does not describe what runs today.
 
     The tolerances are those of `TIGHT`: the Newton tolerances are the same
     numbers, so the thresholds that the tests compute from `SNES_RTOL` and
@@ -217,7 +233,7 @@ def solve_settings(representation):
     if representation == "multiplier":
         return dict(solver_parameters="direct", solver_parameters_extra=TIGHT)
     parameters = selfgrav_dtn_iterative_solver_parameters(
-        condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+        condensed=False,
         outer_rtol=TIGHT["ksp_rtol"], block0_rtol=1e-4,
         snes_rtol=SNES_RTOL, dtn_representation="lowrank")
     # The preset sets `snes_atol` itself. It is set here again from the
