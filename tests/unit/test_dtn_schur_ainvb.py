@@ -61,6 +61,7 @@ from gadopt.gia_gravity import (  # noqa: E402
     FluidCore, OMEGA_SQ_EARTH, SelfGravitatingGIASolver,
     self_gravitating_gia_space, selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_schur_solver_parameters)
+from gadopt.preconditioners import _SchurAinvBCache  # noqa: E402
 from gadopt.stokes_integrators import newton_stokes_solver_parameters  # noqa: E402
 
 
@@ -95,6 +96,17 @@ PARITY_FLOOR = 1e-10
 #: MEASURED on the exact arm: 8.6e-4 relative. The gate is 1e-5, two orders
 #: below what is measured and ten orders above the 4e-15 round-off floor.
 TRANSPOSE_MARGIN = 1e-5
+
+#: How close the two `dense_schur_rebuild` arms must land on one another.
+#: The rule chooses only how often the complement is rebuilt, and a
+#: preconditioner changes no residual, so both arms solve the same nonlinear
+#: system to the same SNES tolerance and differ only by where inside that
+#: tolerance each one stopped. Dimensionless, a ratio of 2-norms over the
+#: whole mixed state. MEASURED on the power-law arm of this file: 6.8e-9,
+#: with 3 Newton iterations, 1 build under `per_solve` and 3 under `always`.
+#: The floor is 1e-6, two orders above it, because the quantity is the scatter
+#: of two Newton solves and not a round-off identity.
+STATE_FLOOR = 1e-6
 
 
 # ---------------------------------------------------------------------------
@@ -983,6 +995,114 @@ def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
     assert cache.build_count == 2
 
 
+# ---------------------------------------------------------------------------
+# B2. The option `dense_schur_rebuild` on the cached apply
+#
+# `_SchurAinvBCache` owns the complement on every route where the `Real` block
+# is narrow, which is the route the sea-level preset takes at 5 `Real` rows.
+# The option that chooses the rebuild rule has to reach it there, or a
+# campaign arm that writes the key measures the default and says nothing about
+# it. The rule itself is a COST decision and never a correctness one: the
+# complement is a preconditioner, so both values must land on the same state.
+# ---------------------------------------------------------------------------
+def power_law_arm(meshes, rebuild_rule):
+    """One power-law solve of the cached arm under a named rebuild rule.
+
+    A power law is what makes the two rules differ at all. It publishes
+    `operator_version = None`, so `per_solve` falls back to `gia_solve_index`
+    and builds once per nonlinear solve, while Newton takes several iterations
+    and so several `update` calls, which is what `always` counts.
+
+    The key is written at the TOP LEVEL of the solver parameters dictionary,
+    not under the preconditioner's own prefix, because that is how a driver
+    writes it and `_option_along_the_prefix_chain` is what has to find it
+    there. It is written in both arms, never left unset in one, so that
+    neither arm can read a key the other left in the global options database.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      rebuild_rule: `"per_solve"` or `"always"`.
+
+    Returns:
+      `(solver, z)` after one solve.
+    """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    params["dense_schur_rebuild"] = rebuild_rule
+    solver, z, _ = tb.build(
+        meshes, "lowrank", solver_parameters=params,
+        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
+    solver.solve()
+    return solver, z
+
+
+@pytest.fixture(scope="module")
+def rebuild_rule_arms(meshes):
+    """One power-law solve under each value of `dense_schur_rebuild`."""
+    out = {}
+    for rule in ("per_solve", "always"):
+        solver, z = power_law_arm(meshes, rule)
+        out[rule] = {
+            "solver": solver,
+            "state": z.copy(deepcopy=True),
+            "builds": int(ainvb_cache(outer_pc(solver)).build_count),
+            "newton": solver.solver.snes.getIterationNumber(),
+        }
+    return out
+
+
+def test_always_rebuilds_more_often_than_per_solve(rebuild_rule_arms):
+    """`always` builds the complement more than once in one nonlinear solve.
+
+    This is the whole point of the option on this class. `per_solve` freezes
+    the complement at the state the solve starts from; `always` rebuilds it at
+    every `update`, which is once per Newton iteration and per outer linear
+    solve, and that is what a moving coastline needs, where the ocean masks
+    follow the unknowns and sit in every block of the `Real` row and column.
+
+    CATCHES the defect this test was written for: the option reaching
+    `DtNMultiplierDenseSchurPC` alone and being inert on the class the preset
+    actually puts on a narrow `Real` block, in which case both arms report the
+    same number of builds.
+    """
+    per_solve = rebuild_rule_arms["per_solve"]
+    always = rebuild_rule_arms["always"]
+    # Vacuity guard: with a single Newton iteration the two rules describe the
+    # same number of updates and the comparison would prove nothing.
+    assert always["newton"] >= 2, (
+        "the test is vacuous unless Newton took more than one iteration")
+    assert per_solve["builds"] == 1, (
+        f"per_solve built the complement {per_solve['builds']} times in one "
+        "nonlinear solve; the rule is one build per solve on a power law")
+    assert always["builds"] > per_solve["builds"], (
+        f"always built the complement {always['builds']} times and per_solve "
+        f"{per_solve['builds']}: the option is inert on this class")
+
+
+def test_both_rebuild_rules_reach_the_same_state(rebuild_rule_arms):
+    """The rule is a cost decision, so the two arms converge to one state.
+
+    A complement rebuilt at every update and one frozen at the start of the
+    solve are two preconditioners of the same system. Neither changes a
+    residual, so the two arms must agree to the nonlinear tolerance.
+
+    CATCHES a rebuild under `always` that runs on the wrong operator -- one
+    that adopted the staleness markers of a build it did not perform, or that
+    rebuilt from stale sub-block handles -- which would show up as a solve
+    that converges somewhere else or not at all.
+    FLOOR: `STATE_FLOOR`, see its definition.
+    """
+    per_solve = rebuild_rule_arms["per_solve"]["state"]
+    always = rebuild_rule_arms["always"]["state"]
+    reference = np.concatenate(
+        [np.asarray(sub.dat.data_ro).ravel() for sub in per_solve.subfunctions])
+    measured = np.concatenate(
+        [np.asarray(sub.dat.data_ro).ravel() for sub in always.subfunctions])
+    scale = max(np.linalg.norm(reference), 1e-300)
+    relative = np.linalg.norm(measured - reference) / scale
+    assert relative < STATE_FLOOR, (
+        f"the two rebuild rules reached states {relative:.3e} apart relative")
+
+
 # ===========================================================================
 # C. What the configuration refuses, and how loudly
 # ===========================================================================
@@ -1100,6 +1220,48 @@ def refusal_stderr(check):
         f"(exit status {finished.returncode}; a negative status is a signal)"
         f"\n--- child stderr ---\n{finished.stderr[-3000:]}")
     return finished.stderr
+
+
+def test_an_unknown_rebuild_rule_is_refused_by_name(capsys):
+    """A misspelled `dense_schur_rebuild` value raises a NAMED `ValueError`.
+
+    The option decides how often the complement is rebuilt: `per_solve`, the
+    rule the class has always had, or `always`, which rebuilds at every
+    update. A wrong value that fell back to the default would make a campaign
+    arm report the cost of a rule it did not run, and nothing else in the log
+    would say so.
+
+    **No solve, and no child process.** The value is read as the FIRST action
+    of `_SchurAinvBCache.__init__`, before the constructor touches the
+    fieldsplit or spends a block-0 solve, so the refusal can be provoked with
+    a bare PETSc `PC` and the three arguments the check never reaches. This is
+    the pattern of `test_dtn_multiplier_dense_schur._pc_on_dense`: a refusal
+    raised inside a preconditioner callback during a solve takes the whole
+    pytest process down with a segmentation violation, for the reason the
+    section comment above gives, while this one is an ordinary Python
+    exception on an ordinary Python call.
+
+    CATCHES: a wrong value accepted and silently read as `per_solve`; a
+    refusal whose text never reaches the log; a check moved to after the
+    build, where it would cost `n` block-0 solves before refusing.
+    """
+    options = PETSc.Options()
+    # Written at the global prefix, which is the last link of the chain
+    # `_option_along_the_prefix_chain` searches, so the bare PC below finds it.
+    options["dense_schur_rebuild"] = "per_step"
+    try:
+        pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
+        # Constructed without running `__init__`, so that the call below is the
+        # constructor itself and not a second entry point that could drift from
+        # it. `inner`, `is0` and `is1` are never reached.
+        cache = _SchurAinvBCache.__new__(_SchurAinvBCache)
+        with pytest.raises(ValueError, match="dense_schur_rebuild"):
+            cache.__init__(pc, None, None, None)
+        assert "dense_schur_rebuild" in capsys.readouterr().err, (
+            "the refusal never reached stderr, so a log reader would see only "
+            "the PETSc error code that replaces it")
+    finally:
+        del options["dense_schur_rebuild"]
 
 
 def test_a_partial_factorisation_is_refused():

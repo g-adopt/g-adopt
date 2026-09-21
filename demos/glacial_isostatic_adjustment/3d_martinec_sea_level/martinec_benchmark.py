@@ -836,7 +836,8 @@ def preconditioner_counters(solver):
 
     `CondensedBlockPC` counts its block assemblies and its eliminations (one
     per block-0 application); `LowRankPotentialPC` counts its column builds;
-    `DtNMultiplierDenseSchurPC` counts its dense-complement builds.
+    whichever class holds the exact complement of the `Real` block counts its
+    builds, and `dense_builds` reports that count under either class.
 
     **The four counters are cumulative.** Each one counts from the build of
     its preconditioner and no run resets it, so the `TIMESTEP` line prints a
@@ -880,10 +881,27 @@ def preconditioner_counters(solver):
         if len(splits) > 1:
             out["columns"] = getattr(python_context(splits[1].getPC()),
                                      "column_builds", None)
-    # Block 1 runs `DtNMultiplierDenseSchurPC` or `pc_type none`; only the
-    # first has a build counter.
-    out["dense_builds"] = getattr(python_context(block1_ksp.getPC()),
-                                  "build_count", None)
+    # Two classes can hold the factored complement of the `Real` block.
+    # `DtNMultiplierDenseSchurPC` sits on block 1 of the fieldsplit, which is
+    # what an arm that passes `ainvb=False` or names the class gets. The
+    # preset itself selects the cached apply of `DtNTwoBlockSchurPC` wherever
+    # it forms the exact complement at all, and at the 5 `Real` rows of this
+    # benchmark it does. That cache lives on the OUTER preconditioner and
+    # leaves block 1 at `pc_type none`, so the block-1 query below finds
+    # nothing there. Reading the outer cache first is what makes a
+    # `dense_schur_rebuild` arm report the builds it actually paid for;
+    # without it every row of such a run prints `-`.
+    #
+    # The field keeps the name `dense_builds` under both classes, because the
+    # counted thing is the same -- one exact complement of the `Real` block,
+    # `n` block-0 applications -- and the notes and the scripts that read the
+    # `TIMESTEP` lines key on that name.
+    cached_apply = getattr(outer, "ainvb", None)
+    if cached_apply is not None:
+        out["dense_builds"] = getattr(cached_apply, "build_count", None)
+    else:
+        out["dense_builds"] = getattr(python_context(block1_ksp.getPC()),
+                                      "build_count", None)
     return out
 
 

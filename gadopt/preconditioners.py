@@ -475,6 +475,52 @@ def _option_along_the_prefix_chain(pc, name, reader, default):
     return default
 
 
+def _rebuild_rule_option(pc):
+    """The value of `dense_schur_rebuild` for a cache of the `Real` block.
+
+    Two classes hold a factored complement of the `Real` block --
+    `DtNMultiplierDenseSchurPC`, which sits on block 1 of the fieldsplit, and
+    `_SchurAinvBCache`, which owns the whole apply on the outer PC -- and both
+    must answer the same option with the same two values. Otherwise a campaign
+    arm that writes the key measures a rule on one route and the default on
+    the other. One reader, called by both, is what keeps them together.
+    `selfgrav_dtn_iterative_solver_parameters` selects the cached apply
+    wherever it forms the exact complement at all, and a caller reaches the
+    block-1 class by passing `ainvb=False` or by naming it.
+
+    The option is read along the whole chain of option prefixes above this
+    preconditioner, so a driver can write `dense_schur_rebuild` at the top
+    level of its solver parameters dictionary and reach the class wherever the
+    nest puts it.
+
+    The lookup reads this rank's own options database, and every build it
+    gates is collective, so a value that differed between ranks would deadlock.
+    It cannot differ: the value comes from the solver parameters dictionary,
+    which is one object on every rank. It is also rank-constant in time, so
+    every caller reads it once at set-up and never per update.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      `"per_solve"`, the default and the staleness-marker rule, or `"always"`,
+      one build per `update`.
+
+    Raises:
+      ValueError: when the option carries any other value. A misspelled value
+        that fell back to the default would make a campaign arm report the
+        cost of a rule it did not run, and nothing else in the log would say
+        so.
+    """
+    rule = _option_along_the_prefix_chain(
+        pc, "dense_schur_rebuild", "getString", "per_solve")
+    if rule not in ("per_solve", "always"):
+        raise _loud(ValueError(
+            "dense_schur_rebuild must be 'per_solve' or 'always'; it got "
+            f"{rule!r}."))
+    return rule
+
+
 def _staleness_markers(pc):
     """The solver's statement of when the mechanics block last changed.
 
@@ -789,6 +835,17 @@ class _SchurAinvBCache:
     staleness markers are rank-consistent, so every rank enters the collective
     build together.
 
+    ## When the cache is rebuilt
+
+    The option `dense_schur_rebuild` selects the rule, with the same two
+    values and the same meaning they have on `DtNMultiplierDenseSchurPC`.
+    `per_solve`, the default, rebuilds when `_RebuildRule` says the operator
+    moved. `always` rebuilds at every `update`, which is what a moving
+    coastline needs, because there the ocean masks follow the unknowns and the
+    complement is stale before the solve that built it ends. `update` below
+    carries the reasoning for each branch. Which value is cheaper at
+    production scale is a measurement, which is why the rule is an option.
+
     Args:
       pc: the outer PETSc `PC`, used for its communicator, its operator layout
         and the staleness markers on its DM.
@@ -799,6 +856,14 @@ class _SchurAinvBCache:
     """
 
     def __init__(self, pc, inner, is0, is1):
+        # The rebuild rule, read once and never re-read: the value is
+        # rank-constant and constant in time, because it comes from the solver
+        # parameters dictionary, which is one object on every rank. It is read
+        # first, before any block-0 solve, so that a misspelled value is
+        # refused before the build spends `n` solves on it. The reader is
+        # shared with `DtNMultiplierDenseSchurPC`, which holds the same
+        # complement on the other block-1 route.
+        self._rebuild_rule = _rebuild_rule_option(pc)
         self.inner = inner
         self.ksp0, self.ksp1 = inner.getFieldSplitSchurGetSubKSP()
 
@@ -981,6 +1046,25 @@ class _SchurAinvBCache:
     def update(self, pc):
         """Rebuild when the mechanics block moved, or when the blocks were replaced.
 
+        Two rules, selected by the option `dense_schur_rebuild` and read once
+        in `__init__`. The default `per_solve` rebuilds when `_RebuildRule`
+        says the operator moved, which is once per changed operator version
+        and, for a state-dependent Jacobian, once per nonlinear solve. The
+        value `always` rebuilds at every call, which is one build per outer
+        linear solve and per Newton iteration; it exists for a moving
+        coastline, where the ocean masks follow the unknowns and so sit in
+        `A01`, `A10` and `A11` as well as in `A00`, and a complement formed at
+        the start of a solve is stale before the solve ends.
+
+        Both rules leave the cache alone when the context carries neither
+        staleness marker, because such a context is the multiplier path's
+        adjoint sweep and not a new state. `DtNMultiplierDenseSchurPC.update`
+        makes exactly the same two branches with the same guard.
+
+        The handle test is outside both rules: a sub-block the fieldsplit
+        re-extracted into a new `Mat` makes everything built from the old
+        objects describe nothing, whatever the rule says about staleness.
+
         Only the three sub-block handles are refreshed here. The work vectors
         and the two scatters stay as `__init__` built them, and that is safe
         because a re-extraction cannot change a LAYOUT in this solver: the two
@@ -1001,6 +1085,16 @@ class _SchurAinvBCache:
         handles = self._sub_block_handles()
         replaced = handles != self._handles
         self._handles = handles
+        if self._rebuild_rule == "always":
+            _, _, present = _staleness_markers(pc)
+            if present:
+                # The markers are still adopted, so that a later comparison -
+                # the first `update` after a switch back - has the state of
+                # this build to compare against.
+                self._rule.record(pc)
+            if replaced or present:
+                self.build(pc)
+            return
         # Both tests are evaluated: `moved` records the markers of the build it
         # asks for, and skipping it when the handles moved would leave the rule
         # comparing against an older state.
@@ -1962,21 +2056,11 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         """
         self._rule = _RebuildRule()
         self._rule.record(pc)
-        # The rebuild rule, read once. Searched along the whole chain of
-        # option prefixes above this preconditioner, so a driver can write
-        # `dense_schur_rebuild` at the top level of its solver parameters
-        # dictionary and reach the class wherever the nest puts it.
-        # The lookup reads this rank's own options database, and `_build`
-        # below is collective, so a value that differed between ranks would
-        # deadlock. It cannot differ: the value comes from the solver
-        # parameters dictionary, which is one object on every rank, and it is
-        # read once here and never re-read, so it cannot drift during a march.
-        self._rebuild_rule = _option_along_the_prefix_chain(
-            pc, "dense_schur_rebuild", "getString", "per_solve")
-        if self._rebuild_rule not in ("per_solve", "always"):
-            raise self._loud(ValueError(
-                "dense_schur_rebuild must be 'per_solve' or 'always'; it got "
-                f"{self._rebuild_rule!r}."))
+        # The rebuild rule, read once here and never re-read, so it cannot
+        # drift during a march. `_rebuild_rule_option` is shared with
+        # `_SchurAinvBCache`, the class that holds the same complement on the
+        # other block-1 route, so the two answer the option identically.
+        self._rebuild_rule = _rebuild_rule_option(pc)
         # Counts builds over the life of this PC instance, `initialize`
         # included. Tests read it to pin the rebuild rule; nothing in the
         # solve path branches on it.
