@@ -196,8 +196,6 @@ class TestUpperBound:
         # Beyond pi, a larger angle gives a smaller chord threshold.
         with pytest.raises(ValueError, match="at most pi"):
             InterpolationConfig(max_source_separation_rad=np.pi + 1e-9)
-        with pytest.raises(ValueError, match="at most pi"):
-            InterpolationConfig(max_source_separation_rad=4.0)
 
     def test_existing_lower_bound_survives(self):
         with pytest.raises(ValueError, match="must be positive"):

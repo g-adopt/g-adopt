@@ -15,9 +15,9 @@ geometry whenever the points move to a new age.
 
 ``prepare`` is collective across ``comm``. The producer runs on rank zero only
 and the result is broadcast, which keeps one copy of the gtrack state in the
-job and keeps every rank in step. Age validation follows the same rule for the
-same reason: a rank-zero exception on its own leaves the other ranks blocked in
-the next collective call, so failures are broadcast before they are raised.
+job and keeps every rank in step. The producer's own age check runs on rank
+zero as well and raises there; as elsewhere in G-ADOPT, the exception is not
+caught or broadcast, and the job is expected to end.
 """
 
 
@@ -276,18 +276,11 @@ class PointCloudSource(Source):
                 f"monotonic-backward — it walks forward in geological time, "
                 f"towards decreasing age — and cannot rewind."
             )
-        # The producer validates its rank-zero state. Broadcast its error text so
-        # that all ranks raise before the next collective operation. A rank-zero
-        # exception alone can leave the other ranks blocked in ``prepare``.
-        message = None
+        # The producer validates its own state, which lives on rank zero. The
+        # exception is raised there and left uncaught, as everywhere else in
+        # G-ADOPT; an invalid age is a user error that ends the job.
         if self._is_root:
-            try:
-                self.producer.validate_age(age)
-            except Exception as exc:
-                message = str(exc) or type(exc).__name__
-        message = self.comm.bcast(message, root=0)
-        if message is not None:
-            raise ValueError(message)
+            self.producer.validate_age(age)
 
     def _compute_sources(self, age: float) -> dict[str, np.ndarray]:
         cloud = self.producer.at_age(age)

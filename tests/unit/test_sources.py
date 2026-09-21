@@ -182,15 +182,14 @@ class TestValidateAge:
         # order — no floor.
         src.validate_age(70.0)
 
-    def test_producer_limit_is_surfaced_before_the_collective(self):
+    def test_producer_limit_is_checked_before_the_collective(self):
         # A producer-side limit (a declared oldest_requested_age_ma, or a producer
         # oldest_age tighter than the connector's) is enforced only inside the
         # producer, which runs on rank 0. PointCloudSource.validate_age must
-        # surface it — evaluate on root, broadcast the verdict — so every rank
-        # raises together rather than rank 0 raising alone inside the bcast in
-        # prepare (F19: that is a hang, not a traceback). The age is within the
-        # connector's range (oldest_age 100), so nothing but the producer's own
-        # check can reject it.
+        # call that check before any collective work, so the rejection is a
+        # traceback from validate_age and not a failure inside the bcast in
+        # prepare. The age is within the connector's range (oldest_age 100), so
+        # nothing but the producer's own check can reject it.
         producer = _FakeProducer(reject_above=80.0)
         src = PointCloudSource(producer, _DummyGplates())
         src.validate_age(70.0)  # within the producer limit: fine
