@@ -90,15 +90,24 @@ from regression_config import (  # noqa: E402
 
 
 def _require_data():
-    if not (GPLATES_GLOBAL / "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2").exists():
-        pytest.skip("Muller 2022 SE reconstruction not downloaded; run `make data`.")
-    if not CONTINENTAL_DATA.exists():
-        pytest.skip(f"Continental thickness data missing at {CONTINENTAL_DATA}.")
+    """Fail with a download hint if the continental thickness data is absent.
+
+    The plate model itself is fetched by ``ensure_reconstruction`` in the
+    fixtures that need it, matching ``test_gplates.py``.
+    """
+    assert CONTINENTAL_DATA.exists(), (
+        f"Continental thickness data missing at {CONTINENTAL_DATA}; download "
+        "https://data.gadopt.org/demos/continental_lithospheric_thickness_mesh.h5 there."
+    )
 
 
 def _require_craton():
-    if not CRATON_SHAPEFILE.exists():
-        pytest.skip(f"Craton shapefile missing at {CRATON_SHAPEFILE}.")
+    """Fail with a download hint if the craton shapefile is absent."""
+    assert CRATON_SHAPEFILE.exists(), (
+        f"Craton shapefile missing at {CRATON_SHAPEFILE}; download the .shp, "
+        ".shx, .dbf and .prj parts of Craton_Boundaries_Inferred from "
+        "https://data.gadopt.org/demos/ there."
+    )
 
 
 def half_space_cooling(age_myr):
@@ -751,11 +760,10 @@ def _evaluate_connectors_lockstep(connectors_by_name, mesh, Q, ages):
 
 def _load_reference():
     ref_path = DATA_DIR / "test_connectors.pkl"
-    if not ref_path.exists():
-        pytest.skip(
-            f"Reference fixture missing: {ref_path}. "
-            "Generate via tests/unit/data/generate_expected_connectors.py."
-        )
+    assert ref_path.exists(), (
+        f"Reference fixture missing: {ref_path}. "
+        "Generate via tests/unit/data/generate_expected_connectors.py."
+    )
     with open(ref_path, "rb") as f:
         return pickle.load(f)
 
