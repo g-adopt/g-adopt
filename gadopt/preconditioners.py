@@ -429,6 +429,52 @@ def _solver_appctx(pc):
         return {}
 
 
+def _option_prefix_chain(pc) -> list:
+    """This PC's options prefix and every shorter prefix above it.
+
+    A PETSc option is found only under an exact prefix, and a preconditioner
+    deep inside a nest carries a long one, for example
+    `SelfGravitatingGIA_dtn_fieldsplit_0_condensed_fieldsplit_1_`. A rebuild
+    rule is a property of the *run*, not of one split, and a driver writes it
+    into the solver parameters dictionary at the top level, where Firedrake
+    prepends the solver's own prefix alone (`SelfGravitatingGIA_`). Searching
+    the chain of prefixes from the longest to the shortest lets one key be set
+    at whichever level the caller finds natural, with the most specific
+    setting winning.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      A list of prefix strings, longest first and the empty (global) prefix
+      last. Each entry ends with `_` unless it is empty.
+    """
+    parts = [part for part in (pc.getOptionsPrefix() or "").split("_") if part]
+    return ["".join(f"{part}_" for part in parts[:count])
+            for count in range(len(parts), -1, -1)]
+
+
+def _option_along_the_prefix_chain(pc, name, reader, default):
+    """The first value of `name` set anywhere on this PC's prefix chain.
+
+    Args:
+      pc: PETSc preconditioner.
+      name: the option name, without any prefix.
+      reader: the name of the `PETSc.Options` accessor to use, for example
+        `"getReal"` or `"getString"`.
+      default: the value returned when no prefix on the chain carries the
+        option.
+
+    Returns:
+      The option value, converted by `reader`, or `default`.
+    """
+    for prefix in _option_prefix_chain(pc):
+        options = PETSc.Options(prefix)
+        if options.hasName(name):
+            return getattr(options, reader)(name)
+    return default
+
+
 def _staleness_markers(pc):
     """The solver's statement of when the mechanics block last changed.
 
@@ -1821,7 +1867,26 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     three-iteration step. A complement that lags the state costs outer
     iterations and changes no residual, so the cheap rule is the right trade.
 
-    Behaviour under `pyadjoint`, which is not the obvious one. The **forward
+    ## The option `dense_schur_rebuild`
+
+    Which of the two rules is cheaper comes from a measurement, so the rule
+    is an option. The value `per_solve`, the default, is the pair of triggers
+    above. The value
+    `always` rebuilds the complement at every `update`, which is one build per
+    linear solve. It exists for the configuration a moving coastline creates:
+    with `SeaLevel(fixed_ocean=False)` the ocean masks follow the unknowns and
+    sit in `A01`, `A10` and `A11` as well as in `A00`, because the sea-level
+    `Shift` is a `Real` row, so every factor of a complement built at the
+    start of a solve is stale in a way a power law does not make it. Which
+    value is cheaper at production scale is what job G4-rule measures.
+
+    The option is read along the whole chain of option prefixes above this
+    preconditioner, so a driver can write it at the top level of its solver
+    parameters dictionary.
+
+    Behaviour under `pyadjoint`, which is not the obvious one. Everything in
+    this paragraph describes `per_solve`, the default; the `always` paragraph
+    below it says where that value differs. The **forward
     replay** solver is built from the taped constructor kwargs
     (`firedrake/adjoint_utils/variational_solver.py:50, 83-91`), and `appctx`
     is one of them, so the replay solver shares the *live* application context
@@ -1841,6 +1906,15 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     replay (nothing runs `SelfGravitatingGIASolver.solve`), so `update`
     compares equal values and the adjoint's complement is likewise built once,
     at the first adjoint solve, and kept.
+
+    Under `always` the multiplier path is unchanged, because the guard that
+    leaves the complement alone when neither marker is present is kept inside
+    that branch, and the adjoint sweep there carries neither. The low-rank
+    adjoint does carry both, so `always` rebuilds its complement at every
+    update, which is `n` block-0 applications per update with `n` the number
+    of `Real` rows. On the multiplier representation that would be about 76
+    per update at `L = 5`, so `always` belongs to a forward run on a narrow
+    `Real` block and not to a taped one.
 
     ## Two correctness conditions, and the second is not what the design assumed
 
@@ -1888,6 +1962,21 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         """
         self._rule = _RebuildRule()
         self._rule.record(pc)
+        # The rebuild rule, read once. Searched along the whole chain of
+        # option prefixes above this preconditioner, so a driver can write
+        # `dense_schur_rebuild` at the top level of its solver parameters
+        # dictionary and reach the class wherever the nest puts it.
+        # The lookup reads this rank's own options database, and `_build`
+        # below is collective, so a value that differed between ranks would
+        # deadlock. It cannot differ: the value comes from the solver
+        # parameters dictionary, which is one object on every rank, and it is
+        # read once here and never re-read, so it cannot drift during a march.
+        self._rebuild_rule = _option_along_the_prefix_chain(
+            pc, "dense_schur_rebuild", "getString", "per_solve")
+        if self._rebuild_rule not in ("per_solve", "always"):
+            raise self._loud(ValueError(
+                "dense_schur_rebuild must be 'per_solve' or 'always'; it got "
+                f"{self._rebuild_rule!r}."))
         # Counts builds over the life of this PC instance, `initialize`
         # included. Tests read it to pin the rebuild rule; nothing in the
         # solve path branches on it.
@@ -1928,9 +2017,26 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         it ends in the same place: one complement, built at the first adjoint
         solve and kept.
 
+        The option `dense_schur_rebuild` selects between the two rules. The
+        default `per_solve` is the pair of triggers above. `always` rebuilds
+        at every call, which is one build per Newton iteration and per outer
+        linear solve, and is worth its cost only where the operator moves fast
+        inside a solve - a moving coastline, where the masks sit in every
+        block of the `Real` row and column. Both rules leave the complement
+        alone when the context carries neither marker, because that context is
+        an adjoint sweep and not a new state.
+
         Args:
           pc: PETSc preconditioner.
         """
+        if self._rebuild_rule == "always":
+            _, _, present = _staleness_markers(pc)
+            if present:
+                # The markers are still adopted, so that a later switch back
+                # to a comparison has a state to compare against.
+                self._rule.record(pc)
+                self._build(pc)
+            return
         if self._rule.moved(pc):
             self._build(pc)
 
@@ -2198,6 +2304,11 @@ class LowRankPotentialPC(fd.preconditioners.base.PCBase):
     uses the same preconditioner and hierarchy with CG and a tight tolerance,
     so a second hierarchy is never built.
 
+    `lowrank_reuse_rtol`, a real number and 0 by default, is the relative
+    tolerance of the reuse test in `update`. It is read along the whole chain
+    of option prefixes above this preconditioner, so a driver can write it at
+    the top level of its solver parameters dictionary.
+
     ## What is refused
 
     A preconditioning matrix that is not `_LowRankPotentialOperator`, which
@@ -2280,6 +2391,24 @@ class LowRankPotentialPC(fd.preconditioners.base.PCBase):
         ksp.setOperators(self._matrix, self._matrix)
         ksp.setFromOptions()
         self.ksp = ksp
+
+        # The reuse tolerance of the columns, read once. It is searched along
+        # the whole prefix chain, so a driver can write `lowrank_reuse_rtol`
+        # at the top level of its solver parameters dictionary and reach this
+        # preconditioner without spelling out the nest it sits in.
+        self._reuse_rtol = _option_along_the_prefix_chain(
+            pc, "lowrank_reuse_rtol", "getReal", 0.0)
+        # Rank-constant for the same reason as `dense_schur_rebuild` above:
+        # the value comes from the solver parameters dictionary, which is one
+        # object on every rank. A rank that read a different tolerance could
+        # only pull every rank into a rebuild through the `MPI.LOR` below,
+        # never leave one behind in the collective `_rebuild`.
+        if self._reuse_rtol < 0.0:
+            raise _loud(ValueError(
+                "lowrank_reuse_rtol must not be negative; it is a relative "
+                "tolerance on the Frobenius norm of A_psipsi, and it got "
+                f"{self._reuse_rtol!r}. Use 0 for the exact-equality "
+                "rule."))
 
         #: Builds of the columns `Z` and of everything keyed with them. A
         #: forward march at any number of time steps must leave this at 1.
@@ -2421,6 +2550,21 @@ class LowRankPotentialPC(fd.preconditioners.base.PCBase):
         PETSc calls this on every linear solve. The prefactor is NOT a second
         input to test: it scales the assembled block and the update together,
         so a change in it moves this norm.
+
+        The test is `|fp - fp_built| > rtol * fp_built` on the Frobenius norm
+        `fp`, with `rtol` from the option `lowrank_reuse_rtol` and 0 by
+        default. At 0 that is exact equality, which is the rule to keep when
+        the block only ever moves between time steps: a rebuild is then one
+        accurate solve per DtN mode and it is paid once.
+
+        A positive tolerance is for the case a moving coastline creates. There
+        the block-0 Jacobian moves at every Newton iteration, so the norm moves
+        at every linear solve and the exact rule rebuilds the columns each
+        time. The columns are preconditioner data, so a stale set changes no
+        residual and no converged state; it costs outer iterations. `rtol`
+        sets that trade: rebuild only when the block moved by more than that
+        relative amount. The production value comes from a measurement, so
+        there is no useful default other than the exact rule.
         """
         # The rebuild below is COLLECTIVE (it solves, and it reduces), so every
         # rank must reach the same decision or the ones that rebuild wait on an
@@ -2429,7 +2573,13 @@ class LowRankPotentialPC(fd.preconditioners.base.PCBase):
         # already agrees; this one-flag reduction removes the dependence on
         # that guarantee for the price of one boolean. It is the pattern
         # `_refresh_operator_version` uses for the same reason.
-        moved = self._matrix_fingerprint() != self._fingerprint
+        fingerprint = self._matrix_fingerprint()
+        # Scaled by the norm the columns were BUILT at, not by the current
+        # one, so the threshold describes the distance from the state the
+        # cache actually holds. `abs` on the built norm is defensive only: a
+        # Frobenius norm is non-negative.
+        moved = (abs(fingerprint - self._fingerprint)
+                 > self._reuse_rtol * abs(self._fingerprint))
         if self.comm.allreduce(moved, MPI.LOR):
             self._rebuild()
 

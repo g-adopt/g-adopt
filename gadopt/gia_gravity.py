@@ -5134,16 +5134,88 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self._attach_condensation_context(solver_extras)
         self.register_update_callback(self.set_solver)
 
+    def _live_ocean_masks(self) -> bool:
+        """True when the surface load sheet carries masks that follow the state.
+
+        With `SeaLevel(fixed_ocean=False)` the ocean function `C` and the
+        grounded-ice function `B` are smooth steps of the *current* sea level
+        `SL = SL_init + dN - du_r + Shift` (`_sheet_of`,
+        `gadopt.sea_level_masks`). Both are therefore functions of the
+        unknowns, the sheet is not affine in them, and the Jacobian of the
+        sea-level rows moves inside one nonlinear solve. With
+        `fixed_ocean=True` the sheet uses `C0 = C(SL_init)`, a frozen field,
+        and the rows are linear.
+
+        `fixed_ocean` is a fixed boolean on the `SeaLevel` dataclass, identical
+        on every rank and unchanged for the life of the solver, so an answer
+        taken from it is rank-consistent and can be published once into the
+        application context.
+
+        Returns:
+            True when sea level is on and its coastline is free to move; False
+            when there is no sea level at all, or its coastline is frozen.
+        """
+        sea_level = getattr(self, "sea_level_parameters", None)
+        return sea_level is not None and not sea_level.fixed_ocean
+
+    def _jacobian_depends_on_solution(self) -> bool:
+        """True when the Jacobian changes within one nonlinear solve.
+
+        Two independent causes on this solver, either of which is enough:
+
+        - the rheology, which is what the base class tests: a power-law
+          exponent puts the solution into the mechanics tangent;
+        - live ocean masks, where the smooth steps `B` and `C` of the surface
+          load sheet follow the sea level and so follow the unknowns
+          (`_live_ocean_masks`).
+
+        The second cause reaches more blocks than the first. `Shift` is a
+        `Real` unknown, so the masks sit in `A01`, `A10` and `A11` as well as
+        in `A00`, and every cached factor of the two-block Schur
+        preconditioner describes a state the solve has already left.
+
+        The consequences of the answer are one correctness rule and one cost
+        rule. `_refuse_ksponly_on_a_nonlinear_residual` refuses a single
+        linear solve on a residual that is not linear. And
+        `CoupledInternalVariableSolver._refresh_operator_version` publishes
+        `operator_version = None`, which moves every cache keyed on it
+        (`gadopt.CondensedBlockPC`, `_RebuildRule`) off the "nothing changed"
+        branch it would otherwise sit on for the whole march.
+
+        This does **not** change `condensed_operator_symmetric`, which reads
+        the rheology alone. The sea-level rows keep a symmetric Jacobian with
+        live masks, because the sheet depends on the unknowns only through the
+        one scalar `Delta = dN - du_r + Shift`, so one energy `E_sl` generates
+        all three rows (`NOTES/DESIGN-SEA-LEVEL.md` section 3). Block 0 is
+        `(u, psi)` and the masks enter it through that same energy, so the
+        condensed block-0 operator is as symmetric with live masks as without
+        them.
+
+        Returns:
+            True when a Newton method is required and no operator version can
+            describe the Jacobian; False when the residual is linear in the
+            unknowns.
+        """
+        return super()._jacobian_depends_on_solution() or self._live_ocean_masks()
+
     def _refuse_ksponly_on_a_nonlinear_residual(self) -> None:
         """Refuse `snes_type ksponly` when the Jacobian depends on the state.
 
         `ksponly` takes one linear solve at the initial state and reports
-        `CONVERGED`, which is the right thing for a Newtonian residual and a
-        wrong answer with no diagnostic for a power law: the returned state is
-        off by the whole nonlinearity and nothing in the log says so. Both
+        `CONVERGED`, which is the right thing for a linear residual and a
+        wrong answer with no diagnostic otherwise: the returned state is off
+        by the whole nonlinearity and nothing in the log says so. Both
         docstrings that recommend `ksponly` recommend it for `exponent = 1`,
-        so the misuse this guard catches is a copy of such a dictionary into a
+        so one misuse this guard catches is a copy of such a dictionary into a
         power-law run.
+
+        **Two causes, and the message names whichever applies.** A power-law
+        exponent is one. Live ocean masks are the other: with
+        `SeaLevel(fixed_ocean=False)` the smooth steps `B` and `C` of the
+        surface load sheet follow the sea level, so the sea-level rows are
+        nonlinear even on a Newtonian Earth, and a message that named only the
+        exponent would send the reader to look at a rheology that is already
+        correct. A configuration can carry both.
 
         Called on both options paths, after the options are final, because
         `snes_type` can arrive from the preset, from a caller's `Mapping` or
@@ -5151,21 +5223,52 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         which method a solve will use.
 
         Raises:
-          ValueError: the outer method is `ksponly` and the rheology makes the
-            Jacobian state-dependent.
+          ValueError: the outer method is `ksponly` and the rheology, the
+            moving coastline, or both make the Jacobian state-dependent.
         """
         if self.solver_parameters.get("snes_type") != "ksponly":
             return
         if not self._jacobian_depends_on_solution():
             return
         exponent = getattr(self.approximation, "exponent", 1)
+        # Each cause contributes the sentence that describes it and the way
+        # out of it, so a reader with both gets both and a reader with one is
+        # not sent to look at the other.
+        causes, remedies = [], []
+        if super()._jacobian_depends_on_solution():
+            causes.append(f"the power-law factor of exponent={exponent!r}")
+            remedies.append(
+                "set exponent=1 if the rheology is meant to be Newtonian")
+        if self._live_ocean_masks():
+            causes.append(
+                "the live ocean and grounded-ice masks of "
+                "SeaLevel(fixed_ocean=False), which follow the sea level and "
+                "so follow the unknowns,")
+            remedies.append(
+                "set SeaLevel(fixed_ocean=True) if the coastline is meant to "
+                "be frozen")
+        # The predicate and this list read the same two branches, so the list
+        # cannot be empty today. It would become empty if a third cause of a
+        # state-dependent Jacobian were added to the base class without a
+        # branch here, and the message would then be a sentence with a hole in
+        # it. A diagnostic that describes nothing is worse than a general one.
+        if not causes:
+            raise ValueError(
+                "snes_type='ksponly' is refused because the Jacobian depends "
+                "on the solution, so one linear solve at the initial state "
+                "converges by definition and returns a state that is wrong by "
+                "the whole nonlinearity. Use snes_type='newtonls'. The cause "
+                "is a branch of _jacobian_depends_on_solution that "
+                "_refuse_ksponly_on_a_nonlinear_residual does not name; add "
+                "it there.")
+        verb = "makes" if len(causes) == 1 else "make"
         raise ValueError(
-            f"snes_type='ksponly' with exponent={exponent!r}: the "
-            "power-law factor makes the residual nonlinear, so one linear "
-            "solve at the initial state converges by definition and returns a "
-            "state that is wrong by the whole nonlinearity. Use "
-            "snes_type='newtonls' (the default of both self-gravity presets), "
-            "or set exponent=1 if the rheology is meant to be Newtonian.")
+            f"snes_type='ksponly' is refused because {' and '.join(causes)} "
+            f"{verb} the residual nonlinear, so one linear solve at the "
+            "initial state converges by definition and returns a state that "
+            "is wrong by the whole nonlinearity. Use snes_type='newtonls' "
+            "(the default of both self-gravity presets), or "
+            f"{', or '.join(remedies)}.")
 
     def _attach_condensation_context(self, extras) -> None:
         """Publish what the block-0 condensations read, on every options path.
@@ -5212,7 +5315,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           "rebuild once per solve" into a test a preconditioner can make
           without knowing about Newton at all.
         - `gia_jacobian_depends_on_solution`: a `bool`, fixed for the life of
-          the solver, true for a power law. `operator_version` carries the same
+          the solver, true for a power law and true for live ocean masks
+          (`_jacobian_depends_on_solution`). `operator_version` carries the same
           fact from the first `solve` onwards, by going `None`, and this key
           carries it **before** that: at construction the version is still the
           integer 0 on every rheology, so a caller or a preconditioner that has
@@ -5221,9 +5325,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         Both keys are rank-consistent, which the collective rebuild needs:
         `gia_solve_index` is incremented by the collective `solve()` on every
         rank alike, and `gia_jacobian_depends_on_solution` is a deterministic
-        function of the exponent. So the rank-local rebuild decision agrees on
-        every rank and the collective `_build` of the dense complement is
-        entered by all ranks together.
+        function of the exponent and of `SeaLevel.fixed_ocean`, both of which
+        hold the same value on every rank. So the rank-local rebuild decision
+        agrees on every rank and the collective `_build` of the dense
+        complement is entered by all ranks together.
 
         On the condensed layout nothing reads these; they are harmless there.
 

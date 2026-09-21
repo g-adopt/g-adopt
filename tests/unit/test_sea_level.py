@@ -2032,6 +2032,321 @@ class TestNestedCondensation:
         assert solver_converged(solver)
 
 
+# ---------------------------------------------------------------------------
+# The Jacobian and the preconditioner caches under a moving coastline
+# ---------------------------------------------------------------------------
+
+def rebuild_parameters(preset=None, **overrides):
+    """The iterative preset on the low-rank path, for the cache-rule tests.
+
+    The same dictionary `solve_settings("lowrank")` builds, so the tolerances
+    and the converged state are those every other live-mask test of this file
+    reads. It is built here rather than taken from `solve_settings` because
+    each of these tests needs its own copy to write an option into, and
+    because they all name the low-rank representation: that is the path whose
+    block 0 is `gadopt.CondensedBlockPC` with `gadopt.LowRankPotentialPC` on
+    its potential split, which is where both caches of this section live. The
+    multiplier path here runs the direct preset, whose block 0 is one LU with
+    no cache to rebuild.
+
+    Args:
+      preset: extra keyword arguments of
+        `selfgrav_dtn_iterative_solver_parameters`, for example
+        `u_ksp_max_it` or `multiplier_pc`.
+      overrides: extra entries written into the dictionary the preset
+        returned, for example `lowrank_reuse_rtol` or `dense_schur_rebuild`.
+        These are plain PETSc options that no preset argument names.
+
+    Returns:
+      A solver parameters dictionary.
+    """
+    parameters = selfgrav_dtn_iterative_solver_parameters(
+        condensed=False,
+        outer_rtol=TIGHT["ksp_rtol"], block0_rtol=1e-4,
+        snes_rtol=SNES_RTOL, dtn_representation="lowrank",
+        **(preset or {}))
+    parameters["snes_atol"] = SNES_ATOL
+    parameters.update(overrides)
+    return parameters
+
+
+def block0_and_potential(solver):
+    """The block-0 preconditioner and the potential-split one it nests.
+
+    Imported at call time, like `condensation_context` above, so that the
+    other test module is not executed at collection of this one.
+
+    Args:
+      solver: a solved `SelfGravitatingGIASolver` on `rebuild_parameters`.
+
+    Returns:
+      `(CondensedBlockPC instance, LowRankPotentialPC instance)`.
+    """
+    from test_gia_lowrank_block0 import block0_context, potential_pc
+
+    block0 = block0_context(solver)
+    return block0, potential_pc(block0)
+
+
+def block1_context(solver):
+    """The `Real`-block preconditioner of the two-block DtN Schur split.
+
+    Args:
+      solver: a solved `SelfGravitatingGIASolver` whose block-1 preconditioner
+        is a Python one.
+
+    Returns:
+      The preconditioner instance.
+    """
+    outer = solver.solver.snes.ksp.pc.getPythonContext()
+    _, block1 = outer.pc.getFieldSplitSchurGetSubKSP()
+    return block1.getPC().getPythonContext()
+
+
+class TestLiveMaskRebuildRules:
+    """W4: the moving coastline makes the Jacobian state-dependent.
+
+    With `SeaLevel(fixed_ocean=False)` the ocean function `C` and the
+    grounded-ice function `B` are smooth steps of the current sea level, so
+    the surface load sheet follows the unknowns and the Jacobian moves inside
+    one nonlinear solve, exactly as it does for a power law.
+    `SelfGravitatingGIASolver._jacobian_depends_on_solution` says so, which has
+    one correctness consequence and one cost consequence.
+
+    The correctness one is that `snes_type ksponly` - one linear solve at the
+    initial state - is refused instead of reporting `CONVERGED` on a state
+    that is wrong by the whole motion of the coastline.
+
+    The cost one is that `operator_version` is published as `None`, so every
+    cache keyed on it rebuilds instead of holding the state the march started
+    from for the whole run. `Shift` is a `Real` unknown, so the masks sit in
+    `A01`, `A10` and `A11` as well as in `A00` and every cached factor is
+    stale together. Two options let a run trade accuracy of those caches
+    against their cost: `lowrank_reuse_rtol` and `dense_schur_rebuild`. Which
+    value is right at production scale is measured on Gadi and not here; these
+    tests pin what each value does.
+    """
+
+    @pytest.fixture(scope="class")
+    def live_exact(self, meshes):
+        """One live-mask shoreline solve under the default cache rules.
+
+        Class-scoped: three tests read it and the solve is the expensive part.
+
+        Returns:
+            `(solver, z, layout)`.
+        """
+        _, sub = meshes
+        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
+                                  representation="lowrank",
+                                  solver_parameters=rebuild_parameters())
+        solver.solve()
+        assert solver_converged(solver)
+        return solver, z, layout
+
+    def test_the_jacobian_is_declared_state_dependent(self, live_exact):
+        """The predicate is true with live masks on a Newtonian Earth.
+
+        Both the method itself and the copy of its answer that
+        `_attach_condensation_context` publishes for the preconditioners to
+        read before the first solve.
+        """
+        solver, _, _ = live_exact
+        assert solver._live_ocean_masks()
+        assert solver._jacobian_depends_on_solution()
+        assert solver.appctx["gia_jacobian_depends_on_solution"] is True
+        # The rheology is Newtonian, so the masks are the whole of the reason.
+        assert solver._newtonian_rheology()
+
+    def test_block_zero_symmetry_is_unchanged(self, meshes, live_exact):
+        """Live masks do not make the condensed block-0 operator nonsymmetric.
+
+        This is the check the design rests on. The two predicates read the
+        same rheology today, so separating them could have moved the Krylov
+        method on block 0 as a side effect, and CG on a nonsymmetric operator
+        does not raise: it converges to the wrong thing or not at all.
+
+        It cannot, and the reason is physical.  The sheet depends on the
+        unknowns only through the one scalar `Delta = dN - du_r + Shift`, so
+        one energy `E_sl` generates all three sea-level rows and its second
+        variation is symmetric whatever the masks do
+        (`NOTES/DESIGN-SEA-LEVEL.md` section 3).
+        `condensed_operator_symmetric` reads `_newtonian_rheology` directly
+        and not `_jacobian_depends_on_solution`, so the override reaches it by
+        no path at all.
+
+        The assertion is made on the answer and on its consequence. The
+        consequence is the Krylov method the options carry on the condensed
+        displacement split, which is where the choice is spent. The preset's
+        default writes `preonly` there - one multigrid V-cycle, which is not a
+        Krylov method and assumes nothing - so `u_ksp_max_it` is named, which
+        is what makes the preset ask for the truncated CG.
+        """
+        _, sub = meshes
+        solver, _, _ = live_exact
+        assert solver.condensed_operator_symmetric()
+
+        key = "dtn_fieldsplit_0_condensed_fieldsplit_0_ksp_type"
+        parameters = rebuild_parameters(preset=dict(u_ksp_max_it=5))
+        assert parameters[key] == "cg"
+        truncated, _, _ = build(meshes, surface_fields(sub, "shoreline"),
+                                representation="lowrank",
+                                solver_parameters=parameters)
+        assert truncated._jacobian_depends_on_solution()
+        assert truncated.condensed_operator_symmetric()
+        assert truncated.solver_parameters[key] == "cg"
+        # And solve it. Without this the test pins the code path and not the
+        # mathematics: every assertion above would hold if the live-mask
+        # block-0 operator were in fact nonsymmetric, which is the failure the
+        # docstring says cannot happen. CG on a nonsymmetric operator does not
+        # raise, so the evidence is that the solve converges.
+        truncated.solve()
+        assert solver_converged(truncated)
+
+    def test_the_condensed_block_reassembles_at_every_newton_iteration(
+            self, live_exact):
+        """`CondensedBlockPC.assembly_count` equals the Newton iteration count.
+
+        `operator_version` is `None`, so the class reassembles its blocks at
+        every linear solve. Newton takes one linear solve per iteration, and
+        the count starts at 1 at `initialize`, so the two numbers are equal.
+
+        Item 5 of the handout. Without the predicate change the version is a
+        fixed integer, the count stays at 1 for the whole march, and the
+        condensed operator, the low-rank columns `Z` and the `Real`-block
+        complement all describe the coastline the step started from.
+        """
+        solver, _, _ = live_exact
+        block0, _ = block0_and_potential(solver)
+        iterations = solver.solver.snes.getIterationNumber()
+        print(f"live masks: {iterations} Newton iterations, "
+              f"assembly_count {block0.assembly_count}")
+        assert iterations > 1, "the live-mask solve must take Newton steps"
+        assert block0.assembly_count == iterations
+
+    def test_a_fixed_coastline_assembles_once_over_two_solves(self, meshes):
+        """With `fixed_ocean` the count stays at 1 across two solves at one `dt`.
+
+        The other half of the pair. A frozen coastline makes the residual
+        linear, `operator_version` stays the integer it started at, and
+        nothing in the Jacobian moves between two solves at the same time
+        step, so the condensed operator and the low-rank columns are built
+        once and serve both solves. That is what the reuse rule exists for,
+        and it must survive the change that switches it off under live masks.
+        """
+        _, sub = meshes
+        solver, _, _ = build(meshes, surface_fields(sub, "shoreline"),
+                             representation="lowrank",
+                             sea_level_overrides=fixed(),
+                             solver_parameters=rebuild_parameters())
+        assert not solver._jacobian_depends_on_solution()
+        solver.solve()
+        assert solver_converged(solver)
+        block0, potential = block0_and_potential(solver)
+        assert block0.assembly_count == 1
+        assert potential.column_builds == 1
+        solver.solve()
+        assert solver_converged(solver)
+        assert block0.assembly_count == 1
+        assert potential.column_builds == 1
+
+    def test_ksponly_with_live_masks_is_refused_and_the_message_says_why(
+            self, meshes):
+        """The guard fires on the masks, and names them rather than the exponent.
+
+        Without this, a Newtonian Earth with a moving coastline accepts
+        `ksponly`: one linear solve at the initial state reports `CONVERGED`
+        and returns a state wrong by the whole motion of the coastline, with
+        nothing in the log. The refusal is raised while the options are set,
+        so it arrives before any solve.
+
+        The message is asserted on as well as the refusal. The exponent is 1
+        here, so a message that named the power-law factor would send the
+        reader to look at a rheology that is already right.
+        """
+        _, sub = meshes
+        with pytest.raises(ValueError) as raised:
+            build(meshes, surface_fields(sub, "shoreline"),
+                  representation="lowrank",
+                  solver_parameters=rebuild_parameters(snes_type="ksponly"))
+        message = str(raised.value)
+        assert "fixed_ocean" in message
+        assert "mask" in message
+        assert "exponent" not in message
+
+    def test_the_reuse_tolerance_holds_the_low_rank_columns(
+            self, meshes, live_exact):
+        """`lowrank_reuse_rtol = 1e-3` builds `Z` once and changes no answer.
+
+        `gadopt.LowRankPotentialPC` keys the columns `Z = A_psipsi^-1 U` on the
+        Frobenius norm of `A_psipsi`. With live masks that block moves at every
+        Newton iteration, because the ocean load carries `psi` through the
+        geoid, so the exact-equality rule rebuilds the columns at each one: one
+        accurate solve per DtN mode, thrown away one iteration later.
+
+        The motion is small against the Laplacian part of the block, so a
+        relative tolerance of 1e-3 absorbs it and one build serves the solve.
+        The columns are preconditioner data, so the converged state is the
+        same to the outer tolerance either way - that is the claim this test
+        makes, and it is what lets the production value be chosen on cost
+        alone.
+        """
+        exact_solver, z_exact, layout = live_exact
+        _, sub = meshes
+        _, exact_potential = block0_and_potential(exact_solver)
+        # Vacuity guard: with the exact rule the columns really are rebuilt,
+        # so a tolerance that holds them at 1 is doing something.
+        assert exact_potential.column_builds > 1
+
+        solver, z, _ = build(
+            meshes, surface_fields(sub, "shoreline"),
+            representation="lowrank",
+            solver_parameters=rebuild_parameters(lowrank_reuse_rtol=1e-3))
+        solver.solve()
+        assert solver_converged(solver)
+        _, potential = block0_and_potential(solver)
+        print(f"lowrank_reuse_rtol: column_builds {potential.column_builds} "
+              f"against {exact_potential.column_builds} with the exact rule")
+        assert potential.column_builds == 1
+        assert solved_fields_agree(z, z_exact, layout, rel=1e-6) == []
+
+    @pytest.mark.parametrize("rule,builds", [("per_solve", 1), ("always", 3)])
+    def test_the_dense_schur_rebuild_rule(self, meshes, rule, builds):
+        """`dense_schur_rebuild` selects one build per solve or one per update.
+
+        `gadopt.DtNMultiplierDenseSchurPC` is named here, because the preset
+        leaves block 1 to the cached apply of `gadopt.DtNTwoBlockSchurPC` at
+        this width and that class owns no complement to rebuild.
+
+        `per_solve`, the default, is the rule the class already had for a
+        Jacobian no version number can describe: build at the first Newton
+        iteration of a solve, from the state that solve starts at, and keep it
+        for the rest of the solve. `always` builds at every `update`, which is
+        one build per linear solve and so one per Newton iteration.
+
+        The expected counts are therefore 1 and the Newton iteration count.
+        The iteration count is asserted to be the 3 the parametrisation was
+        written against, so that a solve which took fewer steps could not turn
+        the second case into the first without failing.
+        """
+        _, sub = meshes
+        parameters = rebuild_parameters(
+            preset=dict(multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"),
+            dense_schur_rebuild=rule)
+        solver, _, _ = build(meshes, surface_fields(sub, "shoreline"),
+                             representation="lowrank",
+                             solver_parameters=parameters)
+        solver.solve()
+        assert solver_converged(solver)
+        iterations = solver.solver.snes.getIterationNumber()
+        complement = block1_context(solver)
+        print(f"dense_schur_rebuild={rule}: build_count "
+              f"{complement.build_count}, {iterations} Newton iterations")
+        assert complement._rebuild_rule == rule
+        assert iterations == 3
+        assert complement.build_count == builds
+
+
 def taylor_forward(control, meshes, *, rotation, representation,
                    fixed_ocean=False):
     """Tape one solve of the shoreline state with ice thickness `control`.

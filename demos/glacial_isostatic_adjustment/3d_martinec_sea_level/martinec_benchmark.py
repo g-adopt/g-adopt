@@ -1956,6 +1956,15 @@ def main(argv=None):
         f"{args.block0_rtol:g}, block-0 iteration cap {args.block0_max_it}")
     say(f"  masks: alpha {args.alpha_mask:g}, grad_floor {args.grad_floor:g}, "
         f"clamp {SMOOTH_STEP_CLAMP:g}")
+    # The two rebuild rules of W4 are what job G4-rule compares, so the output
+    # file has to name the values it ran with. `library default` is printed
+    # when the flag was not given, because the default lives in
+    # `gadopt/preconditioners.py` and not here, and a number printed for it
+    # would go stale the moment that default moved.
+    say("  cache rules: lowrank_reuse_rtol "
+        f"{'library default' if args.lowrank_reuse_rtol is None else format(args.lowrank_reuse_rtol, 'g')}"
+        ", dense_schur_rebuild "
+        f"{args.dense_schur_rebuild or 'library default'}")
     say(f"  Lambda {LAMBDA:.6f}, B_mu {B_MU:.6f}, t_bar {T_BAR_YR} yr")
 
     # Meshes: a fresh run cuts them from the gmsh file, a restart takes the

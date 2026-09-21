@@ -470,6 +470,32 @@ def test_T6_singular_raises_named(capsys):
     assert "singular" in capsys.readouterr().err
 
 
+def test_T6_unknown_rebuild_rule_raises_named(capsys):
+    """An unknown `dense_schur_rebuild` value raises a NAMED `ValueError`.
+
+    The option decides how often the complement is rebuilt: `per_solve`, the
+    rule the class has always had, or `always`, which rebuilds at every
+    update. A misspelled value that fell back to the default would make a
+    campaign arm report the cost of a rule it did not run, and nothing else
+    in the log would say so.
+
+    FAILS IF a wrong value is accepted, or the refusal reaches the user as a
+    bare `PETSc.Error: error code 101`. The value is read in `initialize`, so
+    no solve is needed.
+    """
+    options = PETSc.Options()
+    options["dense_schur_rebuild"] = "per_step"
+    try:
+        # A 1x1 identity: non-singular and square, so the two checks above
+        # pass and the option check is the one that fires.
+        pc, ctx = _pc_on_dense([[1.0]])
+        with pytest.raises(ValueError, match="dense_schur_rebuild"):
+            ctx.initialize(pc)
+        assert "dense_schur_rebuild" in capsys.readouterr().err
+    finally:
+        del options["dense_schur_rebuild"]
+
+
 def test_T6_missized_raises_named(capsys):
     """A non-square Amat raises a NAMED `ValueError` before any MatMult.
 
