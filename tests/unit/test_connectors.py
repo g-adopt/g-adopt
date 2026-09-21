@@ -370,21 +370,6 @@ class _CapSource(_DataSource):
         }
 
 
-class _CountingCKDTree:
-    """Wraps cKDTree, counting constructions so a test can assert how many
-    interpolation geometries were built."""
-
-    count = 0
-
-    def __init__(self, *args, **kwargs):
-        type(self).count += 1
-        from scipy.spatial import cKDTree as _real
-        self._tree = _real(*args, **kwargs)
-
-    def query(self, *args, **kwargs):
-        return self._tree.query(*args, **kwargs)
-
-
 def _target_coords():
     rng = np.random.default_rng(1)
     xyz = rng.normal(size=(15, 3))
@@ -537,10 +522,14 @@ class TestGeometrySharing:
 
     @pytest.fixture(autouse=True)
     def _patch_tree(self, monkeypatch):
-        _CountingCKDTree.count = 0
-        monkeypatch.setattr(
-            "gadopt.gplates.interpolation.cKDTree", _CountingCKDTree
+        # These tests count geometry builds, so the tree itself is a Mock:
+        # its query returns fixed neighbour distances and indices of the
+        # right shape and the interpolation never runs for real.
+        self.mock_tree = Mock()
+        self.mock_tree.return_value.query.return_value = (
+            np.ones((15, 2)), np.ones((15, 2), dtype=np.int32)
         )
+        monkeypatch.setattr("gadopt.gplates.interpolation.cKDTree", self.mock_tree)
 
     def test_siblings_share_one_build_and_agree(self):
         src = _DataSource()
@@ -555,7 +544,7 @@ class TestGeometrySharing:
         out_b = conn_b.get_indicator(target, ndtime)
 
         # Geometry built exactly once, shared by both.
-        assert _CountingCKDTree.count == 1
+        assert self.mock_tree.call_count == 1
         # Both GlobalLayerIndicators on the same source/geometry must agree byte-for-byte.
         np.testing.assert_array_equal(out_a, out_b)
 
@@ -574,7 +563,7 @@ class TestGeometrySharing:
         conn_b.get_indicator(target, ndtime)
 
         # Different config values produce different cache keys.
-        assert _CountingCKDTree.count == 2
+        assert self.mock_tree.call_count == 2
 
     def test_age_advance_rebuilds_geometry(self):
         src = _DataSource()
@@ -583,10 +572,10 @@ class TestGeometrySharing:
         conn = ScalarFieldConnector(src, GlobalLayerIndicator(), interpolation=cfg)
 
         conn.get_indicator(target, src.age2ndtime(50.0))
-        assert _CountingCKDTree.count == 1
+        assert self.mock_tree.call_count == 1
         # Advancing by `delta_t` invalidates the source and geometry caches.
         conn.get_indicator(target, src.age2ndtime(20.0))
-        assert _CountingCKDTree.count == 2
+        assert self.mock_tree.call_count == 2
 
     def test_gather_matches_hand_computed(self):
         # The gathered channel must equal the explicit weighted sum.
