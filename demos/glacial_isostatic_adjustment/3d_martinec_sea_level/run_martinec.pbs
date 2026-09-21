@@ -72,13 +72,18 @@
 #                     reads, so give the continued run its own LABEL as well.
 #   EXTRA=            any other driver options
 #
-# Cost. The Spada baseline on the coarse mesh is 127 s per 100 yr step at 96
-# ranks and 78 GB (job 179238658). Case B marches 118 steps on that ladder,
-# case C and D 300 steps of 50 yr. The refined mesh has 1.8 times the
-# displacement and potential dofs, which scales the step to 219 to 229 s and
-# the memory to at most 191 GB; that estimate needs two nodes at the same
-# dofs per rank. Sea level adds the ocean column of the load to block 0 and
-# the dense Schur complement on block 1; the smoke job measures what it costs.
+# Cost, measured. Case B on the coarse mesh at 96 ranks costs 599.5 s per 100 yr
+# step, 405.9 s per 50 yr step, 214.8 s per 10 yr step and 476.5 s for the
+# elastic solve, at 73.57 GB of memory (job G2, 179385224). Case B marches 118
+# steps of that ladder to 10 kyr, which is 17.74 h; case C and D march 300 steps
+# of 50 yr. The refined mesh has 1.72 times the unknowns and 1.80 times the
+# displacement and potential dofs, so it costs 30.5 to 31.9 h at 96 ranks, and it
+# needs two nodes to keep the dofs per rank (see the G2r paragraph). At 192 ranks
+# on two nodes it measures 153.12 GB (job G2r-smoke, 179428772). The Spada
+# baseline of 127 s per 100 yr step at 78 GB (job 179238658) is 4.7 times
+# cheaper per step than case B on the same mesh: sea level adds the ocean column
+# of the load to block 0 and the dense Schur complement on block 1, so do not
+# scale a sea-level cost from that baseline.
 #
 # Job G2-smoke: four arms of case B on the coarse mesh, two steps each. The
 # four arms give two comparisons. The two representations must give the same
@@ -183,9 +188,18 @@
 # this mesh and this case, a mean of 382 s over 5 steps against 215 s over 10,
 # and not the 1.22 of the Spada load.
 #
-#   job     steps  estimate  request   margin  SU at the estimate
-#   G2      118    13.0 h    24:00:00  1.85    2 700
-#   G2-K     28    11.3 h    18:00:00  1.58    2 350
+#   job     steps  estimate  request   margin  measured wall  measured SU
+#   G2      118    13.0 h    24:00:00  1.85    17 h 48 min    3 701.94
+#   G2-K     28    11.3 h    18:00:00  1.58    12 h 53 min    2 679.33
+#   G2r     118    20.0 h    48:00:00  2.40    -              -
+#
+# The two measured columns are the outcome of the two jobs, 179385224 and
+# 179389239. The estimate of the G2 line is 1.37 times too small, and the whole
+# of that factor is in the larger steps: the line took the factors 1.22 and 1.98
+# of the Spada load, and case B on this mesh measures 1.89 and 2.79 (the table
+# of the G2r paragraph below). The measured G2-K estimate is right to 1.14. So a
+# step ratio of this benchmark has to be measured on this benchmark, and the
+# G2r estimate below uses the measured steps of G2 and no model of them.
 #
 # normalsr charges 2 SU per cpu-hour and PBS charges the 104 cpus of the
 # allocation, so one node costs 208 SU per hour of wall (measured: arm 1 used
@@ -204,73 +218,207 @@
 # so neither line needs a memory option.
 #
 # Job G2r: case B on the 78 km refined mesh, to 10 kyr, on two nodes. The
-# references are job G2 on the coarse mesh and the VEGA profiles. Two lines,
-# in this order. The first line measures the cost and the memory of two steps.
-# The second line marches the 118 steps of the ladder.
+# references are job G2 on the coarse mesh and the VEGA profiles. Two lines, in
+# this order. The first line measures the cost and the memory of two steps. The
+# second line marches the 118 steps of the ladder, and it carries a dependency
+# on the first, so that it starts only after a clean smoke run.
 #
 #   qsub -N g2r-smoke -j oe -o martinec-g2r-smoke.out \
 #        -l ncpus=208 -l mem=960GB -l walltime=03:00:00 \
 #        -v NNODES=2,CASE=B,STEPS=2,LABEL=g2r-smoke,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
 #        run_martinec.pbs
 #   qsub -N g2r -j oe -o martinec-g2r.out \
-#        -l ncpus=208 -l mem=960GB \
+#        -l ncpus=208 -l mem=960GB -l walltime=48:00:00 \
+#        -W depend=afterok:<the job id of the smoke line> \
 #        -v NNODES=2,CASE=B,LABEL=g2r,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
 #        run_martinec.pbs
 #
-# The smoke line comes first because every number below is a linear scale of a
-# coarse-mesh measurement. Two steps cost about 25 minutes of wall and give the
-# real memory, the real step time and the count of the block-0 solves that
-# reach the iteration cap. Submit the second line after you read those three.
+# Submitted on 2026-09-20 as 179428772 (the smoke line) and 179428774 (the
+# march, held on `afterok:179428772`), both charged to vo05 from the Gadi
+# worktree at `c6a3a44a`. The smoke line finished with exit 0 in 17 min 25 s and
+# 120.76 SU, at 153.12 GB of memory, and the march left its hold by itself.
+#
+# What the smoke line measured, beside the same three solves of G2 (the elastic
+# step and two steps of 10 yr, at 96 ranks on the coarse mesh):
+#
+#   quantity                        G2r-smoke, 192 ranks   G2, 96 ranks
+#   wall of the three solves                     837.4 s       917.7 s
+#   wall of each solve             413.0, 212.2, 212.1 s   476.5, 261.4, 179.7 s
+#   outer iterations per solve                     4, 4, 3       6, 5, 3
+#   block-0 applications                              43            52
+#   block-0 inner iterations                       3 065         3 410
+#   applications at the cap of 200            2 (4.7 pc)    2 (3.8 pc)
+#   wall per inner iteration                    0.2732 s      0.2691 s
+#   dense-complement asymmetry, elastic build     1.553e-05     8.697e-06
+#   dense-complement asymmetry, step 1 build      6.010e-06     2.220e-05
+#   memory                                     153.12 GB      73.57 GB
+#   mesh read / solver build                 11.9 s / 89.0 s          -
+#
+# Three readings of that table. The cost per block-0 inner iteration is the same
+# on both, 0.2732 s against 0.2691 s, so the refined mesh at twice the ranks
+# costs 1.5 percent more per iteration for 1.72 times the unknowns: a parallel
+# efficiency of 0.85 over the doubling, above the 0.8 the estimate assumed.
+# Block 0 is not worse on the refined mesh over these three solves: it needs 43
+# applications against 52 and 3 065 inner iterations against 3 410, and the
+# asymmetry of the dense complement is inside a factor of 4 of the G2 value at
+# the same build (the table compares build against build, because the value
+# changes by two orders of magnitude between the builds of one run). And the
+# memory is 2.08 times the memory of G2, above the dof ratio of 1.72, because
+# the fixed cost per rank is paid by 192 ranks and not by 96; 153.12 GB is 6.3
+# times inside the request of 960GB.
+#
+# The smoke line comes first, because every resource of the march is a scale of
+# a coarse-mesh measurement. Two steps cost about 20 minutes of wall, and they
+# give the memory, the step wall at 192 ranks and the fraction of the block-0
+# applications that reach the iteration cap. `-W depend=afterok` holds the march
+# until the smoke line exits 0. A failure of the smoke line therefore stops the
+# march before it spends any units, and PBS then deletes the held job.
 #
 # Resources: two nodes, 208 cpus, 192 ranks at NRANK=96. The reasons:
 #
 #   Cores. The refined mesh has 8 511 866 unknowns against 4 942 922 on the
-#   coarse mesh. At the dofs per rank of the Spada baseline the refined mesh
-#   needs 165 to 173 ranks, which is more than the 104 cpus of one node.
-#   Memory. The largest estimate is 191 GB and one node has 480 GB, so the
-#   second node is for the cores and not for the memory.
-#   Walltime. One node gives an estimate of 23 to 24 hours against the 48 hour
-#   limit of normalsr. Two nodes give about 15 hours. The larger margin covers
-#   the rise of the block-0 iteration count (see the block-0 paragraph).
+#   coarse mesh, a ratio of 1.72 on the total and of 1.80 on the displacement
+#   and potential dofs. At the dofs per rank of the Spada baseline the refined
+#   mesh needs 165 to 173 ranks, which is more than the 104 cpus of one node.
+#   Memory. G2 used 73.57 GB on the coarse mesh at 96 ranks. The dof ratio gives
+#   127 to 133 GB, and the smoke line measured 153.12 GB, which is the number to
+#   use: 192 ranks and not 96 pay the fixed cost per rank. That is 77 GB per node
+#   of a two-node job against the 480 GB of one node, so the request of 960GB is
+#   6.3 times the measured need. The 191 GB of the earlier estimate came from the
+#   Spada baseline and is superseded.
+#   Walltime. The measured wall of G2 is 17.74 h on one node, so one node on the
+#   refined mesh is 30.5 to 31.9 h against the 48 h limit of normalsr, and the
+#   block-0 growth below can pass that limit. Two nodes give 19.1 to 20.0 h.
 #
 # NRANK stays at 96, as in every measured job of this branch. PBS charges the
 # 104 cpus of the allocation at any value of NRANK, and 96 ranks per node keep
 # the step time comparable with G2 and with the Spada baseline.
 #
-# The walltime estimate. G2-smoke measured 220 s for a converged 10 yr step on
-# the coarse mesh at 96 ranks, and 476 s for the elastic solve. The Spada run
-# of G0 cost 127 s per 100 yr step against 64 s per 10 yr step, a factor of
-# 1.98 for the larger dt. The ladder of case B has 10 steps of 10 yr, 18 steps
-# of 50 yr and 90 steps of 100 yr, which gives 13.4 hours on the coarse mesh.
-# The dof ratio of 1.72 to 1.80 gives 23 to 24 hours at 96 ranks, and 192 ranks
-# at 80 percent parallel efficiency give about 15 hours. The default walltime of
-# 48:00:00 is the maximum of normalsr at 208 cpus, so the second line above
-# needs no walltime option.
+# The walltime estimate comes from the measured steps of G2 and not from a model
+# of them. G2 marched this ladder on the coarse mesh at 96 ranks and printed the
+# wall of every step. The four segments of that run:
 #
-# The cost. normalsr charges 2 SU per cpu-hour, so 208 cpus cost 416 SU per
-# hour of wall. The smoke line costs about 200 SU and the march about 6 200 SU.
+#   segment         steps   mean wall        sum   ratio to the 10 yr step
+#   elastic solve       1    476.5 s      476.5 s   -
+#   dt = 10 yr         10    214.8 s    2 147.8 s   1.00
+#   dt = 50 yr         18    405.9 s    7 306.6 s   1.89
+#   dt = 100 yr        90    599.5 s   53 950.5 s   2.79
+#   all               119               63 881 s = 17.74 h
+#
+# The job wall of G2 is 17 h 47 min 52 s, so the setup outside the steps costs
+# about 4 minutes. The refined mesh at 192 ranks scales that sum by the dof
+# ratio and by the rank ratio:
+#
+#   63 881 s x 1.72 / (2 x 0.8) = 68 672 s = 19.1 h   at the dof ratio 1.72
+#   63 881 s x 1.80 / (2 x 0.8) = 71 866 s = 20.0 h   at the dof ratio 1.80
+#
+# The 0.8 is an assumed parallel efficiency over the doubling of the ranks, and
+# the smoke line measured 0.85. The same sum scaled by the measured ratios of
+# the smoke line brackets the march:
+#
+#   63 881 s x 0.913 = 58 291 s = 16.2 h   at the wall ratio of the three solves
+#   63 881 s x 1.18  = 75 385 s = 20.9 h   at the wall ratio of step 2 alone
+#
+# The two ratios differ because the refined mesh took fewer block-0 applications
+# in the first two solves (17 and 17 against 23 and 20), and that advantage can
+# stop at any step. Step 2 is the one solve of the pair that did identical work,
+# 9 applications at 3 outer iterations in both runs, so 1.18 is the ratio to
+# carry. The request of 48:00:00 is the limit of normalsr at 208 cpus, so the
+# march holds a factor of 2.3 over 20.9 h.
+#
+# What can raise the estimate, and the bound on it. G2 ran 1 923 block-0
+# applications with 301 627 inner iterations, a mean of 156.9 of a cap of 200,
+# and 1 093 of the applications (57 percent) reached that cap. The refined mesh
+# has a wider spread of the CG2 Laplacian diagonal, 13.5 times the median
+# against 8.7 times, so more of its applications reach the cap. The cap bounds
+# what that costs: an application never runs more than 200 inner iterations, so
+# the inner work per application can rise by at most 200 / 156.9 = 1.27. Two
+# bounds follow, and they use different factors. On the 20.0 h estimate of the
+# dof ratio, both factors together, 1.27 for the inner work and 1.2 for a rise of
+# the outer count, give 30.4 h. On the measured 20.9 h of the smoke line, the
+# 1.27 alone gives 26.6 h and both factors give 31.9 h. Every one of the three is
+# inside the request of 48 h. The smoke line then measured the start of the
+# march: 2 of its 43 applications reach the cap, against 2 of 52 in G2 over the
+# same three solves, so the wider spread of the Laplacian diagonal costs nothing
+# there. If the march still stops at the walltime, the checkpoint of step 100
+# continues it with RESTART and RESTART_FILE.
+#
+# The cost. normalsr charges 2 SU per cpu-hour and PBS charges the 208 cpus of
+# the allocation, so the march costs 416 SU per hour of wall: about 8 300 SU at
+# the estimate of 20.0 h, about 12 600 SU at the bound of 30.4 h and 19 968 SU
+# if it runs to the request. The smoke line cost 120.76 SU, measured. Gadi
+# reserves the units of the request while the job waits and runs, and it returns
+# the part the job does not use. vo05 held 752.84 KSU on 2026-09-20.
 # CAUTION: check the available service units of the paying project with
-# `nci_account -P vo05` before you submit the second line. A job that stops at
-# the walltime keeps its checkpoint, and `RESTART` continues it, but the units
-# it used are spent.
+# `nci_account -P vo05` before you submit the march. A job that stops at the
+# walltime keeps its checkpoint, and `RESTART` continues it, but the units it
+# used are spent.
 #
-# Block 0. The iteration cap of 200 binds in 2 of the 52 block-0 applications
-# of G2-smoke on the coarse mesh, and the largest CG2 Laplacian diagonal of the
-# refined mesh is 13.5 times the median against 8.7 times on the coarse mesh.
-# So more applications can reach the cap here. Count the block-0 solves that
-# exit `DIVERGED_ITS` in the smoke log:
+# Disk. G2 wrote a checkpoint file of 730 MB for its seven checkpoints and a log
+# of 72 MB. The refined mesh gives about 1.3 GB and about 150 MB. The xd2
+# scratch filesystem held 22.64 TiB of a quota of 22.97 TiB on 2026-09-20, so
+# the output of the march fits, and that margin is for the whole project.
+#
+# Block 0. The march runs the settings of G2 and changes nothing: the relative
+# tolerance of 1e-4 and the iteration cap of 200. This replaces the rule that
+# stood here before, which raised the cap to 400 when more than a tenth of the
+# applications of the smoke log exit `DIVERGED_ITS`. G2 measured why that rule
+# is wrong. The cap binds in 1 093 of its 1 923 applications, which is 57
+# percent and far above a tenth, and the outer FGMRES still converged on
+# CONVERGED_RTOL at every one of the 119 solves, in 3 to 6 iterations with a
+# mean of 4.44 and with a largest relative mass dipole of 4.2e-10 against the
+# outer tolerance of 1e-6. The outer tolerance and not the cap controls the
+# answer, because FGMRES accepts a preconditioner that changes between
+# iterations. A larger cap makes every saturated application more expensive and
+# buys nothing. The G2-K paragraph above reaches the same conclusion at 95
+# percent saturation. The rule was also read over the wrong window: the first
+# four solves of G2 give 4 of 61 applications at the cap, which is 6.6 percent,
+# so a smoke log of two steps does not measure what the march does.
+#
+# Count the applications at the cap for the record, in the smoke log and in the
+# march log. Include the lines that did not converge, because an application at
+# the cap prints `did not converge due to DIVERGED_ITS`:
 #
 #   grep -c "condensed_ solve did not converge" martinec-g2r-smoke.out
+#   grep -c "condensed_ solve converged" martinec-g2r-smoke.out
 #
-# If that count is above a tenth of the block-0 applications of the same log,
-# add `EXTRA=--block0-max-it=400` to the `-v` list of the second line. Write the
-# flag in the `=` form: a `-v` list is separated by commas and a value with a
-# space in it does not survive it. A block-0 solve that
-# stops at the cap builds the dense Schur complement of block 1 from an inexact
-# operator, and it also costs the outer solve more iterations. A larger cap
-# costs wall clock in the applications that reach it and changes nothing in the
-# applications that do not, so it is the safe direction. Record the setting
-# with the counts, because every other 3-D number of this branch is at 200.
+# Change block 0 for one reading of a log only: the run stops with a KSP
+# convergence error, so the outer solve did not reach its relative tolerance of
+# 1e-6 at some step. That reading is the only one that says the answer is wrong.
+# The change is then `EXTRA=--block0-max-it=400`, and it is the safe direction: a
+# larger cap costs wall clock in the applications that reach it and changes
+# nothing in the applications that do not. Write the flag in the `=` form,
+# because a `-v` list is separated by commas and a value with a space in it does
+# not survive it. Record the setting beside the counts, because every other 3-D
+# number of this branch is at a cap of 200.
+#
+# Two other quantities measure the cost of an inexact block 0 and not the
+# accuracy of the answer. Report both for the march, with the G2 value beside
+# each, and do not read a threshold from them:
+#
+#   the outer iteration count per solve. G2 gives 3 to 6 with a mean of 4.44
+#   over its 119 solves, and 3 to 6 with a mean of 3.79 over its first 29
+#   solves, which is the window to 1 kyr.
+#   the relative asymmetry of the dense Schur complement of block 1, build by
+#   build. G2 builds the complement four times and prints 8.697e-06 at the
+#   elastic solve, 2.220e-05 at step 1, 1.577e-05 at step 11 (the change to
+#   dt = 50 yr) and 7.274e-04 at step 29 (the change to dt = 100 yr). The range
+#   over the whole march is therefore 8.7e-06 to 7.3e-04. The narrower range
+#   8.7e-06 to 2.2e-05 holds for the two builds inside a two-step smoke window
+#   only. The G2r march log holds the same four builds, so compare the value of
+#   one build against the G2 value of the same build.
+#
+# Neither quantity carries a threshold, and the reason is G2-K. It is the one
+# measured run that sits high in both, and the G2-K paragraph above says not to
+# raise the cap there. G2-K prints 1.053e-03 at the elastic solve, 2.252e-03 at
+# step 1 and 2.083e-03 at step 11, which is about 100 times the G2 value at the
+# same build, and its outer count is 6 to 12 with a mean of 8.45 over 29 solves.
+# Its outer solve still reached 1e-6 at every step. A threshold at 1e-3 on the
+# asymmetry, or at a mean outer count of 8, therefore fires on that reference run
+# and contradicts the instruction above it. The 1e-3 threshold also sits only 1.4
+# times above the 7.274e-04 that G2 itself prints at step 29. To raise the cap on
+# cost grounds, measure both caps over the same steps and compare the wall clock.
+# Do not infer the cost from either signal.
 source /etc/profile
 module use /g/data/fp50/modules
 module load firedrake/main-20260902
