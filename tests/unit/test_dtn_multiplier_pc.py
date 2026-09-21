@@ -270,21 +270,43 @@ class TestItChangesNoDefault:
     moves every number a campaign produces without anybody asking. A test, not
     a comment, because a comment does not fail.
 
-    These pin the state the 2026-09-20 Gadi runs measured: on the low-rank
-    representation block 1 carries the exact complement, the Schur
-    factorisation is `lower`, block 0 is solved to 1e-4 and its FGMRES is not
-    restarted. The direct preset is untouched by all of it.
+    These pin the state the Gadi runs measured: on the low-rank
+    representation the preset forms the exact complement of the `Real` block,
+    the cached apply of `gadopt.DtNTwoBlockSchurPC` owns it and the Schur
+    factorisation is `full`, block 0 is solved to 1e-4 and its FGMRES is not
+    restarted. Naming `ainvb=False` gives the delegating path, which is
+    `gadopt.DtNMultiplierDenseSchurPC` under `lower`, and that is the
+    configuration the 2026-09-20 campaign measured. The direct preset is
+    untouched by all of it.
     """
 
-    def test_the_low_rank_arm_preconditions_block_one_with_the_complement(self):
-        """4 `Real` rows, so a build is 4 cheap block-0 solves and it pays."""
+    def test_the_low_rank_arm_forms_the_complement_through_the_cached_apply(
+            self):
+        """4 `Real` rows, so a build is 4 cheap block-0 solves and it pays.
+
+        The preset forms that complement through the cached apply, which keeps
+        the outer iteration count of the full factorisation while spending one
+        block-0 solve per outer iteration: 45 min 44 s against the delegating
+        path's 1 h 18 32 over the full Spada ladder (job 179511971 against
+        179496714), and 16.78 s per warm step against 25.6 at dt = 100 yr with
+        2 outer iterations against 3 (arms Z2 and Z1 of job 179510821).
+
+        Block 1 is then never entered, so it carries no preconditioner at all.
+        """
         p = selfgrav_dtn_iterative_solver_parameters(condensed=False)
-        assert p["dtn_fieldsplit_1_pc_type"] == "python"
-        assert p["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+        assert p["dtn_schur_ainvb"] is True
+        assert p["dtn_fieldsplit_1_pc_type"] == "none"
+        assert "dtn_fieldsplit_1_pc_python_type" not in p
         # and the same when the representation is named rather than resolved
         assert selfgrav_dtn_iterative_solver_parameters(
             condensed=False, dtn_representation="lowrank")[
-                "dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+                "dtn_schur_ainvb"] is True
+        # `ainvb=False` names the delegating path, which forms the same
+        # complement and hands it to PETSc as a block-1 preconditioner.
+        off = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, ainvb=False)
+        assert off["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+        assert "dtn_schur_ainvb" not in off
 
     def test_the_complement_runs_under_preonly_with_no_krylov_keys(self):
         """The factored complement is an exact inverse, so nothing iterates.
@@ -296,7 +318,8 @@ class TestItChangesNoDefault:
         cap written for a
         solve that never runs would describe a configuration that is not there.
         """
-        p = selfgrav_dtn_iterative_solver_parameters(condensed=False)
+        p = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, ainvb=False)
         assert p["dtn_fieldsplit_1_ksp_type"] == "preonly"
         for dropped in ("dtn_fieldsplit_1_ksp_rtol",
                         "dtn_fieldsplit_1_ksp_max_it"):
@@ -356,13 +379,17 @@ class TestItChangesNoDefault:
         it refuses any other factorisation type, so the two are alternatives
         and the preset must not stack them.
         """
-        for condensed in (True, False):
+        # The preset writes `full` where it chooses the cached apply, which
+        # is the low-rank representation here, and `lower` where it does not.
+        assert selfgrav_dtn_iterative_solver_parameters(condensed=True)[
+            "dtn_pc_fieldsplit_schur_fact_type"] == "lower"
+        assert selfgrav_dtn_iterative_solver_parameters(condensed=False)[
+            "dtn_pc_fieldsplit_schur_fact_type"] == "full"
+        # Both named values, at the same width, give the two types.
+        for ainvb, fact in ((True, "full"), (False, "lower")):
             assert selfgrav_dtn_iterative_solver_parameters(
-                condensed=condensed)[
-                    "dtn_pc_fieldsplit_schur_fact_type"] == "lower"
-        assert selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, ainvb=True)[
-                "dtn_pc_fieldsplit_schur_fact_type"] == "full"
+                condensed=False, ainvb=ainvb)[
+                    "dtn_pc_fieldsplit_schur_fact_type"] == fact
 
     def test_block_zero_is_solved_to_the_tolerance_the_complement_needs(self):
         """The complement is only as linear as the solve that builds it.
@@ -807,11 +834,13 @@ class TestTheNullCouplingConfiguration:
         assert np.all(obj.block1_diagonal() != 0.0)
 
 
-#: Every key `selfgrav_dtn_iterative_solver_parameters()` writes at its
-#: defaults, sorted, as measured at commit `c24685ac` on
-#: `sghelichkhani/gia-preconditioner`. Written out rather than counted so that
-#: a key which is renamed, or one which is added while another is dropped,
-#: fails here instead of passing a count check.
+#: Every key `selfgrav_dtn_iterative_solver_parameters()` wrote at its defaults
+#: at commit `c24685ac` on `sghelichkhani/gia-preconditioner`, sorted. It is
+#: the shape before the sixth default, `u_ksp_max_it=0`, which drops the three
+#: keys of the truncated CG; the preset writes this set again for a caller who
+#: passes `u_ksp_max_it=4`. Written out and not counted so that a key which is
+#: renamed, or one which is added while another is dropped, fails the test
+#: instead of passing a count check.
 KEYS_AT_C24685AC = (
     "dtn_fieldsplit_0_fieldsplit_0_assembled_mg_levels_pc_type",
     "dtn_fieldsplit_0_fieldsplit_0_assembled_pc_gamg_coarse_eq_limit",
@@ -906,11 +935,21 @@ class TestTheBlockOneChoiceKeysOnTheNumberOfRealRows:
         `condensed=False` to the low-rank one, and at these widths the two
         return the same block-1 configuration. Before the rule, the multiplier
         arm took `pc_type: none` at every width.
+
+        The complement is formed through the cached apply by default, and
+        through `gadopt.DtNMultiplierDenseSchurPC` when the caller names
+        `ainvb=False`. One width test decides both, because both are the same
+        complement and both cost `n` block-0 solves to form.
         """
         p = selfgrav_dtn_iterative_solver_parameters(
             condensed=condensed, n_real=n_real)
-        assert p["dtn_fieldsplit_1_pc_type"] == "python"
-        assert p["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+        assert p["dtn_schur_ainvb"] is True
+        assert p["dtn_pc_fieldsplit_schur_fact_type"] == "full"
+        assert p["dtn_fieldsplit_1_pc_type"] == "none"
+        delegating = selfgrav_dtn_iterative_solver_parameters(
+            condensed=condensed, n_real=n_real, ainvb=False)
+        assert delegating["dtn_fieldsplit_1_pc_type"] == "python"
+        assert delegating["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
 
     @pytest.mark.parametrize("n_real", REFUSED)
     @pytest.mark.parametrize("condensed", (True, False))
@@ -931,9 +970,15 @@ class TestTheBlockOneChoiceKeysOnTheNumberOfRealRows:
         preconditioner. The exact complement runs under `preonly` with no
         tolerance and no cap, because neither describes a solve that happens;
         everything else keeps GMRES at 1e-4 under 200.
+
+        `ainvb=False` is named because this is a test about the block-1 KSP,
+        and the preset's own choice at a narrow width is the cached apply,
+        which never enters that KSP at all. The default's block-1 keys are
+        pinned by `test_a_narrow_block_takes_the_complement_on_either_
+        representation`.
         """
         p = selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, n_real=n_real)
+            condensed=False, n_real=n_real, ainvb=False)
         if p["dtn_fieldsplit_1_pc_type"] == "python":
             assert p["dtn_fieldsplit_1_ksp_type"] == "preonly"
             assert "dtn_fieldsplit_1_ksp_rtol" not in p
@@ -951,22 +996,36 @@ class TestTheBlockOneChoiceKeysOnTheNumberOfRealRows:
         limit has to be movable without a new release, and a test that pins it
         at 16 alone would not show that it is.
         """
+        # The limit decides whether the preset forms the complement at all,
+        # so it moves the cached apply and the delegating path together.
+        assert "dtn_schur_ainvb" in selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=16)
+        assert "dtn_schur_ainvb" not in \
+            selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, n_real=17)
         assert selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, n_real=16)["dtn_fieldsplit_1_pc_type"] == "python"
+            condensed=False, n_real=16, ainvb=False)[
+                "dtn_fieldsplit_1_pc_type"] == "python"
         assert selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, n_real=17)["dtn_fieldsplit_1_pc_type"] == "none"
-        # a caller who has measured a narrower break-even moves it down
-        assert selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, n_real=5, dense_schur_max_rows=4)[
+            condensed=False, n_real=17, ainvb=False)[
                 "dtn_fieldsplit_1_pc_type"] == "none"
+        # a caller who has measured a narrower break-even moves it down
+        narrower = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=5, dense_schur_max_rows=4)
+        assert "dtn_schur_ainvb" not in narrower
+        assert narrower["dtn_fieldsplit_1_pc_type"] == "none"
         # and one who has measured a wider one moves it up
         assert selfgrav_dtn_iterative_solver_parameters(
             condensed=True, n_real=76, dense_schur_max_rows=80)[
-                "dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
-        # 0 switches the preset's choice off at every width
+                "dtn_schur_ainvb"] is True
         assert selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, n_real=1, dense_schur_max_rows=0)[
-                "dtn_fieldsplit_1_pc_type"] == "none"
+            condensed=True, n_real=76, dense_schur_max_rows=80,
+            ainvb=False)["dtn_fieldsplit_1_pc_python_type"] == DENSE_PC
+        # 0 switches the preset's choice off at every width
+        off = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, n_real=1, dense_schur_max_rows=0)
+        assert "dtn_schur_ainvb" not in off
+        assert off["dtn_fieldsplit_1_pc_type"] == "none"
 
     @pytest.mark.parametrize("n_real", SELECTED + REFUSED)
     def test_a_named_preconditioner_is_taken_as_written_at_every_width(
@@ -1040,26 +1099,69 @@ class TestTheBlockOneChoiceKeysOnTheNumberOfRealRows:
     def test_no_count_keeps_the_choice_by_representation(self, condensed):
         """Every caller that passes no count keeps its whole dictionary.
 
-        This is the compatibility half of the change: the fallback is the rule
-        that shipped at `c24685ac`, so the 40 call sites in `tests/` and
-        `demos/` that build the dictionary themselves are untouched.
+        With no count the rule falls to the representation, which is what
+        keeps the multiplier arm off the cached apply: a build there is about
+        76 block-0 solves at L = 5, and no arm measures it. This is the test an
+        implementation that read the count when given and chose the cached
+        apply otherwise would fail.
         """
         p = selfgrav_dtn_iterative_solver_parameters(condensed=condensed)
-        expected = "none" if condensed else "python"
-        assert p["dtn_fieldsplit_1_pc_type"] == expected
+        if condensed:
+            # The multiplier representation: no complement, either way of
+            # forming it.
+            assert "dtn_schur_ainvb" not in p
+            assert p["dtn_fieldsplit_1_pc_type"] == "none"
+            assert p["dtn_pc_fieldsplit_schur_fact_type"] == "lower"
+        else:
+            assert p["dtn_schur_ainvb"] is True
         assert p == selfgrav_dtn_iterative_solver_parameters(
             condensed=condensed, n_real=None)
 
-    def test_the_defaults_write_the_same_keys_they_wrote_at_c24685ac(self):
-        """Adding two arguments must add no key and drop none.
+    def test_the_multiplier_representation_is_kept_off_the_cached_apply(self):
+        """The 76-solve path, named every way a caller reaches it.
+
+        A build costs `n` block-0 solves and `n` is about 76 on the multiplier
+        representation at L = 5, where it is 4 on the low-rank one. No arm
+        measures that, so the preset must not choose either way of forming the
+        complement there.
+        """
+        for kwargs in ({"condensed": True},
+                       {"condensed": False,
+                        "dtn_representation": "multiplier"},
+                       {"condensed": False, "block0": "pair",
+                        "dtn_representation": "multiplier"},
+                       {"condensed": False, "n_real": 76},
+                       {"condensed": True, "n_real": 80}):
+            p = selfgrav_dtn_iterative_solver_parameters(**kwargs)
+            assert "dtn_schur_ainvb" not in p, kwargs
+            assert p["dtn_pc_fieldsplit_schur_fact_type"] == "lower", kwargs
+            assert p["dtn_fieldsplit_1_pc_type"] == "none", kwargs
+
+    def test_the_defaults_drop_exactly_the_three_keys_of_the_truncated_cg(
+            self):
+        """The sixth default drops three keys from the shape at `c24685ac`.
 
         The five preset defaults the 2026-09-20 campaign selected are pinned by
         value in `TestItChangesNoDefault`; this pins the shape of the whole
-        dictionary around them.
+        dictionary around them. `u_ksp_max_it` now defaults to `0`, so the
+        displacement split is `preonly` and carries no cap, no tolerance and
+        no `ksp_converged_maxits`. Nothing else may move: a key which is
+        renamed, or one added while another is dropped, fails here instead of
+        passing a count check.
         """
-        assert tuple(sorted(
-            selfgrav_dtn_iterative_solver_parameters())) == KEYS_AT_C24685AC
+        keys = tuple(sorted(selfgrav_dtn_iterative_solver_parameters()))
+        dropped = set(KEYS_AT_C24685AC) - set(keys)
+        assert dropped == {
+            "dtn_fieldsplit_0_fieldsplit_0_ksp_converged_maxits",
+            "dtn_fieldsplit_0_fieldsplit_0_ksp_max_it",
+            "dtn_fieldsplit_0_fieldsplit_0_ksp_rtol"}
+        assert set(keys) - set(KEYS_AT_C24685AC) == set()
+        assert len(keys) == 48
         assert len(KEYS_AT_C24685AC) == 51
+        # The three come back, and nothing else with them, for the caller who
+        # asks for the truncated CG by name.
+        assert tuple(sorted(selfgrav_dtn_iterative_solver_parameters(
+            u_ksp_max_it=4))) == KEYS_AT_C24685AC
 
     def test_a_negative_count_or_limit_is_refused(self):
         """A count comes from `len(layout.real_fields)` and cannot be negative.

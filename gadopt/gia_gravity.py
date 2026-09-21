@@ -397,6 +397,19 @@ def _prefixed(d, prefix):
 #: agree to 5e-7 in the displacement norm, so this is a preconditioner change
 #: and nothing else.
 #:
+#: Those two jobs ran four iterations of CG on the split above this class, at
+#: PETSc's GMRES restart of 30 on the block-0 FGMRES. The preset now writes one
+#: GAMG V-cycle there (`u_ksp_max_it`, default `0`) at a restart equal to the
+#: block-0 cap, which is faster by a factor 1.94 on the polar-motion case of
+#: the Spada benchmark and 1.44 on the cap case (jobs `179496714` and
+#: `179483713` against `179423870` and `179423871`, 96 ranks, the full 138-step
+#: ladder, every printed benchmark number unchanged). The two control runs were
+#: made from a package that predates `c24685ac`; job `179482312` is what ties
+#: their walls to this tree, at 73.7 s per 100 yr step against the control
+#: arm's 72.8 and 25.0 against the option arm's 25.1, each the mean of the warm
+#: steps as every arm figure in this record is. The choice of modes this
+#: constant makes is unaffected: both arms of the pair above run the same split.
+#:
 #: Pass `u_pc="gadopt.RigidBodyAssembledPC"` to reproduce a run made with the
 #: rigid modes alone.
 DEFAULT_DISPLACEMENT_PC = "gadopt.NearlyIncompressibleAssembledPC"
@@ -412,13 +425,16 @@ _DENSE_MULTIPLIER_PC = "gadopt.DtNMultiplierDenseSchurPC"
 def _displacement_krylov(max_it: int, rtol: float) -> dict:
     """The Krylov options of the displacement split, with no option prefix.
 
-    Block 0 is a flexible FGMRES, so its preconditioner can differ from one
-    application to the next and a truncated Krylov solve on the displacement
-    split is a valid preconditioner inside it. That is what `max_it > 0` buys:
-    the split stops being one GAMG V-cycle and becomes a few steps of CG with
-    GAMG, which brings the block-0 FGMRES to `block0_rtol` in far fewer of its
-    own iterations and lets the tolerance rather than the cap decide when
-    block 0 stops.
+    The default is `max_it = 0`: one GAMG V-cycle per block-0 iteration, with
+    no Krylov method on the split. Block 0 is a flexible FGMRES, so its
+    preconditioner can differ from one application to the next and a truncated
+    Krylov solve on the displacement split is also a valid preconditioner
+    inside it. That is the option `max_it > 0` buys: the split becomes a few
+    steps of CG with GAMG, which brings the block-0 FGMRES to `block0_rtol` in
+    far fewer of its own iterations and lets the tolerance decide when block 0
+    stops instead of the cap. It costs wall clock at the restart the preset
+    ships; see `u_ksp_max_it` in
+    `selfgrav_dtn_iterative_solver_parameters` for the measurement.
 
     `ksp_converged_maxits` makes PETSc count a solve that reaches `max_it` as
     `CONVERGED_ITS`. The truncation is deliberate here; without the option the
@@ -427,9 +443,9 @@ def _displacement_krylov(max_it: int, rtol: float) -> dict:
     read around them.
 
     Args:
-      max_it: the iteration cap on the displacement split. `0` selects one
-        GAMG V-cycle per block-0 iteration (`ksp_type preonly`), which is the
-        route the P3 march ran.
+      max_it: the iteration cap on the displacement split. `0`, the preset's
+        default, selects one GAMG V-cycle per block-0 iteration
+        (`ksp_type preonly`), which is also the route the P3 march ran.
       rtol: the relative tolerance of the truncated CG. It has no effect when
         `max_it` is `0`.
 
@@ -518,11 +534,11 @@ def selfgrav_dtn_iterative_solver_parameters(
     snes_type: str = "newtonls",
     u_pc: str = DEFAULT_DISPLACEMENT_PC,
     multiplier_pc: str | None = None,
-    u_ksp_max_it: int = 4,
+    u_ksp_max_it: int = 0,
     u_ksp_rtol: float = 1e-2,
     block0: str = "condensed",
     dtn_representation: str | None = None,
-    ainvb: bool = False,
+    ainvb: bool | None = None,
     n_real: int | None = None,
     dense_schur_max_rows: int = 16,
 ) -> dict:
@@ -538,20 +554,22 @@ def selfgrav_dtn_iterative_solver_parameters(
     got it wrong.
 
         outer FGMRES
-         +- DtNTwoBlockSchurPC, schur_fact_type lower (`full` under `ainvb`)
+         +- DtNTwoBlockSchurPC, schur_fact_type full with the cached apply,
+         |  which is the default on a narrow `Real` block; lower otherwise
              +- block 0, condensed layout: FGMRES + multiplicative fieldsplit
-             |   +- u  : CG 4 + NearlyIncompressibleAssembledPC + GAMG
+             |   +- u  : one V-cycle of NearlyIncompressibleAssembledPC
              |   +- psi: SPDAssembledPC + GAMG   (GravitySolver's preset)
              +- block 0, full layout, block0="condensed" (the default):
              |  preonly + gadopt.CondensedBlockPC, which eliminates `M` once
              |  with Slate and solves the assembled (u, psi) system
              |   +- FGMRES rtol block0_rtol + multiplicative fieldsplit
-             |       +- u  : CG 4 + GAMG on S_uu, near-incompressible modes
+             |       +- u  : one GAMG V-cycle on S_uu, near-incompressible
+             |       |         modes
              |       +- psi: one GAMG V-cycle on A_psipsi
              +- block 0, full layout, block0="pair": FGMRES + multiplicative
              |  fieldsplit
              |   +- (u, M): InternalVariableSCPC, which eliminates `M` on
-             |   |          every inner iteration; CG 4 + GAMG on the
+             |   |          every inner iteration; one GAMG V-cycle on the
              |   |          condensed operator under `condensed_field_`
              |   +- psi   : SPDAssembledPC + GAMG
              +- block 1, low-rank representation: preonly +
@@ -637,10 +655,15 @@ def selfgrav_dtn_iterative_solver_parameters(
         under `gadopt.InternalVariableSCPC`, which eliminates `M` on every
         block-0 inner iteration (about 900 times per production step) and runs
         the displacement Krylov solve of `u_ksp_max_it` with GAMG on the exact
-        condensed displacement operator (options under `condensed_field_`).
-        It is kept because the T2 Gadi measurements were made on it - 472 s
-        per 500 yr step at 96 ranks - and a job that compares the two arms
-        selects one by this flag alone.
+        condensed displacement operator (options under `condensed_field_`), so
+        one GAMG V-cycle by default. It is kept because the T2 Gadi
+        measurements were made on it - 472 s per 500 yr step at 96 ranks, job
+        `178936321`, two steps from the P3 20 kyr state at block-0 cap 200 and
+        PETSc's GMRES restart of 30 with the four-iteration CG on the
+        displacement split, which `u_ksp_max_it=4` reproduces - and a job that
+        compares the two arms selects one by this flag alone. Both routes take
+        their displacement split from the same argument, which is what keeps
+        such a comparison a measurement of the block-0 route.
       block0_rtol, outer_rtol, block0_max_it, snes_rtol: the tolerances.
         `block0_rtol` is 1e-4 because the dense complement on block 1 is only
         as linear as the block-0 solve that builds its columns: at 1e-2 that
@@ -660,8 +683,13 @@ def selfgrav_dtn_iterative_solver_parameters(
         application. The cap is not the knob that makes block 0 converge --
         raising it to 400 with one V-cycle on the displacement split bought
         three outer iterations for 28 percent more GAMG V-cycles and 15
-        percent more wall (job `178765557` against `178763503`). The knob is
-        `u_ksp_max_it` below.
+        percent more wall (job `178765557` against `178763503`). At the
+        restart this preset ships, the cap binds on a small part of the solves
+        either way and `u_ksp_max_it` moves that part by about a fifth: 117 of
+        523 block-0 solves reached it over the full ladder with one V-cycle on
+        the displacement split (job `179496714`) against 98 of 527 with four
+        iterations of CG (job `179423870`), never more than two solves in one
+        step in either run.
         `snes_rtol` is relative to the norm of the **whole** mixed residual,
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
         are converged to correspondingly fewer digits, which is a live question
@@ -729,8 +757,12 @@ def selfgrav_dtn_iterative_solver_parameters(
         exists: `sghelichkhani/sea-level` adds three centre-of-mass rows and a
         sea-level `Shift`, which make a low-rank block 5 or 8 rows wide and a
         multiplier one 80 at L = 5.
-      dense_schur_max_rows: the widest `Real` block the preset will choose
-        `gadopt.DtNMultiplierDenseSchurPC` on when `n_real` is given. It has no
+      dense_schur_max_rows: the widest `Real` block the preset will form the
+        exact Schur complement on when `n_real` is given - through the cached
+        apply of `gadopt.DtNTwoBlockSchurPC` by default, and through
+        `gadopt.DtNMultiplierDenseSchurPC` when the caller names
+        `ainvb=False`. One limit covers both because both objects are that
+        same complement and both cost `n` block-0 solves to form. It has no
         meaning without a count.
 
         **What is measured.** 4 rows win: 88.2 s per step against 269 s with
@@ -743,15 +775,20 @@ def selfgrav_dtn_iterative_solver_parameters(
         argument exists so that a caller can move it without a new release. The
         widths 5 and 8 will be measured on `sghelichkhani/sea-level` once it
         rebases onto this tip, and that measurement is what sets the production
-        value.
+        value. On this tip that measurement takes the **cached apply**, which
+        is what the preset now chooses at those widths; the dense complement at
+        5 and 8 rows is reached by naming `ainvb=False`, and a campaign that
+        wants both arms must name it.
       multiplier_pc: the preconditioner on the block-1 (`Real`) split, named
         as a `pc_python_type` string, or `"none"`. The default `None` is a
-        sentinel meaning "the preset chooses", and it chooses by `ainvb`, then
-        by `n_real` when a count was given, and otherwise by the resolved
-        `dtn_representation`:
+        sentinel meaning "the preset chooses". It chooses `"none"` whenever
+        the cached apply of `ainvb` owns block 1, which is the default on a
+        narrow `Real` block, because nothing enters the block-1 KSP there.
+        Otherwise it chooses by `n_real` when a count was given, and by the
+        resolved `dtn_representation` when none was:
 
         * `"gadopt.DtNMultiplierDenseSchurPC"` on the low-rank representation
-          with `ainvb` off. The `Real` block is then 4 rows with rotation and
+          with `ainvb=False` named. The `Real` block is then 4 rows with rotation and
           1 without, so one build of the exact complement is 4 block-0 solves,
           and those are the cheap kind: a solve whose right-hand side is a
           column of `A01` takes 63 inner iterations and stops at the cap in 5
@@ -806,21 +843,71 @@ def selfgrav_dtn_iterative_solver_parameters(
         `"gadopt.DtNMultiplierDiagPC"` keep the GMRES at `rtol` 1e-4 and 200
         iterations, because neither solves the block on its own.
       ainvb: whether `gadopt.DtNTwoBlockSchurPC` owns the apply and caches the
-        columns `Z = A00^{-1} A01`. The default `False` keeps the delegating
-        path, whose one block-0 solve per outer iteration comes from
+        columns `Z = A00^{-1} A01`. The default `None` is a sentinel meaning
+        "the preset chooses", the convention `multiplier_pc` and
+        `dtn_representation` use on this same function. `False` keeps the
+        delegating path, whose one block-0 solve per outer iteration comes from
         `dtn_pc_fieldsplit_schur_fact_type lower` instead. With `True`
         the class runs `n` block-0 solves at every operator change, keeps from
         them both `Z` and the exact complement `S = A11 - A10 Z`, and then
         spends ONE block-0 solve per outer iteration while keeping the outer
         iteration count of `full`, which this argument therefore writes above
         it. The two routes are alternatives, not a stack: `lower` buys the
-        same single solve by spending more outer iterations: 88.2 s per 100 yr
-        step at 96 ranks (arm B4, job 179385036,
-        `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 3) against the cached
-        apply's 47.5 s (arm W1, job 179402871, section 28 of the same record,
-        where W2 adds the block-0 restart to W1 and reaches 26.3 s). `ainvb`
-        is off by default because it is new code whose only measurements are
-        at one step size. Block 1 is solved by
+        same single solve by spending more outer iterations.
+
+        **What the preset chooses, and why.** It chooses the cached apply when
+        it would form the exact complement at all: when the caller named no
+        `multiplier_pc` and the `Real` block is narrow by the rule of
+        `n_real` and `dense_schur_max_rows`. One width test decides both
+        objects, because both are the same complement of the same block and
+        both cost `n` block-0 solves to form, and the cached one adds only `n`
+        AXPYs of block-0 length per apply. A caller who named a block-1
+        preconditioner keeps the delegating path, `"none"` included, because
+        under the cached apply the class they named would be built, configured
+        and never applied.
+
+        **What is measured.** Both cases of the Spada benchmark, 138 steps,
+        96 ranks, from the preset alone, against the same preset with the
+        delegating path: **45 min 44 s against 1 h 18 32** on the polar-motion
+        case (job `179511971` against `179496714`) and **45 min 45 s against
+        1 h 08 54** on the cap case (`179511972` against `179483713`), with
+        every printed benchmark number unchanged - the seven polar-motion
+        ratios agree to 5.6e-09 and the cap table to 4.0e-10. At one step size
+        with one thing changed, 16.78 s per warm step against 25.6 at
+        dt = 100 yr, and 2 outer iterations against 3 (arms Z2 and Z1 of job
+        `179510821`). The cache built five times in each full run, one per
+        operator change, and the whole run then costs `n * builds + outer
+        iterations` block-0 solves, which is what the logs count: 298 on the
+        polar-motion case, 20 of them in five four-column builds and 278 in
+        the 139 solves at two outer iterations each (job `179511971`), and 283
+        on the cap case, where the `Real` block is one row without rotation,
+        so a build is one solve and five builds cost five (`179511972`).
+
+        **What is not measured.** No arm runs the cached apply on the
+        multiplier representation, where a build is about 76 block-0 solves,
+        and the width rule keeps the preset off that path. No 3-D arm runs it
+        with a power-law rheology, where the rebuild rule falls to
+        `gia_solve_index` and builds once per nonlinear solve; the unit tests
+        cover that branch at toy size.
+
+        **A note for whoever couples the sea-level equation.** A moving
+        coastline changes the ocean function, which enters the `Real` rows of
+        the sea-level constraint and therefore `A01`, `A10` and `A11`, the
+        blocks this cache is built from. An ocean function that enters the
+        residual as a `Function` needs no action: the solver fingerprints
+        every Jacobian coefficient at each `solve()` and invalidates the
+        Jacobian itself. One modified through a view of its data, or one that
+        reaches the solve only through a hand-supplied `J`, needs
+        `invalidate_jacobian`. **A coastline that depends on the solution
+        inside one solve, on a Newtonian rheology, is caught by neither**,
+        because `operator_version` is published as `None` from the rheology
+        alone; such a solver must publish `None` itself, which gives the
+        power-law treatment of one build per nonlinear solve. A stale cache
+        changes no converged answer, because this is a preconditioner and the
+        residual is untouched; it costs outer iterations, quietly while the
+        outer solve still converges inside its cap and loudly past it.
+
+        Block 1 is solved by
         the dense factors of `S`, so this argument writes `preonly` and
         `pc_type none` there and writes no block-1 tolerance, iteration cap or
         converged-reason key: no block-1 Krylov solve runs, and a tolerance in
@@ -863,18 +950,39 @@ def selfgrav_dtn_iterative_solver_parameters(
         value raises: the near-nullspace is chosen by the solver's
         `condensed_near_nullspace` argument instead.
       u_ksp_max_it, u_ksp_rtol: the Krylov solve on the displacement split, on
-        both layouts. The default runs four iterations of CG at relative
-        tolerance 1e-2 and counts the cap as convergence, so that block 0
-        preconditions with a few GAMG V-cycles instead of one.
-        `u_ksp_max_it=0` selects the single V-cycle (`ksp_type preonly`), the
-        route the P3 march ran. Measured on Gadi against that route with the
-        same modes (job `178765560` against `178765558`): 46 block-0 inner
-        iterations per application against 165, 0 of 111 block-0 solves at the
-        cap against 8 of 102, 20 156 GAMG V-cycles against 16 853, warm step
-        271 s against 270 s. So the wall is the same, the V-cycle count is 20
-        percent higher, and what the CG buys is that every block-0 solve
-        reaches `block0_rtol` and the tolerance decides. See
-        `_displacement_krylov` for the keys and for `ksp_converged_maxits`.
+        both layouts. The default is `0`: one GAMG V-cycle per block-0
+        iteration, written as `ksp_type preonly` with no tolerance and no cap
+        attached. `u_ksp_max_it=4` selects the alternative, four iterations of
+        CG at `u_ksp_rtol`, counting the cap as convergence.
+
+        Measured end to end on Gadi from this preset alone, 96 ranks, both
+        cases of the Spada benchmark over the full 138-step ladder, with the
+        four-iteration CG as the control: the polar-motion case falls from
+        2 h 32 15 to **1 h 18 32** (job `179496714` against `179423870`) and
+        the cap case from 1 h 39 01 to **1 h 08 54** (`179483713` against
+        `179423871`), and every printed benchmark number is unchanged, the
+        seven polar-motion ratios to 1.5e-08 and the cap table to 6.1e-10.
+        Per step at dt = 100 yr, where the ladder spends 90 of its 138 steps,
+        34.0 s against 75.9.
+
+        **The gain belongs to the block-0 restart as much as to this option.**
+        At PETSc's default GMRES restart of 30 the same option loses: 354 s
+        per 100 yr step against 269 for the CG (arms C3 and B0 of
+        `NOTES/team/rotation-pc/03-CAMPAIGN.md`). This preset has shipped a
+        restart equal to the block-0 cap since `c24685ac`, and at that restart
+        the option is the largest single gain of that campaign. The two are
+        not independent.
+
+        The older pair in the record measures a different corner and stands:
+        at dt = 500 yr, block-0 cap 400 and restart 30, the CG needs 46
+        block-0 inner iterations per application against the V-cycle's 165
+        and 20 156 GAMG V-cycles against 16 853, for a warm step of 271 s
+        against 270 (jobs `178765560` and `178765558`,
+        `NOTES/T2-GADI-GATE-2026-09-11.md` sections 5.5 and 5.6). What the CG
+        buys there is that every block-0 solve reaches `block0_rtol`, so the
+        tolerance decides instead of the cap; at the shipped restart that is
+        no longer worth its wall clock. See `_displacement_krylov` for the
+        keys and for `ksp_converged_maxits`.
 
     Every sub-KSP that runs a Krylov method reports `ksp_converged_reason`.
     That is not optional instrumentation: block 0 and block 1 are
@@ -962,44 +1070,75 @@ def selfgrav_dtn_iterative_solver_parameters(
             "the widest `Real` block the preset will form the dense complement "
             "on; pass 0 to switch that choice off entirely.")
     chosen_by_preset = multiplier_pc is None
+    # One predicate decides both objects, because both are the same exact
+    # complement of the same `Real` block and both cost `n` block-0 solves to
+    # form: the preset forms it when the caller named no block-1
+    # preconditioner and the block is narrow. Writing the width test once is
+    # what keeps the two choices from drifting apart, and it is what lets the
+    # tolerance refusal below test one thing.
+    if n_real is not None:
+        # The rule on `n`. A block of zero rows has nothing to form, so it
+        # falls through with everything above the limit.
+        narrow_real_block = 0 < n_real <= dense_schur_max_rows
+    else:
+        # No count given: the earlier rule, kept so that every caller which
+        # passes no count keeps exactly the choice it had.
+        narrow_real_block = dtn_representation == "lowrank"
+    forms_exact_complement = chosen_by_preset and narrow_real_block
+    # What the caller said about `ainvb`, kept because the refusal below turns
+    # on it: `True` is the caller taking the decision, `False` leaves the
+    # preset choosing the dense complement, and `None` is the preset choosing
+    # both.
+    named_ainvb = ainvb
+    if ainvb is None:
+        # The sentinel. The cached apply is the faster of the two ways to use
+        # that complement: it keeps the outer iteration count of the full
+        # factorisation while spending one block-0 solve per outer iteration,
+        # where the delegating path under `lower` spends the same one solve
+        # and more outer iterations. Measured end to end on both cases of the
+        # Spada benchmark, 96 ranks, the full 138-step ladder, from the preset
+        # alone: 45 min 44 s against 1 h 18 32 on the polar-motion case (job
+        # `179511971` against `179496714`) and 45 min 45 s against 1 h 08 54 on
+        # the cap case (`179511972` against `179483713`), with every printed
+        # benchmark number unchanged.
+        #
+        # A caller who named a block-1 preconditioner keeps the delegating
+        # path, because under the cached apply the class they named would be
+        # built, configured and never applied, and the preset must not take
+        # that decision away without saying so. `multiplier_pc="none"` is a
+        # naming, so `demos/gravity/spikes/spike_phase3d.py` keeps its own
+        # configuration and its tolerance ladder.
+        ainvb = forms_exact_complement
     if multiplier_pc is None:
-        if ainvb:
-            # First, and before the width is looked at: under `ainvb` the
-            # cached apply solves block 1 with its own dense factors, so the
-            # block-1 KSP is never entered and a preconditioner named for that
-            # block would be built, configured and never applied. That holds at
-            # every width.
-            multiplier_pc = "none"
-        elif n_real is not None:
-            # The rule on `n`. A block of zero rows has nothing to form, so it
-            # falls through to "none" with everything above the limit.
-            multiplier_pc = (_DENSE_MULTIPLIER_PC
-                             if 0 < n_real <= dense_schur_max_rows else "none")
-        else:
-            # No count given: the earlier rule, kept so that every caller which
-            # passes no count keeps exactly the dictionary it had.
-            multiplier_pc = (_DENSE_MULTIPLIER_PC
-                             if dtn_representation == "lowrank" else "none")
-    # The refusal scopes to the preset's own choice, not to the caller's: the
-    # columns of the dense complement come out of block-0 solves, so a loose
-    # block-0 tolerance makes the factored complement the complement of a
-    # different operator, and the preset must not SELECT a pair it documents as
-    # stagnating. A caller who names the class has taken that decision, so the
-    # pair is allowed at any tolerance. 1e-4 is where the one measurement sits
-    # and not a law.
-    if (chosen_by_preset and multiplier_pc == _DENSE_MULTIPLIER_PC
+        # Under `ainvb` the cached apply solves block 1 with its own dense
+        # factors, so the block-1 KSP is never entered and no preconditioner
+        # belongs there, at any width.
+        multiplier_pc = ("none" if ainvb
+                         else _DENSE_MULTIPLIER_PC if narrow_real_block
+                         else "none")
+    # The refusal scopes to the preset's own choice, not to the caller's. The
+    # columns of the exact complement come out of block-0 solves, whichever of
+    # the two objects holds it, so a loose block-0 tolerance makes the
+    # factored complement the complement of a different operator, and the
+    # preset must not SELECT a pair it documents as stagnating. A caller who
+    # names the class, or `"none"`, or `ainvb`, has taken that decision and is
+    # accepted at any tolerance. 1e-4 is where the one measurement sits and not
+    # a law.
+    if (forms_exact_complement and named_ainvb is not True
             and block0_rtol > 1e-4):
+        chosen = ("gadopt.DtNTwoBlockSchurPC's cached apply" if ainvb
+                  else _DENSE_MULTIPLIER_PC)
         raise ValueError(
             f"block0_rtol={block0_rtol!r} is looser than 1e-4, and the preset "
-            f"would choose {_DENSE_MULTIPLIER_PC} on block 1 here. The columns "
-            "of that dense complement are block-0 solves, so at 1e-2 the arm "
-            "stagnates: 642 non-convergent block-0 calls and a wall worse than "
-            "no block-1 preconditioner at all (Gadi job 176078939). Pass "
-            "multiplier_pc='none' to keep the loose tolerance, or tighten "
-            "block0_rtol to 1e-4. Naming "
-            f"multiplier_pc='{_DENSE_MULTIPLIER_PC}' is accepted at any "
-            "tolerance, because then the pair is the caller's decision and not "
-            "the preset's.")
+            f"would form the exact Schur complement of the `Real` block here, "
+            f"through {chosen}. The columns of that complement are block-0 "
+            "solves, so at 1e-2 the arm stagnates: 642 non-convergent block-0 "
+            "calls and a wall worse than no block-1 preconditioner at all "
+            "(Gadi job 176078939). Pass multiplier_pc='none' to keep the loose "
+            "tolerance, or tighten block0_rtol to 1e-4, or name ainvb=True. "
+            f"Naming multiplier_pc='{_DENSE_MULTIPLIER_PC}' is accepted at any "
+            "tolerance too, because then the pair is the caller's decision and "
+            "not the preset's.")
     # How block 1 is solved follows from what preconditions it, so the three
     # cases are written out together.
     if ainvb:
@@ -1072,7 +1211,10 @@ def selfgrav_dtn_iterative_solver_parameters(
         # the cached apply IS the `full`
         # factorisation with its second block-0 solve replaced by the cached
         # columns, so it reaches one solve per outer iteration while keeping
-        # `full`'s iteration count (47.5 s per step, arm W1 of job 179402871).
+        # `full`'s iteration count: 16.78 s per warm step against the
+        # delegating path's 25.6 at dt = 100 yr, 2 outer iterations against 3
+        # (arms Z2 and Z1 of job 179510821), and 45 min 44 s against 1 h 18 32
+        # over the full ladder (job 179511971 against 179496714).
         # The two routes are alternatives and the class refuses anything but
         # `full`.
         "dtn_pc_fieldsplit_schur_fact_type": "full" if ainvb else "lower",
@@ -1150,10 +1292,13 @@ def selfgrav_dtn_iterative_solver_parameters(
             # GAMG runs directly on the two assembled blocks: neither is
             # matrix-free, so no `AssembledPC` wraps them and the GAMG keys
             # carry no `assembled_` prefix.
-            # `SelfGravitatingGIASolver._attach_condensation_context` replaces
-            # the displacement split's CG by a GMRES of the same length when
-            # `condensed_operator_symmetric` says the condensed operator is
-            # not symmetric, which every power-law rheology makes it.
+            # `SelfGravitatingGIASolver._attach_condensation_context`
+            # replaces the displacement split's CG by a GMRES of the same
+            # length when `condensed_operator_symmetric` says the condensed
+            # operator is not symmetric, which every power-law rheology makes
+            # it. On the default split there is no CG to replace: `preonly`
+            # runs one GAMG V-cycle, which is symmetric or not with the
+            # operator and needs no Krylov method to match it.
             p.update(_prefixed({
                 "ksp_type": "fgmres",
                 "ksp_rtol": block0_rtol,
@@ -1173,12 +1318,15 @@ def selfgrav_dtn_iterative_solver_parameters(
         # Split 0 is the pair `(u, M)`, fields 0 and 1, under static
         # condensation. The displacement operator is the condensed matrix
         # `gadopt.InternalVariableSCPC` assembles, GAMG runs on it directly,
-        # and the Krylov options under `condensed_field_` are the same short
-        # CG the condensed layout puts on its displacement split.
-        # `SelfGravitatingGIASolver._attach_condensation_context` replaces the
-        # CG by a GMRES of the same length when `condensed_operator_symmetric`
-        # says the condensed operator is not symmetric, which every power-law
-        # rheology does.
+        # and the Krylov options under `condensed_field_` are the ones the
+        # condensed layout puts on its displacement split: one GAMG V-cycle by
+        # default, and the same truncated CG under `u_ksp_max_it=4`. Both
+        # routes read one argument so that a job comparing them measures the
+        # route. `SelfGravitatingGIASolver._attach_condensation_context`
+        # replaces a CG by a GMRES of the same length when
+        # `condensed_operator_symmetric` says the condensed operator is not
+        # symmetric, which every power-law rheology does; with `preonly` there
+        # is nothing for it to replace.
         condensation = {
             "ksp_type": "preonly",
             "pc_type": "python",
@@ -1856,8 +2004,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         of this operator in the divergence-free space and GAMG can only
         coarsen onto the modes it is given. It is the choice
         `gadopt.gia_gravity.DEFAULT_DISPLACEMENT_PC` makes on the condensed
-        layout, and giving both layouts the same modes and the same short CG
-        is what keeps the ratio between them a measurement of the coupled
+        layout, and giving both layouts the same modes and the same
+        displacement split is what keeps the ratio between them a measurement
+        of the coupled
         residual: job `178765563`, uncondensed, 107 block-0 applications at 55
         inner iterations and 670 s for a 500 yr step, against job `178765560`,
         condensed, 111 at 46 and 271 s. A `near_nullspace` passed to the
@@ -4136,20 +4285,27 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         On the condensed layout nothing reads these; they are harmless there.
 
-        Also selects the Krylov method on the condensed field. The preset
-        writes a short CG, which acts as a preconditioner inside the flexible
+        Also selects the Krylov method on the condensed field, when there is
+        one to select. A short CG acts as a preconditioner inside the flexible
         block-0 FGMRES and is valid only for a symmetric operator. The
         rheology alone decides that (`condensed_operator_symmetric`): a
         Newtonian rheology keeps the CG, and every power law takes an equally
-        short GMRES whose restart is the cap the preset wrote. The self-gravity
+        short GMRES whose restart is the cap the preset wrote.
+
+        **The switch is inert on the preset's default**, which is
+        `u_ksp_max_it=0` and writes `ksp_type preonly` on that split. The test
+        below is for `"cg"`, so a default run of a power-law rheology carries
+        no `ksp_gmres_restart` key and none is needed: one GAMG V-cycle is not
+        a Krylov method and does not assume symmetry. The switch fires for the
+        caller who asks for the truncated CG with `u_ksp_max_it`. The self-gravity
         configurations are all on the nonsymmetric side of that rule by more
         than one route anyway - measured 3.6e-3 asymmetry on the 2-D annulus
         with a rigid core, 9.4e-2 on the 3-D sphere with a fluid core - so the
         switch fires for a power law here whatever the mesh. The `Mapping` a
         caller passes is normally
-        `selfgrav_dtn_iterative_solver_parameters(...)` itself, whose `cg` is
-        the preset's default and not a choice, so a `cg` found there is
-        switched like the string path's.
+        `selfgrav_dtn_iterative_solver_parameters(...)` itself, where a `cg`
+        comes from `u_ksp_max_it` and not from a named `ksp_type`, so a `cg`
+        found there is switched like the string path's.
 
         The displacement split sits at a different prefix on each block-0
         route, so the switch runs over both: `block0="pair"` puts it under

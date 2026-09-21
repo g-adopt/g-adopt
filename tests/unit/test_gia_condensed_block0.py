@@ -380,13 +380,14 @@ class TestThePresetSelectsTheRoute:
         assert p[CONDENSED + "pc_fieldsplit_type"] == "multiplicative"
 
     def test_the_displacement_split_is_the_truncated_cg_with_gamg(self):
-        """The same short CG both layouts run, at the new prefix.
+        """The same short CG both layouts run under `u_ksp_max_it=4`.
 
         Four iterations at 1e-2 with `ksp_converged_maxits`: the split is a
         preconditioner inside the flexible `(u, psi)` FGMRES, so it is
         truncated on purpose and PETSc must count the truncation as a
         convergence, otherwise every Gadi log line from it reads
-        `DIVERGED_ITS`.
+        `DIVERGED_ITS`. The preset's own default on this split is one GAMG
+        V-cycle, which the test below reads.
         """
         p = selfgrav_dtn_iterative_solver_parameters(
             condensed=False, u_ksp_max_it=4, u_ksp_rtol=1e-2)
@@ -425,16 +426,21 @@ class TestThePresetSelectsTheRoute:
         # for `condensed_fieldsplit_1_*` (line 79) omits the key.
         assert PSI_SPLIT + "ksp_converged_reason" in p
 
-    def test_one_v_cycle_is_selectable_on_the_displacement_split(self):
-        """`u_ksp_max_it=0` is the route the P3 march ran.
+    def test_one_v_cycle_is_the_default_on_the_displacement_split(self):
+        """The preset's default at this prefix, with `0` asked for by hand.
 
         A cap left behind on a `preonly` KSP is inert and would read as a
-        truncated solve to anyone auditing the dictionary.
+        truncated solve to anyone auditing the dictionary, so the key must be
+        absent. Both dictionaries are read here because the measurements that
+        selected this default, jobs 179496714 and 179483713, were taken with
+        `u_ksp_max_it=0` passed by hand.
         """
-        p = selfgrav_dtn_iterative_solver_parameters(
+        default = selfgrav_dtn_iterative_solver_parameters(condensed=False)
+        by_hand = selfgrav_dtn_iterative_solver_parameters(
             condensed=False, u_ksp_max_it=0)
-        assert p[U_SPLIT + "ksp_type"] == "preonly"
-        assert U_SPLIT + "ksp_max_it" not in p
+        assert default == by_hand
+        assert default[U_SPLIT + "ksp_type"] == "preonly"
+        assert U_SPLIT + "ksp_max_it" not in default
 
 
 class TestTheLayoutGuards:
@@ -1054,15 +1060,38 @@ class TestPowerLaw:
     def test_the_displacement_split_switches_to_gmres(self, meshes):
         """A power law makes the condensed operator nonsymmetric, so no CG.
 
-        The preset writes a short CG on the displacement split, which is a
-        valid preconditioner inside the flexible `(u, psi)` FGMRES only while
-        `S_uu` is symmetric. `_attach_condensation_context` must make that
-        switch at the new prefix as well; reading only the `"pair"` route's
-        key leaves CG on a nonsymmetric operator, which does not raise and
-        converges to the wrong thing or not at all.
+        A short CG on the displacement split is a valid preconditioner inside
+        the flexible `(u, psi)` FGMRES only while `S_uu` is symmetric.
+        `_attach_condensation_context` must make that switch at the new prefix
+        as well; reading only the `"pair"` route's key leaves CG on a
+        nonsymmetric operator, which does not raise and converges to the wrong
+        thing or not at all.
+
+        The CG is asked for by name, because the preset's default on this
+        split is one GAMG V-cycle and there is then nothing to switch. The
+        test below, `test_the_default_split_needs_no_switch`, is that half.
 
         The restart is the split's own cap: a longer restart would allocate
         Krylov vectors the truncated solve never reaches.
+        """
+        solver, _, _ = build(
+            meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
+            solver_parameters=condensed_preset(snes_type="newtonls",
+                                               u_ksp_max_it=4),
+            solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
+        assert not solver.condensed_operator_symmetric()
+        p = solver.solver_parameters
+        assert p[U_SPLIT + "ksp_type"] == "gmres"
+        assert p[U_SPLIT + "ksp_gmres_restart"] == p[U_SPLIT + "ksp_max_it"] == 4
+
+    def test_the_default_split_needs_no_switch(self, meshes):
+        """On the default there is no CG to replace, under any rheology.
+
+        One GAMG V-cycle is not a Krylov method, so it assumes no symmetry and
+        the power-law rule has nothing to act on. The switch tests the split's
+        `ksp_type` for `"cg"`, so it must leave `preonly` alone and write no
+        restart key; a restart key at a `preonly` prefix would be inert and
+        would read as a Krylov solve to anyone auditing the dictionary.
         """
         solver, _, _ = build(
             meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
@@ -1070,8 +1099,9 @@ class TestPowerLaw:
             solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
         assert not solver.condensed_operator_symmetric()
         p = solver.solver_parameters
-        assert p[U_SPLIT + "ksp_type"] == "gmres"
-        assert p[U_SPLIT + "ksp_gmres_restart"] == p[U_SPLIT + "ksp_max_it"] == 4
+        assert p[U_SPLIT + "ksp_type"] == "preonly"
+        assert U_SPLIT + "ksp_gmres_restart" not in p
+        assert U_SPLIT + "ksp_max_it" not in p
 
     def test_a_caller_named_krylov_type_wins(self, meshes):
         """The one way to keep a method the symmetry rule would replace."""
@@ -1092,11 +1122,14 @@ class TestPowerLaw:
         """The switch is only worth something if it reaches the KSP.
 
         The options dictionary is one statement; what PETSc built is another,
-        and a key attached at the wrong depth is a silent no-op.
+        and a key attached at the wrong depth is a silent no-op. The CG is
+        asked for by name for the reason given in
+        `test_the_displacement_split_switches_to_gmres`.
         """
         solver, _, _ = build(
             meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
-            solver_parameters=condensed_preset(snes_type="newtonls"),
+            solver_parameters=condensed_preset(snes_type="newtonls",
+                                               u_ksp_max_it=4),
             solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
         solver.solve()
         assert displacement_ksp(block0_context(solver)).getType() == "gmres"
@@ -1309,28 +1342,30 @@ class TestThreeDimensions:
         assert relative_difference(m, m_direct) < 1e-8
         assert relative_difference(psi, psi_direct) < 1e-8
 
-    def test_the_displacement_split_runs_the_truncated_cg(self, solved):
-        """Newtonian in 3-D: `S_uu` is symmetric, so CG is the right method.
+    def test_the_displacement_split_runs_one_v_cycle(self, solved):
+        """The preset's default reaches the KSP PETSc built, in 3-D.
 
-        The 2-D annulus is sent to GMRES by the power-law rule, so this is the
-        only place in the file where the symmetric branch is exercised through
-        a real 3-D solve. The test also pins which block split 0 of the
-        `(u, psi)` fieldsplit acts on, because "the truncated CG" is a claim
-        about the displacement block and nothing else in the file says that
-        split 0 is the displacement one.
+        The fixture names no `u_ksp_max_it`, so this is the default: one GAMG
+        V-cycle per block-0 iteration, `ksp_type preonly`. The options
+        dictionary is one statement and what PETSc built is another, and this
+        is the only place in the file that reads the live displacement KSP of
+        a 3-D solve. The test also pins which block split 0 of the
+        `(u, psi)` fieldsplit acts on, because the claim is about the
+        displacement block and nothing else in the file says that split 0 is
+        the displacement one.
         """
         nested = solved[0]
         context = block0_context(nested)
         ksp = displacement_ksp(context)
         # Split 0 of the `(u, psi)` fieldsplit must carry the displacement
         # unknowns. Nothing else in this file pins the order of the nest: the
-        # near-nullspace tests read `S_uu` directly, and every `ksp_type` and
-        # cap assertion here reads `getFieldSplitSubKSP()[0]` whatever sits
-        # there. A nest built as `(psi, u)` would therefore pass all of them
-        # while applying the truncated CG with the near-incompressible modes
-        # to the potential Laplacian and one V-cycle to the displacement
-        # block: no answer changes, nothing raises, and the only symptom is a
-        # slow 96-rank job. On this sphere the two blocks have different sizes
+        # near-nullspace tests read `S_uu` directly, and every `ksp_type`
+        # assertion here reads `getFieldSplitSubKSP()[0]` whatever sits there.
+        # A nest built as `(psi, u)` would therefore pass all of them while
+        # applying the near-incompressible modes to the potential Laplacian
+        # and the potential preconditioner to the displacement block: no
+        # answer changes, nothing raises, and the only symptom is a slow
+        # 96-rank job. On this sphere the two blocks have different sizes
         # (displacement 1470 rows, potential 490, measured on
         # `_ThreeD.fluid_core_space`), so the size is enough to tell them
         # apart and the second assertion makes sure the first one cannot pass
@@ -1339,11 +1374,7 @@ class TestThreeDimensions:
                 == petsc_matrix(context.S_uu).getSize())
         assert (petsc_matrix(context.A_psipsi).getSize()
                 != petsc_matrix(context.S_uu).getSize())
-        assert ksp.getType() == "cg"
-        # `getTolerances` is (rtol, atol, divtol, max_it); the cap is the
-        # preset's `u_ksp_max_it`, and a split that ran to convergence here
-        # would be the oversolve the truncation exists to avoid.
-        assert ksp.getTolerances()[3] == 4
+        assert ksp.getType() == "preonly"
 
     def test_the_history_field_is_three_dimensional(self, solved):
         """One combined `(n, d, d)` field with `d = 3`, eliminated as one."""

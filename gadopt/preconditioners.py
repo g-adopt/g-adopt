@@ -1214,10 +1214,13 @@ class DtNTwoBlockSchurPC(fd.PCBase):
     `selfgrav_dtn_iterative_solver_parameters` writes it when this option is
     off. The two are alternatives: `lower` gets there by spending more outer
     iterations (14 against `full`'s 8 over the same four solves) and the cached
-    apply gets there while keeping `full`'s count: 47.5 s per 100 yr step at 96
-    ranks (arm W1, job 179402871, `NOTES/team/rotation-pc/03-CAMPAIGN.md`
-    section 28) against `lower`'s 88.2 (arm B4, job 179385036, section 3 of the
-    same record).
+    apply gets there while keeping `full`'s count: 16.78 s per warm 100 yr step
+    at 96 ranks with 2 outer iterations, against the delegating path's 25.6 s
+    with 3 (arms Z2 and Z1 of job 179510821), and 45 min 44 s against 1 h 18 32
+    over the full Spada ladder (job 179511971 against 179496714). The earlier
+    pair, arm W1's 47.5 s against arm B4's 88.2 (jobs 179402871 and 179385036),
+    measures the same two routes with the four-iteration CG on the displacement
+    split, which the preset no longer writes.
 
     Three things are refused under the option, each before the first block-0
     solve and each named on stderr first: any factorisation type other than
@@ -3108,7 +3111,7 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
     type nest, in the order `(u, psi)`. The order is not cosmetic: the
     fieldsplit takes its index sets from the nest, so split 0 is the
     displacement block and split 1 the potential block, and a nest built the
-    other way round would apply the displacement split's truncated CG and the
+    other way round would apply the displacement split's preconditioner and the
     near-incompressible modes to the potential Laplacian without raising
     anything.
 

@@ -608,10 +608,19 @@ def build_solver(parent, mantle, args, dt):
     # The iterative preset with the tolerances of the validated run. The
     # rheology is Newtonian, so the residual is linear in the unknowns and
     # one linear solve per step (`ksponly`) is exact to the outer tolerance.
+    # Both preset arguments are passed only when the flag names a value, so
+    # that the benchmark measures the preset's own defaults and never pins a
+    # value of its own. `_displacement_krylov` compares `u_ksp_max_it` against
+    # zero, so a `None` passed through would raise; `ainvb` takes `None` as
+    # its own sentinel, and leaving it out says the same thing more plainly.
+    preset_extra = {name: value for name, value in
+                    (("u_ksp_max_it", args.u_ksp_max_it),
+                     ("ainvb", args.ainvb))
+                    if value is not None}
     solver_parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=layout.condensed, outer_rtol=args.outer_rtol,
         block0_rtol=args.block0_rtol, snes_type="ksponly",
-        dtn_representation=layout.dtn_representation)
+        dtn_representation=layout.dtn_representation, **preset_extra)
 
     # The moments of the rotation rows. In the "taboo" mode the secular Love
     # number is named as well, together with the surface radius it needs, so
@@ -865,6 +874,25 @@ def parse_args():
     p.add_argument("--block0-rtol", type=float, default=1e-4,
                    help="relative tolerance of the mechanics-potential block "
                         "solve inside the outer FGMRES")
+    # The two preset arguments that select a preconditioner arm. Both go to
+    # `selfgrav_dtn_iterative_solver_parameters` and not into the PETSc option
+    # database, because each one changes more than one key: `u_ksp_max_it=0`
+    # drops the tolerance and the cap of the displacement split along with its
+    # Krylov method, and `ainvb=True` also makes the preset write
+    # `schur_fact_type full` and a block-1 KSP of `preonly`. An arm that writes
+    # `dtn_schur_ainvb` as an option on top of the preset's `lower` is refused
+    # by the class, which is how one earlier arm failed.
+    p.add_argument("--u-ksp-max-it", type=int, default=None,
+                   help="iterations of CG with GAMG on the displacement split "
+                        "inside the block-0 solve; the preset decides when "
+                        "this is not given, which is one GAMG V-cycle, and 4 "
+                        "selects the truncated CG")
+    p.add_argument("--ainvb", action=argparse.BooleanOptionalAction,
+                   default=None,
+                   help="let gadopt.DtNTwoBlockSchurPC own the block-1 apply, "
+                        "caching A00^-1 A01 and the exact Schur complement; "
+                        "--no-ainvb names the delegating path, and the preset "
+                        "decides when neither is given")
     # The two values of the moment difference C - A, and why the choice is a
     # flag. The TABOO reference of test 3/2 uses the prescribed 2.63e35 in the
     # load excitation of eq. (31), and the secular Love number k_s = 0.96672389

@@ -749,6 +749,84 @@ def test_the_apply_costs_one_block_zero_solve(two_arms):
         f"iterations and n = {cached['n']}")
 
 
+class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
+    """The solver's own call, which is where a wrong rule would cost solves.
+
+    `selfgrav_dtn_iterative_solver_parameters` never sees the width unless a
+    caller passes it, and `SelfGravitatingGIASolver` is the caller that does:
+    it passes `n_real=len(layout.real_fields)`. So the dictionary tests of
+    `test_dtn_multiplier_pc.py` cannot see what the solver chooses, and these
+    two can. Both run one solve and read the objects PETSc built.
+    """
+
+    def test_a_wide_real_block_keeps_the_delegating_path(self, meshes):
+        """About 76 `Real` rows in production, 35 here, so no complement.
+
+        A build costs `n` block-0 solves. At this width nobody has measured
+        that it amortises, so the preset must not choose either way of forming
+        the complement, and the cached apply must not be installed on the
+        outer PC at all.
+        """
+        solver, _, layout = tb.build(
+            meshes, "multiplier", truncation=8, solver_parameters="iterative")
+        # The vacuity guard: this truncation must actually be above the limit
+        # the preset applies, or the test says nothing.
+        assert len(layout.real_fields) > 16, (
+            f"{len(layout.real_fields)} Real rows is not a wide block, so "
+            "this test no longer exercises the rule it is about")
+        assert "dtn_schur_ainvb" not in solver.solver_parameters
+        assert solver.solver_parameters[
+            "dtn_pc_fieldsplit_schur_fact_type"] == "lower"
+        solver.solve()
+        assert getattr(outer_pc(solver).getPythonContext(), "ainvb",
+                       None) is None
+
+    def test_a_narrow_real_block_reaches_the_cache_through_the_solver(
+            self, meshes):
+        """The production path: the solver's own call installs the cache.
+
+        The count identity is the same one `test_the_apply_costs_one_block_
+        zero_solve` states, read from objects outside the class under test:
+        `n` from the layout, the iterations from the outer KSP, the block-0
+        count from `gadopt.CondensedBlockPC`. One build, because this is one
+        solve at one operator.
+        """
+        solver, _, layout = tb.build(
+            meshes, "lowrank", solver_parameters="iterative")
+        assert solver.solver_parameters["dtn_schur_ainvb"] is True
+        solver.solve()
+        cache = ainvb_cache(outer_pc(solver))
+        n = len(layout.real_fields)
+        assert cache.n == n
+        assert cache.build_count == 1
+        assert block_zero_solves(solver) == n + outer_iterations(solver), (
+            f"{block_zero_solves(solver)} block-0 solves for "
+            f"{outer_iterations(solver)} outer iterations and n = {n}")
+
+
+def test_the_tolerance_ladder_of_the_phase_3_spike_is_untouched():
+    """`demos/gravity/spikes/spike_phase3d.py:394`, call for call.
+
+    That driver sweeps `block0_rtol` down to 1e-2 and names
+    `multiplier_pc="none"` so that the preset refuses nothing and every rung
+    differs in the tolerance alone. A preset that chose the cached apply there
+    would form the exact complement from block-0 solves at 1e-2 without
+    raising and without a line in the log, and the ladder would stop measuring
+    the tolerance. Naming a block-1 preconditioner is what keeps the caller on
+    the path they asked for.
+    """
+    for condensed in (True, False):
+        for block0_rtol in (1e-2, 1e-3, 1e-4):
+            p = selfgrav_dtn_iterative_solver_parameters(
+                condensed=condensed, block0_rtol=block0_rtol,
+                outer_rtol=1e-6, snes_rtol=1e-4, multiplier_pc="none")
+            assert "dtn_schur_ainvb" not in p, (condensed, block0_rtol)
+            assert p["dtn_pc_fieldsplit_schur_fact_type"] == "lower", (
+                condensed, block0_rtol)
+            assert p["dtn_fieldsplit_1_pc_type"] == "none", (
+                condensed, block0_rtol)
+
+
 def test_the_outer_count_matches_the_full_factorisation_arm(two_arms):
     """The cached path keeps `full`'s convergence, not `lower`'s.
 
@@ -1123,22 +1201,34 @@ def test_the_preset_writes_the_cached_path_keys():
             f"{dropped} is written for a block-1 Krylov solve that never runs")
 
 
-def test_the_preset_default_writes_no_ainvb_key():
-    """`ainvb` is off unless asked for, and off writes the same dictionary.
+def test_the_preset_default_is_the_dictionary_ainvb_true_writes():
+    """The preset chooses the cached apply where it forms the complement.
 
-    Two things are pinned. `ainvb=False` named explicitly gives exactly the
-    default dictionary, so the argument has one meaning and not two. And
-    `dtn_schur_ainvb` is absent from the default, so no key selects the cached
-    apply unless a caller asks: its only measurements are at one step size, and
-    a key that appeared on its own would move every number in the campaign
-    without anybody asking.
+    Two things are pinned. `ainvb=True` named by hand gives exactly the
+    dictionary the preset writes on its own, which is what makes jobs
+    179511971 and 179511972 - the two full Spada runs, which passed `--ainvb`
+    on the command line - a measurement of the default. And `ainvb=False`
+    names the delegating path, so the argument still has three meanings and
+    not two: choose, on, off.
+
+    The preset chooses it on the low-rank representation, where the `Real`
+    block is 4 rows and a build is 4 block-0 solves. On the multiplier
+    representation a build is about 76 and no arm measures it, so the width
+    rule keeps the preset off that path; `test_the_multiplier_representation_
+    is_kept_off_the_cached_apply` in `test_dtn_multiplier_pc.py` pins that.
     """
-    default = selfgrav_dtn_iterative_solver_parameters(
-        condensed=False, block0="condensed")
-    explicit_off = selfgrav_dtn_iterative_solver_parameters(
-        condensed=False, block0="condensed", ainvb=False)
-    assert explicit_off == default
-    assert "dtn_schur_ainvb" not in default
+    for kwargs in ({"condensed": False, "block0": "condensed"},
+                   {"condensed": False, "dtn_representation": "lowrank"},
+                   {"condensed": False, "n_real": 4}):
+        default = selfgrav_dtn_iterative_solver_parameters(**kwargs)
+        named_on = selfgrav_dtn_iterative_solver_parameters(
+            ainvb=True, **kwargs)
+        assert default == named_on, kwargs
+        assert default["dtn_schur_ainvb"] is True, kwargs
+        named_off = selfgrav_dtn_iterative_solver_parameters(
+            ainvb=False, **kwargs)
+        assert "dtn_schur_ainvb" not in named_off, kwargs
+        assert named_off["dtn_pc_fieldsplit_schur_fact_type"] == "lower", kwargs
 
 
 # ===========================================================================

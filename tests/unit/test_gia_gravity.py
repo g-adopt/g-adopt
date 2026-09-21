@@ -576,12 +576,15 @@ class TestConstruction:
 
         `None` selects the direct preset here, because the annulus is 2-D.
 
-        The `"iterative"` case carries one extra fact: the displacement split
-        runs GMRES. A power law makes the condensed displacement operator
-        nonsymmetric in 2-D, and the short CG the preset writes is valid only
-        on a symmetric operator, so `_attach_condensation_context` replaces it.
-        The prefix is the default block-0 route's, `gadopt.CondensedBlockPC`,
-        whose displacement split sits under
+        The `"iterative"` case carries one extra fact: on the preset's own
+        default the displacement split stays `preonly` even under a power law.
+        A power law makes the condensed displacement operator nonsymmetric in
+        2-D, and a short CG would be invalid on it, so
+        `_attach_condensation_context` replaces a CG by a GMRES of the same
+        length. The default writes no CG to replace: one GAMG V-cycle is not a
+        Krylov method and assumes no symmetry, so the switch does not fire and
+        no restart key is written. The prefix is the default block-0 route's,
+        `gadopt.CondensedBlockPC`, whose displacement split sits under
         `dtn_fieldsplit_0_condensed_fieldsplit_0_`.
         """
         solver, _, _ = build(
@@ -591,7 +594,37 @@ class TestConstruction:
         assert solver.solver_parameters["snes_type"] == "newtonls"
         if solver_parameters == "iterative":
             prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
-            assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
+            assert solver.solver_parameters[prefix + "ksp_type"] == "preonly"
+            assert prefix + "ksp_gmres_restart" \
+                not in solver.solver_parameters
+
+    def test_the_displacement_switch_fires_for_the_truncated_cg(self, meshes):
+        """The caller who asks for the CG still gets the GMRES a power law needs.
+
+        This is the other half of the test above. `u_ksp_max_it=4` puts a
+        truncated CG on the displacement split, which is valid only on a
+        symmetric operator, and a power law makes the condensed displacement
+        operator nonsymmetric. `_attach_condensation_context` must then
+        replace it by a GMRES whose restart is the cap the preset wrote, so
+        that the substitute costs the same Krylov vectors and the same number
+        of GAMG V-cycles per block-0 iteration.
+
+        The options come in as a dictionary and not as the string
+        `"iterative"`, because the string reaches the preset with no arguments
+        and so cannot ask for the CG. That also exercises the `Mapping` branch
+        of the switch. The representation is named on both sides so that the
+        dictionary describes the space `build` makes.
+        """
+        params = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, snes_type="newtonls", u_ksp_max_it=4,
+            dtn_representation="lowrank")
+        solver, _, _ = build(
+            meshes, dtn_representation="lowrank",
+            approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3},
+            solver_parameters=params)
+        prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
+        assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
+        assert solver.solver_parameters[prefix + "ksp_gmres_restart"] == 4
 
     def test_ksponly_with_a_power_law_is_refused(self, meshes):
         """One linear solve on a nonlinear residual reports CONVERGED.
@@ -1895,12 +1928,18 @@ class TestPresetWiring:
         warm step (job 178765557); this class 16 853 V-cycles, 8 of 102 at the
         cap, 270 s (job 178765558).
 
-        The split also runs a short CG instead of one V-cycle. Block 0 is a
-        flexible FGMRES, so a truncated CG is a valid preconditioner inside
-        it, and it brings every block-0 solve to its tolerance: 0 of 111
-        capped against 8 of 102, at the same wall (job 178765560 against
-        178765558). `ksp_converged_maxits` is what makes PETSc call the
-        truncation a convergence.
+        The split runs one GAMG V-cycle, written as `ksp_type preonly` with
+        no tolerance and no cap attached. This is the solver's own path, the
+        one a caller reaches by asking for `"iterative"` and naming nothing
+        else, so this is where the preset's `u_ksp_max_it` default is pinned.
+        Measured end to end on Gadi against four iterations of CG on the same
+        split, both Spada cases over the full 138-step ladder from the preset
+        alone: 1 h 18 32 against 2 h 32 15 on the polar-motion case (job
+        179496714 against 179423870) and 1 h 08 54 against 1 h 39 01 on the
+        cap case (179483713 against 179423871), with every printed benchmark
+        number unchanged. A cap left behind on a `preonly` KSP would be inert
+        and would read as a truncated solve to anyone auditing the dictionary,
+        so the three keys of the CG must be absent and not merely unused.
         """
         solver, _, _ = build(meshes, condensed=True,
                              solver_parameters="iterative")
@@ -1911,10 +1950,10 @@ class TestPresetWiring:
         prefix = f"dtn_fieldsplit_0_fieldsplit_{u_split}_"
         assert p[prefix + "pc_python_type"] \
             == "gadopt.NearlyIncompressibleAssembledPC"
-        assert p[prefix + "ksp_type"] == "cg"
-        assert p[prefix + "ksp_max_it"] == 4
-        assert p[prefix + "ksp_rtol"] == 1e-2
-        assert prefix + "ksp_converged_maxits" in p
+        assert p[prefix + "ksp_type"] == "preonly"
+        assert prefix + "ksp_max_it" not in p
+        assert prefix + "ksp_rtol" not in p
+        assert prefix + "ksp_converged_maxits" not in p
 
     def test_the_uncondensed_pair_split_condenses_and_seeds_near_incompressible_modes(
             self, meshes):
@@ -1925,10 +1964,16 @@ class TestPresetWiring:
         provider the solver publishes, whose modes come from
         `condensed_near_nullspace`.
 
-        Both layouts get the same modes and the same short Krylov solve on the
-        displacement, so that the wall-clock ratio between them measures the
-        cost of the coupled residual and nothing else: 670 s against 271 s for
-        a 500 yr step at matched settings (Gadi jobs 178765563 and 178765560).
+        Both layouts get the same modes and the same displacement split, so
+        that the wall-clock ratio between them measures the cost of the
+        coupled residual and nothing else: 670 s against 271 s for a 500 yr
+        step at matched settings (Gadi jobs 178765563 and 178765560, both with
+        the four-iteration CG this preset no longer writes by default).
+
+        The split is `u_ksp_max_it`, one argument for both block-0 routes, so
+        the default reaches this route too and the assertions below are the
+        same three absences as on the condensed layout. A second default for
+        this route would break the comparison the route exists for.
         """
         solver, _, _ = build(
             meshes,
@@ -1943,9 +1988,10 @@ class TestPresetWiring:
         assert p["dtn_fieldsplit_0_fieldsplit_0_pc_python_type"] \
             == "gadopt.InternalVariableSCPC"
         assert p["dtn_fieldsplit_0_fieldsplit_0_pc_sc_eliminate_fields"] == "1"
-        assert p[prefix + "ksp_type"] == "cg"
-        assert p[prefix + "ksp_max_it"] == 4
-        assert p[prefix + "ksp_rtol"] == 1e-2
+        assert p[prefix + "ksp_type"] == "preonly"
+        assert prefix + "ksp_max_it" not in p
+        assert prefix + "ksp_rtol" not in p
+        assert prefix + "ksp_converged_maxits" not in p
         assert solver.condensed_near_nullspace == "incompressible"
         assert callable(solver.appctx["condensed_field_near_nullspace"])
         assert solver.appctx["operator_version"] == 0
@@ -1955,28 +2001,71 @@ class TestPresetWiring:
             selfgrav_dtn_iterative_solver_parameters(
                 condensed=False, u_pc="firedrake.AssembledPC")
 
-    def test_one_v_cycle_is_selectable(self):
-        """`u_ksp_max_it=0` is the route the P3 march ran, on both layouts.
+    # The displacement split sits at a different depth on each route: split 0
+    # of the block-0 sweep on the condensed layout, split 0 of
+    # `gadopt.CondensedBlockPC`'s own `(u, psi)` sweep on the full layout with
+    # `block0="condensed"`, and split 0 of the `(u, M)` pair's condensed field
+    # on the full layout with `block0="pair"`.
+    U_SPLIT_PREFIXES = (
+        ({"condensed": True}, "dtn_fieldsplit_0_fieldsplit_0_"),
+        ({"condensed": False}, "dtn_fieldsplit_0_condensed_fieldsplit_0_"),
+        ({"condensed": False, "block0": "pair",
+          "dtn_representation": "multiplier"},
+         "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"),
+    )
 
-        The preset defaults to a truncated CG on the displacement split, which
-        costs 20 percent more GAMG V-cycles than one V-cycle for the same wall
-        and caps no block-0 solve. A caller reproducing a run made before that
-        default asks for the single V-cycle, and must then get `preonly` with
-        no iteration cap attached: a cap left behind on a `preonly` KSP is
-        inert and would read as a truncated solve to anyone auditing the
-        dictionary.
+    def test_the_displacement_split_defaults_to_one_v_cycle(self):
+        """The sixth preset default, on all three block-0 routes.
+
+        The split is one GAMG V-cycle per block-0 iteration, written as
+        `ksp_type preonly`. The three keys of the truncated CG must be absent
+        and not merely unused: a cap or a tolerance left behind on a `preonly`
+        KSP is inert and would read as a truncated solve to anyone auditing
+        the dictionary.
+
+        Measured on Gadi from the preset alone, both Spada cases over the full
+        138-step ladder, against four iterations of CG on the same split:
+        1 h 18 32 against 2 h 32 15 (job 179496714 against 179423870) and
+        1 h 08 54 against 1 h 39 01 (179483713 against 179423871), with every
+        printed benchmark number unchanged.
         """
-        # The displacement split sits at a different depth on each route: it
-        # is split 0 of the block-0 sweep on the condensed layout, and split 0
-        # of `gadopt.CondensedBlockPC`'s own `(u, psi)` sweep on the
-        # uncondensed one.
-        for condensed, prefix in (
-                (True, "dtn_fieldsplit_0_fieldsplit_0_"),
-                (False, "dtn_fieldsplit_0_condensed_fieldsplit_0_")):
+        for kwargs, prefix in self.U_SPLIT_PREFIXES:
+            p = selfgrav_dtn_iterative_solver_parameters(**kwargs)
+            assert p[prefix + "ksp_type"] == "preonly", kwargs
+            assert prefix + "ksp_max_it" not in p, kwargs
+            assert prefix + "ksp_rtol" not in p, kwargs
+            assert prefix + "ksp_converged_maxits" not in p, kwargs
+
+    def test_the_truncated_cg_is_selectable(self):
+        """`u_ksp_max_it=4` is the alternative, on all three routes.
+
+        It runs four iterations of CG at `u_ksp_rtol` and counts the cap as
+        convergence, which is what `ksp_converged_maxits` says. It was the
+        preset's default from commit 77af62b to c48564a2, and the campaign of
+        2026-09-20 measured most of its arms on it, so a caller reproducing one
+        of those runs asks for it by name. Older runs, the P3 march and job
+        178765558 among them, ran the single V-cycle this preset now defaults
+        to.
+        """
+        for kwargs, prefix in self.U_SPLIT_PREFIXES:
             p = selfgrav_dtn_iterative_solver_parameters(
-                condensed=condensed, u_ksp_max_it=0)
-            assert p[prefix + "ksp_type"] == "preonly", condensed
-            assert prefix + "ksp_max_it" not in p, condensed
+                u_ksp_max_it=4, **kwargs)
+            assert p[prefix + "ksp_type"] == "cg", kwargs
+            assert p[prefix + "ksp_max_it"] == 4, kwargs
+            assert p[prefix + "ksp_rtol"] == 1e-2, kwargs
+            assert prefix + "ksp_converged_maxits" in p, kwargs
+
+    def test_the_default_is_the_dictionary_u_ksp_max_it_zero_writes(self):
+        """Asking for `0` by hand and asking for nothing give one dictionary.
+
+        This is what makes every measurement taken with `u_ksp_max_it=0`
+        passed by hand, the two full runs of the Spada benchmark included, a
+        measurement of the default.
+        """
+        for kwargs, _ in self.U_SPLIT_PREFIXES:
+            assert (selfgrav_dtn_iterative_solver_parameters(**kwargs)
+                    == selfgrav_dtn_iterative_solver_parameters(
+                        u_ksp_max_it=0, **kwargs)), kwargs
 
     def test_the_iterative_preset_solves_the_same_system(self, meshes, solved):
         """The one that is not about dictionaries: does the new path solve?
@@ -2027,9 +2116,21 @@ class TestPresetWiring:
         # one block-0 application from.
         for key in ("ksp_converged_reason",
                     "snes_converged_reason",
-                    "dtn_fieldsplit_0_condensed_ksp_converged_reason",
-                    "dtn_fieldsplit_1_ksp_converged_reason"):
+                    "dtn_fieldsplit_0_condensed_ksp_converged_reason"):
             assert key in p
+        # Block 1 is the exception, and only while the cached apply owns it:
+        # `gadopt.DtNTwoBlockSchurPC` then applies the dense factors of the
+        # exact complement itself and the block-1 KSP is never entered, so a
+        # converged reason there would describe a solve that never runs. The
+        # preset writes the key wherever that KSP is real, which is every
+        # configuration that leaves block 1 to PETSc.
+        assert p["dtn_schur_ainvb"] is True
+        assert "dtn_fieldsplit_1_ksp_converged_reason" not in p
+        delegating, _, _ = build(
+            meshes, solver_parameters=selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, ainvb=False))
+        assert "dtn_fieldsplit_1_ksp_converged_reason" \
+            in delegating.solver_parameters
 
 
 class TestV4:

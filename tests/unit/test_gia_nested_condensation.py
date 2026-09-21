@@ -358,9 +358,13 @@ class TestPowerLaw:
         print(f"\n    [power law] Newton iterations per solve {newton_counts}"
               f"  assembly_count {context.assembly_count}")
 
-        assert context.condensed_ksp.getType() == "gmres"
+        # The preset's default on this split is one GAMG V-cycle, so there is
+        # no Krylov method for the power-law rule to replace and no restart
+        # key is written. `test_power_law_gets_gmres` covers the caller who
+        # asks for the truncated CG instead.
+        assert context.condensed_ksp.getType() == "preonly"
         prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
-        assert nested.solver_parameters[prefix + "ksp_gmres_restart"] == 4
+        assert prefix + "ksp_gmres_restart" not in nested.solver_parameters
 
         u, u_direct = (f.subfunctions[layout.displacement]
                        for f in (z_nested, z_direct))
@@ -528,9 +532,12 @@ class TestPowerLaw:
                          snes_type="newtonls", snes_linesearch_type="l2"))
 
         # 2-D, so the condensed operator is treated as nonsymmetric whatever
-        # the core treatment is, and the preset's short CG is replaced.
+        # the core treatment is. The preset's default on this split is one
+        # GAMG V-cycle, which assumes no symmetry, so the power-law rule has
+        # nothing to replace and writes no restart key.
         prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
-        assert nested.solver_parameters[prefix + "ksp_type"] == "gmres"
+        assert nested.solver_parameters[prefix + "ksp_type"] == "preonly"
+        assert prefix + "ksp_gmres_restart" not in nested.solver_parameters
 
         newton_counts = []
         for _ in range(2):
@@ -543,7 +550,9 @@ class TestPowerLaw:
             assert newton_counts[-1] >= 2
 
         context = condensation_context(nested)
-        assert context.condensed_ksp.getType() == "gmres"
+        # The split PETSc built, and not only the dictionary: the preset's
+        # default is one GAMG V-cycle here too.
+        assert context.condensed_ksp.getType() == "preonly"
         # The core-pressure row is inside the block the dense complement
         # inverts, which is what makes this a test of that saddle and not of
         # the multiplier rows alone.
@@ -623,7 +632,7 @@ class TestKrylovSelection:
             meshes, n_internal_variables=2,
             approximation_kwargs={"viscosity": [1.0, 3.0],
                                   "shear_modulus": [1.0, 0.5]},
-            solver_parameters=nested_preset())
+            solver_parameters=nested_preset(u_ksp_max_it=4))
         solver.solve()
         context = condensation_context(solver)
         assert context.condensed_ksp.getType() == "cg"
@@ -642,17 +651,40 @@ class TestKrylovSelection:
 
         A GMRES restart longer than the iteration cap would allocate Krylov
         vectors the solve never reaches, so the restart the switch writes is
-        the cap the preset wrote.
+        the cap the preset wrote. The CG is asked for by name, because the
+        preset's default on this split is one GAMG V-cycle and there is then
+        no Krylov method to replace.
+        """
+        solver, _, _ = build(
+            meshes, approximation_kwargs={"exponent": 3.0,
+                                          "transition_stress": 1.0},
+            solver_parameters=nested_preset(snes_type="newtonls",
+                                            u_ksp_max_it=4))
+        prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
+        assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
+        assert not solver.condensed_operator_symmetric()
+        assert (solver.solver_parameters[prefix + "ksp_gmres_restart"]
+                == solver.solver_parameters[prefix + "ksp_max_it"] == 4)
+
+    def test_the_default_split_is_left_alone_by_the_power_law_rule(
+            self, meshes):
+        """The pair route takes the sixth default like the other route.
+
+        `u_ksp_max_it` writes one displacement split for both block-0 routes,
+        so this route is `preonly` by default as well, and a second default
+        here would break the comparison the route exists for. One GAMG V-cycle
+        is not a Krylov method, so the power-law rule leaves it alone and
+        writes no restart key at a prefix that would never read it.
         """
         solver, _, _ = build(
             meshes, approximation_kwargs={"exponent": 3.0,
                                           "transition_stress": 1.0},
             solver_parameters=nested_preset(snes_type="newtonls"))
         prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
-        assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
         assert not solver.condensed_operator_symmetric()
-        assert (solver.solver_parameters[prefix + "ksp_gmres_restart"]
-                == solver.solver_parameters[prefix + "ksp_max_it"] == 4)
+        assert solver.solver_parameters[prefix + "ksp_type"] == "preonly"
+        assert prefix + "ksp_gmres_restart" not in solver.solver_parameters
+        assert prefix + "ksp_max_it" not in solver.solver_parameters
 
     def test_a_caller_named_krylov_type_wins(self, meshes):
         key = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_ksp_type"
@@ -695,21 +727,25 @@ class TestThreeDimensions:
             solver_parameters=nested_preset())
         return solver, z, layout
 
-    def test_condensed_operator_is_symmetric_and_solved_by_cg(self):
-        """One solve on 24 cells, then read the operator the Krylov solver saw.
+    def test_condensed_operator_is_symmetric_and_solved_by_one_v_cycle(self):
+        """One solve on 24 cells, then read the operator the split saw.
 
         A bare `pc.setUp()` outside a solve has no solver context on the DM
         (PETSc error 101 from `DMCreateSubDM`), and the setup-only recipe
         needs Firedrake's private solver context, so the cheapest reliable
         route to the assembled condensed operator is one solve.
+
+        The fixture names no `u_ksp_max_it`, so the split is the preset's
+        default: one GAMG V-cycle, `ksp_type preonly`. The symmetry assertion
+        below stands on its own, because a caller who asks for the truncated
+        CG with `u_ksp_max_it=4` needs a symmetric operator for it.
         """
         solver, _, layout = self.build()
         assert layout.internal_variable_field == 1
         solver.solve()
         assert solver.solver.snes.ksp.getConvergedReason() > 0
         context = condensation_context(solver)
-        assert context.condensed_ksp.getType() == "cg"
-        assert context.condensed_ksp.getTolerances()[3] == 4
+        assert context.condensed_ksp.getType() == "preonly"
         W = context.cxt.a.arguments()[0].function_space()
         assert W[1].value_shape == (1, 3, 3)
         # Newtonian, so symmetric on the extruded hexahedra of this sphere as
@@ -895,6 +931,7 @@ class TestThreeDimensions:
         solver = self.fluid_core_solver(
             z, layout, mesh, C,
             nested_preset(snes_type="newtonls", block0_rtol=1e-6,
+                          u_ksp_max_it=4,
                           multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"),
             approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3},
             solver_parameters_extra={"snes_rtol": 1e-8})
