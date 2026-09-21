@@ -22,7 +22,6 @@ rather than a ``KeyError`` deep inside ``compute`` on the first timestep.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Protocol
 from collections.abc import Callable
 
 import numpy as np
@@ -223,14 +222,14 @@ class OutputStrategy(ABC):
 MEMBERSHIP_FLOOR = 1e-3
 
 
-class LateralWeight(Protocol):
+class LateralWeight(ABC):
     """Supply the lateral part of an indicator.
 
     This is the factor that decides how strongly a layer acts at each point on
     the sphere, independent of depth: one everywhere for a global layer, a
-    membership fraction for a layer bounded by polygons. It is a Protocol
-    rather than a base class so that a caller can pass any object with the
-    right two members, including a test double.
+    membership fraction for a layer bounded by polygons. A subclass declares
+    in ``requires`` the source channels its ``weight`` reads, in the same way
+    an ``OutputStrategy`` does.
 
     Attributes:
         requires: Source channels the strategy reads.
@@ -238,6 +237,7 @@ class LateralWeight(Protocol):
 
     requires: frozenset[str]
 
+    @abstractmethod
     def weight(
         self,
         interpolated: dict[str, np.ndarray],
@@ -254,7 +254,6 @@ class LateralWeight(Protocol):
             The weight at each target node, or a single float that applies
             everywhere.
         """
-        ...
 
 
 def _clip_membership(
@@ -403,7 +402,7 @@ class MembershipCorrectedBaseDepth:
         return mesh.r_outer - thickness_km / mesh.depth_scale
 
 
-class UniformLateralWeight:
+class UniformLateralWeight(LateralWeight):
     """Return a lateral weight of one at all target nodes.
 
     This is the strategy for a layer that covers the whole sphere and varies
@@ -420,7 +419,7 @@ class UniformLateralWeight:
         return 1.0
 
 
-class MembershipLateralWeight:
+class MembershipLateralWeight(LateralWeight):
     """Use the interpolated membership channel as the lateral weight.
 
     The layer fades out across the edge of the bounded region in step with the
@@ -437,7 +436,7 @@ class MembershipLateralWeight:
         return _clip_membership(interpolated, outside_source_range)
 
 
-class MappedMembershipWeight:
+class MappedMembershipWeight(LateralWeight):
     """Map membership through a callable to get the lateral weight.
 
     Use this when the layer must not follow membership linearly, for example to
@@ -462,7 +461,7 @@ class MappedMembershipWeight:
         return np.clip(self.mapping(m), 0.0, 1.0)
 
 
-class SourceLateralWeight:
+class SourceLateralWeight(LateralWeight):
     """Read the lateral weight from the ``lateral_weight`` source channel.
 
     A node outside the source range falls back to a weight of one rather than
@@ -498,7 +497,7 @@ class LayerIndicator(OutputStrategy):
             method.
         base_depth: Strategy with a
             ``base_r(interpolated, outside_source_range, mesh)`` method.
-        lateral_weight: Strategy following the ``LateralWeight`` protocol.
+        lateral_weight: A ``LateralWeight`` subclass.
     """
 
     def __init__(
