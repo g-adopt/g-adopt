@@ -679,6 +679,7 @@ def build_solver(parent, mantle, case, args, dt, t_kyr):
         fluid_core=True, self_gravity_number=LAMBDA,
         displacement_degree=args.displacement_degree,
         internal_variable_degree=args.internal_variable_degree,
+        potential_degree=args.potential_degree,
         centre_of_mass=True, sea_level=True,
         dtn_representation=args.dtn_representation)
     z = Function(Z)
@@ -1817,6 +1818,12 @@ def parse_args(argv=None):
                    help="polynomial degree of the CG displacement")
     p.add_argument("--internal-variable-degree", type=int, default=2,
                    help="polynomial degree of the DG internal variables")
+    p.add_argument("--potential-degree", type=int, default=2,
+                   help="the polynomial degree of the gravitational potential "
+                        "space. The geoid N = psi / g_surface is read from "
+                        "this space, so it is what sets the accuracy of the "
+                        "N profiles, and the default 2 is one degree below "
+                        "the displacement.")
     p.add_argument("--sea-level-degree", type=int, default=2,
                    help="polynomial degree of the CG initial sea level")
     p.add_argument("--dt-yr", type=float, default=None,
@@ -1950,7 +1957,8 @@ def main(argv=None):
         f"block-1 preconditioner "
         f"{args.multiplier_pc if args.multiplier_pc is not None else 'chosen by the preset'}")
     say(f"  displacement CG{args.displacement_degree}, internal variables "
-        f"DG{args.internal_variable_degree}, potential CG2, initial sea level "
+        f"DG{args.internal_variable_degree}, potential "
+        f"CG{args.potential_degree}, initial sea level "
         f"CG{args.sea_level_degree}, K/mu {args.bulk_shear_ratio:g}")
     say(f"  tolerances: outer {args.outer_rtol:g}, block 0 "
         f"{args.block0_rtol:g}, block-0 iteration cap {args.block0_max_it}")
