@@ -29,6 +29,8 @@ import numpy.typing as npt
 from scipy.special import erf
 
 __all__ = [
+    "BaseDepth",
+    "RadialTransition",
     "InterpolatedBaseDepth",
     "MembershipCorrectedBaseDepth",
     "FixedBaseDepth",
@@ -252,6 +254,67 @@ class LateralWeight(ABC):
         """
 
 
+class RadialTransition(ABC):
+    """Shape the indicator in radius around the base of the layer.
+
+    A subclass declares in ``requires`` the source channels its ``step``
+    reads, in the same way an ``OutputStrategy`` does.
+
+    Attributes:
+        requires: Source channels the strategy reads.
+    """
+
+    requires: frozenset[str]
+
+    @abstractmethod
+    def step(
+        self, r_target: np.ndarray, base_r: np.ndarray | float, mesh: MeshConfig
+    ) -> np.ndarray:
+        """Return the radial profile: one at the top of the layer, zero below
+        its base.
+
+        Args:
+            r_target: Target radii, in non-dimensional mesh units.
+            base_r: Radius of the base of the layer, per node or one value.
+            mesh: Mesh geometry for the conversion between radius and depth.
+
+        Returns:
+            The profile value at each target node, between zero and one.
+        """
+
+
+class BaseDepth(ABC):
+    """Place the base of the layer at each target node.
+
+    A subclass declares in ``requires`` the source channels its ``base_r``
+    reads, in the same way an ``OutputStrategy`` does.
+
+    Attributes:
+        requires: Source channels the strategy reads.
+    """
+
+    requires: frozenset[str]
+
+    @abstractmethod
+    def base_r(
+        self,
+        interpolated: dict[str, np.ndarray],
+        outside_source_range: np.ndarray,
+        mesh: MeshConfig,
+    ) -> np.ndarray | float:
+        """Return the radius of the base of the layer.
+
+        Args:
+            interpolated: Arrays keyed by channel name.
+            outside_source_range: Boolean mask, True where no source point is
+                in range.
+            mesh: Mesh geometry for the conversion between radius and depth.
+
+        Returns:
+            The base radius at each target node, or one value for all.
+        """
+
+
 def _clip_membership(
     interpolated: dict[str, np.ndarray], outside_source_range: np.ndarray
 ) -> np.ndarray:
@@ -273,7 +336,7 @@ def _clip_membership(
     return np.where(outside_source_range, 0.0, m)
 
 
-class RadialQuinticTransition:
+class RadialQuinticTransition(RadialTransition):
     """Apply a quintic transition below the base depth.
 
     Args:
@@ -302,7 +365,7 @@ class RadialQuinticTransition:
         )
 
 
-class FixedBaseDepth:
+class FixedBaseDepth(BaseDepth):
     """Use one base depth for all target nodes.
 
     This is the choice for a layer of prescribed thickness, where the source
@@ -333,7 +396,7 @@ class FixedBaseDepth:
         return mesh.r_outer - self.fixed_base_depth_km / mesh.depth_scale
 
 
-class InterpolatedBaseDepth:
+class InterpolatedBaseDepth(BaseDepth):
     """Read each base depth from the ``thickness`` channel.
 
     Args:
@@ -366,7 +429,7 @@ class InterpolatedBaseDepth:
         return mesh.r_outer - thickness_km / mesh.depth_scale
 
 
-class MembershipCorrectedBaseDepth:
+class MembershipCorrectedBaseDepth(BaseDepth):
     """Recover base depth from membership-weighted thickness.
 
     A bounded source cannot interpolate raw thickness, because averaging a
@@ -489,17 +552,15 @@ class LayerIndicator(OutputStrategy):
     parts need.
 
     Args:
-        radial_transition: Strategy with a ``step(r_target, base_r, mesh)``
-            method.
-        base_depth: Strategy with a
-            ``base_r(interpolated, outside_source_range, mesh)`` method.
+        radial_transition: A ``RadialTransition`` subclass.
+        base_depth: A ``BaseDepth`` subclass.
         lateral_weight: A ``LateralWeight`` subclass.
     """
 
     def __init__(
         self,
-        radial_transition: RadialQuinticTransition,
-        base_depth: FixedBaseDepth | InterpolatedBaseDepth | MembershipCorrectedBaseDepth,
+        radial_transition: RadialTransition,
+        base_depth: BaseDepth,
         lateral_weight: LateralWeight,
     ):
         self.radial_transition = radial_transition
