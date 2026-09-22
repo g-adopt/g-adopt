@@ -443,6 +443,75 @@
 # times above the 7.274e-04 that G2 itself prints at step 29. To raise the cap on
 # cost grounds, measure both caps over the same steps and compare the wall clock.
 # Do not infer the cost from either signal.
+# Job G4: case D on the 78 km refined mesh, the moving coastline, in four legs.
+# Case D is the last benchmark case. Its coastline moves, so the residual is
+# nonlinear and W4 governs when each preconditioner cache is rebuilt. The rule
+# is chosen by measurement (leg 3) and not by argument, so the march is split
+# at 5 kyr and the arms branch from the checkpoint there.
+#
+# Leg 1, the smoke. CAUTION: case D cannot be smoked with two steps. At 50 yr
+# the ice cap is under a tenth of a degree wide, which is below the quadrature
+# point spacing of every 3-D mesh here, so the load assembles to exactly zero
+# and the solver returns the zero state at Newton iteration 0. The smoke must
+# reach about 0.5 kyr, which is 10 steps of the T1 ladder.
+#
+#   qsub -N g4-smoke -j oe -o martinec-g4-smoke.out \
+#        -l ncpus=208 -l mem=960GB -l walltime=02:00:00 \
+#        -v NNODES=2,CASE=D,STEPS=10,LABEL=g4-smoke,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        run_martinec.pbs
+#
+# Read three things out of the smoke log before leg 2 runs:
+#   the `block 1:` line after "solver built" names the route the preset chose,
+#   which at the 5 `Real` rows of this case is the cached apply of
+#   gadopt.DtNTwoBlockSchurPC under schur_fact_type full;
+#   `newton=` is above 0 on every TIMESTEP line, which says the load is not
+#   assembling to zero;
+#   `dense_builds=` prints a number and not `-`, which says the rebuild rule
+#   reaches the class that owns block 1.
+# Run no multiplier arm. At the 77 `Real` rows of that representation the
+# preset gives block 1 `pc_type none`, and one step then cost 127 block-0
+# applications against 8 on the low-rank path.
+#
+# Leg 2, the march to 5 kyr, which is 100 steps of 50 yr. It writes the epoch
+# checkpoints at 2.5 and 5 kyr, and leg 3 and leg 4 both restart from the one
+# at 5 kyr. Read the index off the `checkpoint index` lines of this log.
+#
+#   qsub -N g4a -j oe -o martinec-g4a.out \
+#        -l ncpus=208 -l mem=960GB -l walltime=12:00:00 \
+#        -v NNODES=2,CASE=D,STEPS=100,LABEL=g4a,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        run_martinec.pbs
+#
+# Leg 2 runs both W4 rules at their library defaults, which are
+# lowrank_reuse_rtol 0 and dense_schur_rebuild per_solve.
+#
+# CAUTION: keep NNODES and NRANK the same in every leg. The restart check
+# passes at 6.1e-06 relative, and the two-rank check at 4.3e-06, and both
+# differences land on the same profile. The driver also refuses a restart on a
+# rank count other than the one that wrote the checkpoint.
+#
+# Leg 3, job G4-rule: three arms of 20 steps each, 5 to 6 kyr, from the leg 2
+# checkpoint, all on the same ranks. The three settings are the library
+# default, dense_schur_rebuild=always and lowrank_reuse_rtol=1e-3. Write the
+# EXTRA flags in the `=` form: a `-v` list is separated by commas, so a value
+# with a space in it does not survive it.
+#
+#   qsub -N g4-rule-per-solve -j oe -o martinec-g4-rule-per-solve.out \
+#        -l ncpus=208 -l mem=960GB -l walltime=04:00:00 \
+#        -v NNODES=2,CASE=D,STEPS=20,LABEL=g4-rule-per-solve,RESTART=<the index at 5 kyr>,RESTART_FILE=martinec-g4a.h5,MESH=martinec_h78_cap12_band4_gl0.5_depth500_base500_grade2_ll1_mc32_alg1_seed7.msh \
+#        run_martinec.pbs
+#   ... the same with EXTRA=--dense-schur-rebuild=always
+#   ... the same with EXTRA=--lowrank-reuse-rtol=1e-3
+#
+# Score the three arms against each other on Newton iterations, block-0
+# applications, `column_builds`, `dense_builds` and wall per step. The rule
+# changes the preconditioner and not the answer: on the 2-D power-law arm the
+# two converged states are 6.8e-09 apart. So the choice is cost alone.
+#
+# Leg 4, job G4: 5 to 15 kyr under the chosen rule, restarting from the same
+# leg 2 checkpoint. Score as G3, plus the floating ice mass and the ocean area,
+# which case D adds, and run NOTES/scale/check_geoid_scale.py on the case D
+# profiles so that the geoid scale is measured on a second load and basin.
+#
 source /etc/profile
 module use /g/data/fp50/modules
 module load firedrake/main-20260902
