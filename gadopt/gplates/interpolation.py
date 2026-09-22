@@ -173,8 +173,7 @@ class SphericalKNNInterpolator:
             ``weights`` and the ``exact_match`` mask.
             Should be treated as read-only.
         """
-        cfg = self.config
-        chord_threshold = _angle_to_chord(cfg.max_source_separation_rad)
+        chord_threshold = _angle_to_chord(self.config.max_source_separation_rad)
 
         r_source = np.linalg.norm(source_xyz, axis=1)
         unit_source = source_xyz / np.maximum(r_source[:, np.newaxis], _EPSILON)
@@ -183,7 +182,7 @@ class SphericalKNNInterpolator:
         unit_target = target_coords / np.maximum(r_target[:, np.newaxis], _EPSILON)
 
         tree = cKDTree(unit_source)
-        k = min(cfg.neighbor_count, len(source_xyz))
+        k = min(self.config.neighbor_count, len(source_xyz))
         source_chord_distances, idx = tree.query(unit_target, k=k)
 
         if k == 1:
@@ -202,8 +201,8 @@ class SphericalKNNInterpolator:
         # Neighbor coverage is zero when the nearest source point is out of range.
         neighbor_coverage = np.mean(source_chord_distances <= chord_threshold, axis=1)
 
-        if cfg.kernel == "gaussian":
-            gaussian_chord_width = 2.0 * np.sin(cfg.gaussian_width_rad / 2.0)
+        if self.config.kernel == "gaussian":
+            gaussian_chord_width = 2.0 * np.sin(self.config.gaussian_width_rad / 2.0)
             weights = np.exp(
                 -source_chord_distances**2 / (2 * gaussian_chord_width**2)
             )

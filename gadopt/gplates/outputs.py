@@ -121,14 +121,9 @@ def ocean_erf_normalized(
     a = 2.0 * np.sqrt(thermal_diffusivity_m2_per_s * np.maximum(age_sec, 1.0))
 
     result = np.zeros_like(depth_m)
-    valid = z_lab_m > 0
-    erf_z = erf(depth_m[valid] / a[valid])
-    erf_zlab = erf(z_lab_m[valid] / a[valid])
-    safe = erf_zlab > 1e-10
-    result[valid] = np.where(
-        safe, erf_z / np.maximum(erf_zlab, 1e-10),
-        depth_m[valid] / z_lab_m[valid],
-    )
+    np.divide(depth_m, z_lab_m, result, where=z_lab_m > 0)
+    erf_zlab = erf(z_lab_m / a)
+    np.divide(erf(depth_m / a), erf_zlab, result, where=erf_zlab > 1e-10)
     return np.clip(result, 0.0, 1.0)
 
 
@@ -149,7 +144,8 @@ def continental_linear(depth_m: npt.ArrayLike, z_lab_m: npt.ArrayLike) -> np.nda
     """
     depth_m = np.asarray(depth_m, dtype=float)
     z_lab_m = np.asarray(z_lab_m, dtype=float)
-    return np.clip(np.where(z_lab_m > 0, depth_m / z_lab_m, 0.0), 0.0, 1.0)
+    result = np.zeros_like(depth_m)
+    return np.clip(np.divide(depth_m, z_lab_m, where=z_lab_m > 0, out=result), 0.0, 1.0)
 
 
 # Shared radial primitive (used by every indicator output)
