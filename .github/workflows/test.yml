@@ -136,6 +136,15 @@ jobs:
           curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
           unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
 
+      - name: Get the lithosphere thickness and craton boundary data
+        run: |
+          mkdir -p demos/mantle_convection/gplates_fields
+          cd demos/mantle_convection/gplates_fields
+          curl -fsSLO https://data.gadopt.org/demos/continental_lithospheric_thickness_mesh.h5
+          for ext in shp shx dbf prj; do
+            curl -fsSLO "https://data.gadopt.org/demos/Craton_Boundaries_Inferred.$ext"
+          done
+
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v5
         with:
