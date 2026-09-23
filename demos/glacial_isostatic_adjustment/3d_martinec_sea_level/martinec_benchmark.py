@@ -2157,15 +2157,21 @@ def main(argv=None):
             f"the restored state at {start_t_kyr:g} kyr")
         say(f"  residual of {state_name} assembled "
             f"({time.time() - tic:.1f} s): l2 norm {norm:.6e}")
-        # The areas and ice masses of the same state. After `--restart` this
-        # scores a saved state with the current diagnostics and no solve,
-        # which is how a checkpoint written before a diagnostic changed is
-        # read again.
-        area, area_C, water_area, grounded, floating = ocean_and_ice(
-            solver, case, pieces)
-        say(f"STATE t_kyr={start_t_kyr:.9g} ocean_area={area:.9g} "
-            f"ocean_area_C={area_C:.9g} ocean_area_water={water_area:.9g} "
-            f"ice_grounded_kg={grounded:.9g} ice_floating_kg={floating:.9g}")
+        # The areas and ice masses of the undeformed state, which checks the
+        # masks on a new mesh without a solve. Not after `--restart`: a
+        # checkpoint does not hold the `Real` fields (see `save_state`), so a
+        # restored state has `Shift = 0`, and its sea level is off by the
+        # whole uniform layer `h_UF`, which is -30 m in case D at 15 kyr. Every
+        # area and ice mass of such a state is wrong. To score a saved state,
+        # restart it and solve one step, which recomputes `Shift`.
+        if args.restart is None:
+            area, area_C, water_area, grounded, floating = ocean_and_ice(
+                solver, case, pieces)
+            say(f"STATE t_kyr={start_t_kyr:.9g} ocean_area={area:.9g} "
+                f"ocean_area_C={area_C:.9g} "
+                f"ocean_area_water={water_area:.9g} "
+                f"ice_grounded_kg={grounded:.9g} "
+                f"ice_floating_kg={floating:.9g}")
         say("DRY RUN complete: no solve was run.")
         return
 
