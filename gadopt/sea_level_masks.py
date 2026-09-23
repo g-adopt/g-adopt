@@ -284,9 +284,19 @@ def grounded_ice_function(I, SL, k, rho_w, rho_i):
 
     Ice floats when its thickness is below `(rho_w / rho_i)` times the water
     depth `SL`. Then the argument is negative and `B = 1`: the ice counts as
-    water. Ice thicker than that rests on the bed and `B = 0`. On land `SL < 0`,
-    so any ice thickness gives `B = 0` and no ice gives `B = 1`, where the
-    ocean function `C = 0` removes the water.
+    water. Ice thicker than that rests on the bed and `B = 0`. Open water with
+    no ice gives a negative argument and `B = 1`. On land `SL < 0`, so the
+    argument is positive with or without ice and `B = 0`. So `B` alone is 1
+    exactly on the ocean of Martinec eq. 23, open water and floating ice, and
+    0 on land and under grounded ice.
+
+    Where there is no ice, `B = H_k((rho_w / rho_i) SL)` is a second smooth
+    step centred on the same coastline as `C = H_k(SL)`, steeper by
+    `rho_w / rho_i`. The product `B C` is therefore narrower than either step
+    at every ice-free coast, by about `1 / k` in width. That costs almost no
+    water in the sheet, because `SL` is zero at the coast, but an area
+    computed as `int B C` is low by that strip; compute the ocean area as
+    `int B` instead.
 
     Args:
       I: the ice thickness, in the units of `SL`.

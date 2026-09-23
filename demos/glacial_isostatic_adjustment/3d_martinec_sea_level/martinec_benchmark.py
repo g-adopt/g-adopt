@@ -928,18 +928,38 @@ def ocean_and_ice(solver, case, pieces):
       case: the `MartinecCase`.
       pieces: the dictionary from `build_solver`.
 
-    Two areas are returned, because the two count different regions once
-    marine ice grounds. `int C dS` counts every point where the sea level is
-    positive, which includes the bed under grounded marine ice. `int B C dS`
-    counts only the points that carry water: `B` is 1 for floating or absent
-    ice and 0 for grounded ice, and the water column of the sheet is
-    `rho_w B C SL` for the same reason. With a fixed coastline `B` does not
-    exist and the two areas are equal.
+    Three areas are returned, because with a moving coastline three
+    natural integrals count three different regions:
+
+    * `int B dS`, the ocean area of the benchmark (Martinec eq. 23): the
+      points with a positive water column and no grounded ice on them, with
+      floating ice counted as ocean. `B = 1 - H_k(I - (rho_w / rho_i) SL)`
+      is 1 in open water and under floating ice, and 0 under grounded ice
+      and on land, because on land `SL < 0` makes the argument positive
+      whether or not ice is there. So `B` alone is the benchmark's ocean
+      function, with one smooth step at each coast and at each grounding
+      line.
+    * `int C dS`, every point where the sea level is positive. It counts
+      the bed under grounded marine ice, and land pushed below sea level
+      under the cap, as ocean. On case D at 15 kyr that is 1.26e-3 of the
+      sphere, 2.85 percent of the area.
+    * `int B C dS`, the product that multiplies the sea level in the water
+      term of the sheet. Where there is no ice, `B` is a second smooth step
+      centred on the same coastline as `C`, and the product of two steps
+      is narrower than either one by about `1 / k`. So this integral loses
+      a strip about 17 km wide along every ice-free coast on the 78 km
+      mesh: 5.42e-4 of the sphere at t = 0, 1.2 percent of the area, and
+      the strip scales with the facet size. The strip holds almost no water,
+      because `SL` is zero at the coast, so the sheet is barely affected;
+      the area is. `NOTES/ocean-area/` has the two measurements.
+
+    With a fixed coastline `B` does not exist and all three are `int C0 dS`.
 
     Returns:
-      `(ocean_area_fraction, water_area_fraction, grounded_kg, floating_kg)`.
-      Both areas are fractions of the whole sphere, `int ... dS / (4 pi
-      Re^2)`.
+      `(ocean_area, ocean_area_C, ocean_area_water, grounded_kg,
+      floating_kg)`: the three areas above, in that order, each a fraction
+      of the whole sphere, `int ... dS / (4 pi Re^2)`, and the two ice
+      masses in kilograms.
     """
     dss = surface_measure(solver)
     k = solver._sea_level_steepness()
@@ -948,6 +968,7 @@ def ocean_and_ice(solver, case, pieces):
         C = ocean_function(pieces["SL_init"], k)
         grounded_integrand = (1 - C) * ice
         floating_integrand = None
+        benchmark = C
         water = C
     else:
         SL = solver.sea_level()
@@ -956,11 +977,14 @@ def ocean_and_ice(solver, case, pieces):
                                   case.rho_ice_nondim)
         grounded_integrand = (1 - B) * ice
         floating_integrand = B * ice
-        # The water-bearing ocean: the same product `B C` that multiplies
-        # the sea level in the water term of the sheet.
+        # The benchmark's ocean function is `B` alone; see the docstring.
+        benchmark = B
+        # The product `B C` that multiplies the sea level in the water term
+        # of the sheet, kept as a diagnostic of the coastal strip.
         water = B * C
     sphere = 4.0 * np.pi * gen.RE ** 2
-    area = assemble(C * dss) / sphere
+    area = assemble(benchmark * dss) / sphere
+    area_C = assemble(C * dss) / sphere
     water_area = assemble(water * dss) / sphere
     # Non-dimensional mass times rho_bar D^3 is kilograms: the densities are
     # in units of rho_bar, the thickness in units of D and the area in D^2.
@@ -968,7 +992,8 @@ def ocean_and_ice(solver, case, pieces):
     grounded = scale * assemble(grounded_integrand * dss)
     floating = (0.0 if floating_integrand is None
                 else scale * assemble(floating_integrand * dss))
-    return float(area), float(water_area), float(grounded), float(floating)
+    return (float(area), float(area_C), float(water_area), float(grounded),
+            float(floating))
 
 
 def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
@@ -1004,7 +1029,8 @@ def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
     # ocean and the ice carry opposite signs and the net mass of the sheet is
     # zero by construction, which would make a ratio against it meaningless.
     load_moment = float(assemble(gen.RE * abs(sheet) * dss))
-    area, water_area, grounded, floating = ocean_and_ice(solver, case, pieces)
+    area, area_C, water_area, grounded, floating = ocean_and_ice(
+        solver, case, pieces)
     counters = preconditioner_counters(solver)
     snes = solver.solver.snes
     abs_dipole = float(np.linalg.norm(dipole))
@@ -1025,7 +1051,8 @@ def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
         # DtN representations. Before any load exists the ratio is 0 by
         # definition.
         dipole_rel=(abs_dipole / load_moment if load_moment > 0.0 else 0.0),
-        net_sheet_mass=net_mass, ocean_area=area, ocean_area_water=water_area,
+        net_sheet_mass=net_mass, ocean_area=area, ocean_area_C=area_C,
+        ocean_area_water=water_area,
         ice_mass_grounded_kg=grounded, ice_mass_floating_kg=floating)
 
 
@@ -1061,6 +1088,7 @@ def print_step(row):
         f"h_UF_m={row['h_UF_m']:.9g} "
         f"net_sheet_mass={row['net_sheet_mass']:.6e} "
         f"ocean_area={row['ocean_area']:.9g} "
+        f"ocean_area_C={row['ocean_area_C']:.9g} "
         f"ocean_area_water={row['ocean_area_water']:.9g} "
         f"ice_grounded_kg={row['ice_mass_grounded_kg']:.9g} "
         f"ice_floating_kg={row['ice_mass_floating_kg']:.9g}")
@@ -2129,6 +2157,15 @@ def main(argv=None):
             f"the restored state at {start_t_kyr:g} kyr")
         say(f"  residual of {state_name} assembled "
             f"({time.time() - tic:.1f} s): l2 norm {norm:.6e}")
+        # The areas and ice masses of the same state. After `--restart` this
+        # scores a saved state with the current diagnostics and no solve,
+        # which is how a checkpoint written before a diagnostic changed is
+        # read again.
+        area, area_C, water_area, grounded, floating = ocean_and_ice(
+            solver, case, pieces)
+        say(f"STATE t_kyr={start_t_kyr:.9g} ocean_area={area:.9g} "
+            f"ocean_area_C={area_C:.9g} ocean_area_water={water_area:.9g} "
+            f"ice_grounded_kg={grounded:.9g} ice_floating_kg={floating:.9g}")
         say("DRY RUN complete: no solve was run.")
         return
 
@@ -2148,7 +2185,8 @@ def main(argv=None):
         path = os.path.join(args.output, f"martinec-{label}-timeseries.npz")
         if COMM_WORLD.rank == 0 and rows:
             keys = ("t_kyr", "dt_yr", "wall_s", "shift", "h_UF_m",
-                    "net_sheet_mass", "ocean_area", "ocean_area_water",
+                    "net_sheet_mass", "ocean_area", "ocean_area_C",
+                    "ocean_area_water",
                     "ice_mass_grounded_kg",
                     "ice_mass_floating_kg", "abs_dipole", "load_moment",
                     "dipole_rel", "newton", "outer")
