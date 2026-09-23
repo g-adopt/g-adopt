@@ -767,18 +767,36 @@ def selfgrav_dtn_iterative_solver_parameters(
 
         **What is measured.** 4 rows win: 88.2 s per step against 269 s with
         block 1 unpreconditioned (arm B4 against arms B0 and C0, job
-        179385036, `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24). About
-        76 rows lose, because a build then costs more than a whole outer solve
-        and nobody has measured over how many steps that amortises. **No arm
-        measures a width between 5 and 75.** So the default 16 is a choice with
-        a margin above the widest measured win and not a measurement; the
-        argument exists so that a caller can move it without a new release. The
-        widths 5 and 8 will be measured on `sghelichkhani/sea-level` once it
-        rebases onto this tip, and that measurement is what sets the production
-        value. On this tip that measurement takes the **cached apply**, which
-        is what the preset now chooses at those widths; the dense complement at
-        5 and 8 rows is reached by naming `ainvb=False`, and a campaign that
-        wants both arms must name it.
+        179385036, `NOTES/team/rotation-pc/03-CAMPAIGN.md` section 24). With
+        the cached apply at 4 rows (core pressure and the three
+        centre-of-mass rows), the frame costs 1.20 times a run without it,
+        against 6.33 times on the delegating path (Spada cap, jobs 179535948
+        and 179535947 against 179271032 and 179271031). The complement there
+        has a condition number of 1.019 after `_DenseLU` scales it by its
+        diagonal, so the rows are almost uncoupled.
+
+        5 rows (4 rows plus the sea-level `Shift`) also win with the cached
+        apply. On the 78 km Martinec mesh a 50 yr step of case C costs 16.0 s
+        at 2 outer iterations (job 179535949), and case C and case D march to
+        15 kyr on it (jobs 179535950, 179581634 and 179603338). Case B at a
+        bulk modulus of 1000 times the shear modulus converges in 2 or 3
+        outer iterations with every block-0 solve that forms the cache
+        stopped at its iteration cap (job 179535952), so a cache formed from
+        capped block-0 solves still works. The 16.0 s compares with 75.3 s
+        for a 50 yr step of case B with `DtNMultiplierDenseSchurPC` named
+        (job 179449169). That is a different case, and no arm runs the cached
+        apply against `ainvb=False` on the same case at 5 rows.
+
+        About 76 rows lose, because a build then costs more than a whole
+        outer solve and nobody has measured over how many steps that
+        amortises. **No arm measures a width between 6 and 75.** 8 rows
+        (core pressure, three rotation rows, three centre-of-mass rows and
+        `Shift`) need rotation and sea level in one solver, and no driver
+        builds that. So the default 16 is a choice with a margin above the
+        widest measured win and not a measurement; the argument exists so
+        that a caller can move it without a new release. The dense
+        complement at these widths is reached by naming `ainvb=False`, and a
+        campaign that wants both arms must name it.
       multiplier_pc: the preconditioner on the block-1 (`Real`) split, named
         as a `pc_python_type` string, or `"none"`. The default `None` is a
         sentinel meaning "the preset chooses". It chooses `"none"` whenever
