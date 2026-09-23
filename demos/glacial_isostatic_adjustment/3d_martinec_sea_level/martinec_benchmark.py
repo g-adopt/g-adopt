@@ -928,10 +928,18 @@ def ocean_and_ice(solver, case, pieces):
       case: the `MartinecCase`.
       pieces: the dictionary from `build_solver`.
 
+    Two areas are returned, because the two count different regions once
+    marine ice grounds. `int C dS` counts every point where the sea level is
+    positive, which includes the bed under grounded marine ice. `int B C dS`
+    counts only the points that carry water: `B` is 1 for floating or absent
+    ice and 0 for grounded ice, and the water column of the sheet is
+    `rho_w B C SL` for the same reason. With a fixed coastline `B` does not
+    exist and the two areas are equal.
+
     Returns:
-      `(ocean_area_fraction, grounded_kg, floating_kg)`. The area is a
-      fraction of the whole sphere, `int C dS / (4 pi Re^2)`, which is the
-      convention of the benchmark's `ocean_area`.
+      `(ocean_area_fraction, water_area_fraction, grounded_kg, floating_kg)`.
+      Both areas are fractions of the whole sphere, `int ... dS / (4 pi
+      Re^2)`.
     """
     dss = surface_measure(solver)
     k = solver._sea_level_steepness()
@@ -940,6 +948,7 @@ def ocean_and_ice(solver, case, pieces):
         C = ocean_function(pieces["SL_init"], k)
         grounded_integrand = (1 - C) * ice
         floating_integrand = None
+        water = C
     else:
         SL = solver.sea_level()
         C = ocean_function(SL, k)
@@ -947,14 +956,19 @@ def ocean_and_ice(solver, case, pieces):
                                   case.rho_ice_nondim)
         grounded_integrand = (1 - B) * ice
         floating_integrand = B * ice
-    area = assemble(C * dss) / (4.0 * np.pi * gen.RE ** 2)
+        # The water-bearing ocean: the same product `B C` that multiplies
+        # the sea level in the water term of the sheet.
+        water = B * C
+    sphere = 4.0 * np.pi * gen.RE ** 2
+    area = assemble(C * dss) / sphere
+    water_area = assemble(water * dss) / sphere
     # Non-dimensional mass times rho_bar D^3 is kilograms: the densities are
     # in units of rho_bar, the thickness in units of D and the area in D^2.
     scale = refstate.RHO_BAR * D_M ** 3 * case.rho_ice_nondim
     grounded = scale * assemble(grounded_integrand * dss)
     floating = (0.0 if floating_integrand is None
                 else scale * assemble(floating_integrand * dss))
-    return float(area), float(grounded), float(floating)
+    return float(area), float(water_area), float(grounded), float(floating)
 
 
 def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
@@ -990,7 +1004,7 @@ def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
     # ocean and the ice carry opposite signs and the net mass of the sheet is
     # zero by construction, which would make a ratio against it meaningless.
     load_moment = float(assemble(gen.RE * abs(sheet) * dss))
-    area, grounded, floating = ocean_and_ice(solver, case, pieces)
+    area, water_area, grounded, floating = ocean_and_ice(solver, case, pieces)
     counters = preconditioner_counters(solver)
     snes = solver.solver.snes
     abs_dipole = float(np.linalg.norm(dipole))
@@ -1011,7 +1025,7 @@ def state_row(solver, layout, case, pieces, t_kyr, dt_yr, step, wall_s):
         # DtN representations. Before any load exists the ratio is 0 by
         # definition.
         dipole_rel=(abs_dipole / load_moment if load_moment > 0.0 else 0.0),
-        net_sheet_mass=net_mass, ocean_area=area,
+        net_sheet_mass=net_mass, ocean_area=area, ocean_area_water=water_area,
         ice_mass_grounded_kg=grounded, ice_mass_floating_kg=floating)
 
 
@@ -1047,6 +1061,7 @@ def print_step(row):
         f"h_UF_m={row['h_UF_m']:.9g} "
         f"net_sheet_mass={row['net_sheet_mass']:.6e} "
         f"ocean_area={row['ocean_area']:.9g} "
+        f"ocean_area_water={row['ocean_area_water']:.9g} "
         f"ice_grounded_kg={row['ice_mass_grounded_kg']:.9g} "
         f"ice_floating_kg={row['ice_mass_floating_kg']:.9g}")
     say(f"FRAME t_kyr={row['t_kyr']:.9g} "
@@ -2133,7 +2148,8 @@ def main(argv=None):
         path = os.path.join(args.output, f"martinec-{label}-timeseries.npz")
         if COMM_WORLD.rank == 0 and rows:
             keys = ("t_kyr", "dt_yr", "wall_s", "shift", "h_UF_m",
-                    "net_sheet_mass", "ocean_area", "ice_mass_grounded_kg",
+                    "net_sheet_mass", "ocean_area", "ocean_area_water",
+                    "ice_mass_grounded_kg",
                     "ice_mass_floating_kg", "abs_dipole", "load_moment",
                     "dipole_rel", "newton", "outer")
             arrays = {key: np.array([row[key] for row in rows], dtype=float)
