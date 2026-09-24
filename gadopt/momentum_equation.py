@@ -200,9 +200,7 @@ def stress_glut_term(
 ) -> Form:
 
     if eq.stress_glut is not None:
-
-        B_mu = eq.approximation.B_mu
-        F = B_mu*inner(grad(eq.test), eq.stress_glut) * eq.dx
+        F = inner(grad(eq.test), eq.stress_glut) * eq.dx
     else:
         F = 0
 
