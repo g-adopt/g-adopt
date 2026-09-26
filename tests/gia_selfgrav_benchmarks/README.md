@@ -82,6 +82,18 @@ nodes have no network, so run the test on a login node.
 The three procedures below all need a Firedrake installation with gmsh.
 Each driver generates its mesh in the job.
 
+On Gadi, git has no `git-lfs`. A plain clone of the repository fails at the
+checkout of two LFS files that these benchmarks do not use. Switch the LFS
+filter off for the clone:
+
+```bash
+git clone -c filter.lfs.smudge=cat -c filter.lfs.process= \
+    -c filter.lfs.required=false https://github.com/g-adopt/g-adopt.git
+```
+
+`run_benchmark.pbs` puts the repository root first on `PYTHONPATH`. Its
+jobs then use the `gadopt` of the clone and not the one in the module.
+
 ### With doit
 
 Use this procedure to run all five cases on Gadi when the Firedrake module
@@ -96,8 +108,11 @@ the Martinec cases with qsub.
 A bare `doit run_case_hpc` submits the HPC cases of every directory in the
 repository.
 
-Each step in `meta.py` submits one job through `gadopt_hpcrun`. The
-`check_hpc` task runs `test_benchmarks.py` in this directory.
+Each step in `meta.py` submits one job through `gadopt_hpcrun`, the
+launcher of the package `gadopt_hpc_helper`. The weekly long-test CI of
+G-ADOPT uses this procedure in its own environment, which has the launcher.
+The Firedrake module on Gadi does not have it, so for a run by hand use
+qsub. The `check_hpc` task runs `test_benchmarks.py` in this directory.
 
 ### With qsub
 
@@ -190,16 +205,38 @@ another gmsh version gives one, change the seed.
 
 ### Spada et al. (2011)
 
-The paper gives no pass tolerance. The tolerances in `test_benchmarks.py` are
-provisional:
+The paper gives no pass tolerance. Each tolerance in `test_benchmarks.py` is
+a known error floor of this model plus a margin for the mesh and the solver.
+Three floors are known:
 
-- U(0), N(0) and the largest V are within 3, 3 and 4 percent of TABOO at every
-  epoch. An earlier run on a 500 km mesh reached 2.5 percent for U(0) at t = 0.
-- The phase of the polar motion is within 0.05 degrees of -105 degrees.
-- |m| / |m_ref| is between 0.95 and 1.0. The model uses C - A =
-  2.6952e35 kg m^2, the value that goes with the secular Love number of the
-  reference. The reference excitation uses 2.63e35 kg m^2, so the ratio is
-  below 1.
+- K / mu = 100. The model is compressible and TABOO is incompressible. At
+  t = 0 this gives U(0) 2.5 percent high and the largest V 3.6 percent low.
+  The effect decreases with time.
+- Backward Euler on the step sequence of the cap case. N(0) is about 1.1
+  percent high at 5 kyr.
+- The moment difference. The model uses C - A = 2.6952e35 kg m^2, the value
+  that goes with the secular Love number of the reference. The reference
+  excitation uses 2.63e35 kg m^2, so |m| / |m_ref| is near 0.976.
+
+The test applies these bounds:
+
+| quantity | bound |
+|---|---|
+| U(0), N(0), largest V, ratio to TABOO | within 3, 1.5 and 4 percent of 1, at every epoch |
+| the same ratios, divided by the predicted floor of the epoch | within 0.5 percent |
+| degree-0 uplift, \|U_0\| / \|U_2\| | below 1e-5 |
+| phase of the polar motion | within 0.01 degrees of -105 degrees |
+| \|m\| / \|m_ref\| | between 0.965 and 0.980 |
+
+The fixed bounds must hold at every epoch. So the compressibility floor at
+t = 0 sets the bounds on U(0) and the largest V. At 20 kyr that floor is
+small, and a late-time error of 2 to 3 percent passes the fixed bounds. The
+second check removes this gap. It divides each ratio by the floor that
+lovejx, a Love-number code that is not in this repository, predicts for
+that epoch (`SPADA_CAP_FLOOR`). The remainder, the error of the mesh and the
+solver, must stay within the bound. If the step sequence or K / mu of the
+cap case changes, the predicted floors must be computed again. The comments
+in `test_benchmarks.py` give the numbers behind each bound.
 
 ### Martinec et al. (2018)
 
@@ -221,9 +258,17 @@ paper does not give the width of the excluded band. At 1.05 degrees instead of
 6.74 degrees, the earlier case C run fails rule 2 on U along the basin
 meridian by 4 percent.
 
-Case B is expected to fail rule 2 on U and N along the load meridian. The
-cause is the time error of backward Euler on the case B time steps. The test for it is
-marked `xfail` until the time step of case B is reduced.
+Case B is sensitive to the time step. The load is a step that is held, so
+at 10 kyr most of the geoid change is still to come. Backward Euler is first
+order in time. The graded steps of the Spada cases are 10 yr to 0.1 kyr,
+50 yr to 1 kyr and 100 yr to 10 kyr. On these steps case B fails rule 2 on
+U and N along the load meridian. The driver therefore takes uniform 10 yr
+steps for case B (1000 steps). On these steps lovejx predicts a largest
+load-meridian N difference of 0.0250 m. The published codes reach 0.0256 m,
+so the margin is small. The margin is 0.6 mm. The uncertainty of the
+prediction is about 4 mm, and the prediction is calibrated on the earlier
+run on the coarser mesh. Only the run decides. The test for case B is marked
+`xfail` until a run on these steps confirms the pass.
 
 ## Walltime and cost
 

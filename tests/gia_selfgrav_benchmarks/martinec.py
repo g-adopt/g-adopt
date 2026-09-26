@@ -76,10 +76,10 @@ DISCRETISATION
               (`--bulk_shear_ratio` overrides it). At 100, case B fails its
               geoid criterion: the error of the compressible model at
               K / mu = 100 adds to the time error of backward Euler.
-    Time      Case B: the elastic solve at t = 0, then 10 yr steps to
-              0.1 kyr, 50 yr to 1 kyr and 100 yr to 10 kyr. Cases C and D:
-              50 yr steps from 0 to 15 kyr, with no elastic solve, because
-              the load grows from zero.
+    Time      Case B: the elastic solve at t = 0, then uniform 10 yr steps
+              to 10 kyr (1000 steps, `T0_DT_YR`). Cases C and D: 50 yr steps
+              from 0 to 15 kyr, with no elastic solve, because the load
+              grows from zero.
     Solver    Cases B and C have a fixed coastline, so the residual is linear
               in the unknowns and one linear solve per step is exact
               (`ksponly`). Case D has live masks and runs Newton.
@@ -154,6 +154,29 @@ EPOCHS_KYR = {"T0": (0.0, 1.0, 2.0, 5.0, 10.0),
 
 #: The time step of the growing load (scenario T1), years.
 T1_DT_YR = 50.0
+
+#: The time step of the held step load (scenario T0, case B), years, from
+#: t = 0 to the terminal time. Backward Euler is first order in time. A held
+#: step load leaves most of the geoid change still to come at 10 kyr, so the
+#: time error of case B is large. On the graded Spada steps (10 yr to
+#: 0.1 kyr, 50 yr to 1 kyr, 100 yr to 10 kyr) the load-meridian N is 0.98
+#: percent high at 10 kyr. Criterion 2 then fails on load U and N.
+#:
+#: lovejx, a Love-number code that is not in this repository, gives the
+#: backward-Euler response of the same Earth model on any step sequence. With
+#: it, the error of this driver on a new sequence is predicted from the
+#: parent's run on the graded steps. For uniform 10 yr steps the prediction
+#: is a largest load-meridian N difference of 0.0250 m. The published codes
+#: reach 0.0256 m. Steps of 12 yr after 0.1 kyr fail. Every sequence that keeps
+#: each step above half the graded one fails as well. At a vanishing step
+#: 0.0173 m remains, the spatial error of the mesh.
+#:
+#: The margin is 0.6 mm. The uncertainty of the prediction is about 4 mm, and
+#: the prediction is calibrated on the earlier run on the coarser mesh. Only
+#: the run decides. The prediction is in `NOTES/team/case-b-dt/REPORT.md`,
+#: and the 0.98 percent is in `NOTES/geoid-b/opus/REPORT.md` of the parent
+#: branch `sghelichkhani/sea-level`.
+T0_DT_YR = 10.0
 
 #: The number of steps of a smoke run.
 SMOKE_STEPS = 10
@@ -781,11 +804,12 @@ def main():
         f"martinec_{letter}")
 
     # Scenario T0 (case B) is a load switched on at t = 0: the elastic solve
-    # and then the graded steps of `selfgrav_common.STEP_LOAD_LADDER_YR`. A
-    # growing load (T1) has no fast early response and takes uniform steps.
+    # and then uniform steps of `T0_DT_YR`, which the time error of backward
+    # Euler on a held load needs (see `T0_DT_YR`). A growing load (T1) has no
+    # fast early response and takes uniform steps of `T1_DT_YR`.
     t_end_yr = max(epochs) * 1000.0
     if case.time_scenario == "T0":
-        ladder = common.truncated_ladder(common.STEP_LOAD_LADDER_YR, t_end_yr)
+        ladder = ((t_end_yr, T0_DT_YR),)
     else:
         ladder = ((t_end_yr, T1_DT_YR),)
     segments = common.time_segments(epochs, ladder)
