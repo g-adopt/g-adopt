@@ -29,12 +29,7 @@ multiplier on the condensed layout (`resolve_dtn_representation`); on the
 arm at every truncation, at 0.69 of the warm step, with a setup that does
 not grow with the truncation. `DtNTwoBlockSchurPC` preconditions the system,
 with `CondensedBlockPC` on block 0 and, on the low-rank representation,
-`LowRankPotentialPC` on its potential split. The 3-D Spada benchmark is in
-`demos/glacial_isostatic_adjustment/3d_spada_selfgrav/`: one driver,
-`spada_benchmark.py`, runs the cap case (U, V and N against TABOO) and the
-polar-motion case, with the library's default solver configuration. Its
-`README.md` gives the mesh command, the run commands and the expected
-results.
+`LowRankPotentialPC` on its potential split.
 
 **Power-law rheology in 3-D.** `SelfGravitatingGIASolver` solves a power-law
 rheology on the full layout with Newton. The 3-D Spada restart driver

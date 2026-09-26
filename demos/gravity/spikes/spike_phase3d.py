@@ -65,10 +65,13 @@ mesh and the forms, not the run.
         [--configuration coarse] [--mesh-file ...]
 
 Serial is fine and parallel is fine; every quantity is an assembled scalar.
+
+This spike does not run on the current code. It imports `b4_polar_motion`,
+which the commit faad336f removed from the old Spada demo directory. To repeat
+the measurement, check out the parent of faad336f and run the spike there,
+with `demos/glacial_isostatic_adjustment/3d_spada_selfgrav` on `PYTHONPATH`.
 """
 import argparse
-import os
-import sys
 
 import gadopt  # noqa: F401  BEFORE firedrake
 import numpy as np  # noqa: E402
@@ -77,11 +80,6 @@ from firedrake.petsc import PETSc  # noqa: E402
 from gadopt.gia_gravity import (  # noqa: E402
     selfgrav_dtn_iterative_solver_parameters,
 )
-
-HERE = os.path.dirname(os.path.abspath(__file__))
-B4DIR = os.path.normpath(os.path.join(
-    HERE, "..", "..", "glacial_isostatic_adjustment", "3d_spada_selfgrav"))
-sys.path.insert(0, B4DIR)
 
 import b4_polar_motion as b4  # noqa: E402
 
