@@ -56,6 +56,7 @@ from gadopt.gia_gravity import (FluidCore,
                                 selfgrav_dtn_iterative_solver_parameters)
 from gadopt.utility import initialise_background_field
 from mpi4py import MPI
+from petsc4py import PETSc
 
 # ---------------------------------------------------------------------------
 # 1. Scales
@@ -336,24 +337,29 @@ MARTINEC_COAST_PSI_DEG = 24.85
 #: The gmsh Delaunay algorithm puts points in at random, and some seeds give
 #: flat cells (see `flat_cells`). With gmsh 4.15.2 on an Apple arm64 machine
 #: the default seed 1 gives 3 flat cells on "spada", 1 on "martinec" and 1 on
-#: "smoke". The seeds below give none there. The same gmsh version on the x86
-#: nodes of Gadi gives other tetrahedra for the same seed, with other cell
-#: counts and one flat cell on "spada" and on "martinec". A seed is therefore
-#: not portable between machines either.
+#: "smoke". Seeds 2, 3 and 2 give none there. The same gmsh version on the
+#: x86 nodes of Gadi gives other tetrahedra for the same seed. There, seeds
+#: 2 to 8 give flat cells on "spada" and seed 9 none. Seeds 3 to 5 give flat
+#: cells on "martinec" and seed 6 none. Seed 2 gives none on "smoke". A seed
+#: is therefore not portable between machines. Gadi gives the same mesh for
+#: the same seed in every run. The seeds below are the ones that work on
+#: Gadi, so a production run there needs one try. On the arm64 machine seed
+#: 9 gives 1 flat cell on "spada" and seed 6 gives 2 on "martinec", so a run
+#: there retries from these seeds. "smoke" needs one try on both machines.
 #: `build_meshes` therefore starts at the seed below and tries the next seeds
 #: until a mesh has no flat cell (`SEED_TRIES`). The job log and the summary
 #: record the seed it used and the MD5 of the file.
 MESHES = {
     "spada": {"h_km": 250.0, "litho_layers": 2, "min_cells": 32,
               "grade": 2.0, "refinement": None,
-              "mesh_options": {"Mesh.Algorithm3D": 1, "Mesh.RandomSeed": 2}},
+              "mesh_options": {"Mesh.Algorithm3D": 1, "Mesh.RandomSeed": 9}},
     "martinec": {"h_km": 250.0, "litho_layers": 2, "min_cells": 32,
                  "grade": 2.0,
                  "refinement": {"h_fine_km": 78.0, "cap_deg": 12.0,
                                 "band_deg": 4.0, "grade_lateral": 0.5,
                                 "depth_km": 500.0},
                  "mesh_options": {"Mesh.Algorithm3D": 1,
-                                  "Mesh.RandomSeed": 3}},
+                                  "Mesh.RandomSeed": 6}},
     "smoke": {"h_km": 1000.0, "litho_layers": 1, "min_cells": 16,
               "grade": 2.0, "refinement": None,
               "mesh_options": {"Mesh.Algorithm3D": 1, "Mesh.RandomSeed": 2}},
@@ -726,11 +732,138 @@ def folded_cells(mesh):
 
 
 #: The number of consecutive gmsh seeds that `build_meshes` tries, from the
-#: seed of `MESHES`, before it stops. In the trials so far, 5 of 9
-#: mesh-and-machine pairs gave a flat cell with their first seed. If the
-#: seeds are independent, ten tries leave a chance of about 1e-3 that no seed
-#: works. One try takes 17 s ("spada") to 22 s ("martinec") on Gadi.
-SEED_TRIES = 10
+#: seed of `MESHES`, before it stops. On Gadi, 10 of the 12 seeds tried gave
+#: a flat cell on the production meshes. If the seeds are independent, 40
+#: tries leave a chance of about 1e-3 that no seed works. One try takes 17 s
+#: ("spada") to 22 s ("martinec") on Gadi.
+SEED_TRIES = 40
+
+
+#: The bits per axis of the Hilbert curve that orders the cell directions in
+#: `balanced_partition`. 2^10 = 1024 steps across the unit cube give a step
+#: of 2 / 1023 in each component of the direction, 12 km at Re. That is well
+#: below the 78 km of the finest cells, so almost no two mantle cells share
+#: a key.
+HILBERT_BITS = 10
+
+
+def hilbert_keys(ijk, bits):
+    """The index of integer points along a 3-D Hilbert curve.
+
+    The algorithm is the transpose form of Skilling (2004), "Programming the
+    Hilbert curve", AIP Conf. Proc. 707, 381, applied to all points at once.
+    It undoes the excess work, Gray-codes the result, and interleaves the
+    bits of the three axes into one key. Points that are close along the
+    curve are close in space, so an equal split of the sorted keys gives
+    compact pieces.
+
+    Args:
+      ijk: an integer array of shape `(n, 3)` with values in `[0, 2**bits)`.
+      bits: the bits per axis. The key has `3 * bits` bits and must fit in
+        int64, so `bits` is at most 21.
+
+    Returns:
+      An int64 array of `n` keys.
+    """
+    X = np.array(ijk, dtype=np.int64)
+    M = np.int64(1) << (bits - 1)
+    # Inverse undo of the excess work, from the top bit down.
+    Q = M
+    while Q > 1:
+        P = Q - 1
+        for i in range(3):
+            high = (X[:, i] & Q) != 0
+            # Where the bit is set, invert the low bits of the first axis.
+            X[high, 0] ^= P
+            # Elsewhere, exchange the low bits of the first axis and axis i.
+            low = ~high
+            t = (X[low, 0] ^ X[low, i]) & P
+            X[low, 0] ^= t
+            X[low, i] ^= t
+        Q >>= 1
+    # Gray encode.
+    for i in range(1, 3):
+        X[:, i] ^= X[:, i - 1]
+    t = np.zeros(len(X), dtype=np.int64)
+    Q = M
+    while Q > 1:
+        t[(X[:, 2] & Q) != 0] ^= Q - 1
+        Q >>= 1
+    X ^= t[:, None]
+    # Interleave: the top bit of each axis first, axis 0 before axis 1.
+    key = np.zeros(len(X), dtype=np.int64)
+    for b in range(bits - 1, -1, -1):
+        for i in range(3):
+            key = (key << 1) | ((X[:, i] >> b) & 1)
+    return key
+
+
+def balanced_partition(plex, nparts):
+    """A partition of the cells that gives every rank the same mantle work.
+
+    The default partitioner cuts the parent mesh into compact pieces of
+    equal cell count. A third of the parent cells lie in the buffer shell
+    and in the inner shell. On hundreds of ranks, many pieces then hold no
+    mantle cell. Firedrake then fails on such a rank (an empty local mesh in
+    `cell_facet_labeling`), and the mantle work, which is most of the cost,
+    is unbalanced. This partition fixes both.
+
+    Each cell is ordered by the Hilbert key of the direction of its
+    centroid. The mantle cells, in that order, are split into `nparts`
+    pieces of equal count. Each buffer or inner cell goes to the rank whose
+    mantle piece covers its key. Every rank then owns a solid-angle sector
+    through all the shells. The mantle work is balanced to one cell. The
+    buffer and inner work, which is the potential alone, is not balanced.
+
+    Every rank must call this, because the plex is collective. Only rank 0
+    holds cells, because the gmsh reader loads the whole file there.
+
+    Args:
+      plex: the serial `DMPlex` read from the gmsh file, on `COMM_WORLD`.
+      nparts: the number of ranks.
+
+    Returns:
+      `(sizes, points)` for `distribution_parameters["partition"]`: the
+      number of cells for each rank, and the cell points ordered by rank.
+      On a rank that holds no cells, `sizes` is all zero and `points` is
+      empty.
+    """
+    cstart, cend = plex.getHeightStratum(0)
+    if cend == cstart:
+        return (np.zeros(nparts, dtype=PETSc.IntType),
+                np.zeros(0, dtype=PETSc.IntType))
+    # The centroid of each tetrahedron: the mean of its four vertices.
+    section = plex.getCoordinateSection()
+    coordinates = plex.getCoordinatesLocal()
+    centroid = np.array([plex.vecGetClosure(section, coordinates, c)
+                         .reshape(-1, 3).mean(axis=0)
+                         for c in range(cstart, cend)])
+    # The direction as integer coordinates in [0, 2^bits) on each axis.
+    direction = centroid / np.linalg.norm(centroid, axis=1)[:, None]
+    scale = (1 << HILBERT_BITS) - 1
+    key = hilbert_keys(np.rint((direction + 1.0) * 0.5 * scale),
+                       HILBERT_BITS)
+    # The mantle cells, by their cell set.
+    mantle = np.zeros(cend - cstart, dtype=bool)
+    mantle_points = plex.getStratumIS("Cell Sets", CELL_MANTLE).getIndices()
+    mantle[np.asarray(mantle_points) - cstart] = True
+    # Split the mantle cells, in key order, into pieces of equal count. A
+    # stable sort keeps equal keys in cell order, so the split is
+    # deterministic.
+    part = np.empty(cend - cstart, dtype=np.int64)
+    mantle_index = np.flatnonzero(mantle)
+    order = mantle_index[np.argsort(key[mantle_index], kind="stable")]
+    part[order] = (np.arange(len(order)) * nparts) // len(order)
+    # The key at which each mantle piece starts. A buffer or inner cell goes
+    # to the last piece that starts at or below its key.
+    first = np.searchsorted(part[order], np.arange(nparts), side="left")
+    starts = key[order][first]
+    other = np.flatnonzero(~mantle)
+    part[other] = np.clip(
+        np.searchsorted(starts, key[other], side="right") - 1, 0, nparts - 1)
+    sizes = np.bincount(part, minlength=nparts).astype(PETSc.IntType)
+    points = (np.argsort(part, kind="stable") + cstart).astype(PETSc.IntType)
+    return sizes, points
 
 
 def md5sum(filename):
@@ -748,9 +881,11 @@ def build_meshes(kind, directory, stem):
     Rank 0 writes the gmsh file and counts the flat cells while the other
     ranks wait. If the mesh has a flat cell, rank 0 writes it again with the
     next gmsh seed, up to `SEED_TRIES` seeds. The tetrahedra of one seed
-    differ between machines, so a fixed seed does not carry. Every rank then
-    reads the file, the mantle submesh is cut from the curved parent, and
-    both meshes are checked for folded cells. `Submesh` does not inherit the
+    differ between machines, so a fixed seed does not carry. Rank 0 then
+    reads the file into a plex, and `Mesh` distributes it with
+    `balanced_partition`, so every rank owns mantle cells. The mantle
+    submesh is cut from the curved parent, and both meshes are checked for
+    folded cells. `Submesh` does not inherit the
     P2 coordinates of the parent, so the submesh is curved again with the
     same radial map. The two coordinate fields then agree on every shared
     facet.
@@ -832,7 +967,16 @@ def build_meshes(kind, directory, stem):
             "when the mesh is curved. Change Mesh.RandomSeed of this mesh in "
             "selfgrav_common.MESHES or raise SEED_TRIES.")
 
-    parent = curve_mesh(Mesh(filename), name=f"{kind}_parent")
+    # The partition of `balanced_partition`, so every rank owns mantle
+    # cells. The gmsh reader loads the whole file on rank 0, as
+    # `Mesh(filename)` does, and `Mesh` then distributes the plex with this
+    # partition.
+    plex = PETSc.DMPlex().createFromFile(filename, comm=COMM_WORLD)
+    plex.setName(f"{kind}_topology")
+    sizes, points = balanced_partition(plex, COMM_WORLD.size)
+    parent = curve_mesh(
+        Mesh(plex, distribution_parameters={"partition": (sizes, points)}),
+        name=f"{kind}_parent")
     # The geometry is a sphere, so the "vertical" direction of the G-ADOPT
     # terms is radial and not the last Cartesian axis.
     parent.cartesian = False

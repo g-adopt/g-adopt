@@ -191,13 +191,25 @@ sphere onto that sphere. The surface, the core-mantle boundary, the density
 interfaces and the two DtN spheres are then piecewise quadratic surfaces. The displacement is CG3, the potential
 CG2 and the internal variables DG2.
 
-| mesh | lateral size | lithosphere | cells (gmsh 4.15.2, Apple arm64) | unknowns | nodes |
+| mesh | lateral size | lithosphere | cells (gmsh 4.15.2, Gadi x86, the seeds of `MESHES`) | unknowns | nodes |
 |---|---|---|---|---|---|
-| `spada` | 250 km | two 35 km layers | 595 348 | 30.3 million | 15 |
-| `martinec` | 78 km in the ice cap and along both coastlines, 250 km elsewhere | two 35 km layers | 743 211 | 37.6 million | 18 |
-| `smoke` | 1000 km | one 70 km layer | 19 312 | 1.0 million | 4 ranks |
+| `spada` | 250 km | two 35 km layers | 595 633 | 30.3 million | 15 |
+| `martinec` | 78 km in the ice cap and along both coastlines, 250 km elsewhere | two 35 km layers | 742 357 | 37.6 million | 18 |
+| `smoke` | 1000 km | one 70 km layer | 19 330 | 1.0 million | 4 ranks |
 
 The node counts give about 20 000 unknowns per core on `normalsr` nodes.
+
+The driver distributes the mesh with its own partition
+(`selfgrav_common.balanced_partition`). A third of the cells are in the
+buffer shell and in the inner shell, where only the potential lives. The
+default partitioner cuts the mesh into compact pieces of equal cell count,
+so on hundreds of ranks many pieces hold no mantle cell. Firedrake then
+fails on those ranks, and the mantle work, which is most of the cost, is
+unbalanced. The driver orders the cells along a Hilbert curve of their
+direction from the centre and splits the mantle cells into equal counts.
+The mantle work is balanced to one cell. The buffer and inner work, the
+potential alone, is not balanced. Each rank then owns a solid-angle sector
+through all the shells.
 
 The job stops with an error if the mesh has a defective cell. A tetrahedron
 with all four vertices on one mesh sphere (a flat cell) folds when the driver
