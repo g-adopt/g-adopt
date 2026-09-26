@@ -31,7 +31,7 @@ Four things have to hold, and there is one test for each.
    (`NOTES/DESIGN-SEA-LEVEL.md` section 6).
 
 The 3-D mesh is a very coarse four-region sphere, written by
-`selfgrav_sphere_mesh.generate` into a session-scoped fixture. The coarse
+`selfgrav_common.generate_sphere` into a session-scoped fixture. The coarse
 benchmark meshes (for example `b2_coarse_ar7.msh`, 99 059 cells) are far too
 slow for a unit test. Both mesh fixtures need gmsh and skip without it.
 """
@@ -154,15 +154,17 @@ def clean_tape():
 
 
 def sphere_generator():
-    """The mesh generator of the 3-D benchmark sphere, a helper module here.
+    """The shared module of the 3-D benchmarks, imported by path.
 
-    `selfgrav_sphere_mesh.py` sits next to this test file and is not part of
-    the package, so it is reached through `sys.path`.
+    `selfgrav_common` holds the mesh generator of the self-gravitating GIA
+    benchmarks. It lives in a test directory and not in the package, so it
+    is reached through `sys.path` the way the benchmark drivers reach it.
     """
-    here = str(Path(__file__).resolve().parent)
-    if here not in sys.path:
-        sys.path.insert(0, here)
-    import selfgrav_sphere_mesh as gen
+    root = Path(__file__).resolve().parents[2]
+    bench = root / "tests" / "gia_selfgrav_benchmarks"
+    if str(bench) not in sys.path:
+        sys.path.insert(0, str(bench))
+    import selfgrav_common as gen
 
     return gen
 
@@ -188,9 +190,9 @@ def sphere():
     path = Path(tempfile.gettempdir()) / (
         f"gadopt_slope_sphere_{SPHERE_H_KM:.0f}_{SPHERE_MIN_CELLS}.msh")
     if fd.COMM_WORLD.rank == 0 and not path.exists():
-        gen.generate(str(path), h=SPHERE_H_KM / gen.D_KM,
-                     litho_layers=SPHERE_LITHO_LAYERS,
-                     min_cells_per_great_circle=SPHERE_MIN_CELLS)
+        gen.generate_sphere(str(path), h=SPHERE_H_KM / gen.D_KM,
+                            litho_layers=SPHERE_LITHO_LAYERS,
+                            min_cells=SPHERE_MIN_CELLS)
     fd.COMM_WORLD.barrier()
 
     parent = gen.curve_mesh(fd.Mesh(str(path)), name="slope_parent")

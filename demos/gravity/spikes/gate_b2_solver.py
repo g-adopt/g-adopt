@@ -78,7 +78,6 @@ import re
 import resource
 import sys
 import time
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -121,13 +120,14 @@ from gadopt.solver_options_manager import GAMG_PARAMETERS
 RigidBodyAssembledPC = _RigidBodyAssembledPC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The cell and surface tags of the four-region sphere. They live in the shared
+# module of the self-gravitating benchmarks, with the mesh generator that
+# writes them.
+BENCH = os.path.normpath(os.path.join(
+    HERE, "..", "..", "..", "tests", "gia_selfgrav_benchmarks"))
+sys.path.insert(0, BENCH)
 
-#: The cell and surface tags of the four-region sphere that the benchmark mesh
-#: generator writes: the mantle cell group, and the surfaces at Re, at Rc and
-#: at the outer and inner DtN truncation spheres. The generator is not part of
-#: the package, so the spike carries the tags it needs.
-gen = SimpleNamespace(CELL_MANTLE=101, SURF_RE=2, SURF_RC=3, SURF_OUTER=4,
-                      SURF_INNER=5)
+import selfgrav_common as gen  # noqa: E402
 
 # Non-dimensional constants, from the 2-D driver; Lambda ~ 1 is the point.
 B_MU = 1.2769

@@ -59,7 +59,8 @@ the class from a marked node id, so a parallel test inside a class never runs
 """
 
 import re
-from types import SimpleNamespace
+import sys
+from pathlib import Path
 
 import firedrake as fd
 import numpy as np
@@ -84,32 +85,17 @@ from test_gia_gravity import (  # noqa: E402  (module-level helpers)
 # the only unused name is in it.
 from test_gia_gravity import meshes  # noqa: E402,F401  (pytest fixture)
 
-#: The reference state of the Spada et al. (2011) benchmark, for the one
-#: calibration test: the scales and the rotation constants of the 3-D benchmark
-#: driver, with the same values and names as the driver's module. The driver is
-#: not part of the package, so the test carries its own copy of the few numbers
-#: it compares against.
-_G_NEWTON = 6.6732e-11          # m^3 kg^-1 s^-2
-_RHO_BAR = 5511.68              # kg m^-3, the model's own mean density
-_G_BAR = 9.81555                # m s^-2, the reference surface gravity
-_D_SCALE = 2.891e6              # m, the mantle thickness Re - Rc
-refstate = SimpleNamespace(
-    A_EARTH=6.371e6,            # m, the Earth radius
-    D_SCALE=_D_SCALE,
-    # The self-gravity number 4 pi G rho_bar D / g_bar (1.3613238).
-    LAMBDA=4 * np.pi * _G_NEWTON * _RHO_BAR * _D_SCALE / _G_BAR,
-    # C - A in units of rho_bar D^5: the value consistent with the secular
-    # Love number k_s of the model (2.6952e35 kg m^2, 0.24214001), and the one
-    # the benchmark prescribes for its excitation (2.63e35 kg m^2, 0.23628236).
-    C_MINUS_A={"ks": 2.6952e35 / (_RHO_BAR * _D_SCALE**5),
-               "prescribed": 2.63e35 / (_RHO_BAR * _D_SCALE**5)},
-    # Omega^2 in units of g_bar / D, with Omega = 7.292115e-5 rad/s
-    # (1.5661757e-03).
-    OMEGA_SQ=7.292115e-5**2 * _D_SCALE / _G_BAR)
+# The reference state of the benchmark drivers, for the one calibration test.
+# `selfgrav_common` is a module of the benchmark test directory, so that
+# directory goes on the path the same way `test_gia_gravity.meshes` puts
+# `demos/gravity` there for the mesh generator.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"
+                       / "gia_selfgrav_benchmarks"))
+import selfgrav_common as refstate  # noqa: E402
 
 #: The secular (fluid-limit) tidal Love number of M3-L70-V01, from the TABOO
 #: transfer function the Spada et al. (2011) benchmark used. It is the number
-#: `refstate.C_MINUS_A`'s comment names as the origin of the consistent
+#: `selfgrav_common.C_MINUS_A`'s comment names as the origin of the consistent
 #: `C - A = 2.6952e35 kg m^2`, and it is dimensionless.
 K_S_SPADA = 0.96672389
 
@@ -339,13 +325,13 @@ def test_the_refusal_message_carries_both_values_and_the_implied_k_s(meshes):  #
     to report the given `C - A`, the given `k_s`, the `C - A = Qhat k_s` they
     imply and the `k_s = (C - A) / Qhat` the given ellipticity implies. On the
     benchmark's pair that last number is 0.94334, the value
-    `refstate.C_MINUS_A`'s comment names for the prescribed
+    `selfgrav_common.C_MINUS_A`'s comment names for the prescribed
     `2.63e35 kg m^2`, and reproducing it here is an independent check of the
     arithmetic as well as of the message.
 
     The numbers are compared by value and not by substring, for the reason in
     `numbers_in`. The implied `k_s` is checked to 1e-5 absolute, which is the
-    five-digit form quoted in the comment of `refstate`.
+    five-digit form quoted in `selfgrav_common.py`.
     """
     given = Q_ANNULUS * K_S_SPADA * BENCHMARK_RATIO
     with pytest.raises(ValueError) as excinfo:
