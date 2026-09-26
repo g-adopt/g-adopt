@@ -334,11 +334,15 @@ MARTINEC_COAST_PSI_DEG = 24.85
 #: Its numbers are not results.
 #:
 #: The gmsh Delaunay algorithm puts points in at random, and some seeds give
-#: flat cells (see `flat_cells`). With gmsh 4.15.2 the default seed 1 gives
-#: 3 flat cells on "spada", 1 on "martinec" and 1 on "smoke". The seeds
-#: below give none, and the same seed gave the same MD5 twice. A seed is not
-#: portable between gmsh versions, so `build_meshes` counts the flat cells
-#: in every run and stops the run if there is one.
+#: flat cells (see `flat_cells`). With gmsh 4.15.2 on an Apple arm64 machine
+#: the default seed 1 gives 3 flat cells on "spada", 1 on "martinec" and 1 on
+#: "smoke". The seeds below give none there. The same gmsh version on the x86
+#: nodes of Gadi gives other tetrahedra for the same seed, with other cell
+#: counts and one flat cell on "spada" and on "martinec". A seed is therefore
+#: not portable between machines either.
+#: `build_meshes` therefore starts at the seed below and tries the next seeds
+#: until a mesh has no flat cell (`SEED_TRIES`). The job log and the summary
+#: record the seed it used and the MD5 of the file.
 MESHES = {
     "spada": {"h_km": 250.0, "litho_layers": 2, "min_cells": 32,
               "grade": 2.0, "refinement": None,
@@ -721,6 +725,14 @@ def folded_cells(mesh):
     return mesh.comm.allreduce(local, op=MPI.SUM)
 
 
+#: The number of consecutive gmsh seeds that `build_meshes` tries, from the
+#: seed of `MESHES`, before it stops. In the trials so far, 5 of 9
+#: mesh-and-machine pairs gave a flat cell with their first seed. If the
+#: seeds are independent, ten tries leave a chance of about 1e-3 that no seed
+#: works. One try takes 17 s ("spada") to 22 s ("martinec") on Gadi.
+SEED_TRIES = 10
+
+
 def md5sum(filename):
     """The MD5 of a file, as a hexadecimal string."""
     digest = hashlib.md5()
@@ -734,11 +746,14 @@ def build_meshes(kind, directory, stem):
     """Generate the mesh of `kind` in the job, check it, and curve it.
 
     Rank 0 writes the gmsh file and counts the flat cells while the other
-    ranks wait. Every rank then reads the file, the mantle submesh is cut
-    from the curved parent, and both meshes are checked for folded cells.
-    `Submesh` does not inherit the P2 coordinates of the parent, so the
-    submesh is curved again with the same radial map; the two coordinate
-    fields then agree on every shared facet.
+    ranks wait. If the mesh has a flat cell, rank 0 writes it again with the
+    next gmsh seed, up to `SEED_TRIES` seeds. The tetrahedra of one seed
+    differ between machines, so a fixed seed does not carry. Every rank then
+    reads the file, the mantle submesh is cut from the curved parent, and
+    both meshes are checked for folded cells. `Submesh` does not inherit the
+    P2 coordinates of the parent, so the submesh is curved again with the
+    same radial map. The two coordinate fields then agree on every shared
+    facet.
 
     The mesh is generated in every run and not copied, so the job records
     what it ran on: the gmsh version, the MD5 of the file and the cell
@@ -755,10 +770,12 @@ def build_meshes(kind, directory, stem):
 
     Returns:
       `(parent, mantle, info)`: the two curved meshes, and a dictionary with
-      the mesh parameters, the gmsh version, the MD5 and the cell counts.
+      the mesh parameters, the gmsh version, the seed used, the flat-cell
+      count of every seed tried, the MD5 and the cell counts.
 
     Raises:
-      RuntimeError: if the mesh has a flat cell or a folded cell.
+      RuntimeError: if every seed tried gives a flat cell, or the curved
+        mesh has a folded cell.
     """
     spec = MESHES[kind]
     filename = os.path.join(directory, f"{stem}.msh")
@@ -776,16 +793,26 @@ def build_meshes(kind, directory, stem):
         # An error on rank 0 must reach the other ranks, or they wait in
         # the broadcast below for ever.
         try:
-            cells = generate_sphere(filename, h, spec["litho_layers"],
-                                    spec["min_cells"], grade=spec["grade"],
-                                    extra_size_fields=hook,
-                                    mesh_options=spec["mesh_options"])
+            first_seed = spec["mesh_options"]["Mesh.RandomSeed"]
+            flat_by_seed = {}
+            for seed in range(first_seed, first_seed + SEED_TRIES):
+                options = {**spec["mesh_options"], "Mesh.RandomSeed": seed}
+                cells = generate_sphere(filename, h, spec["litho_layers"],
+                                        spec["min_cells"],
+                                        grade=spec["grade"],
+                                        extra_size_fields=hook,
+                                        mesh_options=options)
+                flat_by_seed[seed] = flat_cells(filename)
+                if flat_by_seed[seed] == 0:
+                    break
             info.update({"gmsh_version": gmsh.__version__,
+                         "random_seed": seed,
+                         "flat_cells_by_seed": flat_by_seed,
                          "md5": md5sum(filename),
                          "cells_mantle": cells[CELL_MANTLE],
                          "cells_inner": cells[CELL_INNER],
                          "cells_buffer": cells[CELL_BUFFER],
-                         "flat_cells": flat_cells(filename),
+                         "flat_cells": flat_by_seed[seed],
                          "generation_s": time.time() - tic})
         except Exception as exc:  # noqa: BLE001  (re-raised on every rank)
             error = f"mesh generation failed on rank 0: {exc!r}"
@@ -793,14 +820,17 @@ def build_meshes(kind, directory, stem):
     if error is not None:
         raise RuntimeError(error)
     log(f"  mesh {kind}: {filename}, gmsh {info['gmsh_version']}, "
+        f"seed {info['random_seed']} (flat cells by seed "
+        f"{info['flat_cells_by_seed']}), "
         f"md5 {info['md5']}, cells mantle {info['cells_mantle']}, inner "
         f"{info['cells_inner']}, buffer {info['cells_buffer']} "
         f"({info['generation_s']:.1f} s)")
     if info["flat_cells"]:
         raise RuntimeError(
-            f"{filename} has {info['flat_cells']} flat cells, which fold "
+            f"{filename} has flat cells with every one of the {SEED_TRIES} "
+            f"seeds tried ({info['flat_cells_by_seed']}). Flat cells fold "
             "when the mesh is curved. Change Mesh.RandomSeed of this mesh in "
-            "selfgrav_common.MESHES.")
+            "selfgrav_common.MESHES or raise SEED_TRIES.")
 
     parent = curve_mesh(Mesh(filename), name=f"{kind}_parent")
     # The geometry is a sphere, so the "vertical" direction of the G-ADOPT

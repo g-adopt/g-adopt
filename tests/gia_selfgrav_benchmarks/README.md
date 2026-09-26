@@ -82,13 +82,13 @@ nodes have no network, so run the test on a login node.
 The three procedures below all need a Firedrake installation with gmsh.
 Each driver generates its mesh in the job.
 
-On Gadi, git has no `git-lfs`. A plain clone of the repository fails at the
-checkout of two LFS files that these benchmarks do not use. Switch the LFS
-filter off for the clone:
+On Gadi, the system git (`/bin/git`) has no `git-lfs`, and the repository
+has LFS files. Load the git module before you clone, because it has
+`git-lfs`:
 
 ```bash
-git clone -c filter.lfs.smudge=cat -c filter.lfs.process= \
-    -c filter.lfs.required=false https://github.com/g-adopt/g-adopt.git
+module load git/2.39.2
+git clone https://github.com/g-adopt/g-adopt.git
 ```
 
 `run_benchmark.pbs` puts the repository root first on `PYTHONPATH`. Its
@@ -181,11 +181,17 @@ colatitudes with a cubic spline.
 ## Meshes
 
 Each driver generates its mesh with gmsh at a fixed resolution. The job log
-gives the gmsh version, the MD5 of the mesh file and the cell counts. Another
-gmsh version gives other tetrahedra, so two runs with different MD5 values
-used different meshes.
+gives the gmsh version, the random seed, the MD5 of the mesh file and the
+cell counts. Another gmsh version or another machine gives other
+tetrahedra, so two runs with different MD5 values used different meshes.
 
-| mesh | lateral size | lithosphere | cells (gmsh 4.15.2) | unknowns | nodes |
+The driver then curves the mesh. It interpolates the coordinates into CG2
+and moves the midpoint of each edge whose two vertices lie on one mesh
+sphere onto that sphere. The surface, the core-mantle boundary, the density
+interfaces and the two DtN spheres are then piecewise quadratic surfaces. The displacement is CG3, the potential
+CG2 and the internal variables DG2.
+
+| mesh | lateral size | lithosphere | cells (gmsh 4.15.2, Apple arm64) | unknowns | nodes |
 |---|---|---|---|---|---|
 | `spada` | 250 km | two 35 km layers | 595 348 | 30.3 million | 15 |
 | `martinec` | 78 km in the ice cap and along both coastlines, 250 km elsewhere | two 35 km layers | 743 211 | 37.6 million | 18 |
@@ -197,9 +203,11 @@ The job stops with an error if the mesh has a defective cell. A tetrahedron
 with all four vertices on one mesh sphere (a flat cell) folds when the driver
 curves the mesh. The curved cell then has a Jacobian determinant that
 changes sign, which gives a wrong answer without an error message. The
-Delaunay algorithm of gmsh makes flat cells at random. The random seed of
-each mesh in `selfgrav_common.MESHES` gives no flat cell with gmsh 4.15.2. If
-another gmsh version gives one, change the seed.
+Delaunay algorithm of gmsh makes flat cells at random, and the same seed
+gives other tetrahedra on another machine. The driver therefore starts at
+the seed of `selfgrav_common.MESHES` and tries the next seeds, up to
+`SEED_TRIES`, until the mesh has no flat cell. After the curving, it checks
+every cell for a Jacobian determinant of one sign.
 
 ## Pass criteria
 
