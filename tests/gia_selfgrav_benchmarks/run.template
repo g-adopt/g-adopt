@@ -1,0 +1,10 @@
+{header}
+
+{prescript}
+
+# {command} already holds the driver and its arguments from meta.py
+# ("--case <case>"). The driver generates its mesh, runs the case and writes
+# params_<case>.log and summary_<case>.json into this directory.
+# test_benchmarks.py reads them after the job ends.
+export OMP_NUM_THREADS=1
+{executor} {command}

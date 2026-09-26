@@ -1,0 +1,104 @@
+#!/bin/bash
+#PBS -P vo05
+#PBS -q normalsr
+#PBS -l ncpus=1560
+#PBS -l mem=7500GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=24:00:00
+#PBS -l storage=scratch/vo05+gdata/vo05+gdata/fp50
+#PBS -l wd
+#
+# One case of the self-gravitating GIA benchmarks on the NCI Gadi cluster.
+# Use this script to submit a case by hand. `doit run_case_hpc` submits the
+# same cases from meta.py.
+#
+# Submit from this directory. The resource lines above fit the Spada cases
+# (15 nodes). The Martinec cases need 18 nodes, so give the resources on the
+# command line. The normalsr queue allows at most 24 h for 1144 to 2080
+# cores, so do not ask for a longer walltime.
+#
+#   qsub -v DRIVER=spada,CASE=cap run_benchmark.pbs
+#   qsub -v DRIVER=spada,CASE=polar-motion run_benchmark.pbs
+#   qsub -l ncpus=1872 -l mem=9000GB \
+#        -v DRIVER=martinec,CASE=B run_benchmark.pbs
+#
+# A smoke run on one node, to check the installation before a full run:
+#
+#   qsub -l ncpus=104 -l mem=500GB -l walltime=01:00:00 \
+#        -v DRIVER=spada,CASE=cap,SMOKE=1 run_benchmark.pbs
+#
+# Variables:
+#   DRIVER    spada or martinec (required).
+#   CASE      cap or polar-motion for spada; B, C or D for martinec
+#             (required).
+#   SMOKE     1 adds --smoke: a very coarse mesh and 10 steps.
+#   OUTPUT    the output directory (default: this directory).
+#   EXTRA     more driver arguments, for example --write_output.
+#   EXTRA_PYTHONPATH
+#             a directory with Python packages that the module does not
+#             have, for example giamip (see below). Default: empty.
+#
+# Edit the project (-P), the storage line and the module lines for another
+# allocation.
+#
+# The Martinec driver reads its case from the Python package `giamip`. The
+# package is in the `demos` extra of G-ADOPT, and the weekly Firedrake module
+# build installs that extra. Until a module build has it, install it into a
+# directory of your own on a login node and give that directory as
+# EXTRA_PYTHONPATH. The module Python is a virtual environment, so
+# `pip install --user` does not work. numpy, scipy, h5py and packaging are
+# in the module, so only giamip and h5netcdf go into the directory:
+#
+#   module use /g/data/fp50/modules; module load firedrake/main
+#   python3 -m pip install --no-deps --target /g/data/vo05/$USER/python-extra \
+#       giamip h5netcdf
+#   qsub -l ncpus=1872 -l mem=9000GB \
+#        -v DRIVER=martinec,CASE=C,EXTRA_PYTHONPATH=/g/data/vo05/$USER/python-extra \
+#        run_benchmark.pbs
+#
+# The job stops at once if the package is missing.
+
+source /etc/profile
+module use /g/data/fp50/modules
+# `firedrake/main` is an alias of the newest weekly build `main-YYYYMMDD`.
+module load firedrake/main
+ulimit -s unlimited 2>/dev/null || true
+
+# This directory and the repository root. The root comes first on PYTHONPATH,
+# so that `import gadopt` loads this checkout and not another install.
+D=$PBS_O_WORKDIR
+W=$(cd "$D/../.." && pwd)
+export PYTHONPATH=$W${EXTRA_PYTHONPATH:+:$EXTRA_PYTHONPATH}:$PYTHONPATH
+export PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 OMPI_MCA_io=ompio
+cd "$D"
+
+: ${DRIVER:?set DRIVER=spada or DRIVER=martinec}
+: ${CASE:?set CASE}
+: ${SMOKE:=0}
+: ${OUTPUT:=$D}
+: ${EXTRA:=}
+
+SMOKE_FLAG=
+if [ "$SMOKE" = "1" ]; then
+    SMOKE_FLAG=--smoke
+fi
+
+echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
+echo "=== git:    $(git -C "$W" rev-parse --short HEAD) ==="
+echo "=== module: $(module -t list 2>&1 | grep firedrake) ==="
+echo "=== DRIVER=$DRIVER CASE=$CASE SMOKE=$SMOKE ranks=$PBS_NCPUS ==="
+if [ "$DRIVER" = "martinec" ]; then
+    python3 -c 'import giamip; print("=== giamip:", giamip.__version__, giamip.__file__, "===")' \
+        || { echo "giamip is not importable; see the header of this script"; exit 1; }
+fi
+echo "=== started $(date) on $(hostname) ==="
+
+# One rank per core. The driver generates and checks its mesh, and it prints
+# the gmsh version and the MD5 of the mesh.
+# shellcheck disable=SC2086
+mpiexec -np "$PBS_NCPUS" python3 -u "$DRIVER.py" --case "$CASE" \
+    --output_path "$OUTPUT" $SMOKE_FLAG $EXTRA 2>&1
+RC=$?
+
+echo "=== finished $(date), exit $RC ==="
+exit $RC
