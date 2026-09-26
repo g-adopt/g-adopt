@@ -31,7 +31,7 @@ Four things have to hold, and there is one test for each.
    (`NOTES/DESIGN-SEA-LEVEL.md` section 6).
 
 The 3-D mesh is a very coarse four-region sphere, written by
-`generate_selfgrav_sphere.generate` into a session-scoped fixture. The coarse
+`selfgrav_sphere_mesh.generate` into a session-scoped fixture. The coarse
 benchmark meshes (for example `b2_coarse_ar7.msh`, 99 059 cells) are far too
 slow for a unit test. Both mesh fixtures need gmsh and skip without it.
 """
@@ -154,16 +154,15 @@ def clean_tape():
 
 
 def sphere_generator():
-    """The mesh generator module of the 3-D benchmark, imported by path.
+    """The mesh generator of the 3-D benchmark sphere, a helper module here.
 
-    It lives in a demo directory and not in the package, so it is reached
-    through `sys.path` the way the benchmark drivers reach it.
+    `selfgrav_sphere_mesh.py` sits next to this test file and is not part of
+    the package, so it is reached through `sys.path`.
     """
-    root = Path(__file__).resolve().parents[2]
-    demo = root / "demos" / "glacial_isostatic_adjustment" / "3d_spada_selfgrav"
-    if str(demo) not in sys.path:
-        sys.path.insert(0, str(demo))
-    import generate_selfgrav_sphere as gen
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import selfgrav_sphere_mesh as gen
 
     return gen
 

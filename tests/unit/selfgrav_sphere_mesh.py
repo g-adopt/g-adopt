@@ -1,5 +1,10 @@
 """The four-region 3-D sphere of the self-gravitating Spada benchmark.
 
+This module is a helper of `test_sea_level_masks_slope.py`, which builds a
+very coarse sphere with it. It is the mesh generator of the former demo
+`demos/glacial_isostatic_adjustment/3d_spada_selfgrav`, kept unchanged so
+that the test keeps the mesh it was written against.
+
 The gravitational potential lives on the whole mesh (the "parent"). The
 mechanics lives on a `Submesh` of the mantle cells. The two outer regions are
 buffers that carry the potential away from its sources, so that the exterior
@@ -53,7 +58,7 @@ lithosphere cells. The benchmark mesh `b2_coarse_ar7.msh` uses the `coarse`
 lateral spacing (500 km) with ONE lithosphere layer (70 km), which gives a
 design aspect ratio of about 7:
 
-    python generate_selfgrav_sphere.py --configuration coarse \\
+    python selfgrav_sphere_mesh.py --configuration coarse \\
         --litho-layers 1 --min-cells 32 --output b2_coarse_ar7.msh
 
 gmsh tetrahedralisation is not bit-reproducible across gmsh versions, so a

@@ -139,6 +139,13 @@ quantities over the same cells, so a disagreement at 1e-07 is the cross-mesh
 entity maps genuinely wrong, and both coupling terms are built on that measure.
 
 Exits non-zero if any criterion fails.
+
+This gate does not run on the current code, except `--selfcheck`. Its
+measurement imports `b1_elastic` and `validate_selfgrav_sphere`, which the
+commit faad336f removed from the old Spada demo directory. To repeat the
+measurement, check out the parent of faad336f and run the gate there, with
+`demos/glacial_isostatic_adjustment/3d_spada_selfgrav` on `PYTHONPATH` as in
+the commands above.
 """
 import argparse
 import os
@@ -149,10 +156,6 @@ import numpy as np  # noqa: E402
 import firedrake as fd  # noqa: E402
 from firedrake import COMM_WORLD  # noqa: E402
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(os.path.dirname(HERE))
-SPADA = os.path.join(ROOT, "demos", "glacial_isostatic_adjustment",
-                     "3d_spada_selfgrav")
 
 # Tolerances. The multiplier and off-diagonal numbers are the unit tests' own.
 DIAG_TOL = 1e-12
@@ -820,7 +823,6 @@ def main():
     if args.selfcheck:
         failures = selfcheck()
     else:
-        sys.path.insert(0, SPADA)
         import b1_elastic as b1
         from validate_selfgrav_sphere import provenance
 
