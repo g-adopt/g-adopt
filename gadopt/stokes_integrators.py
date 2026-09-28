@@ -14,9 +14,9 @@ import abc
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Any
 from warnings import warn
-from types import MappingProxyType
 
 import firedrake as fd
 from ufl.core.expr import Expr
@@ -26,18 +26,18 @@ from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .scalar_equation import mass_term, sink_term, source_term
-from .solver_options_manager import SolverConfigurationMixin, ConfigType
+from .solver_options_manager import ConfigType, SolverConfigurationMixin
 from .utility import (
     DEBUG,
     INFO,
     InteriorBC,
     depends_on,
+    get_device_type,
     is_cartesian,
     is_continuous,
     log_level,
     upward_normal,
     vertical_component,
-    get_device_type
 )
 
 gamg_common_parameters: Mapping[str, str | float | int | bool] = MappingProxyType(
@@ -735,6 +735,9 @@ class StokesSolver(StokesSolverBase):
         Float quantifying the time step used in a coupled time integration
       theta:
         Float quantifying the implicit contribution in a coupled time integration
+      conserve_free_surface_volume:
+        Constrain the mean height for a single free-surface boundary by iterating on a
+        uniform normal-velocity multiplier.
       additional_forcing_term:
         Firedrake form specifying an additional term contributing to the residual
       bcs:
@@ -769,14 +772,40 @@ class StokesSolver(StokesSolverBase):
         approximation: BaseApproximation,
         T: fd.Function | float = 0.0,
         /,
+        conserve_free_surface_volume: bool = False,
         **kwargs,
     ) -> None:
         self.T = T
 
         self.eta_ind = 2
+        self.conserve_free_surface_volume = conserve_free_surface_volume
+        self.volume_multiplier = fd.Constant(0.0)
         self.free_surface_map = {}
         self.free_surface_equations = []
         super().__init__(solution, approximation, **kwargs)
+        if self.conserve_free_surface_volume:
+            if not is_cartesian(self.mesh):
+                raise NotImplementedError(
+                    "Free-surface volume conservation is currently implemented for "
+                    "Cartesian meshes only."
+                )
+            if len(self.free_surface_map) != 1:
+                raise ValueError(
+                    "Free-surface volume conservation requires exactly one "
+                    "free-surface boundary."
+                )
+            bc_id, (eta_ind, _) = next(iter(self.free_surface_map.items()))
+            self._volume_boundary_id = bc_id
+            self._volume_eta_index = eta_ind
+            self._volume_boundary_measure = fd.assemble(
+                fd.Constant(1.0) * fd.ds(bc_id, domain=self.mesh)
+            )
+            self._target_mean_height = (
+                fd.assemble(
+                    self.solution.subfunctions[eta_ind] * fd.ds(bc_id, domain=self.mesh)
+                )
+                / self._volume_boundary_measure
+            )
 
     def set_free_surface_boundary(
         self, params_fs: dict[str, int | bool], bc_id: int | str
@@ -832,6 +861,8 @@ class StokesSolver(StokesSolverBase):
                 "use_irksome": False,
                 "u": u,
             }
+            if self.conserve_free_surface_volume:
+                eq_attrs["volume_multiplier"] = self.volume_multiplier
 
             self.equations.append(
                 Equation(
@@ -843,6 +874,55 @@ class StokesSolver(StokesSolverBase):
                     scaling_factor=-self.theta,
                 )
             )
+
+    def solve(self) -> None:
+        """Solve the Stokes/free-surface system, optionally conserving volume."""
+        if not self.conserve_free_surface_volume:
+            return super().solve()
+
+        bc_id = self._volume_boundary_id
+        eta_ind = self._volume_eta_index
+        eta_scale = max(
+            1.0,
+            float(
+                fd.assemble(
+                    abs(self.solution_old.subfunctions[eta_ind])
+                    * fd.ds(bc_id, domain=self.mesh)
+                )
+                / self._volume_boundary_measure
+            ),
+        )
+        tolerance = 1e-10 * eta_scale
+        history: list[tuple[float, float]] = []
+        multiplier = 0.0
+
+        for _ in range(8):
+            self.volume_multiplier.assign(multiplier)
+            self.solver.solve()
+            mean_height = (
+                fd.assemble(self.solution_split[eta_ind] * fd.ds(bc_id))
+                / self._volume_boundary_measure
+            )
+            value = float(mean_height - self._target_mean_height)
+            if abs(value) <= tolerance:
+                self.solution_old.assign(self.solution)
+                return
+
+            history.append((multiplier, value))
+            if len(history) >= 2:
+                previous_multiplier, previous_value = history[-2]
+                slope = (value - previous_value) / (multiplier - previous_multiplier)
+                if abs(slope) > 1e-14:
+                    multiplier -= value / slope
+                    continue
+
+            # The kinematic equation gives d(mean eta)/dt = mean(w) - lambda.
+            multiplier += value / float(self.dt)
+
+        raise RuntimeError(
+            "Free-surface volume constraint failed to converge: "
+            f"mean-height change is {value:.3e} after 8 coupled solves."
+        )
 
     def set_solver_options(
         self,

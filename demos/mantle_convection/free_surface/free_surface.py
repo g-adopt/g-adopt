@@ -146,8 +146,10 @@ output_frequency = 10
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t eta_min eta_max"
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t "
+    "eta_mean eta_min eta_max"
 )
+top_length = assemble(Constant(1.0) * ds(boundary.top, domain=mesh))
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
 # -
@@ -171,7 +173,14 @@ energy_solver = EnergySolver(
     T, u, approximation, delta_t, ImplicitMidpoint, bcs=temp_bcs
 )
 
-stokes_solver = StokesSolver(z, approximation, T, dt=delta_t, bcs=stokes_bcs)
+stokes_solver = StokesSolver(
+    z,
+    approximation,
+    T,
+    dt=delta_t,
+    bcs=stokes_bcs,
+    conserve_free_surface_volume=True,
+)
 
 # -
 
@@ -193,6 +202,7 @@ for timestep in range(0, timesteps):
 
     # Compute diagnostics:
     energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
+    eta_mean = assemble(z.subfunctions[2] * ds(boundary.top)) / top_length
 
     # Calculate L2-norm of change in temperature:
     maxchange = sqrt(assemble((T - energy_solver.T_old) ** 2 * dx))
@@ -202,7 +212,8 @@ for timestep in range(0, timesteps):
         f"{timestep} {time} {float(delta_t)} {maxchange} "
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} {gd.Nu_top()} "
         f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
-        f"{z.subfunctions[2].dat.data.min()} {z.subfunctions[2].dat.data.max()}"
+        f"{eta_mean} {z.subfunctions[2].dat.data.min()} "
+        f"{z.subfunctions[2].dat.data.max()}"
     )
 
     # Leave if steady-state has been achieved:
