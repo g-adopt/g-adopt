@@ -14,6 +14,8 @@ module holds everything that the two drivers share:
 4. The time steps: the elastic step at t = 0 and the graded time-step
    sequence that ends on every output epoch.
 5. The solver settings, the time loop and the output helpers.
+6. The checkpoints: the state of a run in one Firedrake `CheckpointFile`,
+   and the restart of a run from the last state in that file.
 
 ## Non-dimensional scales
 
@@ -48,13 +50,15 @@ import os
 import time
 
 import numpy as np
-from gadopt import (COMM_WORLD, CompressibleInternalVariableApproximation,
-                    Constant, Function, FunctionSpace, JacobianDeterminant,
-                    Mesh, SpatialCoordinate, Submesh, VectorFunctionSpace,
-                    conditional, dot, log, sqrt)
+from gadopt import (COMM_WORLD, CheckpointFile,
+                    CompressibleInternalVariableApproximation, Constant,
+                    Function, FunctionSpace, JacobianDeterminant, Mesh,
+                    SpatialCoordinate, Submesh, VectorFunctionSpace, assemble,
+                    conditional, dot, interpolate, log, sqrt)
 from gadopt.gia_gravity import (FluidCore,
                                 selfgrav_dtn_iterative_solver_parameters)
 from gadopt.utility import initialise_background_field
+from finat.ufl import BrokenElement
 from mpi4py import MPI
 from petsc4py import PETSc
 
@@ -974,8 +978,15 @@ def build_meshes(kind, directory, stem):
     plex = PETSc.DMPlex().createFromFile(filename, comm=COMM_WORLD)
     plex.setName(f"{kind}_topology")
     sizes, points = balanced_partition(plex, COMM_WORLD.size)
+    # The distribution gets a name of its own. Without one, Firedrake names
+    # it after `str()` of the partition arrays, a text with NumPy's "..."
+    # and line breaks, and `CheckpointFile.save_mesh` then hangs in
+    # `DMPlex.topologyView` when it writes the distribution under that name
+    # (seen with Firedrake main of 2026-09 on 2 and 4 ranks). A restart on
+    # the same number of ranks finds the distribution by this name.
     parent = curve_mesh(
-        Mesh(plex, distribution_parameters={"partition": (sizes, points)}),
+        Mesh(plex, distribution_parameters={"partition": (sizes, points)},
+             distribution_name=f"balanced_partition_{COMM_WORLD.size}"),
         name=f"{kind}_parent")
     # The geometry is a sphere, so the "vertical" direction of the G-ADOPT
     # terms is radial and not the last Cartesian axis.
@@ -1117,7 +1128,7 @@ def solver_parameters(layout, snes_type):
 
 
 def march(solver, dt, segments, *, elastic, on_step, on_epoch,
-          before_step=None, max_steps=None):
+          before_step=None, max_steps=None, checkpoint=None, start_step=0):
     """Backward-Euler time loop over `segments`, with callbacks.
 
     The time step is one live `Constant`. The forms read its value, and the
@@ -1133,6 +1144,15 @@ def march(solver, dt, segments, *, elastic, on_step, on_epoch,
     reset together with `solution`, because backward Euler reads the
     internal variables of the previous step from `solution_old`.
 
+    A restarted run passes `start_step`, the step of the state that
+    `restore_checkpoint` put into the solver. The loop then counts steps
+    1 to `start_step` without solving them, and it skips the elastic solve
+    and every epoch up to that step. The step numbers, the times and the
+    time step of the remaining steps are the ones of an unbroken run,
+    because they come from the same `segments`. The checkpoint of a step is
+    written after the epoch of that step, so an epoch at `start_step` was
+    already reported by the run that wrote the checkpoint.
+
     Args:
       solver: the `SelfGravitatingGIASolver`.
       dt: the time step `Constant`, in Maxwell times.
@@ -1144,12 +1164,17 @@ def march(solver, dt, segments, *, elastic, on_step, on_epoch,
         the time at the end of the step. A time-dependent load reads it there.
       max_steps: `None`, or the number of marched steps after which the loop
         reports the last state as an epoch and stops.
+      checkpoint: `None`, or `checkpoint(step, t_kyr)`, after every marched
+        step and after the epoch of that step. It decides itself whether the
+        step is due for a checkpoint (see `RunCheckpoint`).
+      start_step: 0 for a new run; for a restarted run, the step of the
+        restored state.
 
     Returns:
-      The number of marched steps.
+      The number of the last marched step.
     """
     step = 0
-    if elastic:
+    if elastic and start_step == 0:
         log(f"\n  t = 0: the elastic response, one step of {DT_ELASTIC:g} "
             "Maxwell times")
         dt.assign(DT_ELASTIC)
@@ -1164,6 +1189,11 @@ def march(solver, dt, segments, *, elastic, on_step, on_epoch,
 
     previous_dt_yr = None
     for t0, t1, dt_yr, nsteps, is_epoch in segments:
+        # A segment that ended at or before the restored step, and its
+        # epoch, belong to the run that wrote the checkpoint.
+        if step + nsteps <= start_step:
+            step += nsteps
+            continue
         if dt_yr != previous_dt_yr:
             dt.assign(dt_yr / T_BAR_YR)
             previous_dt_yr = dt_yr
@@ -1174,18 +1204,29 @@ def march(solver, dt, segments, *, elastic, on_step, on_epoch,
             # Backward Euler: a time-dependent load is read at the end of
             # the step.
             t_kyr = (t0 + (k + 1) * dt_yr) / 1000.0
+            step += 1
+            # The steps of this segment up to the restored one were solved
+            # by the run that wrote the checkpoint.
+            if step <= start_step:
+                continue
             if before_step is not None:
                 before_step(t_kyr)
-            step += 1
             tic = time.time()
             solver.solve()
             on_step(t_kyr, dt_yr, step, time.time() - tic)
             if max_steps is not None and step >= max_steps:
                 log(f"\n  stopping after {max_steps} steps (smoke run)")
                 on_epoch(t_kyr)
+                if checkpoint is not None:
+                    checkpoint(step, t_kyr)
                 return step
-        if is_epoch:
-            on_epoch(t1 / 1000.0)
+            # The epoch at the end of the segment is reported before the
+            # checkpoint of the same step, so that a restart from that
+            # checkpoint does not report it a second time.
+            if is_epoch and k == nsteps - 1:
+                on_epoch(t1 / 1000.0)
+            if checkpoint is not None:
+                checkpoint(step, t_kyr)
     return step
 
 
@@ -1201,16 +1242,363 @@ def write_json(path, data):
     NumPy scalars and arrays are converted to plain Python numbers and lists,
     so that the file can be read without NumPy.
     """
-    def plain(value):
-        if isinstance(value, dict):
-            return {str(k): plain(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple, np.ndarray)):
-            return [plain(v) for v in value]
-        if isinstance(value, np.generic):
-            return value.item()
-        return value
-
     if COMM_WORLD.rank == 0:
         with open(path, "w") as handle:
-            json.dump(plain(data), handle, indent=1)
+            json.dump(plain_json(data), handle, indent=1)
     log(f"  summary written: {path}")
+
+
+def plain_json(value):
+    """`value` with NumPy scalars and arrays replaced by Python numbers and lists.
+
+    `json` cannot write a NumPy type, and the drivers collect NumPy floats
+    from `assemble` and from the reference series.
+    """
+    if isinstance(value, dict):
+        return {str(k): plain_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [plain_json(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+# ---------------------------------------------------------------------------
+# 6. Checkpoints
+# ---------------------------------------------------------------------------
+#
+# A run writes its state to one Firedrake `CheckpointFile` every
+# `CHECKPOINT_EVERY` steps, in the timestepping mode of that class: the mesh
+# is stored once, and every stored field gets one entry per checkpoint,
+# numbered 0, 1, 2, ... (the `idx` of `save_function`). A restart loads the
+# mesh from the file and continues from the last entry.
+#
+# Two limits of `CheckpointFile` shape the layout of the file:
+#
+# 1. A function can only be loaded onto a mesh that `load_mesh` of the same
+#    file returned, because that mesh carries the map from the stored layout
+#    to the loaded one. A restart therefore does not generate the mesh with
+#    gmsh again; it loads the parent mesh and cuts the mantle submesh from
+#    it, as `build_meshes` does.
+# 2. `CheckpointFile` stores one mesh per function and knows nothing of
+#    `Submesh`. The mixed solution spans two meshes: the displacement (and
+#    the internal variables) live on the mantle submesh, the potential and
+#    the `Real` rows on the parent. Each mantle field is therefore stored as
+#    its copy on the parent mesh, in the broken (cell-wise discontinuous)
+#    version of its element (see `RunCheckpoint._parent_copy` for why
+#    broken). The copy is made by interpolation across the submesh map,
+#    which moves nodal values cell by cell and does not evaluate at points,
+#    so the round trip mantle -> parent -> mantle returns the same nodal
+#    values. The parent cells outside the mantle stay zero; nothing reads
+#    them.
+#
+# Beside the fields, each entry holds the step number and the time (as the
+# `timestepping_info` of `save_function`) and a JSON text of the driver's
+# own record: the rows of the time series, the lines of the parameter log,
+# the profile files written so far. The JSON text is a `uint8` dataset, not
+# an attribute, because an HDF5 attribute cannot hold more than 64 KiB and
+# 1000 rows of the Martinec time series take about 350 KiB.
+#
+# A restart must use the same number of ranks as the run that wrote the
+# file. With the same number, `load_mesh` reuses the stored distribution,
+# which is the one of `balanced_partition`. With another number, Firedrake
+# partitions the mesh again with its default partitioner, and that one leaves
+# ranks without a mantle cell at hundreds of ranks (see `balanced_partition`).
+
+#: The number of steps between two checkpoints. At about 40 s per step of
+#: the Martinec cases on 18 nodes, 50 steps are about 35 minutes of work.
+CHECKPOINT_EVERY = 50
+
+#: The HDF5 group of this module's own records in a checkpoint file.
+_RESTART_GROUP = "/gadopt_restart"
+
+
+def checkpoint_path(directory, stem):
+    """The checkpoint file of one case: `<directory>/checkpoint_<stem>.h5`."""
+    return os.path.join(directory, f"checkpoint_{stem}.h5")
+
+
+def _stored_fields(solver):
+    """`(name, function)` of every field that a checkpoint stores.
+
+    The subfunctions of the mixed solution, and in the condensed layout the
+    stored internal variables, which live outside the solution. The solver
+    copies `solution` into `solution_old` after every solve
+    (`StokesSolverBase.solve`), so `solution_old` is not stored.
+    """
+    fields = [(f"solution_{i}", f)
+              for i, f in enumerate(solver.solution.subfunctions)]
+    stored = solver.internal_variables
+    if stored is not None:
+        seq = stored if isinstance(stored, (list, tuple)) else [stored]
+        fields += [(f"internal_variables_{j}", f) for j, f in enumerate(seq)]
+    return fields
+
+
+def _write_json_dataset(chk, path, data):
+    """Write `data` as JSON text into the `uint8` dataset `path` of `chk`.
+
+    Every rank must write the same bytes, because the parallel HDF5 file is
+    written by all ranks. The text is made on rank 0 and broadcast: the rows
+    hold the wall time of each step, which differs between ranks.
+    """
+    text = json.dumps(plain_json(data)) if COMM_WORLD.rank == 0 else None
+    text = COMM_WORLD.bcast(text, root=0)
+    raw = np.frombuffer(text.encode(), dtype=np.uint8)
+    group, name = os.path.split(path)
+    grp = chk.require_group(group)
+    if name in grp:
+        del grp[name]
+    grp.create_dataset(name, data=raw)
+
+
+def _read_json_dataset(chk, path):
+    """Read the JSON text that `_write_json_dataset` wrote at `path`."""
+    return json.loads(bytes(chk.h5pyfile[path][...]).decode())
+
+
+class RunCheckpoint:
+    """The checkpoint file of one run, written every `every` steps.
+
+    Pass an instance as the `checkpoint` argument of `march`. It writes
+    after every step whose number is a multiple of `every`. The first write
+    of a new run creates the file. A restarted run appends to the file it
+    was restarted from, so the file keeps every checkpoint of every leg.
+
+    A new run that finds a file of the same name renames it to
+    `<name>.previous.h5` before it starts, and replaces an older file of that
+    name. A job submitted again without `--restart` therefore does not
+    destroy the states of the job before it. Only one earlier file is kept,
+    because the weekly test runs every case again in the same directory and
+    a production file is about 17 GB.
+
+    Args:
+      path: the `.h5` file.
+      parent: the parent mesh, the one `build_meshes` or `load_checkpoint`
+        returned. The potential and the `Real` rows live on it.
+      solver: the `SelfGravitatingGIASolver`.
+      every: the number of steps between two checkpoints; 0 writes none.
+      mesh_info: the mesh record of `build_meshes`, stored once, so that a
+        restart can report what mesh it runs on.
+      record: a callable that returns the driver's own record as a
+        JSON-serialisable dictionary; it is called at every checkpoint.
+      restart: `None` for a new run, or the `RestartState` the run was
+        restarted from; the entries then continue after its last one.
+    """
+
+    def __init__(self, path, parent, solver, every, mesh_info, record,
+                 restart=None):
+        self.path = path
+        self.parent = parent
+        self.solver = solver
+        self.every = int(every)
+        self.mesh_info = mesh_info
+        self.record = record
+        # After a restart the entries continue after the highest index in
+        # the file, which can be above the restored one when the stopped job
+        # left an incomplete entry behind.
+        self.next_index = 0 if restart is None else restart.next_index
+        self.appending = restart is not None
+        # The copies of the mantle fields on the parent mesh, made once and
+        # refilled at every checkpoint.
+        self._copies = {}
+        if restart is None and self.every > 0:
+            self._keep_previous_file()
+
+    def _keep_previous_file(self):
+        """Rename an existing file of this name to `<name>.previous.h5`.
+
+        Rank 0 renames, and every rank waits for it, so that no rank opens
+        the file for writing while it is still being moved.
+        """
+        if COMM_WORLD.rank == 0 and os.path.exists(self.path):
+            previous = os.path.splitext(self.path)[0] + ".previous.h5"
+            os.replace(self.path, previous)
+            log(f"  kept the existing {self.path} as {previous}")
+        COMM_WORLD.barrier()
+
+    def __call__(self, step, t_kyr):
+        """Write a checkpoint if `step` is due for one."""
+        if self.every > 0 and step % self.every == 0:
+            self.save(step, t_kyr)
+
+    def _parent_copy(self, name, f):
+        """The function that stores `f` on the parent mesh, named `name`.
+
+        A field on the parent is stored as a view of its own data. A field on
+        the mantle submesh is first interpolated into the broken (cell-wise
+        discontinuous) version of its element on the mantle, which is exact
+        because the broken space contains the original one. That broken
+        field then goes to the parent across the submesh map. The broken
+        step matters for a continuous element: the parent nodes on the CMB
+        and on Re are shared with cells outside the mantle, and there the
+        interpolation onto a continuous parent space writes the mantle value
+        or zero depending on the order of the cells (measured: errors of
+        order one at those nodes). A broken space has no shared node, so
+        every stored value comes from its own mantle cell.
+        `allow_missing_dofs` leaves the parent cells outside the mantle at
+        zero; nothing reads them.
+        """
+        space = f.function_space()
+        element = space.ufl_element()
+        if space.mesh() is self.parent:
+            return Function(FunctionSpace(self.parent, element), val=f.dat,
+                            name=name)
+        if name not in self._copies:
+            broken = BrokenElement(element)
+            self._copies[name] = (
+                Function(FunctionSpace(space.mesh(), broken)),
+                Function(FunctionSpace(self.parent, broken), name=name))
+        local, copy = self._copies[name]
+        local.interpolate(f)
+        copy.assign(assemble(interpolate(local, copy.function_space(),
+                                         allow_missing_dofs=True)))
+        return copy
+
+    def save(self, step, t_kyr):
+        """Append the state after `step` to the file, as entry `next_index`."""
+        tic = time.time()
+        index = self.next_index
+        mode = "a" if (self.appending or index > 0) else "w"
+        fields = _stored_fields(self.solver)
+        with CheckpointFile(self.path, mode) as chk:
+            if mode == "w":
+                chk.save_mesh(self.parent)
+                _write_json_dataset(chk, f"{_RESTART_GROUP}/mesh_info",
+                                    {**self.mesh_info,
+                                     "ranks": COMM_WORLD.size,
+                                     "fields": [name for name, _ in fields]})
+            info = {"step": float(step), "t_kyr": float(t_kyr)}
+            for name, f in fields:
+                chk.save_function(self._parent_copy(name, f), idx=index,
+                                  timestepping_info=info)
+            _write_json_dataset(chk, f"{_RESTART_GROUP}/{index}/record",
+                                self.record())
+        self.next_index = index + 1
+        log(f"  checkpoint {index}: step {step}, t {t_kyr:.4f} kyr, "
+            f"{self.path} ({time.time() - tic:.1f} s)")
+
+
+class RestartState:
+    """The state that `load_checkpoint` read: fields, step, time and record.
+
+    Attributes:
+      path: the checkpoint file.
+      index: the entry the state came from, the last complete one in the
+        file.
+      next_index: the index for the next entry, one above the highest index
+        that any field of the file holds.
+      step: the step number of the state.
+      t_kyr: the time of the state, kyr.
+      fields: `{name: function on the loaded parent mesh}`.
+      record: the driver's own record, as the driver stored it.
+    """
+
+    def __init__(self, path, index, next_index, step, t_kyr, fields, record):
+        self.path = path
+        self.index = index
+        self.next_index = next_index
+        self.step = step
+        self.t_kyr = t_kyr
+        self.fields = fields
+        self.record = record
+
+
+def load_checkpoint(path, kind):
+    """Load the meshes and the last state of a checkpoint file.
+
+    The parent mesh comes from the file, with its stored distribution. The
+    mantle submesh is cut from it and curved as in `build_meshes`, and both
+    meshes get `cartesian = False`.
+
+    Args:
+      path: the checkpoint file that `RunCheckpoint` wrote.
+      kind: the key of `MESHES` that the driver expects; a file of another
+        mesh is refused.
+
+    Returns:
+      `(parent, mantle, mesh_info, state)`, with `state` a `RestartState`.
+
+    Raises:
+      RuntimeError: for a file of another mesh kind, or a restart on another
+        number of ranks than the run that wrote the file.
+    """
+    with CheckpointFile(path, "r") as chk:
+        mesh_info = _read_json_dataset(chk, f"{_RESTART_GROUP}/mesh_info")
+        if mesh_info["kind"] != kind:
+            raise RuntimeError(
+                f"{path} holds a '{mesh_info['kind']}' mesh; this run needs "
+                f"'{kind}'.")
+        if mesh_info["ranks"] != COMM_WORLD.size:
+            raise RuntimeError(
+                f"{path} was written on {mesh_info['ranks']} ranks; restart "
+                f"on the same number, not {COMM_WORLD.size}. Another number "
+                "partitions the mesh again with the default partitioner, "
+                "which can leave ranks without a mantle cell.")
+        parent = chk.load_mesh(f"{kind}_parent")
+        names = mesh_info["fields"]
+        # An entry is complete when every field and the record were written.
+        # A job killed during a save leaves the last entry incomplete; the
+        # restart then uses the entry before it.
+        histories = {name: chk.get_timestepping_history(parent, name)
+                     for name in names}
+        written = [{int(i) for i in histories[name]["index"]}
+                   for name in names]
+        complete = sorted(
+            i for i in set.intersection(*written)
+            if f"{_RESTART_GROUP}/{i}/record" in chk.h5pyfile)
+        if not complete:
+            raise RuntimeError(f"{path} holds no complete checkpoint")
+        index = complete[-1]
+        next_index = max(set.union(*written)) + 1
+        # The step and the time of each entry are stored with every field;
+        # read them at the position of the chosen index.
+        first = histories[names[0]]
+        position = [int(i) for i in first["index"]].index(index)
+        step = int(round(first["step"][position]))
+        t_kyr = float(first["t_kyr"][position])
+        fields = {name: chk.load_function(parent, name, idx=index)
+                  for name in names}
+        record = _read_json_dataset(chk, f"{_RESTART_GROUP}/{index}/record")
+    parent.cartesian = False
+    mantle = curve_mesh(Submesh(parent, 3, CELL_MANTLE), name=f"{kind}_mantle")
+    mantle.cartesian = False
+    log(f"  restart: {path}, entry {index}, step {step}, t {t_kyr:.4f} kyr, "
+        f"mesh {mesh_info['kind']} md5 {mesh_info.get('md5')}")
+    return parent, mantle, mesh_info, RestartState(
+        path, index, next_index, step, t_kyr, fields, record)
+
+
+def restore_checkpoint(state, solver, parent):
+    """Put the stored fields of `state` into the solver.
+
+    A field on the parent mesh is interpolated from its stored copy on the
+    same mesh and element, which copies the nodal values. A field on the
+    mantle submesh is interpolated from its broken copy on the parent across
+    the submesh map. At a node shared by several mantle cells every cell
+    holds the same value, because the stored field was continuous, so the
+    interpolation back into the continuous space copies nodal values too. A `Real` row takes its
+    stored value. `solution_old` is then set equal to `solution`, as it is
+    after every solve.
+
+    Args:
+      state: the `RestartState` of `load_checkpoint`.
+      solver: a solver built on the meshes that `load_checkpoint` returned.
+      parent: the parent mesh from `load_checkpoint`.
+
+    Raises:
+      RuntimeError: if the solver stores other fields than the file holds.
+    """
+    fields = _stored_fields(solver)
+    names = [name for name, _ in fields]
+    if sorted(names) != sorted(state.fields):
+        raise RuntimeError(
+            f"the solver stores {names}; {state.path} holds "
+            f"{sorted(state.fields)}")
+    for name, f in fields:
+        stored = state.fields[name]
+        if f.function_space().ufl_element().family() == "Real":
+            f.assign(float(stored.dat.data_ro[0]))
+        else:
+            f.interpolate(stored)
+    solver.solution_old.assign(solver.solution)

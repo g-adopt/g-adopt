@@ -34,6 +34,9 @@
 #   SMOKE     1 adds --smoke: a very coarse mesh and 10 steps.
 #   OUTPUT    the output directory (default: this directory).
 #   EXTRA     more driver arguments, for example --write_output.
+#   RESTART   a checkpoint file (for example checkpoint_B.h5). The run
+#             continues after its last checkpoint. Use the same number of
+#             ranks as the job that wrote it.
 #   EXTRA_PYTHONPATH
 #             a directory with Python packages that the module does not
 #             have, for example giamip (see below). Default: empty.
@@ -77,16 +80,21 @@ cd "$D"
 : ${SMOKE:=0}
 : ${OUTPUT:=$D}
 : ${EXTRA:=}
+: ${RESTART:=}
 
 SMOKE_FLAG=
 if [ "$SMOKE" = "1" ]; then
     SMOKE_FLAG=--smoke
 fi
+RESTART_FLAG=
+if [ -n "$RESTART" ]; then
+    RESTART_FLAG="--restart $RESTART"
+fi
 
 echo "=== gadopt: $(python3 -c 'import gadopt; print(gadopt.__file__)') ==="
 echo "=== git:    $(git -C "$W" rev-parse --short HEAD) ==="
 echo "=== module: $(module -t list 2>&1 | grep firedrake) ==="
-echo "=== DRIVER=$DRIVER CASE=$CASE SMOKE=$SMOKE ranks=$PBS_NCPUS ==="
+echo "=== DRIVER=$DRIVER CASE=$CASE SMOKE=$SMOKE RESTART=$RESTART ranks=$PBS_NCPUS ==="
 if [ "$DRIVER" = "martinec" ]; then
     python3 -c 'import giamip; print("=== giamip:", giamip.__version__, giamip.__file__, "===")' \
         || { echo "giamip is not importable; see the header of this script"; exit 1; }
@@ -97,7 +105,7 @@ echo "=== started $(date) on $(hostname) ==="
 # the gmsh version and the MD5 of the mesh.
 # shellcheck disable=SC2086
 mpiexec -np "$PBS_NCPUS" python3 -u "$DRIVER.py" --case "$CASE" \
-    --output_path "$OUTPUT" $SMOKE_FLAG $EXTRA 2>&1
+    --output_path "$OUTPUT" $SMOKE_FLAG $RESTART_FLAG $EXTRA 2>&1
 RC=$?
 
 echo "=== finished $(date), exit $RC ==="

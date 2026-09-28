@@ -160,6 +160,31 @@ On a laptop with a debug build of PETSc, one step takes 45 to 100 s.
 | `--write_output` | also write VTK files at every output epoch |
 | `--output_path` | the directory for every output file (default `./`) |
 | `--smoke` | the coarse mesh and 10 steps |
+| `--checkpoint_every` | the number of steps between two checkpoints (default 50; 0 writes none) |
+| `--restart` | continue a run after the last checkpoint in the given file |
+
+### A restart
+
+Every run writes a checkpoint every 50 steps into `checkpoint_<case>.h5`,
+a Firedrake `CheckpointFile`. The file holds the mesh once and one entry for
+each checkpoint. If a job stops before its end, continue it from the last
+entry:
+
+```bash
+qsub -l ncpus=1872 -l mem=9000GB -l walltime=02:00:00 \
+     -v DRIVER=martinec,CASE=B,RESTART=checkpoint_B.h5 run_benchmark.pbs
+```
+
+Set the walltime from the steps that remain; 50 Martinec steps take about
+40 minutes on 18 nodes. Use the same number of ranks as the job that wrote
+the file. The restarted
+run loads the mesh from the file, continues after the last checkpoint and
+appends its own checkpoints to the same file. It writes the parameter log,
+the time series and the summary again, with the rows of the earlier job.
+If the earlier job stopped during a save, the restart uses the last
+complete checkpoint. A new run without `RESTART` renames an existing
+`checkpoint_<case>.h5` to `checkpoint_<case>.previous.h5` first.
+The summary records every restart and the wall time of all jobs together.
 
 ## Output
 
@@ -173,6 +198,7 @@ directory.
 | `spada_<case>.msh`, `martinec_<case>.msh` | the mesh of the run |
 | `martinec-<case>-profiles_<t>kyr.npz` | U, N, S and RSL along the two comparison meridians, at 1801 colatitudes from 0 to 180 degrees, at every epoch |
 | `martinec-<case>-timeseries.npz` | h_UF, ocean area, ice masses and iteration counts at every step |
+| `checkpoint_<case>.h5` | the checkpoints of the run, for `--restart` |
 
 `test_benchmarks.py` converts the two Martinec npz files to a `giamip`
 `BenchmarkResult`. `giamip` evaluates the VEGA reference at the run's own
@@ -294,8 +320,9 @@ run on the coarser mesh. Only the run decides. The test for case B is marked
 
 No run on these meshes exists yet. The walltimes in `meta.py` and
 `run_benchmark.pbs` are provisional. Set each one from the first timed run.
-The normalsr queue allows at most 24 h for a job of 1144 to 2080 cores. The
-drivers cannot restart, so each case must finish inside 24 h.
+The normalsr queue allows at most 24 h for a job of 1144 to 2080 cores. A
+case that needs more time continues in a second job from its last
+checkpoint (see "A restart").
 
 On the earlier, coarser Martinec mesh, case C took 1 h 26 min. Case D took
 6 h 17 min in two jobs of 2 nodes each.

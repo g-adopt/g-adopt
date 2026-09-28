@@ -77,6 +77,12 @@ RUN
     `--smoke` runs the same code on a very coarse mesh to 0.1 kyr. It checks
     that the code runs; its numbers are not results.
 
+    The run writes a checkpoint every `--checkpoint_every` steps (default
+    50) into `checkpoint_<case>.h5`. To continue a run that stopped, run the
+    same command on the same number of ranks with `--restart <file>`. The
+    run continues after the last checkpoint in the file and appends its own
+    checkpoints to the same file.
+
 OUTPUT (in --output_path)
     params_<case>.log      One line per time step: the step, the time, the
                            step length, the wall time of the solve, the
@@ -86,6 +92,8 @@ OUTPUT (in --output_path)
     summary_<case>.json    The comparison with TABOO at every epoch, the
                            mesh record (gmsh version, MD5, cell counts) and
                            the run settings. `test_benchmarks.py` reads it.
+    checkpoint_<case>.h5   The checkpoints of the run (Firedrake
+                           `CheckpointFile`), for `--restart`.
     spada_<case>.msh       The mesh of the run.
     spada_<case>_*.pvd     VTK files, with `--write_output` only. The
                            displacement and the potential live on different
@@ -650,6 +658,13 @@ def parse_args():
                    help="write Paraview VTK files at every epoch")
     p.add_argument("--output_path", default="./",
                    help="the directory of every output file")
+    p.add_argument("--checkpoint_every", type=int,
+                   default=common.CHECKPOINT_EVERY,
+                   help="steps between two checkpoints in "
+                        "checkpoint_<case>.h5; 0 writes none")
+    p.add_argument("--restart", default=None, metavar="FILE",
+                   help="continue the run after the last checkpoint in FILE, "
+                        "on the same number of ranks")
     return p.parse_args()
 
 
@@ -669,8 +684,25 @@ def main():
         f"degrees 2..{NMAX}, SphericalDtN(L={common.DTN_DEGREE}), K/mu "
         f"{args.bulk_shear_ratio:g}")
 
-    parent, mantle, mesh_info = common.build_meshes(
-        mesh_kind, args.output_path, f"spada_{args.case}")
+    # A new run generates its mesh; a restarted run loads it from the
+    # checkpoint file, because the stored fields can only be loaded onto the
+    # mesh that the same file holds.
+    restart = None
+    if args.restart is None:
+        parent, mantle, mesh_info = common.build_meshes(
+            mesh_kind, args.output_path, f"spada_{args.case}")
+    else:
+        parent, mantle, mesh_info, restart = common.load_checkpoint(
+            args.restart, mesh_kind)
+        # The record says what run wrote the file. A restart with another
+        # case or another K / mu would continue a different problem from
+        # this state without any error.
+        written = restart.record["run"]
+        this = {"case": args.case, "bulk_shear_ratio": args.bulk_shear_ratio,
+                "smoke": args.smoke}
+        if written != this:
+            raise RuntimeError(f"{args.restart} was written by the run "
+                               f"{written}; this run is {this}")
     reference = TabooReference()
     segments = common.time_segments(
         epochs, common.truncated_ladder(common.STEP_LOAD_LADDER_YR,
@@ -698,10 +730,22 @@ def main():
     # One line per time step. The columns are the same for both cases apart
     # from the last ones: the rms radial displacement on Re (m) for the cap,
     # the polar motion (degrees) for the other case.
+    # The lines of the parameter log and the epoch comparisons so far. A
+    # restarted run takes them from the checkpoint and writes the log again,
+    # because `ParameterLog` opens its file for writing and the log of the
+    # stopped run can hold steps after the checkpoint.
+    log_lines = [] if restart is None else restart.record["log_lines"]
+    rows = [] if restart is None else restart.record["rows"]
+    wall_before_s = 0.0 if restart is None else restart.record["wall_s"]
+    # Every restart of the case so far, this one last, for the summary.
+    restarts = ([] if restart is None else restart.record["restarts"]
+                + [{"file": args.restart, "step": restart.step}])
     plog = ParameterLog(os.path.join(args.output_path,
                                      f"params_{args.case}.log"), parent)
     state_columns = ("urms_Re_m" if args.case == "cap" else "mx_deg my_deg")
     plog.log_str(f"step t_kyr dt_yr wall_s newton outer {state_columns}")
+    for line in log_lines:
+        plog.log_str(line)
     area_Re = assemble(Constant(1.0) * ds(common.SURF_RE, domain=mantle))
 
     def on_step(t_kyr, dt_yr, step, wall_s):
@@ -713,13 +757,12 @@ def main():
                      * common.D_SCALE]
         else:
             state = list(polar_motion_deg(solver))
-        plog.log_str(" ".join(str(v) for v in
-                              [step, t_kyr, dt_yr, wall_s, newton, outer,
-                               *state]))
+        line = " ".join(str(v) for v in
+                        [step, t_kyr, dt_yr, wall_s, newton, outer, *state])
+        log_lines.append(line)
+        plog.log_str(line)
         log(f"  step {step:4d}  t {t_kyr:9.4f} kyr  outer {outer:3d}  "
             f"wall {wall_s:8.1f} s")
-
-    rows = []
 
     def on_epoch(t_kyr):
         if args.case == "cap":
@@ -730,8 +773,28 @@ def main():
             vtk[0].write(solver.displacement, time=t_kyr)
             vtk[1].write(solver.potential, time=t_kyr)
 
+    def record():
+        """The driver's part of a checkpoint: enough to continue the outputs."""
+        return {"run": {"case": args.case,
+                        "bulk_shear_ratio": args.bulk_shear_ratio,
+                        "smoke": args.smoke},
+                "log_lines": log_lines, "rows": rows, "restarts": restarts,
+                "wall_s": wall_before_s + time.time() - tic_run}
+
+    # A restarted run appends to the file it came from, so that one file
+    # holds every checkpoint of the case.
+    checkpoint = common.RunCheckpoint(
+        args.restart or common.checkpoint_path(args.output_path, args.case),
+        parent, solver, args.checkpoint_every, mesh_info, record,
+        restart=restart)
+    start_step = 0
+    if restart is not None:
+        common.restore_checkpoint(restart, solver, parent)
+        start_step = restart.step
+
     common.march(solver, dt, segments, elastic=True, on_step=on_step,
-                 on_epoch=on_epoch)
+                 on_epoch=on_epoch, checkpoint=checkpoint,
+                 start_step=start_step)
     plog.close()
 
     common.write_json(
@@ -740,7 +803,10 @@ def main():
          "smoke": args.smoke, "bulk_shear_ratio": args.bulk_shear_ratio,
          "nmax": NMAX, "dtn_degree": common.DTN_DEGREE,
          "ranks": parent.comm.size, "mesh": mesh_info,
-         "wall_s": time.time() - tic_run, "epochs": rows})
+         # The wall time of every leg together, so that a restarted run
+         # reports the cost of the whole case.
+         "wall_s": wall_before_s + time.time() - tic_run,
+         "restarts": restarts, "epochs": rows})
 
 
 if __name__ == "__main__":

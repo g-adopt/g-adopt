@@ -92,6 +92,12 @@ RUN
     10 steps: at the end of the first 50 yr step the load is still too small
     to assemble to a nonzero sheet.
 
+    The run writes a checkpoint every `--checkpoint_every` steps (default
+    50) into `checkpoint_<case>.h5`. To continue a run that stopped, run the
+    same command on the same number of ranks with `--restart <file>`. The
+    run continues after the last checkpoint in the file and appends its own
+    checkpoints to the same file.
+
 OUTPUT (in --output_path)
     params_<case>.log          One line per time step: the time, the wall
                                time, the iteration counts, h_UF, the ocean
@@ -106,6 +112,8 @@ OUTPUT (in --output_path)
                                masses and the iteration counts.
     summary_<case>.json        The run settings, the mesh record, the
                                epochs and the names of the files above.
+    checkpoint_<case>.h5       The checkpoints of the run (Firedrake
+                               `CheckpointFile`), for `--restart`.
     martinec_<case>.msh        The mesh of the run.
     martinec_<case>_*.pvd      VTK files, with `--write_output` only.
 
@@ -776,6 +784,13 @@ def parse_args():
                    help="write Paraview VTK files at every epoch")
     p.add_argument("--output_path", default="./",
                    help="the directory of every output file")
+    p.add_argument("--checkpoint_every", type=int,
+                   default=common.CHECKPOINT_EVERY,
+                   help="steps between two checkpoints in "
+                        "checkpoint_<case>.h5; 0 writes none")
+    p.add_argument("--restart", default=None, metavar="FILE",
+                   help="continue the run after the last checkpoint in FILE, "
+                        "on the same number of ranks")
     return p.parse_args()
 
 
@@ -799,9 +814,26 @@ def main():
     log(describe(case))
     log(f"  K/mu {bulk_shear_ratio:g}, SphericalDtN(L={common.DTN_DEGREE})")
 
-    parent, mantle, mesh_info = common.build_meshes(
-        "smoke" if args.smoke else "martinec", args.output_path,
-        f"martinec_{letter}")
+    # A new run generates its mesh; a restarted run loads it from the
+    # checkpoint file, because the stored fields can only be loaded onto the
+    # mesh that the same file holds.
+    mesh_kind = "smoke" if args.smoke else "martinec"
+    restart = None
+    if args.restart is None:
+        parent, mantle, mesh_info = common.build_meshes(
+            mesh_kind, args.output_path, f"martinec_{letter}")
+    else:
+        parent, mantle, mesh_info, restart = common.load_checkpoint(
+            args.restart, mesh_kind)
+        # The record says what run wrote the file. A restart with another
+        # case or another K / mu would continue a different problem from
+        # this state without any error.
+        written = restart.record["run"]
+        this = {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
+                "smoke": args.smoke}
+        if written != this:
+            raise RuntimeError(f"{args.restart} was written by the run "
+                               f"{written}; this run is {this}")
 
     # Scenario T0 (case B) is a load switched on at t = 0: the elastic solve
     # and then uniform steps of `T0_DT_YR`, which the time error of backward
@@ -864,10 +896,21 @@ def main():
                VTKFile(os.path.join(args.output_path,
                                     f"martinec_{letter}_potential.pvd")))
 
+    # The rows of the time series and the profile files so far. A restarted
+    # run takes them from the checkpoint and writes the parameter log again
+    # from them, because `ParameterLog` opens its file for writing and the
+    # log of the stopped run can hold steps after the checkpoint.
+    rows = [] if restart is None else restart.record["rows"]
+    profile_files = [] if restart is None else restart.record["profile_files"]
+    wall_before_s = 0.0 if restart is None else restart.record["wall_s"]
+    # Every restart of the case so far, this one last, for the summary.
+    restarts = ([] if restart is None else restart.record["restarts"]
+                + [{"file": args.restart, "step": restart.step}])
     plog = ParameterLog(os.path.join(args.output_path,
                                      f"params_{letter}.log"), parent)
     plog.log_str(" ".join(ROW_KEYS))
-    rows, profile_files = [], []
+    for row in rows:
+        plog.log_str(" ".join(str(row[key]) for key in ROW_KEYS))
     timeseries_path = os.path.join(args.output_path,
                                    f"martinec-{letter}-timeseries.npz")
 
@@ -899,10 +942,30 @@ def main():
             vtk[0].write(solver.displacement, time=t_epoch_kyr)
             vtk[1].write(solver.potential, time=t_epoch_kyr)
 
+    def record():
+        """The driver's part of a checkpoint: enough to continue the outputs."""
+        return {"run": {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
+                        "smoke": args.smoke},
+                "rows": rows, "profile_files": profile_files,
+                "restarts": restarts,
+                "wall_s": wall_before_s + time.time() - tic_run}
+
+    # A restarted run appends to the file it came from, so that one file
+    # holds every checkpoint of the case.
+    checkpoint = common.RunCheckpoint(
+        args.restart or common.checkpoint_path(args.output_path, letter),
+        parent, solver, args.checkpoint_every, mesh_info, record,
+        restart=restart)
+    start_step = 0
+    if restart is not None:
+        common.restore_checkpoint(restart, solver, parent)
+        start_step = restart.step
+
     common.march(solver, dt, segments, elastic=case.time_scenario == "T0",
                  on_step=on_step, on_epoch=on_epoch,
                  before_step=t_kyr.assign,
-                 max_steps=SMOKE_STEPS if args.smoke else None)
+                 max_steps=SMOKE_STEPS if args.smoke else None,
+                 checkpoint=checkpoint, start_step=start_step)
     plog.close()
     write_timeseries()
 
@@ -911,7 +974,11 @@ def main():
         {"benchmark": "Martinec et al. (2018)", "case": letter,
          "smoke": args.smoke, "bulk_shear_ratio": bulk_shear_ratio,
          "dtn_degree": common.DTN_DEGREE, "ranks": parent.comm.size,
-         "mesh": mesh_info, "wall_s": time.time() - tic_run,
+         "mesh": mesh_info,
+         # The wall time of every leg together, so that a restarted run
+         # reports the cost of the whole case.
+         "wall_s": wall_before_s + time.time() - tic_run,
+         "restarts": restarts,
          "steps": len(rows), "epochs_kyr": epochs,
          "profile_files": profile_files,
          "timeseries_file": os.path.basename(timeseries_path),
