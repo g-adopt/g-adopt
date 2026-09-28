@@ -150,7 +150,7 @@ def run_interval(mesh, time, timestep, Nt, u_init, p_init):
         "pc_type": "sor",
         "mat_type": "aij",
         "ksp_rtol": 1e-12,
-}
+    }
 
     stokes_solver = StokesSolver(
         z,
@@ -209,7 +209,6 @@ def run_interval(mesh, time, timestep, Nt, u_init, p_init):
         # removing constant nullspace from pressure
         coef = assemble(p * dx) / volume
         p.project(p - coef, solver_parameters=project_solver_parameters)
-
 
         # Compute diagnostics:
         energy_conservation = abs(abs(gd.Nu_top()) - abs(gd.Nu_bottom()))
@@ -272,7 +271,7 @@ plog = ParameterLog('params.log', mesh)
 plog.log_str("timestep time dt r_min_bot r_max_bot r_min_top r_max_top u_rms u_rms_surf ux_max nu_top nu_base energy avg_t "
              "elements p1nodes p2nodes "
              "uerr perr nserr"
-)
+             )
 # -
 
 # Initial conditions for the model, these will be interpolated onto
@@ -345,7 +344,7 @@ p = 0.
 
 metric_parameters = {
     # metric gets rescaled s.t. we always end up with ~ 1000 vertices:
-    #'dm_plex_metric_target_complexity': 10000,
+    # 'dm_plex_metric_target_complexity': 10000,
     'dm_plex_metric_p': np.inf,  # Use infinity norm for estimated interpolation error
     'dm_plex_metric_gradation_factor': 1.5,  # Variation in edge length from one cell to another
     'dm_plex_metric_a_max': 10,  # maximum aspect ratio
@@ -413,11 +412,10 @@ for _ in range(nadapts):
     metric_intersected = RiemannianMetric(TV, name='IntersectedMetric')
     metric_intersected.assign(metric)
 
-
     # this applies the rescaling to achieve the desired target complexity
     # (estimate of number of elements)
     metric.enforce_spd(restrict_sizes=True, restrict_anisotropy=True)
-    #metric.normalise()
+    # metric.normalise()
 
     metric_pvd.write(metric, metric_intersected, *metrics)
 

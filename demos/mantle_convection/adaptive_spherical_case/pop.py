@@ -37,5 +37,5 @@ def min_max_coordinates(mesh):
 def correct_surface_radius(mesh, surface_id, r):
     V = mesh.coordinates.function_space()
     x = fd.SpatialCoordinate(mesh)
-    bc = fd.DirichletBC(V, x / fd.sqrt(fd.dot(x,x)) * fd.Constant(r), surface_id)
+    bc = fd.DirichletBC(V, x / fd.sqrt(fd.dot(x, x)) * fd.Constant(r), surface_id)
     bc.apply(mesh.coordinates)
