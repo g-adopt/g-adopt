@@ -16,10 +16,19 @@ degrees of freedom per core. The counts come from the meshes of
 80 percent of the unknowns are the DG2 internal variables, which the
 preconditioner eliminates cell by cell.
 
-The walltimes are provisional. No run on these meshes exists yet. Set each
-one from the first timed run of its case. The normalsr queue allows at most
-24 h for a job of 1144 to 2080 cores, so 24 h is the upper limit for all
-five steps.
+The walltimes are about 1.5 times the measured runs on Gadi (2026-09-26 to
+2026-09-29, `firedrake/main-20260918`): Spada cap and polar motion 1 h 01
+min each, Martinec C 1 h 53 min, D 9 h 57 min, B 12 h 38 min over two jobs.
+The normalsr queue allows at most 24 h for a job of 1144 to 2080 cores.
+
+Case B does not finish in one job on Gadi at present. The job crashes after
+step 998 of 1000 with a segmentation fault inside HCOLL, the collectives
+library of the Gadi Open MPI, in its multicast broadcast
+(`vmc_bcast_multiroot`), during an `MPI_Allreduce` of the low-rank DtN
+operator. It happened in three runs at the same step. A job with
+`RESTART=checkpoint_B.h5` finishes the case from the checkpoint at step 950
+(see the README). Until the crash is fixed, the step for case B needs that
+second job.
 
 The Martinec steps read their case from the Python package `giamip`, in the
 `demos` extra of G-ADOPT. The weekly Firedrake module build installs that
@@ -33,11 +42,11 @@ work on Gadi, because the module Python is a virtual environment.
 #: `(driver, case, short name, cores, walltime)` for every step. PBSPro caps
 #: the job name at 15 characters, so each step has a short name.
 _CASES = (
-    ("spada", "cap", "gia_sp_cap", 1560, "24:00:00"),
-    ("spada", "polar-motion", "gia_sp_pm", 1560, "24:00:00"),
-    ("martinec", "B", "gia_mt_B", 1872, "24:00:00"),
-    ("martinec", "C", "gia_mt_C", 1872, "24:00:00"),
-    ("martinec", "D", "gia_mt_D", 1872, "24:00:00"),
+    ("spada", "cap", "gia_sp_cap", 1560, "01:30:00"),
+    ("spada", "polar-motion", "gia_sp_pm", 1560, "01:30:00"),
+    ("martinec", "B", "gia_mt_B", 1872, "18:00:00"),
+    ("martinec", "C", "gia_mt_C", 1872, "03:00:00"),
+    ("martinec", "D", "gia_mt_D", 1872, "15:00:00"),
 )
 
 

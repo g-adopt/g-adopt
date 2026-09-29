@@ -12,8 +12,9 @@ solver.
   implementations of the sea level equation in GIA modelling, Geophys. J.
   Int. 215(1), 389-414. The reference is VEGA.
 
-Each case runs on Gadi as one job. `test_benchmarks.py` then compares the
-output with the published criteria.
+Each case runs on Gadi as one job. Case B needs a second job at present
+(see "Walltime and cost"). `test_benchmarks.py` then compares the output
+with the published criteria.
 
 ## The cases
 
@@ -121,7 +122,7 @@ Use this procedure to run one case by hand. Submit from this directory.
 ```bash
 qsub -v DRIVER=spada,CASE=cap run_benchmark.pbs
 qsub -v DRIVER=spada,CASE=polar-motion run_benchmark.pbs
-qsub -l ncpus=1872 -l mem=9000GB \
+qsub -l ncpus=1872 -l mem=9000GB -l walltime=13:00:00 \
      -v DRIVER=martinec,CASE=B,EXTRA_PYTHONPATH=/g/data/vo05/$USER/python-extra \
      run_benchmark.pbs
 ```
@@ -171,7 +172,7 @@ each checkpoint. If a job stops before its end, continue it from the last
 entry:
 
 ```bash
-qsub -l ncpus=1872 -l mem=9000GB -l walltime=02:00:00 \
+qsub -l ncpus=1872 -l mem=9000GB -l walltime=01:30:00 \
      -v DRIVER=martinec,CASE=B,RESTART=checkpoint_B.h5 run_benchmark.pbs
 ```
 
@@ -310,19 +311,45 @@ order in time. The graded steps of the Spada cases are 10 yr to 0.1 kyr,
 50 yr to 1 kyr and 100 yr to 10 kyr. On these steps case B fails rule 2 on
 U and N along the load meridian. The driver therefore takes uniform 10 yr
 steps for case B (1000 steps). On these steps lovejx predicts a largest
-load-meridian N difference of 0.0250 m. The published codes reach 0.0256 m,
-so the margin is small. The margin is 0.6 mm. The uncertainty of the
-prediction is about 4 mm, and the prediction is calibrated on the earlier
-run on the coarser mesh. Only the run decides. The test for case B is marked
-`xfail` until a run on these steps confirms the pass.
+load-meridian N difference of 0.0250 m, with an uncertainty of about 4 mm.
+The published codes reach 0.0256 m. The run on these steps brings load U
+inside the spread of the published codes. Load N stays 3.5 mm outside:
+
+| load meridian | graded steps | 10 yr steps | published codes |
+|---|---|---|---|
+| U, largest difference | 0.6516 m | 0.0825 m | 0.3266 m |
+| N, largest difference | 0.0917 m | 0.0291 m | 0.0256 m |
+| N, root mean square difference | | 0.0075 m | 0.0171 m |
+
+The largest N difference is at the cap centre, colatitude 25 degrees. It is
+4 mm above the prediction, and the cause of that remainder is not known.
+The test for rule 2 of case B is therefore marked `xfail`.
 
 ## Walltime and cost
 
-No run on these meshes exists yet. The walltimes in `meta.py` and
-`run_benchmark.pbs` are provisional. Set each one from the first timed run.
-The normalsr queue allows at most 24 h for a job of 1144 to 2080 cores. A
-case that needs more time continues in a second job from its last
-checkpoint (see "A restart").
+The runs below are on Gadi with `firedrake/main-20260918`, whole `normalsr`
+nodes, gmsh 4.15.2. The walltimes in `meta.py` and `run_benchmark.pbs` are
+about 1.5 times these. The normalsr queue allows at most 24 h for a job of
+1144 to 2080 cores. A case that needs more time continues in a second job
+from its last checkpoint (see "A restart").
 
-On the earlier, coarser Martinec mesh, case C took 1 h 26 min. Case D took
-6 h 17 min in two jobs of 2 nodes each.
+| case | job | nodes | wall | SU | memory | mesh MD5 | verdict |
+|---|---|---|---|---|---|---|---|
+| Spada cap | 179921930 | 15 | 1 h 01 min | 3 182 | 1.16 TB | `22d2602d87e6029327cf910cad6a76ad` | pass |
+| Spada polar motion | 179923050 | 15 | 1 h 01 min | 3 162 | 0.93 TB | `22d2602d87e6029327cf910cad6a76ad` | pass |
+| Martinec C | 179921931 | 18 | 1 h 53 min | 7 055 | 1.18 TB | `c3782d68cbd1babd889baa2c2566b66c` | pass |
+| Martinec D | 179923052 | 18 | 9 h 57 min | 37 244 | 1.79 TB | `c3782d68cbd1babd889baa2c2566b66c` | pass |
+| Martinec B | 180015010, then 180015049 | 18 | 11 h 55 min + 43 min | 44 646 + 2 678 | 1.76 TB | `c3782d68cbd1babd889baa2c2566b66c` | rule 1 passes; rule 2 fails on load N (`xfail`) |
+
+Case B does not finish in one job at present. Three jobs crashed after step
+998 of 1000, at the same step. Each time the first rank of every node had a
+segmentation fault. The backtrace ends in HCOLL, the collectives library of
+the Gadi Open MPI. The call is an `MPI_Allreduce` of the low-rank DtN
+operator (`gadopt/preconditioners.py`, `_LowRankPotentialOperator.mult`).
+Inside HCOLL it goes to the multicast broadcast
+(`hmca_mcast_vmc_bcast_multiroot`, `vmc_bcast_multiroot`). A second job
+with `RESTART=checkpoint_B.h5` finishes the case from the checkpoint at step
+950. At step 998 the restarted job gives the same h_UF as the first job
+(-119.9284 m). The module `petsc/main-20260920`, which `firedrake/main`
+loads, sets `OMPI_MCA_coll=^holl`. This value does not switch HCOLL off.
+Without HCOLL the Martinec steps take twice as long.

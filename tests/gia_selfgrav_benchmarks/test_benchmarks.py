@@ -42,9 +42,12 @@ Martinec et al. (2018)
 
 With the graded Spada time steps, case B fails criterion 2 on U and N along
 the load meridian. The cause is the time error of backward Euler. The driver
-now takes uniform 10 yr steps for case B (`martinec.T0_DT_YR`). A prediction
-passes on these steps by a margin smaller than its own uncertainty. The test
-stays marked `xfail` until a run on these steps confirms the pass.
+now takes uniform 10 yr steps for case B (`martinec.T0_DT_YR`). The run on
+these steps (Gadi, 2026-09-29) brings load U inside the spread (largest
+difference 0.0825 m against 0.3266 m). Load N stays outside: its largest
+difference is 0.0291 m against 0.0256 m, at the cap centre, and its root
+mean square difference of 0.0075 m is inside (0.0171 m). The test for case
+B criterion 2 therefore stays marked `xfail`.
 """
 
 import json
@@ -364,8 +367,9 @@ def test_martinec_uniform_layer(letter):
 @pytest.mark.longtest
 @pytest.mark.parametrize("letter", [
     pytest.param("B", marks=pytest.mark.xfail(
-        strict=False, reason="load-meridian U and N of case B failed on the "
-                             "graded steps; the 10 yr steps await a run")),
+        strict=False, reason="load-meridian N of case B: 0.0291 m against "
+                             "0.0256 m at the cap centre on the 10 yr "
+                             "steps")),
     "C", "D"])
 def test_martinec_profiles(letter):
     """Criterion 2: every profile inside the spread of the published codes.

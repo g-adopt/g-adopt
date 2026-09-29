@@ -4,7 +4,7 @@
 #PBS -l ncpus=1560
 #PBS -l mem=7500GB
 #PBS -l jobfs=100GB
-#PBS -l walltime=24:00:00
+#PBS -l walltime=01:30:00
 #PBS -l storage=scratch/vo05+gdata/vo05+gdata/fp50
 #PBS -l wd
 #
@@ -13,14 +13,28 @@
 # same cases from meta.py.
 #
 # Submit from this directory. The resource lines above fit the Spada cases
-# (15 nodes). The Martinec cases need 18 nodes, so give the resources on the
-# command line. The normalsr queue allows at most 24 h for 1144 to 2080
-# cores, so do not ask for a longer walltime.
+# (15 nodes, about 1 h each). The Martinec cases need 18 nodes and longer
+# walltimes, so give the resources on the command line. The walltimes below
+# are about 1.5 times the measured runs, except case B. Its first job
+# crashes after step 998 at 11 h 55 min (see below), so 13 h is enough, and
+# the restart job gets 1 h 30 min. The normalsr queue allows at most 24 h
+# for 1144 to 2080 cores.
 #
 #   qsub -v DRIVER=spada,CASE=cap run_benchmark.pbs
 #   qsub -v DRIVER=spada,CASE=polar-motion run_benchmark.pbs
-#   qsub -l ncpus=1872 -l mem=9000GB \
+#   qsub -l ncpus=1872 -l mem=9000GB -l walltime=03:00:00 \
+#        -v DRIVER=martinec,CASE=C run_benchmark.pbs
+#   qsub -l ncpus=1872 -l mem=9000GB -l walltime=15:00:00 \
+#        -v DRIVER=martinec,CASE=D run_benchmark.pbs
+#   qsub -l ncpus=1872 -l mem=9000GB -l walltime=13:00:00 \
 #        -v DRIVER=martinec,CASE=B run_benchmark.pbs
+#
+# Case B crashes after step 998 in one job on Gadi at present (see the
+# README, "Walltime and cost"). Finish it with a second job from the last
+# checkpoint:
+#
+#   qsub -l ncpus=1872 -l mem=9000GB -l walltime=01:30:00 \
+#        -v DRIVER=martinec,CASE=B,RESTART=checkpoint_B.h5 run_benchmark.pbs
 #
 # A smoke run on one node, to check the installation before a full run:
 #
@@ -55,7 +69,7 @@
 #   module use /g/data/fp50/modules; module load firedrake/main
 #   python3 -m pip install --no-deps --target /g/data/vo05/$USER/python-extra \
 #       giamip h5netcdf
-#   qsub -l ncpus=1872 -l mem=9000GB \
+#   qsub -l ncpus=1872 -l mem=9000GB -l walltime=03:00:00 \
 #        -v DRIVER=martinec,CASE=C,EXTRA_PYTHONPATH=/g/data/vo05/$USER/python-extra \
 #        run_benchmark.pbs
 #
