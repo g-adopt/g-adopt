@@ -1,0 +1,81 @@
+base: Base {
+  link: ./base_case
+  shape: circle
+}
+
+physical: Physical {
+  near: top-left
+  compressibility: Compressibility {
+    tala: TALA {
+      link: ./2d_compressible_TALA
+    }
+    ala: ALA {
+      link: ./2d_compressible_ALA
+    }
+    visualise_ala: ALA Nullspace {
+      link: ./visualise_ALA_p_nullspace
+    }
+    tala -> ala -> visualise_ala
+  }
+
+  rheology: Rheology {
+    viscoplastic: Viscoplastic {
+      link: ./viscoplastic_case
+    }
+    drucker_prager: Drucker-Prager {
+      link: ./Drucker_Prager
+    }
+
+
+    viscoplastic -> drucker_prager
+  }
+
+}
+
+dimension: Dimension {
+  near: bottom-left
+  cartesian_3d: 3D Cartesian {
+    link: ./3d_cartesian
+  }
+}
+
+diagnostics: Model Diagnostics {
+  near: bottom-center
+  dynamic_topography: Dynamic Topography {
+    link: ./dynamic_topography
+  }
+}
+
+geometry: Geometry & Boundary Condition {
+  near: top-right
+  cylindrical_2d: 2D Cylindrical {
+    link: ./2d_cylindrical
+  }
+  spherical_3d: 3D Spherical {
+    link: ./3d_spherical
+  }
+  gplates_global: Global GPlates {
+    link: ./gplates_global
+  }
+
+  cylindrical_2d -> spherical_3d
+  spherical_3d -> gplates_global: GPlates
+}
+
+adjoint: Adjoint {
+  near: bottom-right
+  adjoint_forward: Forward {
+    link: ./adjoint_forward
+  }
+  inverse: Inverse {
+    link: ./adjoint
+  }
+
+  adjoint_forward -> inverse
+}
+
+base -> physical
+base -> dimension
+base -> diagnostics
+base -> geometry
+base -> adjoint
