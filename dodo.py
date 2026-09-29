@@ -460,7 +460,7 @@ def task_convert() -> Iterator[DoitTask]:
 
     demo_path = REPO_ROOT / "demos"
 
-    diagrams = list(demo_path.glob("**/.diagram.mermaid"))
+    diagrams = list(demo_path.glob("**/.diagram.d2"))
     diagram_paths = " ".join(str(d.relative_to(demo_path)) for d in diagrams)
 
     actions = [
