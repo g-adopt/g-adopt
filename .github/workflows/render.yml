@@ -61,11 +61,6 @@ jobs:
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
           uv pip install --no-build-isolation git+https://github.com/mesh-adaptation/animate
 
-      - name: Get Muller et al 2022 plate reconstructions
-        run: |
-          curl -fsSLO https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
-          unzip Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip -d demos/mantle_convection/gplates_global
-
       - name: Install Firedrake kernel
         run: |
           . .venv/bin/activate

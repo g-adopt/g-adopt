@@ -138,11 +138,9 @@ Z_near_nullspace = create_stokes_nullspace(Z, closed=False, rotational=True, tra
 # the G-ADOPT interface requires specific files for loading and
 # processing surface velocities from a reconstruction model. For this
 # tutorial, we will use the study published by [Muller et al., 2022](https://doi.org/10.5194/se-13-1127-2022).
-# The files can be downloaded from EarthByte's server at:
+# The `ensure_reconstruction` function will download the required
+# files automatically. The files can also be downloaded from EarthByte at:
 # https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip
-# Download and unzip this file into the current
-# directory. Below, we verify the required paths in this directory and
-# ensure they exist:
 
 muller_2022_files = ensure_reconstruction("Muller 2022 SE v1.2", ".")
 
