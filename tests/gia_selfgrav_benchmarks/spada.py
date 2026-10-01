@@ -520,6 +520,51 @@ def build_solver(case, parent, mantle, dt, bulk_shear_ratio):
 # --------------------------------------------------------------------------
 
 
+def build_profile_samplers(parent, mantle, depth_fraction):
+    """Locate three near-surface meridians once, for direct field output."""
+    theta_deg = np.linspace(0.0, 180.0, 1801)
+    longitude_deg = np.array([0.0, 90.0, 180.0])
+    theta = np.deg2rad(theta_deg)
+    samplers = []
+    for longitude in longitude_deg:
+        phi = np.deg2rad(longitude)
+        points = common.RE * (1 - depth_fraction) * np.column_stack((
+            np.sin(theta) * np.cos(phi), np.sin(theta) * np.sin(phi),
+            np.cos(theta)))
+        samplers.append((common.PointSampler(mantle, points),
+                         common.PointSampler(parent, points)))
+    return theta_deg, longitude_deg, depth_fraction, samplers
+
+
+def write_profiles(path, solver, mantle, profiles, t_kyr):
+    """Save direct U, V and N in metres, indexed by longitude and colatitude."""
+    theta_deg, longitude_deg, depth_fraction, samplers = profiles
+    Xm = SpatialCoordinate(mantle)
+    radial = vertical_component(solver.displacement)
+    gravity = common.gravity_exact_ufl(Constant(common.RE))
+    geoid = solver.potential / gravity
+    U, V, N, found = [], [], [], []
+    for longitude, (mechanics, potential) in zip(longitude_deg, samplers):
+        # A fixed meridian direction also defines the limiting V at the poles.
+        phi = np.deg2rad(longitude)
+        radius = sqrt(dot(Xm, Xm))
+        horizontal = (Xm[0] * np.cos(phi) + Xm[1] * np.sin(phi)) / radius
+        south = as_vector((Xm[2] / radius * np.cos(phi),
+                           Xm[2] / radius * np.sin(phi), -horizontal))
+        U.append(mechanics(radial) * common.D_SCALE)
+        V.append(mechanics(dot(solver.displacement, south)) * common.D_SCALE)
+        N.append(potential(geoid) * common.D_SCALE)
+        found.append(mechanics.found & potential.found)
+    arrays = {"t_kyr": t_kyr, "colatitude_deg": theta_deg,
+              "longitude_deg": longitude_deg, "depth_fraction": depth_fraction,
+              "U_m": np.array(U), "V_m": np.array(V), "N_m": np.array(N),
+              "found": np.array(found)}
+    if common.COMM_WORLD.rank == 0:
+        np.savez(path, **arrays)
+    missing = np.count_nonzero(~arrays["found"])
+    log(f"  profiles written: {path} ({missing} missing points)")
+
+
 def compare_cap(t_kyr, solver, parent, mantle, reference):
     """The cap-case comparison at one epoch: printed, and returned as a row.
 
@@ -656,6 +701,10 @@ def parse_args():
                         "the code runs; the numbers are not results")
     p.add_argument("--write_output", action="store_true",
                    help="write Paraview VTK files at every epoch")
+    p.add_argument("--write_profiles", action="store_true",
+                   help="write direct near-surface U, V and N transects for cap")
+    p.add_argument("--profile_depth_fraction", type=float, default=1.0e-6,
+                   help="inward sampling offset as a fraction of Earth radius")
     p.add_argument("--output_path", default="./",
                    help="the directory of every output file")
     p.add_argument("--checkpoint_every", type=int,
@@ -671,6 +720,10 @@ def parse_args():
 def main():
     """Run one Spada case."""
     args = parse_args()
+    if args.write_profiles and args.case != "cap":
+        raise ValueError("--write_profiles currently supports only the cap case")
+    if args.write_profiles and not 0 < args.profile_depth_fraction < 0.01:
+        raise ValueError("--profile_depth_fraction must be in (0, 0.01)")
     tic_run = time.time()
     os.makedirs(args.output_path, exist_ok=True)
     epochs = SMOKE_EPOCHS_KYR if args.smoke else EPOCHS_KYR
@@ -764,11 +817,18 @@ def main():
         log(f"  step {step:4d}  t {t_kyr:9.4f} kyr  outer {outer:3d}  "
             f"wall {wall_s:8.1f} s")
 
+    profiles = (build_profile_samplers(parent, mantle, args.profile_depth_fraction)
+                if args.write_profiles else None)
+
     def on_epoch(t_kyr):
         if args.case == "cap":
             rows.append(compare_cap(t_kyr, solver, parent, mantle, reference))
         else:
             rows.append(compare_polar_motion(t_kyr, solver, reference))
+        if profiles is not None:
+            write_profiles(os.path.join(args.output_path,
+                                        f"profiles_{args.case}_{t_kyr:g}kyr.npz"),
+                           solver, mantle, profiles, t_kyr)
         if vtk is not None:
             vtk[0].write(solver.displacement, time=t_kyr)
             vtk[1].write(solver.potential, time=t_kyr)

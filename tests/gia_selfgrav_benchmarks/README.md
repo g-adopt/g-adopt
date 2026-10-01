@@ -353,3 +353,46 @@ with `RESTART=checkpoint_B.h5` finishes the case from the checkpoint at step
 (-119.9284 m). The module `petsc/main-20260920`, which `firedrake/main`
 loads, sets `OMPI_MCA_coll=^holl`. This value does not switch HCOLL off.
 Without HCOLL the Martinec steps take twice as long.
+
+## Direct Spada profiles and field plots
+
+For cap runs, `--write_profiles` saves direct finite-element U, V and N at
+all output epochs as `profiles_cap_<time>kyr.npz`. Arrays have shape
+`(longitude, colatitude)` in metres, with meridians at 0, 90 and 180 degrees
+longitude and colatitudes at 0.1 degree spacing. V is signed southward
+displacement, not tangential magnitude. Points sit 1e-6 Earth radii (about
+6.4 m) below the nominal surface to help locate them in the curved mesh.
+The depth fraction and point-found mask are saved; missing values are NaN
+and counted in the job output. N uses gravity at the nominal Earth surface.
+
+`--write_output` also saves displacement and potential as VTK at each epoch.
+These fields retain nondimensional units: multiply displacement by `D_SCALE`
+and potential by `G_BAR * D_SCALE` for physical units.
+
+Start with a smoke run in a new output folder, submitted from this directory:
+
+```bash
+mkdir -p smoke/spada-profiles
+qsub -N spada_profiles_smoke \
+    -l storage=scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50 \
+    -l ncpus=104 -l mem=500GB -l walltime=01:00:00 \
+    -v "DRIVER=spada,CASE=cap,SMOKE=1,OUTPUT=$PWD/smoke/spada-profiles,EXTRA=--write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+Adjust storage projects to the checkout/output locations. Check missing-point
+counts before a full run; the coarse mesh may need a larger inward offset.
+Set `--profile_depth_fraction` to adjust it, and check sensitivity to that
+offset before interpreting the samples as surface values.
+
+Plot with NumPy and Matplotlib installed (no Firedrake needed):
+
+```bash
+python3 plot_spada_profiles.py smoke/spada-profiles/summary_cap.json \
+    --profiles-dir smoke/spada-profiles --max-colatitude 25 \
+    --output smoke/spada-profiles/profiles_near.png
+```
+
+The plot overlays direct meridians, projected G-ADOPT profiles, matching
+truncated TABOO and all available TABOO degrees. No correction factors are
+applied. Omit `--profiles-dir` for existing summaries without sampled profiles.
