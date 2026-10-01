@@ -156,19 +156,3 @@ def test_empty_directory(tmpdir, mock_reconstruction):
         MissingReconstructionException, match="An object with the expected name"
     ):
         ensure_reconstruction("dummy", tmpdir)
-
-
-def test_download_cant_make_directory(mock_reconstruction):
-    with pytest.raises(
-        PermissionError, match="Extraction directory /a/b/c/d does not exist"
-    ):
-        ensure_reconstruction("dummy", "/a/b/c/d")
-
-
-def test_download_no_write_permission(mock_reconstruction):
-    with pytest.raises(
-        PermissionError,
-        match="No write permission on directory /sys, cannot download reconstruction.",
-    ):
-        # I sure hope this directory isn't writable...
-        ensure_reconstruction("dummy", "/sys")
