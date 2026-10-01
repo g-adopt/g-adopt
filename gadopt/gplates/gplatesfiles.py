@@ -77,9 +77,9 @@ class MissingReconstructionException(Exception):
     def __init__(self, reconstruction: str, path: Path, msg: str):
         url = reconstructions[reconstruction].get("url")
         if url is None:
-            exc_str = f"Error retrieving {reconstruction}: {msg}. Please download manually and extract to {path.parent}"
+            exc_str = f"Error retrieving {reconstruction}: {msg}. Please download manually and extract to {path.parent.absolute()}"
         else:
-            exc_str = f"Error retrieving {reconstruction}: {msg}. Please download manually from {url} and extract to {path.parent}"
+            exc_str = f"Error retrieving {reconstruction}: {msg}. Please download manually from {url} and extract to {path.parent.absolute()}"
         super().__init__(exc_str)
 
 
@@ -131,7 +131,12 @@ def download_reconstruction(reconstruction: str, base_path: Path) -> None:
         "application/zip",
         "application/x-zip-compressed",
     ):
-        extract_zip_reconstruction(resp.read(), base_path.parent)
+        try:
+            extract_zip_reconstruction(resp.read(), base_path.parent)
+        except PermissionError:
+            raise PermissionError(f"No write permission on directory {base_path.parent}, cannot download reconstruction.")
+        except zipfile.BadZipFile:
+            raise MissingReconstructionException(reconstruction, base_path, f"Bad zipfile downloaded from {url}.")
     else:
         # Downloaded something that wasn't a zipfile
         raise MissingReconstructionException(
@@ -179,7 +184,7 @@ def check_and_get_absolute_paths(base_path: Path, reconstruction: str) -> dict[s
         except PermissionError:
             # Re-raise with a more useful message
             raise PermissionError(
-                f"You have attempted download the reconstruction {reconstruction} to the directory {base_path.parent}, which you do not have permission to write to."
+                f"Extraction directory {base_path.parent} does not exist and you do not have permission to create it."
             )
         # Is there a zipfile present that we can extract? Try base_path/<directory>.zip
         # and if a URL has been provided, base_path/<url path basename>
@@ -194,6 +199,8 @@ def check_and_get_absolute_paths(base_path: Path, reconstruction: str) -> dict[s
                 except zipfile.BadZipFile:
                     # The zipfile wasn't a zipfile
                     download_reconstruction(reconstruction, base_path)
+                except PermissionError:
+                    raise PermissionError(f"No write permission on directory {base_path.parent}, cannot extract reconstruction.")
                 else:
                     # The zipfile extracted successfully but didn't contain the directory
                     # we needed

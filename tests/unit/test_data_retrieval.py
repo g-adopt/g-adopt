@@ -116,7 +116,9 @@ def test_download_not_a_zipfile(tmpdir, monkeypatch):
 
 def test_missing_files(tmpdir, monkeypatch):
     monkeypatch.setitem(reconstructions, "dummy", DUMMY_RECONSTRUCTION_EXTRA_FILE)
-    with pytest.raises(MissingReconstructionException, match="An object with the expected name"):
+    with pytest.raises(
+        MissingReconstructionException, match="An object with the expected name"
+    ):
         ensure_reconstruction("dummy", tmpdir)
 
 
@@ -141,7 +143,8 @@ def test_no_url_provided(tmpdir, monkeypatch):
     monkeypatch.setitem(reconstructions, "dummy", DUMMY_RECONSTRUCTION_NO_URL)
     with patch("gadopt.gplates.gplatesfiles.extract_zip_reconstruction") as mock:
         with pytest.raises(
-            MissingReconstructionException, match="Please download manually and extract to"
+            MissingReconstructionException,
+            match="Please download manually and extract to",
         ):
             ensure_reconstruction("dummy", tmpdir)
         mock.assert_not_called()
@@ -149,10 +152,23 @@ def test_no_url_provided(tmpdir, monkeypatch):
 
 def test_empty_directory(tmpdir, mock_reconstruction):
     (tmpdir / "dummy").mkdir()
-    with pytest.raises(MissingReconstructionException, match="An object with the expected name"):
+    with pytest.raises(
+        MissingReconstructionException, match="An object with the expected name"
+    ):
         ensure_reconstruction("dummy", tmpdir)
 
 
-def test_download_no_write_permission(mock_reconstruction):
-    with pytest.raises(PermissionError, match="You have attempted"):
+def test_download_cant_make_directory(mock_reconstruction):
+    with pytest.raises(
+        PermissionError, match="Extraction directory /a/b/c/d does not exist"
+    ):
         ensure_reconstruction("dummy", "/a/b/c/d")
+
+
+def test_download_no_write_permission(mock_reconstruction):
+    with pytest.raises(
+        PermissionError,
+        match="No write permission on directory /sys, cannot download reconstruction.",
+    ):
+        # I sure hope this directory isn't writable...
+        ensure_reconstruction("dummy", "/sys")
