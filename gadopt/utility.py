@@ -292,7 +292,8 @@ def extend_function_to_3d(func, mesh_extruded):
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0, dim=2, vector=True)
     else:
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0)
-    func_extended = Function(fs_extended, name=name, val=func.dat._data)
+    indices = func.dat.axes.buffer_slice(include_ghosts=True)
+    func_extended = Function(fs_extended, name=name, val=func.dat.buffer.data_ro[indices])
     func_extended.source = func
     return func_extended
 
