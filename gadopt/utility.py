@@ -645,14 +645,19 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
         # seen by all MPI ranks
         gathered_boundaries = mesh.comm.allgather(identified)
         mesh.topology_dm.removeLabel("TEMP_LABEL")
-        kwargs = dict(
-            [
-                (proc_bdy.get(face_id), face_id)  # invert boundary mapping
-                for proc_bdy in reversed(gathered_boundaries)  # keep value on lowest comm rank
-                for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
-            ]
-        )
+        kwargs = {
+            proc_bdy.get(face_id): face_id  # invert boundary mapping
+            for proc_bdy in reversed(gathered_boundaries)  # keep value on lowest comm rank
+            for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
+        }
         kwargs.pop(None, None)  # remove None entry
+        # An extruded mesh is identified by two labels inserted by Firedrake,
+        # exterior_facets_top and exterior_facets_bottom. If those exist, override
+        # 'bottom' and 'top' with the values directly as top/bottom boundary detection
+        # from a plex object does not represent the boundaries known to Firedrake
+        for surface in ( "top", "bottom" ):
+            if mesh.topology_dm.getStratumSize(f"exterior_facets_{surface}", 1) > 0:
+                kwargs[surface] = surface
         # Get remaining dimensions (if any)
         for idim in range(plex_dim, dim):
             for axis_label in axis_extremes_order[idim]:
