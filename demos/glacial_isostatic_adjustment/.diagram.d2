@@ -1,0 +1,33 @@
+base: Base {
+	link: ./base_case
+	shape: circle
+}
+
+geometry: Geometry {
+	near: bottom-left
+	2d_cylindrical: 2D Cylindrical {
+		link: ./2d_cylindrical
+	}
+
+	2d_cylindrical_lvv: 2D Cylindrical (lateral viscosity variation) {
+		link: ./2d_cylindrical_lvv
+	}
+
+	2d_cylindrical -> 2d_cylindrical_lvv
+}
+
+adjoint: Adjoint {
+	near: bottom-right
+	viscosity: Viscosity Inversion {
+		link: ./adjoint_viscosity
+	}
+
+	ice: Ice Inversion {
+		link: ./adjoint_ice
+	}
+
+	viscosity -> ice
+}
+
+base -> geometry
+base -> adjoint
