@@ -46,6 +46,13 @@ diagnostics: Model Diagnostics {
   }
 }
 
+adaptivity: Mesh Adaptivity {
+  near: center-right
+  adaptivity: Adaptivity {
+    link: ./adaptive_base_case
+  }
+}
+
 geometry: Geometry & Boundary Condition {
   near: top-right
   cylindrical_2d: 2D Cylindrical {
@@ -79,3 +86,4 @@ base -> dimension
 base -> diagnostics
 base -> geometry
 base -> adjoint
+base -> adaptivity
