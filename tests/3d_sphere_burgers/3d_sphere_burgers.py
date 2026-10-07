@@ -370,7 +370,7 @@ for timestep in range(1, max_timesteps+1):
 
     # Log diagnostics:
     if OUTPUT:
-        plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+        plog.log_str(f"{timestep} {float(time)} {float(dt)} {gd.u_rms()} "
                      f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
                      f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
@@ -385,7 +385,7 @@ for timestep in range(1, max_timesteps+1):
     if OUTPUT:
         displacement_min_array.append(
             [
-                float(characteristic_maxwell_time * time.dat.data[0] / year_in_seconds),
+                characteristic_maxwell_time * float(time) / year_in_seconds,
                 displacement_min,
             ]
         )
