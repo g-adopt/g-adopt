@@ -298,8 +298,7 @@ class FunctionContext:
             `boundary_id`
         """
         self.check_boundary_id(boundary_id)
-        bc = fd.DirichletBC(self.function_space, 0, boundary_id)
-        return [n for n in bc.nodes if n < self.function_space.axes.owned.local_size]
+        return [n for n in self.function_space.boundary_nodes(boundary_id) if n < self.function_space.axes.blocked(self.function_space.shape).owned.local_size]
 
 
 class BaseDiagnostics:

@@ -656,7 +656,7 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
         # exterior_facets_top and exterior_facets_bottom. If those exist, override
         # 'bottom' and 'top' with the values directly as top/bottom boundary detection
         # from a plex object does not represent the boundaries known to Firedrake
-        for surface in ( "top", "bottom" ):
+        for surface in ("top", "bottom"):
             if mesh.topology_dm.getStratumSize(f"exterior_facets_{surface}", 1) > 0:
                 kwargs[surface] = surface
         # Get remaining dimensions (if any)
