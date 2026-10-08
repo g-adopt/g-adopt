@@ -500,7 +500,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         Applying these settings is complicated by the change in nesting levels required
         for the `OffloadPC` (and potentially `PCTelescope`). Also apply any
         device-specific workarounds to both the solver settings and directly to the
-        PETSc options database if necessary.
+        PETSc options database if requested.
 
         Args:
             gpu_extras: GPU-specific settings. Indicates whether to apply `PCTelescope`
@@ -520,6 +520,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         gpu_telescope_factor = (
             1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
         )
+        cuda_workaround = gpu_extras is not None and gpu_extras.get(
+            "cuda_workaround", False
+        )
         if device_type is None:
             return in_config
         # in_config can be one of the predefined config dicts, make sure it is not
@@ -533,7 +536,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                 "pc_telescope_reduction_factor": gpu_telescope_factor,
                 "telescope": ksp_params,
             }
-        if device_type == "CUDA":
+        if device_type == "CUDA" and cuda_workaround:
             # Add cuda workarounds
             odb = fd.PETSc.Options()
             odb.setValue("matmatmult_backend_cpu", True)
