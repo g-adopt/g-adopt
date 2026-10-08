@@ -110,7 +110,7 @@ ITERATIVE_FIELDSPLIT_0_GPU = {
     }
 }
 
-ITERATIVE_STOKES_HIP_PARAMS = (
+ITERATIVE_STOKES_GPU_PARAMS = (
     deepcopy(BASE_LINEAR_PARAMS_WITH_LOG)
     | iterative_outer_stokes_solver_parameters
     | {
@@ -120,12 +120,12 @@ ITERATIVE_STOKES_HIP_PARAMS = (
     | deepcopy(ITERATIVE_FIELDSPLIT_0_GPU)
 )
 
-ITERATIVE_STOKES_CUDA_PARAMS = deepcopy(ITERATIVE_STOKES_HIP_PARAMS)
-ITERATIVE_STOKES_CUDA_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
+ITERATIVE_STOKES_CUDA_WORKAROUND_PARAMS = deepcopy(ITERATIVE_STOKES_GPU_PARAMS)
+ITERATIVE_STOKES_CUDA_WORKAROUND_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
-ITERATIVE_STOKES_CUDA_DEBUG_PARAMS = deepcopy(ITERATIVE_STOKES_CUDA_PARAMS)
-ITERATIVE_STOKES_CUDA_DEBUG_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"]["ksp_converged_reason"] = None
-ITERATIVE_STOKES_CUDA_DEBUG_PARAMS["fieldsplit_1"]["ksp_monitor"] = None
+ITERATIVE_STOKES_GPU_DEBUG_PARAMS = deepcopy(ITERATIVE_STOKES_GPU_PARAMS)
+ITERATIVE_STOKES_GPU_DEBUG_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"]["ksp_converged_reason"] = None
+ITERATIVE_STOKES_GPU_DEBUG_PARAMS["fieldsplit_1"]["ksp_monitor"] = None
 
 
 ITERATIVE_FIELDSPLIT_0_GPU_TELESCOPE = {
@@ -162,7 +162,7 @@ ITERATIVE_FIELDSPLIT_0_GPU_TELESCOPE = {
     }
 }
 
-ITERATIVE_STOKES_HIP_PARAMS_TELESCOPE = (
+ITERATIVE_STOKES_GPU_PARAMS_TELESCOPE = (
     deepcopy(BASE_LINEAR_PARAMS_WITH_LOG)
     | iterative_outer_stokes_solver_parameters
     | {
@@ -171,12 +171,12 @@ ITERATIVE_STOKES_HIP_PARAMS_TELESCOPE = (
     }
     | deepcopy(ITERATIVE_FIELDSPLIT_0_GPU_TELESCOPE)
 )
-ITERATIVE_STOKES_CUDA_PARAMS_TELESCOPE = deepcopy(ITERATIVE_STOKES_HIP_PARAMS_TELESCOPE)
-ITERATIVE_STOKES_CUDA_PARAMS_TELESCOPE["fieldsplit_0"]["assembled"]["offload"]["telescope"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
+ITERATIVE_STOKES_CUDA_WORKAROUND_PARAMS_TELESCOPE = deepcopy(ITERATIVE_STOKES_GPU_PARAMS_TELESCOPE)
+ITERATIVE_STOKES_CUDA_WORKAROUND_PARAMS_TELESCOPE["fieldsplit_0"]["assembled"]["offload"]["telescope"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
-ITERATIVE_STOKES_CUDA_DEBUG_PARAMS_TELESCOPE = deepcopy(ITERATIVE_STOKES_CUDA_PARAMS_TELESCOPE)
-ITERATIVE_STOKES_CUDA_DEBUG_PARAMS_TELESCOPE["fieldsplit_0"]["assembled"]["offload"]["telescope"]["ksp"]["ksp_converged_reason"] = None
-ITERATIVE_STOKES_CUDA_DEBUG_PARAMS_TELESCOPE["fieldsplit_1"]["ksp_monitor"] = None
+ITERATIVE_STOKES_GPU_DEBUG_PARAMS_TELESCOPE = deepcopy(ITERATIVE_STOKES_GPU_PARAMS_TELESCOPE)
+ITERATIVE_STOKES_GPU_DEBUG_PARAMS_TELESCOPE["fieldsplit_0"]["assembled"]["offload"]["telescope"]["ksp"]["ksp_converged_reason"] = None
+ITERATIVE_STOKES_GPU_DEBUG_PARAMS_TELESCOPE["fieldsplit_1"]["ksp_monitor"] = None
 
 ITERATIVE_GIA_BASE = (
     deepcopy(BASE_LINEAR_PARAMS_WITH_LOG)
@@ -187,22 +187,22 @@ ITERATIVE_GIA_CPU_PARAMS = ITERATIVE_GIA_BASE | deepcopy(
     ITERATIVE_FIELDSPLIT_0_CPU["fieldsplit_0"] | {"ksp_converged_reason": None}
 )
 
-ITERATIVE_GIA_HIP_PARAMS = ITERATIVE_GIA_BASE | deepcopy(
+ITERATIVE_GIA_GPU_PARAMS = ITERATIVE_GIA_BASE | deepcopy(
     ITERATIVE_FIELDSPLIT_0_GPU["fieldsplit_0"]
 )
-ITERATIVE_GIA_HIP_PARAMS["assembled"]["offload"]["ksp"]["ksp_converged_reason"] = None
+ITERATIVE_GIA_GPU_PARAMS["assembled"]["offload"]["ksp"]["ksp_converged_reason"] = None
 
-ITERATIVE_GIA_CUDA_PARAMS = deepcopy(ITERATIVE_GIA_HIP_PARAMS)
-ITERATIVE_GIA_CUDA_PARAMS["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
+ITERATIVE_GIA_CUDA_WORKAROUND_PARAMS = deepcopy(ITERATIVE_GIA_GPU_PARAMS)
+ITERATIVE_GIA_CUDA_WORKAROUND_PARAMS["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
-ITERATIVE_GIA_HIP_PARAMS_TELESCOPE = (
+ITERATIVE_GIA_GPU_PARAMS_TELESCOPE = (
     deepcopy(ITERATIVE_GIA_BASE)
     | deepcopy(ITERATIVE_FIELDSPLIT_0_GPU_TELESCOPE["fieldsplit_0"])
 )
-ITERATIVE_GIA_HIP_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"]["ksp_converged_reason"] = None
+ITERATIVE_GIA_GPU_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"]["ksp_converged_reason"] = None
 
-ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE = deepcopy(ITERATIVE_GIA_HIP_PARAMS_TELESCOPE)
-ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
+ITERATIVE_GIA_CUDA_WORKAROUND_PARAMS_TELESCOPE = deepcopy(ITERATIVE_GIA_GPU_PARAMS_TELESCOPE)
+ITERATIVE_GIA_CUDA_WORKAROUND_PARAMS_TELESCOPE["assembled"]["offload"]["telescope"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
 ITERATIVE_GIA_COUPLED_CPU_PARAMS = (
     {"snes_monitor": None}
@@ -215,7 +215,7 @@ ITERATIVE_GIA_COUPLED_CPU_PARAMS = (
     | newton_stokes_solver_parameters
 )
 
-ITERATIVE_GIA_COUPLED_HIP_PARAMS = (
+ITERATIVE_GIA_COUPLED_GPU_PARAMS = (
     {"snes_monitor": None}
     | coupled_gia_solver_parameters
     | {
@@ -225,9 +225,6 @@ ITERATIVE_GIA_COUPLED_HIP_PARAMS = (
     | deepcopy(ITERATIVE_FIELDSPLIT_0_GPU)
     | newton_stokes_solver_parameters
 )
-
-ITERATIVE_GIA_COUPLED_CUDA_PARAMS = deepcopy(ITERATIVE_GIA_COUPLED_HIP_PARAMS)
-ITERATIVE_GIA_COUPLED_CUDA_PARAMS["fieldsplit_0"]["assembled"]["offload"]["ksp"] |= iterative_cuda_ksp_workarounds_inner
 
 DIRECT_GIA_COUPLED_CPU_PARAMS = (
     newton_stokes_solver_parameters | direct_stokes_solver_parameters
@@ -242,15 +239,19 @@ DIRECT_GIA_COUPLED_CPU_PARAMS = (
 
 TEST_VARIANTS = [
     ("stokes", direct_stokes_solver_parameters, ITERATIVE_STOKES_CPU_PARAMS, "HOST", {}),
-    ("stokes_hip", direct_stokes_solver_parameters, ITERATIVE_STOKES_HIP_PARAMS, "HIP", {}),
-    ("stokes_cuda", direct_stokes_solver_parameters, ITERATIVE_STOKES_CUDA_PARAMS, "CUDA", {}),
-    ("stokes_cuda_telescope", direct_stokes_solver_parameters, ITERATIVE_STOKES_CUDA_PARAMS_TELESCOPE, "CUDA", {"telescope_factor": 2}),
+    ("stokes_hip", direct_stokes_solver_parameters, ITERATIVE_STOKES_GPU_PARAMS, "HIP", {}),
+    ("stokes_cuda", direct_stokes_solver_parameters, ITERATIVE_STOKES_GPU_PARAMS, "CUDA", {}),
+    ("stokes_cuda_workaround", direct_stokes_solver_parameters, ITERATIVE_STOKES_CUDA_WORKAROUND_PARAMS, "CUDA", {"cuda_workaround": True}),
+    ("stokes_cuda_telescope", direct_stokes_solver_parameters, ITERATIVE_STOKES_GPU_PARAMS_TELESCOPE, "CUDA", {"telescope_factor": 2}),
+    ("stokes_cuda_telescope_workaround", direct_stokes_solver_parameters, ITERATIVE_STOKES_CUDA_WORKAROUND_PARAMS_TELESCOPE, "CUDA", {"telescope_factor": 2, "cuda_workaround": True}),
     ("gia", direct_stokes_solver_parameters, ITERATIVE_GIA_CPU_PARAMS, "HOST", {}),
-    ("gia_hip", direct_stokes_solver_parameters, ITERATIVE_GIA_HIP_PARAMS, "HIP", {}),
-    ("gia_cuda", direct_stokes_solver_parameters, ITERATIVE_GIA_CUDA_PARAMS, "CUDA", {}),
-    ("gia_cuda_telescope", direct_stokes_solver_parameters, ITERATIVE_GIA_CUDA_PARAMS_TELESCOPE, "CUDA", {"telescope_factor": 2}),
+    ("gia_hip", direct_stokes_solver_parameters, ITERATIVE_GIA_GPU_PARAMS, "HIP", {}),
+    ("gia_cuda", direct_stokes_solver_parameters, ITERATIVE_GIA_GPU_PARAMS, "CUDA", {}),
+    ("gia_cuda_workaround", direct_stokes_solver_parameters, ITERATIVE_GIA_CUDA_WORKAROUND_PARAMS, "CUDA", {"cuda_workaround": True}),
+    ("gia_cuda_telescope", direct_stokes_solver_parameters, ITERATIVE_GIA_GPU_PARAMS_TELESCOPE, "CUDA", {"telescope_factor": 2}),
+    ("gia_cuda_telescope_workaround", direct_stokes_solver_parameters, ITERATIVE_GIA_CUDA_WORKAROUND_PARAMS_TELESCOPE, "CUDA", {"telescope_factor": 2, "cuda_workaround": True}),
     ("coupled_gia", DIRECT_GIA_COUPLED_CPU_PARAMS, ITERATIVE_GIA_COUPLED_CPU_PARAMS, "HOST", {}),
-    ("coupled_gia_gpu", DIRECT_GIA_COUPLED_CPU_PARAMS, ITERATIVE_GIA_COUPLED_CUDA_PARAMS, "CUDA", {}),
+    ("coupled_gia_gpu", DIRECT_GIA_COUPLED_CPU_PARAMS, ITERATIVE_GIA_COUPLED_GPU_PARAMS, "CUDA", {}),
 ]
 
 TEST_VARIANTS_3D = [
@@ -451,10 +452,10 @@ for test_type, direct_params, iter_params, device_type, gpu_param in TEST_VARIAN
 
 debugging_tests = [
     ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CPU_DEBUG_PARAMS), "HOST", {}),
-    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CUDA_DEBUG_PARAMS), "CUDA", {}),
-    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_CUDA_DEBUG_PARAMS_TELESCOPE), "CUDA", {"telescope_factor": 2}),
+    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_GPU_DEBUG_PARAMS), "CUDA", {}),
+    ("stokes", ("stokes",), ("iterative", None, BASE_LINEAR_PARAMS_WITH_LOG | ITERATIVE_STOKES_GPU_DEBUG_PARAMS_TELESCOPE), "CUDA", {"telescope_factor": 2}),
     ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_CPU_PARAMS | {"ksp_monitor": None}), "HOST", {}),
-    ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_CUDA_PARAMS | {"ksp_monitor": None}), "CUDA", {})
+    ("gia", ("gia",), ("iterative", None, ITERATIVE_GIA_GPU_PARAMS | {"ksp_monitor": None}), "CUDA", {})
 ]
 
 
