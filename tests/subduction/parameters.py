@@ -85,7 +85,7 @@ if dimensionless:
     B = buoyancy_number(rho_weak_layer - rho_mantle)
 
     if free_surface:
-        BFS = [buoyancy_number(rho - rho_water) for rho in [rho_mantle, rho_weak_layer]]
+        BFS = buoyancy_number(rho_mantle - rho_water)
 
 # Temporal parameters
 time_scale = reference_time if dimensionless else 1.0
@@ -105,14 +105,14 @@ plastic_deformation_params = {
 }
 viscous_creep_params = {
     "upper": {
-        "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
+        "diffusion": {"prefactor": 2e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 1.5e-17,
+            "prefactor": 4e-17,
             "n": 3.5,
             "act_nrg": 5.4e5,
             "act_vol": 1.2e-5,
         },
-        "Peierls": {"prefactor": 1e-145, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
+        "Peierls": {"prefactor": 3e-143, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
         "diffusion": {"prefactor": 1e-15, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}

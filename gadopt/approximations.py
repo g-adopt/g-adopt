@@ -8,23 +8,22 @@ G-ADOPT queries variables and methods from the approximation.
 
 import abc
 from numbers import Number
-from typing import Optional
 from warnings import warn
 
-from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
 import ufl
+from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
 
 from .utility import ensure_constant, vertical_component
 
 __all__ = [
-    "BoussinesqApproximation",
-    "ExtendedBoussinesqApproximation",
-    "TruncatedAnelasticLiquidApproximation",
     "AnelasticLiquidApproximation",
-    "IncompressibleMaxwellApproximation",
-    "QuasiCompressibleInternalVariableApproximation",
+    "BoussinesqApproximation",
     "CompressibleInternalVariableApproximation",
+    "ExtendedBoussinesqApproximation",
+    "IncompressibleMaxwellApproximation",
     "MaxwellApproximation",
+    "QuasiCompressibleInternalVariableApproximation",
+    "TruncatedAnelasticLiquidApproximation",
 ]
 
 
@@ -157,7 +156,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A boolean signalling if the governing equations are in compressible form.
 
         """
-        pass
 
     def stress(self, u: Function) -> ufl.core.expr.Expr:
         r"""Defines the deviatoric stress $\sigma(u)$.
@@ -182,7 +180,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A UFL expression for the buoyancy term (momentum source in gravity direction).
 
         """
-        pass
 
     @abc.abstractmethod
     def rho_continuity(self) -> ufl.core.expr.Expr:
@@ -192,7 +189,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A UFL expression for density in the mass continuity equation.
 
         """
-        pass
 
     @abc.abstractmethod
     def rhocp(self) -> ufl.core.expr.Expr:
@@ -202,7 +198,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A UFL expression for the volumetric heat capacity in the energy equation.
 
         """
-        pass
 
     @abc.abstractmethod
     def kappa(self) -> ufl.core.expr.Expr:
@@ -212,7 +207,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A UFL expression for thermal diffusivity.
 
         """
-        pass
 
     @property
     @abc.abstractmethod
@@ -223,7 +217,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A Firedrake function for the reference temperature profile.
 
         """
-        pass
 
     @abc.abstractmethod
     def linearized_energy_sink(self, u) -> ufl.core.expr.Expr:
@@ -233,7 +226,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A UFL expression for temperature-related sink terms in the energy equation.
 
         """
-        pass
 
     @abc.abstractmethod
     def energy_source(self, u) -> ufl.core.expr.Expr:
@@ -243,7 +235,6 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
           A UFL expression for additional independent terms in the energy equation.
 
         """
-        pass
 
     @abc.abstractmethod
     def free_surface_terms(self, p, T, eta, theta_fs) -> tuple[ufl.core.expr.Expr]:
@@ -264,12 +255,18 @@ class BaseApproximation(DeviatoricStressMixin, abc.ABC):
         rescaling eta -> eta_tilde in Kramer et al. (2012, see block matrix shown in
         Eq. 23).
 
+        With the default `variable_rho_fs`, the prefactor involves the interior
+        buoyancy. For approximations whose buoyancy depends on the pressure (e.g. the
+        AnelasticLiquidApproximation through `dbuoyancydp`), the prefactor therefore
+        involves the pressure unknown, making the free surface equation nonlinear.
+        The Newton fixed point is unchanged, but the block matrix is symmetric only
+        when the buoyancy is independent of the solution.
+
         Returns:
           A UFL expression for the free surface normal stress and a UFL expression for
           the free surface equation prefactor.
 
         """
-        pass
 
 
 class BoussinesqApproximation(BaseApproximation):
@@ -350,9 +347,13 @@ class BoussinesqApproximation(BaseApproximation):
         self, p, T, eta, *, variable_rho_fs=True, RaFS=1, delta_rho_fs=1
     ):
         buoyancy = RaFS * delta_rho_fs * self.g
-        normal_stress = buoyancy * eta
         if variable_rho_fs:
-            normal_stress -= self.buoyancy(p, T) * eta
+            # The interior density deviation enters the normal stress through the
+            # hydrostatic transfer of the stress condition to the reference boundary.
+            # The same coefficient scales the free-surface equation so that the
+            # off-diagonal blocks of the coupled system remain symmetric.
+            buoyancy = buoyancy - self.buoyancy(p, T)
+        normal_stress = buoyancy * eta
 
         return normal_stress, buoyancy
 
@@ -391,7 +392,15 @@ class ExtendedBoussinesqApproximation(BoussinesqApproximation):
 
     compressible = False
 
-    def __init__(self, Ra: Number, Di: Number, *, H: Optional[Number] = None, heating_weight: Function | Number = 1, **kwargs):
+    def __init__(
+        self,
+        Ra: Number,
+        Di: Number,
+        *,
+        H: Number | None = None,
+        heating_weight: Function | Number = 1,
+        **kwargs,
+    ):
         super().__init__(Ra, **kwargs)
         self.Di = Di
         self.H = H

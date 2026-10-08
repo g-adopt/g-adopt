@@ -44,11 +44,8 @@ def viscosity_strain_rate_balance(
     pressure: Operator,
     temperature: Operator,
     viscous_creep_params: dict[str, dict[str, float]],
-    bounds: Operator,
+    bounds: dict[str, float | Operator],
 ) -> dict[str, dict[str, Operator]]:
-    measure = fd.dx(domain=mesh, degree=5)
-    domain_volume = fd.assemble(1.0 * measure)
-
     bounds_wide = {"minimum": 1e15, "maximum": 1e30}
     viscosity = {}
     for mantle, mechanism_params in viscous_creep_params.items():
@@ -67,8 +64,8 @@ def viscosity_strain_rate_balance(
             )
 
         if len(mechanism_params) > 1:
-            viscosity_eff = effective_viscosity(viscosity[mantle].values())
-            while True:
+            for _ in range(15):
+                viscosity_eff = effective_viscosity(viscosity[mantle].values())
                 for mechanism, params in mechanism_params.items():
                     strain_rate_mechanism = (
                         viscosity_eff / viscosity[mantle][mechanism] * strain_rate
@@ -83,14 +80,6 @@ def viscosity_strain_rate_balance(
                         **params,
                         bounds=bounds_wide,
                     )
-
-                viscosity_eff_old = viscosity_eff
-                viscosity_eff = effective_viscosity(viscosity[mantle].values())
-                relative_variation = (
-                    abs(viscosity_eff - viscosity_eff_old) / viscosity_eff_old
-                )
-                if fd.assemble(relative_variation * measure) / domain_volume <= 5e-4:
-                    break
 
         viscosity[mantle]["effective"] = effective_viscosity(
             viscosity[mantle].values(), bounds

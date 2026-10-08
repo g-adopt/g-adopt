@@ -27,6 +27,8 @@ class AdaptiveSimulation:
                 if MPI.COMM_WORLD.rank == 0:
                     generate_mesh(prms.domain_dims, prms.mesh_layers)
 
+                MPI.COMM_WORLD.barrier()
+
                 self.mesh = Mesh("mesh.msh")
 
         # Time-stepping objects
@@ -104,7 +106,7 @@ class AdaptiveSimulation:
 
             # Adapting the mesh can generate new nodes outside of the original mesh
             # Increase tolerance to ensure point location does not fail
-            self.mesh.tolerance = 5.0
+            self.mesh.tolerance = 0.1
             # Generate new mesh based on overall metric
             self.mesh = adapt(self.mesh, overall_metric, serialise=True)
 
@@ -154,12 +156,11 @@ class AdaptiveSimulation:
     def set_up(self, initial: bool = False) -> None:
         # Mesh
         self.mesh.cartesian = True
-        boundary = get_boundary_ids(self.mesh)
+        self.boundary = get_boundary_ids(self.mesh)
 
         # Function spaces
         V = VectorFunctionSpace(self.mesh, "CG", 2)
         W = FunctionSpace(self.mesh, "CG", 1)
-        W_equispaced = FunctionSpace(self.mesh, "CG", 1, variant="equispaced")
         if prms.free_surface:
             Z = MixedFunctionSpace([V, W, W])
         else:
@@ -186,13 +187,7 @@ class AdaptiveSimulation:
             self.fields.clear()
 
         self.fields = {
-            field.name(): {
-                "field": field,
-                "output": Function(
-                    FunctionSpace(self.mesh, field.ufl_element(), variant="equispaced"),
-                    name=field.name(),
-                ),
-            }
+            field.name(): {"field": field, "output": Function(field, name=field.name())}
             for field in self.solutions
         }
 
@@ -200,8 +195,8 @@ class AdaptiveSimulation:
         mu_material, rheol_expr = material_viscosity(self.mesh, u, self.T, self.psi)
         self.fields |= {
             field_name: {
-                "field": Function(W, name=f"{field_name}"),
-                "output": Function(W_equispaced, name=field_name),
+                "field": Function(W, name=field_name),
+                "output": Function(W, name=field_name),
                 "expr": expr,
             }
             for field_name, expr in rheol_expr.items()
@@ -209,14 +204,16 @@ class AdaptiveSimulation:
 
         # Boundary conditions
         self.temp_bcs = {
-            boundary.bottom: {"T": prms.temperature_scaling(prms.T_pot)},
-            boundary.top: {"T": prms.temperature_scaling(prms.T_surf)},
+            self.boundary.bottom: {"T": prms.temperature_scaling(prms.T_pot)},
+            self.boundary.top: {"T": prms.temperature_scaling(prms.T_surf)},
         }
         stokes_bcs = {
-            boundary.bottom: {"uy": 0.0},
-            boundary.left: {"ux": 0.0},
-            boundary.right: {"ux": 0.0},
+            self.boundary.bottom: {"uy": 0.0},
+            self.boundary.left: {"ux": 0.0},
+            self.boundary.right: {"ux": 0.0},
         }
+        if prms.free_surface:
+            self.volume_multiplier = Constant(0.0)
 
         if prms.dimensionless:
             RaB_material = material_field(
@@ -225,7 +222,7 @@ class AdaptiveSimulation:
             RaB_name = "Rayleigh number (compositional)"
             self.fields[RaB_name] = {
                 "field": Function(W, name=RaB_name),
-                "output": Function(W_equispaced, name=RaB_name),
+                "output": Function(W, name=RaB_name),
                 "expr": RaB_material,
             }
 
@@ -243,12 +240,16 @@ class AdaptiveSimulation:
             }
 
             if prms.free_surface:
-                RaFS_material = material_field(
-                    self.psi, [prms.Ra * B for B in prms.BFS], interface="arithmetic"
-                )
-                stokes_bcs[boundary.top] = {"free_surface": {"RaFS": RaFS_material}}
+                RaFS = prms.Ra * prms.BFS
+                stokes_bcs[self.boundary.top] = {
+                    "free_surface": {
+                        "RaFS": RaFS,
+                        "exact_normal": True,
+                        "volume_multiplier": self.volume_multiplier,
+                    }
+                }
             else:
-                stokes_bcs[boundary.top] = {"uy": 0.0}
+                stokes_bcs[self.boundary.top] = {"uy": 0.0}
         else:
             delta_rho_material = material_field(
                 self.psi,
@@ -261,7 +262,7 @@ class AdaptiveSimulation:
             rho_name = "Density"
             self.fields[rho_name] = {
                 "field": Function(W, name=rho_name),
-                "output": Function(W_equispaced, name=rho_name),
+                "output": Function(W, name=rho_name),
                 "expr": rho_material,
             }
 
@@ -279,12 +280,15 @@ class AdaptiveSimulation:
             }
 
             if prms.free_surface:
-                delta_rho_fs = prms.rho_mantle + delta_rho_material - prms.rho_water
-                stokes_bcs[boundary.top] = {
-                    "free_surface": {"delta_rho_fs": delta_rho_fs}
+                stokes_bcs[self.boundary.top] = {
+                    "free_surface": {
+                        "delta_rho_fs": prms.rho_mantle - prms.rho_water,
+                        "exact_normal": True,
+                        "volume_multiplier": self.volume_multiplier,
+                    }
                 }
             else:
-                stokes_bcs[boundary.top] = {"uy": 0.0}
+                stokes_bcs[self.boundary.top] = {"uy": 0.0}
 
         for field_name, field_specs in self.fields.items():
             field_specs["include_in_metric"] = field_name in prms.metric_fields
@@ -351,6 +355,12 @@ class AdaptiveSimulation:
 
             self.tstep_adapt.update_timestep()  # Update time step
 
+            if prms.free_surface:
+                u, _, eta = split(self.stokes)
+                self.volume_multiplier.assign(
+                    free_surface_volume_multiplier(u, eta, self.boundary.top)
+                )
+
             for solver in self.solvers:  # Perform solves
                 solver.solve()
 
@@ -376,6 +386,9 @@ class AdaptiveSimulation:
             if check_dir.is_dir():
                 rmtree(check_dir)
             check_dir.mkdir()
+
+        if initial:
+            MPI.COMM_WORLD.barrier()
 
         with CheckpointFile(
             f"checkpoints/checkpoint_{self.checkpoint_counter}.h5", "w"
@@ -410,5 +423,6 @@ class AdaptiveSimulation:
         self.output_counter += 1
 
 
-simulation = AdaptiveSimulation()
-simulation.run()
+if __name__ == "__main__":
+    simulation = AdaptiveSimulation()
+    simulation.run()

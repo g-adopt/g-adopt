@@ -18,8 +18,21 @@ def function_name(field: fd.Function | Indexed) -> str:
 
 
 def generate_mesh(
-    domain_dims: list[float], mesh_layers: dict[str, float | list[float]]
+    domain_dims: tuple[float, float], mesh_layers: dict[str, float | list[float]]
 ) -> None:
+    thicknesses = mesh_layers["thickness"]
+    vertical_resolutions = mesh_layers["vertical_resolution"]
+    if len(thicknesses) != len(vertical_resolutions):
+        raise ValueError(
+            "Mesh layer thicknesses and vertical resolutions must have equal lengths."
+        )
+    if not thicknesses or any(value <= 0.0 for value in thicknesses):
+        raise ValueError("Mesh layer thicknesses must be positive and non-empty.")
+    if any(value <= 0.0 for value in vertical_resolutions):
+        raise ValueError("Mesh layer vertical resolutions must be positive.")
+    if mesh_layers["horizontal_resolution"] <= 0.0:
+        raise ValueError("Mesh horizontal resolution must be positive.")
+
     gmsh.initialize()
     gmsh.model.add("mesh")
 
@@ -32,26 +45,36 @@ def generate_mesh(
 
     line_1 = gmsh.model.geo.addLine(point_1, point_2)
 
-    for i, (layer_thickness, layer_resolution) in enumerate(
-        zip(mesh_layers["thickness"], mesh_layers["vertical_resolution"])
-    ):
-        gmsh.model.geo.extrude(
-            [(1, line_1 + sum(x**2 for x in range(i + 1)))],
+    top_curve = line_1
+    side_curves = []
+    layer_surfaces = []
+    for layer_thickness, layer_resolution in zip(thicknesses, vertical_resolutions):
+        extruded_entities = gmsh.model.geo.extrude(
+            [(1, top_curve)],
             0.0,
             layer_thickness,
             0.0,
-            numElements=[int(layer_thickness / layer_resolution)],
+            numElements=[round(layer_thickness / layer_resolution)],
             recombine=False,
         )
+        surfaces = [tag for dim, tag in extruded_entities if dim == 2]
+        curves = [tag for dim, tag in extruded_entities if dim == 1]
+        if not surfaces or len(curves) < 3:
+            raise RuntimeError("Gmsh extrusion did not return the expected entities.")
+
+        # Gmsh returns the new top curve before the two lateral curves.
+        top_curve = curves[0]
+        side_curves.extend(curves[1:])
+        layer_surfaces.extend(surfaces)
 
     gmsh.model.geo.synchronize()
 
     gmsh.model.addPhysicalGroup(1, [line_1], tag=1)
-    gmsh.model.addPhysicalGroup(1, [line_1 + 9], tag=2)
-    gmsh.model.addPhysicalGroup(1, [line_1 + i for i in [2, 6, 10]], tag=3)
-    gmsh.model.addPhysicalGroup(1, [line_1 + i for i in [3, 7, 11]], tag=4)
+    gmsh.model.addPhysicalGroup(1, [top_curve], tag=2)
+    gmsh.model.addPhysicalGroup(1, side_curves[::2], tag=3)
+    gmsh.model.addPhysicalGroup(1, side_curves[1::2], tag=4)
 
-    gmsh.model.addPhysicalGroup(2, [5, 9, 13], tag=1)
+    gmsh.model.addPhysicalGroup(2, layer_surfaces, tag=1)
 
     gmsh.model.mesh.generate(2)
 

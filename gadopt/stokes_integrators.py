@@ -14,30 +14,30 @@ import abc
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Any
 from warnings import warn
-from types import MappingProxyType
 
 import firedrake as fd
 from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
-from .free_surface_equation import free_surface_terms
+from .free_surface_equation import free_surface_option_keys, free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .scalar_equation import mass_term, sink_term, source_term
-from .solver_options_manager import SolverConfigurationMixin, ConfigType
+from .solver_options_manager import ConfigType, SolverConfigurationMixin
 from .utility import (
     DEBUG,
     INFO,
     InteriorBC,
     depends_on,
+    get_device_type,
     is_cartesian,
     is_continuous,
     log_level,
     upward_normal,
     vertical_component,
-    get_device_type
 )
 
 gamg_common_parameters: Mapping[str, str | float | int | bool] = MappingProxyType(
@@ -775,6 +775,7 @@ class StokesSolver(StokesSolverBase):
 
         self.eta_ind = 2
         self.free_surface_map = {}
+        self.free_surface_options = {}
         self.free_surface_equations = []
         super().__init__(solution, approximation, **kwargs)
 
@@ -785,6 +786,16 @@ class StokesSolver(StokesSolverBase):
         self.strong_bcs.append(
             InteriorBC(self.solution_space[self.eta_ind], 0.0, bc_id)
         )
+
+        # Options governing the free-surface kinematics are consumed here; the
+        # remaining parameters are passed to the approximation
+        fs_options = {
+            key: params_fs[key] for key in free_surface_option_keys if key in params_fs
+        }
+        params_fs = {
+            key: value for key, value in params_fs.items() if key not in fs_options
+        }
+        self.free_surface_options[bc_id] = fs_options
 
         normal_stress, buoyancy = self.approximation.free_surface_terms(
             self.solution_split[1],
@@ -831,6 +842,7 @@ class StokesSolver(StokesSolverBase):
                 "trial_old": self.solution_old_split[eta_ind],
                 "use_irksome": False,
                 "u": u,
+                **self.free_surface_options.get(bc_id, {}),
             }
 
             self.equations.append(
@@ -855,6 +867,19 @@ class StokesSolver(StokesSolverBase):
         super().set_solver_options(
             solver_preset, None, gpu_extras, iterative_preset, direct_preset
         )
+        # The exact free-surface normal makes the residual nonlinear in the free-surface
+        # deflection even when the viscosity is solution-independent, a case where the
+        # base class defaults to a single linear solve (ksponly). Ensure Newton
+        # iteration is used, unless the user requested an SNES type.
+        user_snes_type = (
+            isinstance(solver_preset, Mapping) and "snes_type" in solver_preset
+        )
+        exact_normal = any(
+            options.get("exact_normal")
+            for options in self.free_surface_options.values()
+        )
+        if exact_normal and not user_snes_type:
+            self.add_to_solver_config(newton_stokes_solver_parameters)
         if self.free_surface_map and self.is_iterative_solver():
             # Update application context
             self.appctx["free_surface"] = self.free_surface_map

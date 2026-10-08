@@ -97,14 +97,15 @@ def initial_level_set(psi: fd.Function) -> None:
     slab_tip_triangle = sl.Polygon(slab_tip_triangle_coords)
 
     weak_layer_polygon = surface_plate.union(annulus.intersection(slab_tip_triangle))
-    weak_layer_polygon_coords = weak_layer_polygon.exterior.coords._coords
+    # Coordinates start at the trench and follow the slab first
+    weak_layer_polygon_coords = np.asarray(weak_layer_polygon.exterior.coords)
     ([plate_extremity_index],) = np.all(
         weak_layer_polygon_coords == prms.plate_extremity_coords, axis=1
     ).nonzero()
-    weak_layer_interface_coords = weak_layer_polygon_coords[: plate_extremity_index + 1]
+    weak_layer_interface_coords = weak_layer_polygon_coords[:plate_extremity_index]
     weak_layer_interface = sl.LineString(weak_layer_interface_coords)
 
-    boundary_coordinates = weak_layer_polygon_coords[plate_extremity_index + 1 :]
+    boundary_coordinates = weak_layer_polygon_coords[plate_extremity_index:]
 
     epsilon = interface_thickness(psi.function_space(), min_cell_edge_length=True)
     epsilon = MPI.COMM_WORLD.allreduce(epsilon.dat.data_ro.min(), MPI.MIN)

@@ -122,12 +122,37 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 #
 # Typically, when the exterior density is negligbile compared with the interior density (i.e. air vs rock!) and with $\alpha$ = 3x10$^{-5}$ K$^{-1}$ and $\Delta T$ = 3000 K, $B_{fs}$ is about 10. For dimensional simulations you can specify the density contrast across the free surface with *delta_rho_fs* through the free surface dictionary, as well as providing $\rho_0$ and $g$ through the approximation object in the usual way.
 
+# Two further options are enabled below through the `free_surface` dictionary:
+# * *exact_normal*: By default, the free surface is advanced with the linearised
+# kinematic boundary condition, in which the surface height only responds to the normal
+# flow. With this option, the kinematic condition is upgraded to its full form, in which
+# tangential (horizontal) flow transports topography along the surface. This is the
+# physically consistent description for a closed box like this one, and is required for
+# open or periodic domains, where topography must be allowed to cross lateral
+# boundaries.
+# * *volume_multiplier*: With horizontal transport enabled, topography converges towards
+# regions of convergent flow beneath the surface, which drifts the mean height upwards
+# over time. Because a uniform shift of the height is dynamically inert (it is absorbed
+# by a uniform pressure shift, and only height gradients load the interior), we remove
+# it through a uniform correction to the surface's normal speed. For this closed box,
+# evaluating the multiplier as the surface's mean height tendency, with the previous
+# step's fields, renders the mean height stationary; the G-ADOPT function
+# *free_surface_volume_multiplier* automates the calculation. The multiplier is a
+# `Constant`, so it can be updated between solves without rebuilding the solver.
+
 # +
 Bfs = 10.0  # Free surface buoyancy number
+volume_multiplier = Constant(0.0)  # Uniform correction to the surface's normal speed
 
 stokes_bcs = {
     boundary.bottom: {"uy": 0},
-    boundary.top: {"free_surface": {"RaFS": Ra * Bfs}},
+    boundary.top: {
+        "free_surface": {
+            "RaFS": Ra * Bfs,
+            "exact_normal": True,
+            "volume_multiplier": volume_multiplier,
+        }
+    },
     boundary.left: {"ux": 0},
     boundary.right: {"ux": 0},
 }
@@ -146,7 +171,8 @@ output_frequency = 10
 
 plog = ParameterLog("params.log", mesh)
 plog.log_str(
-    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t eta_min eta_max"
+    "timestep time dt maxchange u_rms u_rms_surf ux_max nu_top nu_base energy avg_t "
+    "eta_min eta_max eta_mean"
 )
 
 gd = GeodynamicalDiagnostics(z, T, boundary.bottom, boundary.top)
@@ -177,13 +203,18 @@ stokes_solver = StokesSolver(z, approximation, T, dt=delta_t, bcs=stokes_bcs)
 
 # Now let's run the simulation!
 
-for timestep in range(0, timesteps):
+for timestep in range(timesteps):
     # Write output:
     if timestep % output_frequency == 0:
         output_file.write(*z.subfunctions, T)
 
     dt = t_adapt.update_timestep()
     time += dt
+
+    # Update the uniform correction to the free surface's normal speed from the previous
+    # state: the surface-mean height tendency. For this closed box, it renders the mean
+    # height stationary.
+    volume_multiplier.assign(free_surface_volume_multiplier(u, eta, boundary.top))
 
     # Solve Stokes sytem:
     stokes_solver.solve()
@@ -202,7 +233,7 @@ for timestep in range(0, timesteps):
         f"{timestep} {time} {float(delta_t)} {maxchange} "
         f"{gd.u_rms()} {gd.u_rms_top()} {gd.ux_max(boundary.top)} {gd.Nu_top()} "
         f"{gd.Nu_bottom()} {energy_conservation} {gd.T_avg()} "
-        f"{z.subfunctions[2].dat.data.min()} {z.subfunctions[2].dat.data.max()}"
+        f"{gd.eta_min()} {gd.eta_max()} {gd.eta_mean()}"
     )
 
     # Leave if steady-state has been achieved:

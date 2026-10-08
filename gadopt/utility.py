@@ -4,28 +4,26 @@ depending on what they would like to achieve.
 
 """
 
-from firedrake import outer, ds_v, ds_t, ds_b, CellDiameter, CellVolume, dot, JacobianInverse
-from firedrake import sqrt, Function, FiniteElement, TensorProductElement, FunctionSpace, VectorFunctionSpace
-from firedrake import as_vector, SpatialCoordinate, Constant, max_value, min_value, dx, assemble, tanh
-from firedrake import op2, VectorElement, DirichletBC, interpolate, conditional
-from firedrake.ufl_expr import extract_unique_domain
-import ufl
-import time
-from ufl.corealg.traversal import traverse_unique_terminals
-from firedrake.petsc import PETSc
-from firedrake.utils import get_device_type as fd_get_device_type
-from functools import cached_property
-from mpi4py import MPI
-import numpy as np
 import logging
-from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
-from scipy.linalg import solveh_banded
+import time
+from collections.abc import Sequence
+from functools import cached_property
+from logging import CRITICAL, DEBUG, ERROR, INFO, WARNING  # NOQA
 from types import SimpleNamespace
 
+import firedrake as fd
+import numpy as np
+import ufl
+from mpi4py import MPI
+from scipy.linalg import solveh_banded
+from ufl.core.expr import Expr
+from ufl.core.operator import Operator
+from ufl.corealg.traversal import traverse_unique_terminals
+
 try:
-    from firedrake import MeshSequenceGeometry
-except ImportError:
+    MeshSequenceGeometry = fd.MeshSequenceGeometry
+except AttributeError:
     MeshSequenceGeometry = None
 
 # TBD: do we want our own set_log_level and use logging module with handlers?
@@ -42,7 +40,7 @@ def log(*args, level=None):
     """
     if level is not None and level < log_level:
         return
-    PETSc.Sys.Print(*args)
+    fd.PETSc.Sys.Print(*args)
 
 
 class ParameterLog:
@@ -85,7 +83,9 @@ class TimestepAdaptor:
         # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
-        self.ref_vel_interpolate = interpolate(abs(dot(JacobianInverse(self.mesh), self.u)), V, access=op2.MAX)
+        self.ref_vel_interpolate = fd.interpolate(
+            abs(fd.dot(fd.JacobianInverse(self.mesh), self.u)), V, access=fd.op2.MAX
+        )
 
     def compute_timestep(self):
         max_ts = float(self.dt_const)*self.increase_tolerance
@@ -93,7 +93,7 @@ class TimestepAdaptor:
             max_ts = min(max_ts, self.maximum_timestep)
 
         # need to reset ref_vel to avoid taking max with previous values
-        ref_vel = assemble(self.ref_vel_interpolate)
+        ref_vel = fd.assemble(self.ref_vel_interpolate)
         local_maxrefvel = ref_vel.dat.data.max()
         max_refvel = self.mesh.comm.allreduce(local_maxrefvel, MPI.MAX)
         # NOTE; we're incorparating max_ts here before dividing by max. ref. vel. as it may be zero
@@ -116,15 +116,15 @@ def is_cartesian(mesh):
 def upward_normal(mesh):
     if is_cartesian(mesh):
         n = mesh.geometric_dimension
-        return as_vector([0]*(n-1) + [1])
+        return fd.as_vector([0] * (n - 1) + [1])
     else:
-        X = SpatialCoordinate(mesh)
-        r = sqrt(sum([x ** 2 for x in X]))
+        X = fd.SpatialCoordinate(mesh)
+        r = fd.sqrt(sum([x**2 for x in X]))
         return X/r
 
 
 def vertical_component(u):
-    mesh = extract_unique_domain(u)
+    mesh = fd.ufl_expr.extract_unique_domain(u)
 
     if is_cartesian(mesh):
         return u[u.ufl_shape[0]-1]
@@ -135,13 +135,89 @@ def vertical_component(u):
 
 def horizontal_components(u):
     """Returns expression for vector u with vertical component removed, i.e. returns the vector UFL expression orthogonal to gravity."""
-    mesh = extract_unique_domain(u)
+    mesh = fd.ufl_expr.extract_unique_domain(u)
     return u - vertical_component(u) * upward_normal(mesh)
 
 
+def free_surface_normal(deflection: Expr, reference_normal: Expr) -> Operator:
+    r"""Unit normal of the deformed free surface.
+
+    The deformed surface is the reference boundary displaced by `deflection` along the
+    upwards direction. Its (unnormalised) normal reads $n - \nabla_t \eta$, where $n$ is
+    the reference (undeformed) boundary normal and $\nabla_t \eta$ the tangential
+    gradient of the deflection along the reference normal. The construction is agnostic
+    to the domain geometry (Cartesian, cylindrical, or spherical; 2-D or 3-D) and
+    handles both top and bottom free surfaces.
+
+    Args:
+      deflection:
+        UFL expression for the free-surface deflection.
+      reference_normal:
+        UFL expression for the reference (undeformed) boundary normal.
+
+    Returns:
+      UFL expression for the unit normal of the deformed free surface.
+
+    """
+    # The deflection is measured along the upward direction; converting it to a
+    # deflection along the reference normal flips its sign at bottom free surfaces
+    grad_deflection = fd.grad(deflection * vertical_component(reference_normal))
+    tangential_gradient = (
+        grad_deflection - fd.dot(grad_deflection, reference_normal) * reference_normal
+    )
+    normal = reference_normal - tangential_gradient
+
+    return normal / fd.sqrt(fd.dot(normal, normal))
+
+
+def free_surface_volume_multiplier(
+    u: fd.Function,
+    deflection: fd.Function,
+    boundary_id: Sequence[int | str] | int | str,
+    quad_degree: int = 4,
+) -> float:
+    r"""Mean tendency of the free-surface deflection over a boundary.
+
+    Returns the boundary average of the local height tendency $u \cdot n / n_{up}$,
+    where $n$ is the exact normal of the deformed free surface (see
+    `free_surface_normal`) and $n_{up}$ its upward component. For a closed domain,
+    assigning the returned value to the `volume_multiplier` free-surface boundary
+    condition parameter before a solve, using the previous step's fields, renders the
+    mean deflection stationary, removing the uniform vertical drift associated with the
+    tangential transport of topography. For open or periodic domains, the boundary flux
+    of tangentially transported topography must additionally be accounted for.
+
+    Args:
+      u:
+        Firedrake function for the velocity.
+      deflection:
+        Firedrake function for the free-surface deflection.
+      boundary_id:
+        Boundary identifier of the free surface.
+      quad_degree:
+        Degree of polynomial quadrature approximation. Only used on extruded meshes,
+        whose surface measure requires an explicit quadrature degree.
+
+    Returns:
+      The boundary-averaged height tendency.
+
+    """
+    mesh = fd.ufl_expr.extract_unique_domain(u)
+    if mesh.extruded:
+        ds_surf = CombinedSurfaceMeasure(mesh, quad_degree)(boundary_id)
+    else:
+        ds_surf = fd.ds(boundary_id, domain=mesh)
+
+    n = free_surface_normal(deflection, fd.FacetNormal(mesh))
+
+    return fd.assemble(fd.dot(u, n) / vertical_component(n) * ds_surf) / fd.assemble(
+        fd.Constant(1.0) * ds_surf
+    )
+
+
 def ensure_constant(f):
-    if isinstance(f, float) or isinstance(f, int):
-        return Constant(f)
+    if isinstance(f, (float, int)):
+        return fd.Constant(f)
     else:
         return f
 
@@ -180,9 +256,9 @@ def get_device_type(gpu_options: dict | None) -> str | None:
         # exception from PETSc if a GPU-enabled build calls this on a non-GPU enabled
         # system - add this to Firedrake. This function returns None for a GPU-enabled
         # build or HOST on a non-GPU enabled build when GPUs are not available.
-        PETSc.Sys.pushErrorHandler("python")
-        device_type = fd_get_device_type()
-        PETSc.Sys.popErrorHandler()
+        fd.PETSc.Sys.pushErrorHandler("python")
+        device_type = fd.utils.get_device_type()
+        fd.PETSc.Sys.popErrorHandler()
     if device_type == "HOST":
         return None
     return device_type
@@ -195,9 +271,9 @@ class CombinedSurfaceMeasure(ufl.Measure):
     the same surface ids as ds_v. The top and bottom surfaces are identified via the "top" and "bottom" ids."""
 
     def __init__(self, domain, degree):
-        self.ds_v = ds_v(domain=domain, degree=degree)
-        self.ds_t = ds_t(domain=domain, degree=degree)
-        self.ds_b = ds_b(domain=domain, degree=degree)
+        self.ds_v = fd.ds_v(domain=domain, degree=degree)
+        self.ds_t = fd.ds_t(domain=domain, degree=degree)
+        self.ds_b = fd.ds_b(domain=domain, degree=degree)
 
     def __call__(self, subdomain_id, **kwargs):
         if subdomain_id == 'top':
@@ -255,9 +331,9 @@ def normal_is_continuous(expr):
 
 def cell_size(mesh):
     if hasattr(mesh.ufl_cell(), 'sub_cells'):
-        return CellVolume(mesh) ** (1/mesh.topological_dimension)
+        return fd.CellVolume(mesh) ** (1 / mesh.topological_dimension)
     else:
-        return CellDiameter(mesh)
+        return fd.CellDiameter(mesh)
 
 
 def tensor_jump(v, n):
@@ -270,7 +346,7 @@ def tensor_jump(v, n):
     vectorial UFL jump operator `ufl.jump` which represents div(u).
     The equivalent of nabla_grad(u) is given by tensor_jump(n, u).
     """
-    return outer(v('+'), n('+')) + outer(v('-'), n('-'))
+    return fd.outer(v("+"), n("+")) + fd.outer(v("-"), n("-"))
 
 
 def extend_function_to_3d(func, mesh_extruded):
@@ -286,17 +362,17 @@ def extend_function_to_3d(func, mesh_extruded):
     family = ufl_elem.family()
     degree = ufl_elem.degree()
     name = func.name()
-    if isinstance(ufl_elem, VectorElement):
+    if isinstance(ufl_elem, fd.VectorElement):
         # vector function space
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0, dim=2, vector=True)
     else:
         fs_extended = get_functionspace(mesh_extruded, family, degree, 'R', 0)
-    func_extended = Function(fs_extended, name=name, val=func.dat._data)
+    func_extended = fd.Function(fs_extended, name=name, val=func.dat._data)
     func_extended.source = func
     return func_extended
 
 
-class ExtrudedFunction(Function):
+class ExtrudedFunction(fd.Function):
     """A 2D `Function` that provides a 3D view on the extruded domain.
 
     The 3D function can be accessed as `ExtrudedFunction.view_3d`.
@@ -338,21 +414,21 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
             variant = 'equispaced'
     if v_variant is None:
         v_variant = 'equispaced'
-    if cell_dim == (2, 1) or (1, 1):
+    if cell_dim in [(2, 1), (1, 1)]:
         if v_family is None:
             v_family = h_family
         if v_degree is None:
             v_degree = h_degree
         h_cell, v_cell = mesh.ufl_cell().sub_cells
-        h_elt = FiniteElement(h_family, h_cell, h_degree, variant=variant)
-        v_elt = FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
-        elt = TensorProductElement(h_elt, v_elt)
+        h_elt = fd.FiniteElement(h_family, h_cell, h_degree, variant=variant)
+        v_elt = fd.FiniteElement(v_family, v_cell, v_degree, variant=v_variant)
+        elt = fd.TensorProductElement(h_elt, v_elt)
         if hdiv:
             elt = ufl.HDivElement(elt)
     else:
-        elt = FiniteElement(h_family, mesh.ufl_cell(), h_degree, variant=variant)
+        elt = fd.FiniteElement(h_family, mesh.ufl_cell(), h_degree, variant=variant)
 
-    constructor = VectorFunctionSpace if vector else FunctionSpace
+    constructor = fd.VectorFunctionSpace if vector else fd.FunctionSpace
     return constructor(mesh, elt, **kwargs)
 
 
@@ -370,16 +446,16 @@ class LayerAveraging:
 
     def __init__(self, mesh, r1d=None, quad_degree=None):
         self.mesh = mesh
-        XYZ = SpatialCoordinate(mesh)
+        XYZ = fd.SpatialCoordinate(mesh)
 
         if is_cartesian(mesh):
             self.r = XYZ[len(XYZ)-1]
         else:
-            self.r = sqrt(dot(XYZ, XYZ))
+            self.r = fd.sqrt(fd.dot(XYZ, XYZ))
 
-        self.dx = dx
+        self.dx = fd.dx
         if quad_degree is not None:
-            self.dx = dx(degree=quad_degree)
+            self.dx = fd.dx(degree=quad_degree)
 
         if r1d is not None:
             self.r1d = r1d
@@ -388,8 +464,8 @@ class LayerAveraging:
                 nlayers = mesh.layers
             except AttributeError:
                 raise ValueError("For non-extruded mesh need to specify depths array r1d.")
-            CG1 = FunctionSpace(mesh, "CG", 1)
-            r_func = Function(CG1).interpolate(self.r)
+            CG1 = fd.FunctionSpace(mesh, "CG", 1)
+            r_func = fd.Function(CG1).interpolate(self.r)
             self.r1d = r_func.dat.data[:nlayers]
 
         self.mass = np.zeros((2, len(self.r1d)))
@@ -399,55 +475,59 @@ class LayerAveraging:
     def _assemble_mass(self):
         # main diagonal of mass matrix
         r = self.r
-        rc = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rc = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
+        rp = fd.Constant(0.0)
 
         # radial P1 hat function in rp < r < rn with maximum at rc
-        phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
+        phi = fd.max_value(fd.min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
 
         for i, rin in enumerate(self.r1d[1:]):
             rn.assign(rin)
-            self.mass[0, i] = assemble(phi**2 * self.dx)
+            self.mass[0, i] = fd.assemble(phi**2 * self.dx)
 
             # shuffle coefficients for next iteration
             rp.assign(rc)
             rc.assign(rn)
 
-        phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
-        self.mass[0, -1] = assemble(phi**2 * self.dx)
+        phi = fd.max_value(fd.min_value(1, (r - rp) / (rn - rp)), 0)
+        self.mass[0, -1] = fd.assemble(phi**2 * self.dx)
 
         # compute off-diagonal (symmetric)
-        rp = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
+        rp = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
 
         # overlapping product between two basis functions in rp < r < rn
-        overlap = max_value((rn - r) / (rn - rp), 0) * max_value((r - rp) / (rn - rp), 0) * self.dx
+        overlap = (
+            fd.max_value((rn - r) / (rn - rp), 0)
+            * fd.max_value((r - rp) / (rn - rp), 0)
+            * self.dx
+        )
 
         for i, rin in enumerate(self.r1d[1:]):
             rn.assign(rin)
-            self.mass[1, i] = assemble(overlap)
+            self.mass[1, i] = fd.assemble(overlap)
 
             # shuffle coefficients for next iteration
             rp.assign(rn)
 
     def _assemble_rhs(self, T):
         r = self.r
-        rc = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rc = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
+        rp = fd.Constant(0.0)
 
-        phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
+        phi = fd.max_value(fd.min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
 
         for i, rin in enumerate(self.r1d[1:]):
             rn.assign(rin)
-            self.rhs[i] = assemble(phi * T * self.dx)
+            self.rhs[i] = fd.assemble(phi * T * self.dx)
 
             rp.assign(rc)
             rc.assign(rn)
 
-        phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
-        self.rhs[-1] = assemble(phi * T * self.dx)
+        phi = fd.max_value(fd.min_value(1, (r - rp) / (rn - rp)), 0)
+        self.rhs[-1] = fd.assemble(phi * T * self.dx)
 
     def get_layer_average(self, T):
         """Compute the layer averages of `Function` T at the predefined depths.
@@ -464,14 +544,14 @@ class LayerAveraging:
         """
 
         r = self.r
-        rc = Constant(self.r1d[0])
-        rn = Constant(self.r1d[1])
-        rp = Constant(0.)
+        rc = fd.Constant(self.r1d[0])
+        rn = fd.Constant(self.r1d[1])
+        rp = fd.Constant(0.0)
 
         u.assign(0.0)
 
-        phi = max_value(min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
-        val = Constant(0.)
+        phi = fd.max_value(fd.min_value((r - rp) / (rc - rp), (rn - r) / (rn - rc)), 0)
+        val = fd.Constant(0.0)
 
         for a, rin in zip(avg[:-1], self.r1d[1:]):
             val.assign(a)
@@ -482,7 +562,7 @@ class LayerAveraging:
             rp.assign(rc)
             rc.assign(rn)
 
-        phi = max_value(min_value(1, (r - rp) / (rn - rp)), 0)
+        phi = fd.max_value(fd.min_value(1, (r - rp) / (rn - rp)), 0)
         val.assign(avg[-1])
         u.interpolate(u + val * phi)
 
@@ -498,7 +578,7 @@ def timer_decorator(func):
     return wrapper
 
 
-class InteriorBC(DirichletBC):
+class InteriorBC(fd.DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
     @cached_property
     def nodes(self):
@@ -507,7 +587,7 @@ class InteriorBC(DirichletBC):
 
 def absv(u):
     """Component-wise absolute value of vector for SU stabilisation"""
-    return as_vector([abs(ui) for ui in u])
+    return fd.as_vector([abs(ui) for ui in u])
 
 
 def step_func(r, centre, mag, increasing=True, sharpness=50):
@@ -515,11 +595,11 @@ def step_func(r, centre, mag, increasing=True, sharpness=50):
     # Build a step centred at "centre" with given magnitude
     # Increase with radius if "increasing" is True
     return mag * (
-        0.5 * (1 + tanh((1 if increasing else -1) * (r - centre) * sharpness))
+        0.5 * (1 + fd.tanh((1 if increasing else -1) * (r - centre) * sharpness))
     )
 
 
-def node_coordinates(function: Function) -> Function:
+def node_coordinates(function: fd.Function) -> fd.Function:
     """Interpolates mesh coordinates at each node of the provided function.
 
     Args:
@@ -528,12 +608,12 @@ def node_coordinates(function: Function) -> Function:
     Returns:
       A Firedrake function for the interpolated mesh coordinates
     """
-    vec_space = VectorFunctionSpace(function.ufl_domain(), function.ufl_element())
+    vec_space = fd.VectorFunctionSpace(function.ufl_domain(), function.ufl_element())
 
-    return Function(vec_space).interpolate(SpatialCoordinate(function))
+    return fd.Function(vec_space).interpolate(fd.SpatialCoordinate(function))
 
 
-def interpolate_1d_profile(function: Function, one_d_filename: str):
+def interpolate_1d_profile(function: fd.Function, one_d_filename: str):
     """
     Assign a one-dimensional profile to a Function `function` from a file.
 
@@ -549,7 +629,7 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
         - This is designed to read a file with one process and distribute in parallel with MPI.
         - The input file should contain an array of radius/height and an array of values, separated by a comma.
     """
-    mesh = extract_unique_domain(function)
+    mesh = fd.ufl_expr.extract_unique_domain(function)
 
     if mesh.comm.rank == 0:
         rshl, one_d_data = np.loadtxt(one_d_filename, unpack=True, delimiter=",")
@@ -565,11 +645,11 @@ def interpolate_1d_profile(function: Function, one_d_filename: str):
     one_d_data = mesh.comm.bcast(one_d_data, root=0)
     rshl = mesh.comm.bcast(rshl, root=0)
 
-    X = SpatialCoordinate(mesh)
+    X = fd.SpatialCoordinate(mesh)
 
     upward_coord = vertical_component(X)
 
-    rad = Function(function.function_space()).interpolate(upward_coord)
+    rad = fd.Function(function.function_space()).interpolate(upward_coord)
 
     averager = LayerAveraging(mesh, rshl if mesh.layers is None else None)
     interpolated_visc = np.interp(averager.get_layer_average(rad), rshl, one_d_data)
@@ -644,13 +724,13 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
         # seen by all MPI ranks
         gathered_boundaries = mesh.comm.allgather(identified)
         mesh.topology_dm.removeLabel("TEMP_LABEL")
-        kwargs = dict(
-            [
-                (proc_bdy.get(face_id), face_id)  # invert boundary mapping
-                for proc_bdy in reversed(gathered_boundaries)  # keep value on lowest comm rank
-                for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
-            ]
-        )
+        kwargs = {
+            proc_bdy.get(face_id): face_id  # invert boundary mapping
+            for proc_bdy in reversed(
+                gathered_boundaries
+            )  # keep value on lowest comm rank
+            for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
+        }
         kwargs.pop(None, None)  # remove None entry
         # Get remaining dimensions (if any)
         for idim in range(plex_dim, dim):
@@ -695,11 +775,12 @@ def extruded_layer_heights(
 
 
 def initialise_background_field(
-        f: Function,
-        background_values: list[float],
-        X: ufl.geometry.SpatialCoordinate,
-        radii: list[float],
-        shift: float = 0.0,):
+    f: fd.Function,
+    background_values: list[float],
+    X: ufl.geometry.SpatialCoordinate,
+    radii: list[float],
+    shift: float = 0.0,
+):
     """Initialises discontinuous field with sharp jumps at rheological boundaries
 
     Args:
@@ -719,6 +800,11 @@ def initialise_background_field(
     assert len(background_values) == len(radii)-1
     for i in range(len(background_values)):
         f.interpolate(
-            conditional(vertical_component(X) + shift > radii[i+1],
-                        conditional(vertical_component(X) + shift <= radii[i],
-                                    background_values[i], f), f))
+            fd.conditional(
+                vertical_component(X) + shift > radii[i + 1],
+                fd.conditional(
+                    vertical_component(X) + shift <= radii[i], background_values[i], f
+                ),
+                f,
+            )
+        )

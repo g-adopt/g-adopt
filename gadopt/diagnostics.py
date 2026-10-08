@@ -4,21 +4,22 @@ relevant parameters and call individual class methods to compute associated diag
 
 """
 
+from collections import defaultdict
+from collections.abc import Sequence
+from functools import _make_key, cache, cached_property, partial
+from typing import Literal
+
 import firedrake as fd
 import numpy as np
+from firedrake.ufl_expr import extract_unique_domain
+from mpi4py import MPI
 from ufl.core.expr import Expr
 from ufl.core.operator import Operator
 from ufl.core.terminal import Terminal
-from mpi4py import MPI
-from functools import cache, cached_property, partial, _make_key
 
-from firedrake.ufl_expr import extract_unique_domain
-from .utility import CombinedSurfaceMeasure, vertical_component, horizontal_components
-from collections.abc import Sequence
-from typing import Literal
-from collections import defaultdict
+from .utility import CombinedSurfaceMeasure, horizontal_components, vertical_component
 
-__all__ = ["BaseDiagnostics", "GeodynamicalDiagnostics", "GIADiagnostics"]
+__all__ = ["BaseDiagnostics", "GIADiagnostics", "GeodynamicalDiagnostics"]
 
 
 # Free functions to allow caching of attributes that may be common among
@@ -130,7 +131,7 @@ def ts_cache(
     def ts_cache_decorator(diag_func):
         cache = {}
         funcs = defaultdict(set)
-        object_state = defaultdict(lambda: defaultdict(lambda: int(-1)))
+        object_state = defaultdict(lambda: defaultdict(lambda: -1))
         check_funcs = set()
         if input_funcs is not None:
             check_funcs |= set(
@@ -770,6 +771,9 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
       T_min: Minimum temperature in domain
       T_max: Maximum temperature in domain
       ux_max: Maximum velocity (first component, optionally over a given boundary)
+      eta_mean: Mean free-surface deflection along a boundary
+      eta_min: Minimum free-surface deflection along a boundary
+      eta_max: Maximum free-surface deflection along a boundary
 
     """
 
@@ -784,7 +788,10 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         quad_degree: int = 4,
     ):
         u, p = z.subfunctions[:2]
-        super().__init__(quad_degree, u=u, p=p, T=T)
+        # The free-surface deflection, present if the mixed Stokes function space
+        # includes it as its third component
+        eta = z.subfunctions[2] if len(z.subfunctions) > 2 else None
+        super().__init__(quad_degree, u=u, p=p, T=T, eta=eta)
 
         if bottom_id:
             self.bottom_id = bottom_id
@@ -842,6 +849,28 @@ class GeodynamicalDiagnostics(BaseDiagnostics):
         self, boundary_id: Sequence[int | str] | int | str | None = None
     ) -> float:
         return self.max(self.u, boundary_id, 0)
+
+    def eta_mean(
+        self, boundary_id: Sequence[int | str] | int | str | None = None
+    ) -> float:
+        boundary_id = self.top_id if boundary_id is None else boundary_id
+        surface_area = self._function_contexts[self.eta].surface_area(boundary_id)
+
+        return self.integral(self.eta, boundary_id) / surface_area
+
+    def eta_min(
+        self, boundary_id: Sequence[int | str] | int | str | None = None
+    ) -> float:
+        boundary_id = self.top_id if boundary_id is None else boundary_id
+
+        return self.min(self.eta, boundary_id)
+
+    def eta_max(
+        self, boundary_id: Sequence[int | str] | int | str | None = None
+    ) -> float:
+        boundary_id = self.top_id if boundary_id is None else boundary_id
+
+        return self.max(self.eta, boundary_id)
 
 
 class GIADiagnostics(BaseDiagnostics):
