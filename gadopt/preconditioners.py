@@ -3,13 +3,23 @@ r"""This module contains classes that augment default Firedrake preconditioners.
 """
 
 import firedrake as fd
-from ufl.indexed import Indexed
 from firedrake.petsc import PETSc
+from ufl.indexed import Indexed
+
 from .utility import InteriorBC
 
 
 class FreeSurfaceMassInvPC(fd.MassInvPC):
-    """Version of MassInvPC that includes free surface variables."""
+    """Version of MassInvPC that includes free surface variables.
+
+    The free-surface deflection's diagonal block in the Schur complement of the coupled
+    system carries two contributions: a mass term, scaled by the free-surface buoyancy
+    and the time step, `buoyancy * theta / dt`, which dominates for time steps well
+    below the free-surface relaxation time; and the velocity-mediated coupling, scaled
+    by `1 / mu`, which dominates otherwise. Including both terms, with the buoyancy
+    prefactor of the free-surface equations, makes the preconditioner consistent across
+    regimes and material parameterisations.
+    """
 
     def form(
         self,
@@ -34,9 +44,16 @@ class FreeSurfaceMassInvPC(fd.MassInvPC):
         a = fd.inner(1 / mu * trials[0], tests[0]) * fd.dx
 
         ds = appctx["ds"]
+        theta = appctx.get("theta")
+        dt = appctx.get("dt")
         bcs = []
-        for bc_id, (eta_ind, _) in appctx["free_surface"].items():
-            a += 1 / mu * fd.inner(trials[eta_ind - 1], tests[eta_ind - 1]) * ds(bc_id)
+        for bc_id, (eta_ind, buoyancy) in appctx["free_surface"].items():
+            # Without a time step, only the velocity-mediated coupling contributes,
+            # matching the scaling of the pressure mass
+            scale = 1 / mu
+            if dt is not None and theta is not None:
+                scale = scale + buoyancy * theta / dt
+            a += scale * fd.inner(trials[eta_ind - 1], tests[eta_ind - 1]) * ds(bc_id)
 
             bcs.append(InteriorBC(trials.function_space()[eta_ind - 1], 0, bc_id))
 

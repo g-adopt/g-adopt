@@ -884,6 +884,9 @@ class StokesSolver(StokesSolverBase):
             # Update application context
             self.appctx["free_surface"] = self.free_surface_map
             self.appctx["ds"] = self.equations[-1].ds
+            # The free-surface mass preconditioner requires the time discretisation
+            self.appctx["theta"] = self.theta
+            self.appctx["dt"] = self.dt
 
             # Gather pressure and free surface fields for Schur complement solve
             fields_ind = ",".join(map(str, range(1, len(self.solution_split))))
