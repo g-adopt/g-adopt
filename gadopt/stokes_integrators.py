@@ -109,7 +109,7 @@ iterative_outer_stokes_solver_parameters: Mapping[
                 "ksp_rtol": 1e-4,
                 "ksp_max_it": 200,
                 "pc_type": "python",
-                "pc_python_type": "firedrake.MassInvPC",
+                "pc_python_type": "gadopt.StokesMassInvPC",
                 "Mp_pc_type": "ksp",
                 "Mp_ksp_ksp_rtol": 1e-5,
                 "Mp_ksp_ksp_type": "cg",
@@ -644,6 +644,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         """Sets PETSc solver options."""
         # Application context for the inverse mass matrix preconditioner
         self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
+        # A measure with a prescribed quadrature degree for the mass preconditioner:
+        # an estimated degree explodes for strongly nonlinear viscosities
+        self.appctx["dx"] = self.equations[0].dx
 
         if isinstance(solver_preset, Mapping):
             self.add_to_solver_config(solver_preset)

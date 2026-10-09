@@ -9,6 +9,46 @@ from ufl.indexed import Indexed
 from .utility import InteriorBC
 
 
+class StokesMassInvPC(fd.MassInvPC):
+    """Version of MassInvPC that prescribes the quadrature degree of its form.
+
+    The viscosity-weighted pressure mass approximates the Schur complement of the Stokes
+    system. Firedrake's MassInvPC integrates it with a quadrature degree estimated from
+    the integrand, which explodes for strongly nonlinear viscosities (their nested
+    fractional powers compound multiplicatively), running the quadrature rule
+    construction out of memory. The measure prescribed here carries the quadrature
+    degree used for the solver's Stokes terms.
+    """
+
+    def form(
+        self,
+        pc: fd.PETSc.PC,
+        test: fd.Argument,
+        trial: fd.Argument,
+    ) -> tuple[fd.Form, list[fd.DirichletBC]]:
+        """Sets the form.
+
+        Args:
+          pc:
+            PETSc preconditioner
+          test:
+            Firedrake test function
+          trial:
+            Firedrake trial function
+        """
+        # Skip MassInvPC in the hierarchy to fetch the parent operator's BCs
+        _, bcs = super(fd.MassInvPC, self).form(pc)
+
+        appctx = self.get_appctx(pc)
+        # An estimated degree explodes for strongly nonlinear viscosities; the
+        # solver's volume measure carries the degree used for the Stokes terms
+        dx = appctx.get("dx") or fd.dx(degree=6)
+        mu = appctx.get("mu", 1.0)
+        a = fd.inner((1 / mu) * trial, test) * dx
+
+        return a, bcs
+
+
 class FreeSurfaceMassInvPC(fd.MassInvPC):
     """Version of MassInvPC that includes free surface variables.
 
@@ -39,9 +79,14 @@ class FreeSurfaceMassInvPC(fd.MassInvPC):
         """
         appctx = self.get_appctx(pc)
 
+        # The quadrature degree must be prescribed: with a strongly nonlinear viscosity,
+        # its nested fractional powers make an estimated degree explode, and the
+        # quadrature rule construction runs out of memory. The solver's volume measure
+        # carries the degree it uses for the Stokes terms.
+        dx = appctx.get("dx") or fd.dx(degree=6)
         # N.B. trials[0] is pressure
         mu = appctx.get("mu", 1.0)
-        a = fd.inner(1 / mu * trials[0], tests[0]) * fd.dx
+        a = fd.inner(1 / mu * trials[0], tests[0]) * dx
 
         ds = appctx["ds"]
         theta = appctx.get("theta")
