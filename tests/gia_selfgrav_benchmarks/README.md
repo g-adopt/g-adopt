@@ -132,6 +132,48 @@ Leave out `EXTRA_PYTHONPATH` if the module has `giamip`. The header of
 `vo05` and loads `firedrake/main`, the newest weekly build of the Firedrake
 module. For another project, edit the `-P` and storage lines.
 
+For Spada, the load and spectral diagnostics have independent cutoffs. Both
+default to degree 10, preserving the original run. For example, retain load
+degrees 2–128 while projecting only degrees 0–10 for diagnostics:
+
+```bash
+qsub -N spada_cap_n128 \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-n128,EXTRA=--load_nmax 128 --diagnostic_nmax 10 --write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+Alternatively, evaluate the cap in space and subtract only its analytic
+degree-0 and degree-1 components (`sigma_0 + sigma_1 cos(gamma)`):
+
+```bash
+qsub -N spada_cap_spatial \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-spatial,EXTRA=--load_representation spatial --diagnostic_nmax 10 --write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+`--load_representation spectral` is the default and uses `--load_nmax`.
+Spatial mode has no upper load cutoff, so `--load_nmax` is unused. Both modes
+omit degrees 0 and 1 before CG2 interpolation and use the same mesh and
+load prescription for the mechanics traction and gravity mass sheet. The
+spatial cap differs from a degree-128 series; mesh interpolation can introduce
+small low-degree components in either mode.
+
+`--diagnostic_nmax` must be at least 2 and, for the cap comparison, no larger
+than the available TABOO reference (currently 256). It controls the projected
+coefficient arrays and the reconstructed pole values and maximum V, not the
+detail retained by the solver or by direct profiles. If it exceeds a spectral
+load's cutoff, reference coefficients above that cutoff are zero. Larger
+diagnostic cutoffs still cost more surface assemblies. Use direct profiles
+to compare the full computed fields with the appropriate load reference.
+The existing benchmark tolerances were calibrated for the default degree-10
+configuration.
+
+The summary and checkpoint record `load_representation`, `load_nmax` (`null`
+for spatial mode), and `diagnostic_nmax`. The legacy summary key `nmax` now
+means the diagnostic cutoff. Restart with the same recorded settings. Old
+cap checkpoints infer their shared cutoff from the recorded diagnostic
+degrees; old polar-motion checkpoints are interpreted as degree-10 runs.
+
 After the jobs end, run the test on a login node in this directory, with the
 same module and the same `PYTHONPATH` as for the install:
 

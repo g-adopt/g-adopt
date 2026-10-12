@@ -1,4 +1,4 @@
-"""Plot the degree-2–10 surface profiles stored in a Spada cap summary.
+"""Plot diagnostic spectra and optional direct profiles from a Spada cap summary.
 
 Usage: python plot_spada_profiles.py [summary_cap.json] [--max-colatitude 25]
 """
@@ -73,13 +73,26 @@ def main():
                 print(f"Warning: missing sample points at {epoch['t_kyr']:g} kyr")
         for ax, quantity in zip(row, names):
             curves = []
-            for suffix, label, style in [("", "G-ADOPT 2–10", "-"),
-                                          ("_ref", "TABOO 2–10", "--")]:
+            diagnostic_range = f"{degrees.min()}–{degrees.max()}"
+            for suffix, label, style in [
+                    ("", f"G-ADOPT diagnostics {diagnostic_range}", "-"),
+                    ("_ref", f"TABOO diagnostics {diagnostic_range}", "--")]:
                 coefficients = np.zeros(int(degrees.max()) + 1)
                 coefficients[degrees] = epoch[f"{quantity}_n{suffix}"]
                 curves.append((coefficients, label, style))
             nmax = len(full_reference[quantity]) - 1
-            curves.append((full_reference[quantity], f"TABOO 2–{nmax}", ":"))
+            load_representation = summary.get("load_representation", "spectral")
+            load_nmax = summary.get("load_nmax", summary.get("nmax", int(degrees.max())))
+            if load_representation == "spectral" and load_nmax > degrees.max():
+                matched_reference = full_reference[quantity].copy()
+                matched_reference[load_nmax + 1:] = 0.0
+                label = (f"TABOO load 2–{load_nmax}" if load_nmax <= nmax else
+                         f"TABOO available 2–{nmax} (load 2–{load_nmax})")
+                curves.append((matched_reference, label, "-."))
+            reference_label = (f"TABOO spatial-cap reference 2–{nmax}"
+                               if load_representation == "spatial" else
+                               f"TABOO full-cap reference 2–{nmax}")
+            curves.append((full_reference[quantity], reference_label, ":"))
             for coefficients, label, style in curves:
                 if quantity == "V":
                     profile = -np.sin(theta) * legval(

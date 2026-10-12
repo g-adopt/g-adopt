@@ -20,19 +20,27 @@ THE LOAD
 
     with gamma the angular distance from the cap centre. The load is switched
     on at t = 0 and then held. It enters as the Legendre series
-    sum_{n=2}^{10} sigma_n P_n(cos gamma) in two places that must agree: as a
+    sum_{n=2}^{load_nmax} sigma_n P_n(cos gamma) in two places that must agree: as a
     normal traction on the surface of the mechanics, and as a mass sheet in
     the Poisson equation. Degrees 0 and 1 are left out, as in the benchmark,
     which removes the question of the reference frame. The TABOO reference is
-    built at the same truncation, so both sides see the same truncated load.
+    Alternatively, --load_representation spatial constructs the cap directly
+    and subtracts only sigma_0 + sigma_1 cos(gamma), retaining all higher
+    degrees. Both representations are interpolated into the same CG2 space.
+    --load_nmax sets the spectral load cutoff (default 10); it is unused for
+    the spatial cap. --diagnostic_nmax independently sets the harmonic
+    projection cutoff (default 10). The projected TABOO comparison uses the
+    same diagnostic degrees and accounts for the chosen load cutoff. Direct
+    profiles from --write_profiles retain all detail resolved by the mesh.
 
 THE TWO CASES
     --case cap
         The cap on the north pole, rotation off. At each epoch the radial
         displacement U, the colatitudinal displacement V and the geoid N on
         Re are projected onto Legendre polynomials in cos(colatitude), and
-        each degree n = 2..10 is compared with TABOO. The summary also gives
-        U and N at both poles and the maximum of V.
+        each degree n = 2..diagnostic_nmax is compared with TABOO. The summary
+        also gives U and N at both poles and the maximum of V reconstructed
+        from those diagnostic degrees, rather than the full spatial fields.
 
     --case polar-motion
         The same cap centred at colatitude 25, longitude 75 degrees, rotation
@@ -135,8 +143,7 @@ import selfgrav_common as common  # noqa: E402
 # Settings of the benchmark
 # --------------------------------------------------------------------------
 
-#: The truncation degree of the load, of the TABOO reference and of the
-#: Legendre projection of the answer.
+#: Default cutoffs for the spectral load and the independent diagnostics.
 NMAX = 10
 #: The quadrature degree of the Legendre projections. P_n(z / r) is a
 #: rational expression, and the automatic degree estimate for it runs to
@@ -235,6 +242,7 @@ class TabooReference:
         """
         self.data = np.load(npz_path, allow_pickle=False)
         self.nmin = int(self.data["degrees"][0])
+        self.nmax = int(self.data["degrees"][-1])
 
     def love_time(self, t_kyr, nmax):
         """hbar, lbar and kbar for degrees nmin..nmax at `t_kyr`.
@@ -246,6 +254,9 @@ class TabooReference:
         Returns:
           Three arrays, one value per degree.
         """
+        if not self.nmin <= nmax <= self.nmax:
+            raise ValueError(f"TABOO reference supports degrees "
+                             f"{self.nmin}..{self.nmax}, requested {nmax}")
         rows = slice(0, nmax - self.nmin + 1)
         s = self.data["spectrum_s"][rows]
         shape = (1.0 - np.exp(s * t_kyr)) / s
@@ -317,8 +328,8 @@ def load_axis(case):
                      np.sin(colat) * np.sin(lon), np.cos(colat)])
 
 
-def load_field(mesh, sigma_n, axis):
-    """The truncated cap series sum_{n=2}^{NMAX} sigma_n P_n(cos gamma), in CG2.
+def load_field(mesh, sigma_n, axis, *, representation="spectral"):
+    """The degree-0/1-free cap, built spectrally or spatially, in CG2.
 
     cos(gamma) = (X . axis) / |X| is the cosine of the angular distance from
     the load centre, so the field depends on direction only and is defined at
@@ -329,22 +340,38 @@ def load_field(mesh, sigma_n, axis):
     Args:
       mesh: the mesh to build the field on.
       sigma_n: the non-dimensional coefficients, indexed from degree 0.
+        For the spatial cap, only coefficients 0 and 1 are needed.
       axis: the unit vector to the load centre.
+      representation: "spectral" sums degrees 2..len(sigma_n)-1;
+        "spatial" evaluates the cap and subtracts degrees 0 and 1.
 
     Returns:
       A CG2 `Function` of the non-dimensional surface density.
     """
     X = SpatialCoordinate(mesh)
     cos_gamma = dot(X, Constant(axis)) / sqrt(dot(X, X))
-    P = legendre_ufl(NMAX, cos_gamma)
-    expr = Constant(0.0)
-    for n in range(2, NMAX + 1):
-        expr = expr + Constant(sigma_n[n]) * P[n]
+    if representation == "spectral":
+        nmax = len(sigma_n) - 1
+        P = legendre_ufl(nmax, cos_gamma)
+        expr = Constant(0.0)
+        for n in range(2, nmax + 1):
+            expr = expr + Constant(sigma_n[n]) * P[n]
+    elif representation == "spatial":
+        cos_alpha = np.cos(np.deg2rad(CAP_RADIUS_DEG))
+        # Clamp before sqrt, including for points outside the cap.
+        cap_fraction = conditional(cos_gamma > cos_alpha,
+                                   (cos_gamma - cos_alpha) / (1 - cos_alpha),
+                                   0.0)
+        amplitude = RHO_ICE * CAP_THICKNESS_M / (common.RHO_BAR * common.D_SCALE)
+        expr = (amplitude * sqrt(cap_fraction)
+                - Constant(sigma_n[0]) - Constant(sigma_n[1]) * cos_gamma)
+    else:
+        raise ValueError(f"Unknown load representation {representation!r}")
     return Function(FunctionSpace(mesh, "CG", 2),
                     name="sigma_load").interpolate(expr)
 
 
-def project_surface(field_expr, mesh, measure, interior, basis="P"):
+def project_surface(field_expr, mesh, measure, interior, basis="P", *, nmax=NMAX):
     """Legendre coefficients f_n = int f B_n dS / int B_n^2 dS on Re.
 
     B_n is P_n(cos theta) for `basis="P"` and dP_n/dtheta for `basis="dP"`,
@@ -359,18 +386,19 @@ def project_surface(field_expr, mesh, measure, interior, basis="P"):
       interior: whether `measure` is an interior-facet measure, which needs
         `avg`.
       basis: `"P"` or `"dP"`.
+      nmax: the diagnostic cutoff, independent of the load cutoff.
 
     Returns:
-      A NumPy array of the coefficients for degrees 0..NMAX.
+      A NumPy array of the coefficients for degrees 0..nmax.
     """
     X = SpatialCoordinate(mesh)
     x = X[2] / sqrt(dot(X, X))
-    P = legendre_ufl(NMAX, x)
+    P = legendre_ufl(nmax, x)
     if basis == "dP":
-        P = dlegendre_ufl(NMAX, x, P)
+        P = dlegendre_ufl(nmax, x, P)
     measure = measure(metadata={"quadrature_degree": QUAD_DEGREE})
-    out = np.zeros(NMAX + 1)
-    for n in range(NMAX + 1):
+    out = np.zeros(nmax + 1)
+    for n in range(nmax + 1):
         if interior:
             num = assemble(avg(field_expr * P[n]) * measure)
             den = assemble(avg(P[n] * P[n]) * measure)
@@ -381,7 +409,7 @@ def project_surface(field_expr, mesh, measure, interior, basis="P"):
     return out
 
 
-def surface_spectra(solver, parent, mantle):
+def surface_spectra(solver, parent, mantle, nmax=NMAX):
     """U_n, V_n and N_n in metres from a solved state of the cap case.
 
     U is the radial displacement, V the colatitudinal (southward)
@@ -393,16 +421,17 @@ def surface_spectra(solver, parent, mantle):
     Args:
       solver: the solved `SelfGravitatingGIASolver`.
       parent, mantle: the two meshes.
+      nmax: the diagnostic cutoff.
 
     Returns:
-      `(U_n, V_n, N_n)`, NumPy arrays for degrees 0..NMAX, in metres.
+      `(U_n, V_n, N_n)`, NumPy arrays for degrees 0..nmax, in metres.
     """
     ds_mantle = ds(common.SURF_RE, domain=mantle)
     u = solver.displacement
     # The mantle mesh is marked non-Cartesian, so `vertical_component` is the
     # radial component u . X / |X|.
     U_n = project_surface(vertical_component(u), mantle, ds_mantle,
-                          interior=False)
+                          interior=False, nmax=nmax)
 
     # e_theta |X| sin(theta) = (z x, z y, -(x^2 + y^2)): the colatitude
     # direction without its normalisation, divided by r and by the distance
@@ -416,12 +445,12 @@ def surface_spectra(solver, parent, mantle):
         sqrt(dot(Xm, Xm)) * conditional(rho_axis > 1e-12, rho_axis,
                                         Constant(1e-12)))
     V_n = project_surface(u_theta, mantle, ds_mantle, interior=False,
-                          basis="dP")
+                          basis="dP", nmax=nmax)
 
     Xp = SpatialCoordinate(parent)
     geoid = solver.potential / common.gravity_exact_ufl(sqrt(dot(Xp, Xp)))
     N_n = project_surface(geoid, parent, solver.form.dS(common.SURF_RE),
-                          interior=True)
+                          interior=True, nmax=nmax)
     # Non-dimensional lengths to metres.
     return U_n * common.D_SCALE, V_n * common.D_SCALE, N_n * common.D_SCALE
 
@@ -434,7 +463,7 @@ def series(coeffs, theta, kind="P"):
     otherwise enter the pole values with nothing on the reference side.
 
     Args:
-      coeffs: coefficients for degrees 0..NMAX.
+      coeffs: coefficients indexed from degree 0.
       theta: colatitudes, radians.
       kind: `"P"` or `"dP"`.
 
@@ -452,7 +481,8 @@ def series(coeffs, theta, kind="P"):
 # --------------------------------------------------------------------------
 
 
-def build_solver(case, parent, mantle, dt, bulk_shear_ratio):
+def build_solver(case, parent, mantle, dt, bulk_shear_ratio, *,
+                 load_nmax=NMAX, load_representation="spectral"):
     """The coupled self-gravitating solver of one Spada case.
 
     Args:
@@ -460,6 +490,8 @@ def build_solver(case, parent, mantle, dt, bulk_shear_ratio):
       parent, mantle: the two meshes.
       dt: the time step `Constant`, in Maxwell times.
       bulk_shear_ratio: K / mu.
+      load_nmax: the spectral load cutoff; unused for a spatial cap.
+      load_representation: "spectral" or "spatial".
 
     Returns:
       `(solver, layout)`.
@@ -467,9 +499,10 @@ def build_solver(case, parent, mantle, dt, bulk_shear_ratio):
     rotation = case == "polar-motion"
     axis = load_axis(case)
     # The load coefficients, scaled by rho_bar D.
-    sigma_n = cap_load(NMAX) / (common.RHO_BAR * common.D_SCALE)
-    sigma_parent = load_field(parent, sigma_n, axis)
-    sigma_mantle = load_field(mantle, sigma_n, axis)
+    sigma_n = cap_load(load_nmax if load_representation == "spectral" else 1)
+    sigma_n /= common.RHO_BAR * common.D_SCALE
+    sigma_parent = load_field(parent, sigma_n, axis, representation=load_representation)
+    sigma_mantle = load_field(mantle, sigma_n, axis, representation=load_representation)
 
     # The Poisson equation: DtN maps on the two truncation spheres, and the
     # ice as a mass sheet on the interior facets of Re. Without the sheet, U
@@ -565,7 +598,23 @@ def write_profiles(path, solver, mantle, profiles, t_kyr):
     log(f"  profiles written: {path} ({missing} missing points)")
 
 
-def compare_cap(t_kyr, solver, parent, mantle, reference):
+def diagnostic_load_coefficients(nmax, *, load_nmax=NMAX,
+                                 load_representation="spectral"):
+    """Load coefficients for the reference on the diagnostic degree range.
+
+    A finite spectral load has zero coefficients above its cutoff. The
+    spatial cap retains every degree >= 2 before mesh interpolation.
+    """
+    sigma_n = cap_load(nmax)
+    sigma_n[:2] = 0.0
+    if load_representation == "spectral":
+        sigma_n[load_nmax + 1:] = 0.0
+    return sigma_n
+
+
+def compare_cap(t_kyr, solver, parent, mantle, reference, *,
+                diagnostic_nmax=NMAX, load_nmax=NMAX,
+                load_representation="spectral"):
     """The cap-case comparison at one epoch: printed, and returned as a row.
 
     Args:
@@ -573,15 +622,20 @@ def compare_cap(t_kyr, solver, parent, mantle, reference):
       solver: the solved solver.
       parent, mantle: the two meshes.
       reference: the `TabooReference`.
+      diagnostic_nmax: the projection and reference comparison cutoff.
+      load_nmax, load_representation: the load used by the solver.
 
     Returns:
       A dictionary of the model and reference values at the epoch, in
       metres and degrees.
     """
-    U_n, V_n, N_n = surface_spectra(solver, parent, mantle)
+    U_n, V_n, N_n = surface_spectra(solver, parent, mantle, diagnostic_nmax)
+    sigma_n = diagnostic_load_coefficients(
+        diagnostic_nmax, load_nmax=load_nmax,
+        load_representation=load_representation)
     U_ref_n, V_ref_n, N_ref_n = reference.coefficients(
-        t_kyr, cap_load(NMAX), NMAX)
-    degrees = np.arange(reference.nmin, NMAX + 1)
+        t_kyr, sigma_n, diagnostic_nmax)
+    degrees = np.arange(reference.nmin, diagnostic_nmax + 1)
 
     # Degree 0 is the breathing mode. The load has no degree-0 content and
     # the fluid core keeps its volume, so |U_0| / |U_2| must be small.
@@ -590,7 +644,7 @@ def compare_cap(t_kyr, solver, parent, mantle, reference):
     # The spatial series on a fine grid of colatitudes, from degree 2 on,
     # for both sides. The reference coefficients go into the same series.
     theta = np.linspace(0.0, np.pi, 4001)
-    full = np.zeros(NMAX + 1)
+    full = np.zeros(diagnostic_nmax + 1)
 
     def reference_series(coeffs, kind="P"):
         full[:] = 0.0
@@ -620,6 +674,8 @@ def compare_cap(t_kyr, solver, parent, mantle, reference):
 
     log(f"\n  t = {t_kyr:g} kyr   (lengths in m)   |U_0| / |U_2| "
         f"{u0_over_u2:.3e}")
+    log(f"    spatial quantities below are reconstructed from "
+        f"degrees 2..{diagnostic_nmax}")
     log(f"    {'quantity':<12}{'model':>13}{'TABOO':>13}{'ratio':>9}")
     for name, key in (("U(0)", "U0"), ("N(0)", "N0"), ("U(180)", "U180"),
                       ("N(180)", "N180"), ("max V", "Vmax")):
@@ -629,9 +685,12 @@ def compare_cap(t_kyr, solver, parent, mantle, reference):
     # scale factor) from one that grows with n (mesh resolution).
     log(f"    {'n':>5} {'U_n ratio':>10} {'V_n ratio':>10} {'N_n ratio':>10}")
     for j, n in enumerate(degrees):
-        log(f"    {n:>5} {row['U_n'][j] / U_ref_n[j]:>10.4f} "
-            f"{row['V_n'][j] / V_ref_n[j]:>10.4f} "
-            f"{row['N_n'][j] / N_ref_n[j]:>10.4f}")
+        # Degrees above a finite load cutoff have zero reference response.
+        ratios = [f"{values[j] / expected[j]:>10.4f}" if expected[j] != 0
+                  else f"{'--':>10}" for values, expected in
+                  ((row["U_n"], U_ref_n), (row["V_n"], V_ref_n),
+                   (row["N_n"], N_ref_n))]
+        log(f"    {n:>5} {' '.join(ratios)}")
 
     # A wrong solved state (a failed solve that PETSc did not report, or a
     # sign error) shows here first, and the rest of the run would be wasted.
@@ -685,7 +744,41 @@ def compare_polar_motion(t_kyr, solver, reference):
 # --------------------------------------------------------------------------
 
 
-def parse_args():
+def harmonic_degree(value):
+    """Both cutoffs must include degree 2, the first retained load degree."""
+    value = int(value)
+    if value < 2:
+        raise argparse.ArgumentTypeError("harmonic cutoff must be at least 2")
+    return value
+
+
+def run_settings(args):
+    """Settings recorded in checkpoints, including the load and diagnostics."""
+    return {"case": args.case, "bulk_shear_ratio": args.bulk_shear_ratio,
+            "smoke": args.smoke, "load_representation": args.load_representation,
+            "load_nmax": (args.load_nmax if args.load_representation == "spectral"
+                          else None),
+            "diagnostic_nmax": args.diagnostic_nmax}
+
+
+def checkpoint_run_settings(record):
+    """Upgrade the old checkpoint record, whose one cutoff was shared.
+
+    Cap records contain their diagnostic degrees, hence also the old load
+    cutoff. Old polar-motion records have no degree information and are
+    interpreted as the original default degree-10 configuration.
+    """
+    written = dict(record["run"])
+    if "load_representation" not in written:
+        rows = record["rows"]
+        nmax = int(rows[-1]["degrees"][-1]) if (
+            written["case"] == "cap" and rows) else NMAX
+        written.update(load_representation="spectral", load_nmax=nmax,
+                       diagnostic_nmax=nmax)
+    return written
+
+
+def parse_args(argv=None):
     """The command line."""
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -696,6 +789,16 @@ def parse_args():
                         "75 with rotation, polar motion against T02-03.")
     p.add_argument("--bulk_shear_ratio", type=float, default=100.0,
                    help="K / mu in every layer")
+    p.add_argument("--load_representation", choices=["spectral", "spatial"],
+                   default="spectral",
+                   help="spectral: sum load degrees 2..load_nmax (default); "
+                        "spatial: evaluate the cap and subtract only degrees 0 and 1")
+    p.add_argument("--load_nmax", type=harmonic_degree, default=NMAX,
+                   help="highest spectral load degree (default 10); "
+                        "unused for --load_representation spatial")
+    p.add_argument("--diagnostic_nmax", type=harmonic_degree, default=NMAX,
+                   help="highest projected diagnostic degree, independently "
+                        "of the load (default 10; TABOO reference extends to 256)")
     p.add_argument("--smoke", action="store_true",
                    help="run on a very coarse mesh to 0.1 kyr, to check that "
                         "the code runs; the numbers are not results")
@@ -714,7 +817,7 @@ def parse_args():
     p.add_argument("--restart", default=None, metavar="FILE",
                    help="continue the run after the last checkpoint in FILE, "
                         "on the same number of ranks")
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def main():
@@ -724,6 +827,11 @@ def main():
         raise ValueError("--write_profiles currently supports only the cap case")
     if args.write_profiles and not 0 < args.profile_depth_fraction < 0.01:
         raise ValueError("--profile_depth_fraction must be in (0, 0.01)")
+    reference = TabooReference()
+    if args.case == "cap" and args.diagnostic_nmax > reference.nmax:
+        raise ValueError(f"--diagnostic_nmax must not exceed the TABOO "
+                         f"reference maximum {reference.nmax}")
+    settings = run_settings(args)
     tic_run = time.time()
     os.makedirs(args.output_path, exist_ok=True)
     epochs = SMOKE_EPOCHS_KYR if args.smoke else EPOCHS_KYR
@@ -733,9 +841,14 @@ def main():
     log(f"Spada et al. (2011) benchmark, case '{args.case}'"
         f"{' (smoke run)' if args.smoke else ''}")
     log("=" * 78)
+    load_description = (f"spectral degrees 2..{args.load_nmax}"
+                        if args.load_representation == "spectral" else
+                        "spatial cap minus degrees 0 and 1 (no load cutoff)")
     log(f"  load centre (colatitude, longitude) {LOAD_CENTRE_DEG[args.case]}, "
-        f"degrees 2..{NMAX}, SphericalDtN(L={common.DTN_DEGREE}), K/mu "
+        f"{load_description}, SphericalDtN(L={common.DTN_DEGREE}), K/mu "
         f"{args.bulk_shear_ratio:g}")
+    if args.case == "cap":
+        log(f"  projected diagnostic degrees 2..{args.diagnostic_nmax}")
 
     # A new run generates its mesh; a restarted run loads it from the
     # checkpoint file, because the stored fields can only be loaded onto the
@@ -750,13 +863,10 @@ def main():
         # The record says what run wrote the file. A restart with another
         # case or another K / mu would continue a different problem from
         # this state without any error.
-        written = restart.record["run"]
-        this = {"case": args.case, "bulk_shear_ratio": args.bulk_shear_ratio,
-                "smoke": args.smoke}
-        if written != this:
+        written = checkpoint_run_settings(restart.record)
+        if written != settings:
             raise RuntimeError(f"{args.restart} was written by the run "
-                               f"{written}; this run is {this}")
-    reference = TabooReference()
+                               f"{written}; this run is {settings}")
     segments = common.time_segments(
         epochs, common.truncated_ladder(common.STEP_LOAD_LADDER_YR,
                                         max(epochs) * 1000.0))
@@ -766,7 +876,9 @@ def main():
     dt = Constant(common.DT_ELASTIC)
     tic = time.time()
     solver, layout = build_solver(args.case, parent, mantle, dt,
-                                  args.bulk_shear_ratio)
+                                  args.bulk_shear_ratio,
+                                  load_nmax=args.load_nmax,
+                                  load_representation=args.load_representation)
     log(f"  solver built ({time.time() - tic:.1f} s): "
         f"{solver.solution.function_space().dim()} unknowns, "
         f"{len(layout.real_fields)} Real rows")
@@ -822,7 +934,10 @@ def main():
 
     def on_epoch(t_kyr):
         if args.case == "cap":
-            rows.append(compare_cap(t_kyr, solver, parent, mantle, reference))
+            rows.append(compare_cap(
+                t_kyr, solver, parent, mantle, reference,
+                diagnostic_nmax=args.diagnostic_nmax, load_nmax=args.load_nmax,
+                load_representation=args.load_representation))
         else:
             rows.append(compare_polar_motion(t_kyr, solver, reference))
         if profiles is not None:
@@ -835,9 +950,7 @@ def main():
 
     def record():
         """The driver's part of a checkpoint: enough to continue the outputs."""
-        return {"run": {"case": args.case,
-                        "bulk_shear_ratio": args.bulk_shear_ratio,
-                        "smoke": args.smoke},
+        return {"run": settings,
                 "log_lines": log_lines, "rows": rows, "restarts": restarts,
                 "wall_s": wall_before_s + time.time() - tic_run}
 
@@ -859,9 +972,9 @@ def main():
 
     common.write_json(
         os.path.join(args.output_path, f"summary_{args.case}.json"),
-        {"benchmark": "Spada et al. (2011)", "case": args.case,
-         "smoke": args.smoke, "bulk_shear_ratio": args.bulk_shear_ratio,
-         "nmax": NMAX, "dtn_degree": common.DTN_DEGREE,
+        {"benchmark": "Spada et al. (2011)", **settings,
+         # Keep the old key for readers of the diagnostic coefficient arrays.
+         "nmax": args.diagnostic_nmax, "dtn_degree": common.DTN_DEGREE,
          "ranks": parent.comm.size, "mesh": mesh_info,
          # The wall time of every leg together, so that a restarted run
          # reports the cost of the whole case.
