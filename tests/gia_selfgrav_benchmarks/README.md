@@ -438,3 +438,28 @@ python3 plot_spada_profiles.py smoke/spada-profiles/summary_cap.json \
 The plot overlays direct meridians, projected G-ADOPT profiles, matching
 truncated TABOO and all available TABOO degrees. No correction factors are
 applied. Omit `--profiles-dir` for existing summaries without sampled profiles.
+
+### Compare load prescriptions
+
+To compare load degrees and the spatial cap, put each full cap run's
+`summary_cap.json` and all its `profiles_cap_<time>kyr.npz` files in a separate
+subdirectory of `outputs/`, then run:
+
+```bash
+python3 plot_spada_load_convergence.py --outputs outputs --max-colatitude 25
+```
+
+This needs NumPy and Matplotlib, with no Firedrake. It writes PNG and PDF
+figures for the load comparison, differences from TABOO, RMS error versus
+load cutoff, and the degree-128 run against TABOO at all common epochs.
+It also writes `load_convergence_metrics.csv` with errors in metres and
+normalised by the reference peak amplitude. RMS errors pool the sampled
+meridians with uniform colatitude weighting. The profile comparison shows
+the 0-degree meridian; the degree-128 figure shows all three meridians.
+If degree 128 is absent, the latter figure uses the highest available cutoff.
+
+All comparisons use the fixed TABOO reference, degrees 2–256, without
+compressibility or timestep corrections. Direct G-ADOPT samples sit below
+the surface as described above. If this directory's legacy degree-10
+`summary_cap.json` is present, its reconstructed spectrum is included as a
+labelled baseline when no direct degree-10 dataset is available.
