@@ -49,7 +49,7 @@ mesh_layers = {
 
 # Physical parameters
 rho_mantle = 3.3e3
-rho_weak_layer = 3.3e3
+rho_weak_layer = 3.1e3
 if free_surface:
     rho_water = 1e3
 alpha = 3e-5
@@ -105,14 +105,14 @@ plastic_deformation_params = {
 }
 viscous_creep_params = {
     "upper": {
-        "diffusion": {"prefactor": 2e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
+        "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 4e-17,
+            "prefactor": 5e-17,
             "n": 3.5,
             "act_nrg": 5.4e5,
             "act_vol": 1.2e-5,
         },
-        "Peierls": {"prefactor": 3e-143, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
+        "Peierls": {"prefactor": 1e-144, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
         "diffusion": {"prefactor": 1e-15, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}

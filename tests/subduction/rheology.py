@@ -64,7 +64,7 @@ def viscosity_strain_rate_balance(
             )
 
         if len(mechanism_params) > 1:
-            for _ in range(15):
+            for _ in range(10):
                 viscosity_eff = effective_viscosity(viscosity[mantle].values())
                 for mechanism, params in mechanism_params.items():
                     strain_rate_mechanism = (
