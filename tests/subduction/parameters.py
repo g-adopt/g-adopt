@@ -115,10 +115,9 @@ viscous_creep_params = {
         "Peierls": {"prefactor": 1e-144, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
-        "diffusion": {"prefactor": 1e-15, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
+        "diffusion": {"prefactor": 3.3e-17, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
     },
 }
-viscous_creep_params["lower"]["diffusion"]["prefactor"] /= 30.0
 def_mech_tags = {
     "diffusion": 0,
     "dislocation": 1,
