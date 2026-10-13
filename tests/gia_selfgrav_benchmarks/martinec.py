@@ -1,4 +1,4 @@
-r"""The Martinec et al. (2018) sea-level benchmark in 3-D, cases B, C and D.
+r"""The Martinec et al. (2018) sea-level benchmark in 3-D, cases B to E.
 
 THE BENCHMARK
     Martinec, Z., et al. (2018), A benchmark study of numerical
@@ -16,9 +16,12 @@ THE BENCHMARK
         B      fixed coastline  L1, 1500 m     T0, step    B1, far from the ice
         C      fixed coastline  L2, 500 m      T1, growth  B2, under the ice
         D      moving coastline L2, 500 m      T1, growth  B2
+        E      as D, but B2 is prescribed at 15 kyr; initial topography is fitted
 
     Case A has no ocean, and the Spada driver covers it. Case E prescribes
     the topography at the end and is an inverse problem.
+    `--case E` uses Picard by default (`--topography_method rol` selects
+    adjoint/ROL). See `CASE_E.md` for its target, norm, restart and run commands.
 
     Every physical constant of a case comes from the PyPI package `giamip`
     (`giamip.case("martinec2018-<case>")`), never from this file, because
@@ -91,6 +94,8 @@ RUN
     checks that the code runs; its numbers are not results. Case D needs the
     10 steps: at the end of the first 50 yr step the load is still too small
     to assemble to a nonzero sheet.
+    Case E smoke runs instead cover the full 15 kyr in six coarse 2500 yr
+    steps, so the terminal-topography fit can be exercised.
 
     The run writes a checkpoint every `--checkpoint_every` steps (default
     50) into `checkpoint_<case>.h5`. To continue a run that stopped, run the
@@ -153,7 +158,7 @@ import selfgrav_common as common  # noqa: E402
 # --------------------------------------------------------------------------
 
 #: K / mu of each case. Case B fails its geoid criterion at 100.
-BULK_SHEAR_RATIO = {"B": 1000.0, "C": 100.0, "D": 100.0}
+BULK_SHEAR_RATIO = {"B": 1000.0, "C": 100.0, "D": 100.0, "E": 100.0}
 
 #: Output epochs in kyr, per time scenario. The time of the published
 #: profiles is added to the list in `main`.
@@ -236,7 +241,7 @@ def is_fixed_ocean(case):
     """Whether the coastline is fixed (sea-level equation level 1).
 
     Level 1 (cases B and C) keeps the initial ocean function C0 for the whole
-    run. Level 2 (case D) moves the coastline with the sea level and lets ice
+    run. Level 2 (cases D and E) moves the coastline with the sea level and lets ice
     float.
     """
     return int(case.sea_level_equation) == 1
@@ -443,7 +448,8 @@ def surface_gravity(parent):
     return float(value)
 
 
-def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
+def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio,
+                 initial_sea_level=None, mask_slope=None):
     """The coupled self-gravitating sea-level solver of one case.
 
     Args:
@@ -480,7 +486,8 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
     # of the mask in arc length. Without it the width is fixed in sea level,
     # and it spreads over many facets on the gentle B1 shelf (slope 2.51e-4)
     # while it falls inside one facet on the steep B2 one (1.26e-3).
-    SL_init = basin_sea_level(mantle, case)
+    SL_init = (basin_sea_level(mantle, case) if initial_sea_level is None
+               else initial_sea_level)
     ice = cap_thickness(mantle, case, t_kyr)
     g_surface = surface_gravity(parent)
     sea_level = SeaLevel(
@@ -490,7 +497,8 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
         # The run starts from the undeformed state, so the initial ice, geoid
         # and uplift are all zero.
         I_init=Constant(0.0), N_init=Constant(0.0), ur_init=Constant(0.0),
-        alpha_mask=DEFAULT_ALPHA_MASK, slope=surface_slope(SL_init),
+        alpha_mask=DEFAULT_ALPHA_MASK,
+        slope=surface_slope(SL_init) if mask_slope is None else mask_slope,
         grad_floor=DEFAULT_GRAD_FLOOR, fixed_ocean=is_fixed_ocean(case))
 
     # A rigid rotation of the mantle stays in the kernel with sea level on:
@@ -727,13 +735,13 @@ def parse_args():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--case", choices=["B", "C", "D"], default="B",
+    p.add_argument("--case", choices=["B", "C", "D", "E"], default="B",
                    help="the benchmark case")
     p.add_argument("--bulk_shear_ratio", type=float, default=None,
                    help="K / mu in every layer; default 1000 for case B and "
-                        "100 for cases C and D")
+                        "100 for cases C, D and E")
     p.add_argument("--smoke", action="store_true",
-                   help=f"run {SMOKE_STEPS} steps on a very coarse mesh, to "
+                   help=f"run {SMOKE_STEPS} steps (E: six steps to 15 kyr) on a very coarse mesh, to "
                         "check that the code runs; the numbers are not "
                         "results")
     p.add_argument("--write_output", action="store_true",
@@ -747,12 +755,24 @@ def parse_args():
     p.add_argument("--restart", default=None, metavar="FILE",
                    help="continue the run after the last checkpoint in FILE, "
                         "on the same number of ranks")
-    return p.parse_args()
+    # Case E has an outer inverse problem, separate from the moving-coastline
+    # Newton solve inside each time step. Importing its driver is lazy so B/C/D
+    # retain their existing dependencies and forward-only execution.
+    from martinec_e import add_arguments
+    add_arguments(p)
+    args = p.parse_args()
+    if args.case != "E" and (args.topography_restart or args.topography_one_pass
+                            or args.check_topography_gradient):
+        p.error("topography restart/one-pass/gradient options require --case E")
+    return args
 
 
 def main():
     """Run one Martinec case."""
     args = parse_args()
+    if args.case == "E":
+        from martinec_e import run
+        return run(args, sys.modules[__name__])
     tic_run = time.time()
     os.makedirs(args.output_path, exist_ok=True)
     letter = args.case

@@ -1376,6 +1376,9 @@ def _stored_fields(solver):
     if stored is not None:
         seq = stored if isinstance(stored, (list, tuple)) else [stored]
         fields += [(f"internal_variables_{j}", f) for j, f in enumerate(seq)]
+    # Case E must resume with the same unknown initial topography as well as
+    # the dynamic state. Ordinary forward runs leave this tuple empty.
+    fields += list(getattr(solver, "benchmark_checkpoint_fields", ()))
     return fields
 
 

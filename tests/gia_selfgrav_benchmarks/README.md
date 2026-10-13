@@ -13,7 +13,8 @@ solver.
   Int. 215(1), 389-414. The reference is VEGA.
 
 Each case runs on Gadi as one job. Case B needs a second job at present
-(see "Walltime and cost"). `test_benchmarks.py` then compares the output
+(see "Walltime and cost"). Case E uses successive full-history jobs to fit
+the initial topography; see [CASE_E.md](CASE_E.md). `test_benchmarks.py` then compares the output
 with the published criteria.
 
 ## The cases
@@ -25,6 +26,7 @@ with the published criteria.
 | `martinec.py` | `B` | 1500 m cap, switched on at t = 0; fixed coastline, basin B1 | U, N, S and h_UF against VEGA at 10 kyr |
 | `martinec.py` | `C` | 500 m cap, grows over 10 kyr; fixed coastline, basin B2 | as B, plus the grounded ice mass, at 15 kyr |
 | `martinec.py` | `D` | as C, with a moving coastline and floating ice | as C, plus the floating ice mass and the ocean area |
+| `martinec.py` | `E` | as D, with B2 prescribed at 15 kyr; fit the initial topography | terminal topography mismatch, ocean area and h_UF; Picard default or adjoint/ROL |
 
 The docstring of each driver describes the physics, the scales, the
 discretisation and the output. `selfgrav_common.py` holds the parts that
@@ -37,6 +39,7 @@ settings.
 |---|---|
 | `spada.py`, `martinec.py` | the two drivers |
 | `selfgrav_common.py` | the shared module |
+| `martinec_e.py`, `CASE_E.md` | Case E topography fitting and staged-job instructions |
 | `test_benchmarks.py` | the pass criteria; it reads the output files and needs `giamip` and no Firedrake |
 | `meta.py`, `run.template` | the steps for `doit run_case_hpc` |
 | `run_benchmark.pbs` | a PBS script to submit one case by hand |

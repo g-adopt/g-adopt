@@ -43,11 +43,13 @@
 #
 # Variables:
 #   DRIVER    spada or martinec (required).
-#   CASE      cap or polar-motion for spada; B, C or D for martinec
+#   CASE      cap or polar-motion for spada; B, C, D or E for martinec
 #             (required).
-#   SMOKE     1 adds --smoke: a very coarse mesh and 10 steps.
+#   SMOKE     1 adds --smoke: a very coarse mesh (E: six steps to 15 kyr).
 #   OUTPUT    the output directory (default: this directory).
 #   EXTRA     more driver arguments, for example --write_output.
+#             E: --topography_one_pass, then --topography_restart FILE;
+#             see CASE_E.md for Picard and adjoint/ROL commands.
 #   RESTART   a checkpoint file (for example checkpoint_B.h5). The run
 #             continues after its last checkpoint. Use the same number of
 #             ranks as the job that wrote it.

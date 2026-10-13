@@ -224,7 +224,7 @@ def martinec_result(letter, directory=HERE):
     first row is the elastic solve at t = 0, which belongs in the series.
 
     Args:
-      letter: `"B"`, `"C"` or `"D"`.
+      letter: `"B"`, `"C"`, `"D"` or `"E"`.
       directory: the directory of the npz files.
 
     Returns:
@@ -236,11 +236,12 @@ def martinec_result(letter, directory=HERE):
     result = BenchmarkResult(letter, "g-adopt")
     time_kyr = float(case.terminal_time_kyr)
     path = directory / f"martinec-{letter}-profiles_{time_kyr:g}kyr.npz"
-    if not path.exists():
+    if case.profiles and not path.exists():
         pytest.fail(f"{path.name} does not exist; the run did not reach "
                     f"{time_kyr:g} kyr")
-    data = np.load(path)
-    assert abs(float(data["t_kyr"]) - time_kyr) < 1e-9, path.name
+    data = np.load(path) if case.profiles else None
+    if case.profiles:
+        assert abs(float(data["t_kyr"]) - time_kyr) < 1e-9, path.name
     for spec in case.profiles:
         # A point that the driver could not locate on the mesh holds nan,
         # and one such point makes the whole profile unusable.
@@ -261,6 +262,8 @@ def martinec_result(letter, directory=HERE):
         pytest.fail(f"{path.name} does not exist")
     data = np.load(path)
     kyr = np.asarray(data["t_kyr"], dtype=float)
+    assert np.isfinite(kyr).all() and np.all(np.diff(kyr) > 0), path.name
+    assert abs(kyr[-1] - time_kyr) < 1e-9, f"{path.name} did not reach {time_kyr:g} kyr"
     for source, name in TIME_SERIES.items():
         values = np.asarray(data[source], dtype=float)
         assert np.isfinite(values).all(), f"time series {source}"
@@ -276,7 +279,10 @@ def giamip_case(letter):
 
 def martinec_run(letter):
     """The checked summary and the `BenchmarkResult` of one case."""
-    read_summary(letter)
+    summary = read_summary(letter)
+    if letter == "E":
+        assert summary["topography"]["converged"], "E initial-topography fit has not converged"
+        assert summary["topography"]["terminal_rms_m"] < 0.01
     return martinec_result(letter)
 
 
@@ -356,7 +362,10 @@ def test_martinec_uniform_layer(letter):
     # S - N of the reference on the basin meridian, which is h_UF over the
     # ocean (Martinec eq. 6 and 8). The spread along the meridian is below
     # 2e-6 m, so the mean is the reference value.
-    vega, _ = metrics.uniform_layer(letter)
+    if letter == "E":
+        vega = terminal_value(case.reference().series("h_UF"), case.terminal_time_kyr)
+    else:
+        vega, _ = metrics.uniform_layer(letter)
     ours = terminal_value(result.series("h_UF"), case.terminal_time_kyr)
     relative = 100.0 * abs(ours - vega) / abs(vega)
     assert relative <= H_UF_TOLERANCE_PERCENT, (
@@ -407,27 +416,40 @@ def test_martinec_ice_mass(letter, name):
 
 
 @pytest.mark.longtest
-def test_martinec_ocean_area():
-    """Criterion 3, case D: the ocean area inside the range of the codes."""
+@pytest.mark.parametrize("letter", ["D"])
+def test_martinec_ocean_area(letter):
+    """Local criterion for D/E: terminal ocean area inside the published range."""
     from giamip.benchmarks.results import BenchmarkResult
 
-    result = martinec_run("D")
-    time_kyr = giamip_case("D").terminal_time_kyr
+    result = martinec_run(letter)
+    time_kyr = giamip_case(letter).terminal_time_kyr
     ours = terminal_value(result.series("ocean_area"), time_kyr)
     # Every published code with an ocean-area series, VEGA included, read
     # at the terminal time. Some series carry nan rows where a code wrote no
     # value; the interpolation uses the finite rows only.
-    path = BenchmarkResult.reference_path("D")
+    path = BenchmarkResult.reference_path(letter)
     values = []
     for member in BenchmarkResult.members(path):
+        if letter == "E" and member == "ZM_case_D":
+            continue  # Figure overlay from D, not an E submission.
         series = BenchmarkResult.read(path, member,
-                                      case="D").time_series.get("ocean_area")
+                                      case=letter).time_series.get("ocean_area")
         if series is not None:
             axis = np.asarray(series.axis, dtype=float)
             data = np.asarray(series.values, dtype=float)
             finite = np.isfinite(data)
-            values.append(float(np.interp(time_kyr, axis[finite],
-                                          data[finite])))
+            if finite.any():
+                values.append(float(np.interp(time_kyr, axis[finite], data[finite])))
+    assert values, f"No published {letter} ocean-area series"
     assert min(values) <= ours <= max(values), (
         f"ocean area {ours:.7f} outside {min(values):.7f} to "
         f"{max(values):.7f}")
+
+
+@pytest.mark.longtest
+@pytest.mark.skipif(not (HERE / "summary_E.json").exists(),
+                    reason="E requires staged manual jobs; see CASE_E.md")
+def test_martinec_E():
+    """Converged E fit and local terminal scalar checks (paper has no tolerance)."""
+    test_martinec_uniform_layer("E")
+    test_martinec_ocean_area("E")
