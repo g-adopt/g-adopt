@@ -52,6 +52,13 @@ problem and avoids differentiating through an unannotated slope recovery.
 The Earth model, production mesh, compressibility (`K/mu=100`), DtN degree
 (5) and inner solver follow D.
 
+Use `--time_step_yr 500` with either method for 30 steps to 15 kyr. Omitting
+the option retains the 50 yr production default (300 steps). An explicit
+timestep also overrides E's smoke timestep. The uniform timestep is adjusted
+to divide the terminal time exactly if necessary; the actual value is logged
+and saved in `summary_E.json`. Restarts must use the same timestep as the
+checkpoint, including staged Picard passes.
+
 ## Smoke runs
 
 From this directory in a compatible Firedrake environment:
@@ -64,8 +71,9 @@ python3 martinec.py --case E --smoke --topography_one_pass \
     --output_path smoke/martinec_E
 ```
 
-E smoke covers all 15 kyr in six 2500 yr steps on the smoke mesh. It exercises
-the topography update but supplies no benchmark-quality numbers. Smoke
+By default, E smoke covers all 15 kyr in six 2500 yr steps on the smoke mesh;
+`--time_step_yr` can override this grid. It exercises the topography update
+but supplies no benchmark-quality numbers. Smoke
 runs retain the measured convergence flag even when the iteration limit is
 reached. Production runs fail if the fit remains above tolerance.
 

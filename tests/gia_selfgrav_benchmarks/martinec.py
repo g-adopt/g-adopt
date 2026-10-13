@@ -740,6 +740,9 @@ def parse_args():
     p.add_argument("--bulk_shear_ratio", type=float, default=None,
                    help="K / mu in every layer; default 1000 for case B and "
                         "100 for cases C, D and E")
+    p.add_argument("--time_step_yr", type=float, default=None,
+                   help="time step in years; defaults: B 10, C/D/E 50, E smoke 2500. "
+                        "Adjusted to land exactly on output times (E: terminal time).")
     p.add_argument("--smoke", action="store_true",
                    help=f"run {SMOKE_STEPS} steps (E: six steps to 15 kyr) on a very coarse mesh, to "
                         "check that the code runs; the numbers are not "
@@ -761,6 +764,9 @@ def parse_args():
     from martinec_e import add_arguments
     add_arguments(p)
     args = p.parse_args()
+    if args.time_step_yr is not None and (not np.isfinite(args.time_step_yr)
+                                         or args.time_step_yr <= 0):
+        p.error("--time_step_yr must be finite and positive")
     if args.case != "E" and (args.topography_restart or args.topography_one_pass
                             or args.check_topography_gradient):
         p.error("topography restart/one-pass/gradient options require --case E")
@@ -779,6 +785,8 @@ def main():
     bulk_shear_ratio = (args.bulk_shear_ratio if args.bulk_shear_ratio
                         is not None else BULK_SHEAR_RATIO[letter])
     case = read_case(letter)
+    default_step_yr = T0_DT_YR if case.time_scenario == "T0" else T1_DT_YR
+    step_yr = args.time_step_yr if args.time_step_yr is not None else default_step_yr
     profiles = profile_grid(case)
     epochs = sorted(set(EPOCHS_KYR[case.time_scenario])
                     | {entry["time_kyr"] for entry in profiles.values()})
@@ -805,8 +813,10 @@ def main():
         # case or another K / mu would continue a different problem from
         # this state without any error.
         written = restart.record["run"]
+        # Checkpoints predating the CLI option used the case's default step.
+        written = {"time_step_yr": default_step_yr, **written}
         this = {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
-                "smoke": args.smoke}
+                "smoke": args.smoke, "time_step_yr": step_yr}
         if written != this:
             raise RuntimeError(f"{args.restart} was written by the run "
                                f"{written}; this run is {this}")
@@ -816,10 +826,7 @@ def main():
     # Euler on a held load needs (see `T0_DT_YR`). A growing load (T1) has no
     # fast early response and takes uniform steps of `T1_DT_YR`.
     t_end_yr = max(epochs) * 1000.0
-    if case.time_scenario == "T0":
-        ladder = ((t_end_yr, T0_DT_YR),)
-    else:
-        ladder = ((t_end_yr, T1_DT_YR),)
+    ladder = ((t_end_yr, step_yr),)
     segments = common.time_segments(epochs, ladder)
     log(f"  epochs (kyr) {epochs}, {sum(s[3] for s in segments)} steps")
 
@@ -921,7 +928,7 @@ def main():
     def record():
         """The driver's part of a checkpoint: enough to continue the outputs."""
         return {"run": {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
-                        "smoke": args.smoke},
+                        "smoke": args.smoke, "time_step_yr": step_yr},
                 "rows": rows, "profile_files": profile_files,
                 "restarts": restarts,
                 "wall_s": wall_before_s + time.time() - tic_run}
@@ -959,6 +966,8 @@ def main():
          "profile_files": profile_files,
          "timeseries_file": os.path.basename(timeseries_path),
          "terminal_time_kyr": case.terminal_time_kyr,
+         "requested_time_step_yr": args.time_step_yr,
+         "time_step_yr": step_yr,
          "giamip_version": giamip.__version__,
          "cap_volume_error": cap_volume_error,
          "profile_points_found": {

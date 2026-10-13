@@ -35,10 +35,24 @@ def add_arguments(parser):
                         help="E ROL: compare adjoint derivative with fresh central differences")
 
 
-def configuration(args, bulk_shear_ratio):
+def time_grid(args, terminal_time_kyr, default_step_yr):
+    """Uniform steps landing on the target time; explicit dt overrides smoke."""
+    duration_yr = terminal_time_kyr * 1000
+    requested = args.time_step_yr
+    if requested is None:
+        steps = SMOKE_STEPS if args.smoke else max(1, int(round(duration_yr / default_step_yr)))
+    else:
+        if not math.isfinite(requested) or requested <= 0:
+            raise ValueError("--time_step_yr must be finite and positive")
+        steps = max(1, int(round(duration_yr / requested)))
+    return steps, duration_yr / steps
+
+
+def configuration(args, bulk_shear_ratio, step_yr):
     return {"case": "E", "bulk_shear_ratio": bulk_shear_ratio, "smoke": args.smoke,
             "method": args.topography_method, "tolerance_m": args.topography_tolerance_m,
             "relaxation": args.topography_relaxation,
+            "time_step_yr": step_yr,
             "norm": "area-normalised whole-surface RMS", "mask_slope": "fixed terminal target basin",
             "initial_guess": "terminal target basin", "control_scale_m": CONTROL_SCALE_M}
 
@@ -108,8 +122,7 @@ def history(args, driver, parent, mantle, case, target_SL, frozen_slope,
     from pyadjoint import stop_annotating
     common = driver.common
     with stop_annotating():
-        total_steps = SMOKE_STEPS if args.smoke else int(round(case.terminal_time_kyr * 1000 / driver.T1_DT_YR))
-        step_yr = case.terminal_time_kyr * 1000 / total_steps
+        total_steps, step_yr = time_grid(args, case.terminal_time_kyr, driver.T1_DT_YR)
         dt = fd.Constant(step_yr / common.T_BAR_YR)
         # Firedrake Constants are not overloaded by its adjoint interface.
         # A Real Function records time assignments and restores the correct
@@ -234,7 +247,9 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
     tape = get_working_tape()
     pause_annotation()
     tape.clear_tape()
-    total_steps = SMOKE_STEPS if args.smoke else int(round(case.terminal_time_kyr * 1000 / driver.T1_DT_YR))
+    total_steps, _ = time_grid(args, case.terminal_time_kyr, driver.T1_DT_YR)
+    if total_steps < 2:
+        raise ValueError("E adjoint checkpointing requires at least two time steps")
     tape.enable_checkpointing(Revolve(total_steps, min(args.adjoint_checkpoints, total_steps - 1)))
     with stop_annotating():
         riesz = fd.RieszMap(correction.function_space(), "L2", constant_jacobian=True,
@@ -315,13 +330,19 @@ def run(args, driver):
     root.mkdir(parents=True, exist_ok=True)
     tic = time.time()
     bulk = args.bulk_shear_ratio if args.bulk_shear_ratio is not None else driver.BULK_SHEAR_RATIO["E"]
-    config = configuration(args, bulk)
+    case = driver.read_case("E")
+    total_steps, step_yr = time_grid(args, case.terminal_time_kyr, driver.T1_DT_YR)
+    config = configuration(args, bulk, step_yr)
     mesh_kind = "smoke" if args.smoke else "martinec"
     restart_path = args.restart or args.topography_restart
     with stop_annotating():
         if restart_path:
             parent, mantle, mesh_info, state = common.load_checkpoint(restart_path, mesh_kind)
             written = state.record["configuration"]
+            # Older E checkpoints used the default grid for their smoke setting.
+            _, legacy_step_yr = time_grid(SimpleNamespace(time_step_yr=None, smoke=written["smoke"]),
+                                          case.terminal_time_kyr, driver.T1_DT_YR)
+            written = {"time_step_yr": legacy_step_yr, **written}
             if written != config:
                 raise ValueError(f"E restart settings differ: stored {written}, requested {config}")
             if args.restart and state.record["stage"] != "history":
@@ -334,7 +355,6 @@ def run(args, driver):
         else:
             parent, mantle, mesh_info = common.build_meshes(mesh_kind, str(root), "martinec_E")
             state, pass_number, passes, previous_wall_s = None, 1, [], 0.0
-        case = driver.read_case("E")
         target_SL = driver.basin_sea_level(mantle, case)
         # Mask width is numerical regularisation. Keep it fixed for both fits:
         # surface_slope deliberately has no adjoint dependency on topography.
@@ -347,6 +367,7 @@ def run(args, driver):
         raise ValueError(f"Restart requests pass {pass_number}; increase --topography_max_iterations "
                          f"above {args.topography_max_iterations}")
     driver.log(driver.describe(case))
+    driver.log(f"  E time step {step_yr:g} yr, {total_steps} steps to {case.terminal_time_kyr:g} kyr")
     driver.log(f"  E topography method {args.topography_method}, tolerance {args.topography_tolerance_m:g} m RMS, "
                f"fixed target-basin mask slope; start pass {pass_number}")
     evaluations = gradient_report = None
@@ -380,6 +401,7 @@ def run(args, driver):
                        "epochs_kyr": sorted(set(row["t_kyr"] for row in rows)),
                        "terminal_time_kyr": case.terminal_time_kyr, "giamip_version": driver.giamip.__version__,
                        "time_step_yr": case.terminal_time_kyr * 1000 / rows[-1]["step"],
+                       "requested_time_step_yr": args.time_step_yr,
                        "reference_time_scale_yr": common.T_BAR_YR,
                        "timeseries_file": "martinec-E-timeseries.npz", "profile_files": [],
                        "h_UF_m_last": rows[-1]["h_UF_m"], "wall_s": previous_wall_s + time.time() - tic,
