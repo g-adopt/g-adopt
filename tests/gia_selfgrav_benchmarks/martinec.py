@@ -768,7 +768,7 @@ def parse_args():
                                          or args.time_step_yr <= 0):
         p.error("--time_step_yr must be finite and positive")
     if args.case != "E" and (args.topography_restart or args.topography_one_pass
-                            or args.check_topography_gradient):
+                            or args.check_topography_gradient or args.write_gradients):
         p.error("topography restart/one-pass/gradient options require --case E")
     return args
 

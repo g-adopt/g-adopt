@@ -33,6 +33,8 @@ def add_arguments(parser):
                         help="E ROL: RAM snapshots for Revolve (recomputation between snapshots)")
     parser.add_argument("--check_topography_gradient", action="store_true",
                         help="E ROL: compare adjoint derivative with fresh central differences")
+    parser.add_argument("--write_gradients", action="store_true",
+                        help="E ROL: write surface L2 gradient and control at each iteration")
 
 
 def time_grid(args, terminal_time_kyr, default_step_yr):
@@ -236,6 +238,51 @@ def gradient_check(reduced, correction, fresh_objective, output):
     return report
 
 
+class ROLGradientOutput:
+    """Cache existing derivatives and export accepted ROL iterates off tape."""
+
+    def __init__(self, root, riesz, write_json):
+        import firedrake as fd
+        self.root = Path(root) / "rol_gradients"
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.vtk = fd.VTKFile(str(self.root / "topography_gradient.pvd"))
+        self.riesz = riesz
+        self.write_json = write_json
+        self.records = []
+        self.cached = None
+
+    def capture(self, objective, derivatives, controls):
+        import firedrake as fd
+        from pyadjoint import stop_annotating
+        with stop_annotating():
+            derivative = derivatives[0]
+            gradient = self.riesz(derivative) if isinstance(derivative, fd.Cofunction) else derivative
+            self.cached = (gradient.copy(deepcopy=True), controls[0].copy(deepcopy=True))
+        # Never change the derivative returned to the optimiser.
+        return derivatives
+
+    def write(self, iteration, current_control, objective):
+        import firedrake as fd
+        from pyadjoint import stop_annotating
+        with stop_annotating():
+            if self.cached is None:
+                raise RuntimeError("ROL has not evaluated a gradient for this iterate")
+            gradient, evaluated_control = self.cached
+            mismatch = fd.norm(evaluated_control - current_control)
+            if mismatch > 1e-12 * max(1.0, fd.norm(current_control)):
+                raise RuntimeError("Cached ROL gradient belongs to a different control")
+            gradient.rename("topography_gradient_L2")
+            correction_m = fd.Function(current_control.function_space(),
+                                       name="initial_topography_correction_m")
+            correction_m.assign(evaluated_control * CONTROL_SCALE_M)
+            self.vtk.write(gradient, correction_m, time=float(iteration))
+            self.records.append({"iteration": int(iteration), "objective": float(objective),
+                                 "rms_m": CONTROL_SCALE_M * math.sqrt(2 * float(objective)),
+                                 "gradient_L2_norm": float(fd.norm(gradient)),
+                                 "control_scale_m": CONTROL_SCALE_M})
+            self.write_json(str(self.root / "iterations.json"), self.records)
+
+
 def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
             correction, bulk_shear_ratio, root):
     from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
@@ -268,7 +315,9 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
         evaluations.append({"evaluation": len(evaluations) + 1, "objective": float(value),
                             "rms_m": CONTROL_SCALE_M * math.sqrt(max(0.0, 2 * float(value)))})
         driver.common.write_json(str(root / "topography_rol_evaluations.json"), evaluations)
-    reduced = ReducedFunctional(objective, control, eval_cb_post=evaluation_callback)
+    gradient_output = ROLGradientOutput(root, riesz, driver.common.write_json) if args.write_gradients else None
+    callbacks = {"derivative_cb_post": gradient_output.capture} if gradient_output else {}
+    reduced = ReducedFunctional(objective, control, eval_cb_post=evaluation_callback, **callbacks)
     derivative_report = None
     if args.check_topography_gradient:
         def fresh(value):
@@ -291,6 +340,8 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
     class TopographyStatusTest(ROL.StatusTest):
         def check(self, status):
             optimiser.iteration += 1
+            if gradient_output:
+                gradient_output.write(optimiser.iteration, optimiser.rol_solver.rolvector.dat[0], status.value)
             if float(status.value) < goal:
                 return False
             return super().check(status)
@@ -326,6 +377,8 @@ def run(args, driver):
         raise ValueError("ROL restarts from a topography warm start, not a partially taped history")
     if args.topography_method == "picard" and args.check_topography_gradient:
         raise ValueError("--check_topography_gradient requires --topography_method rol")
+    if args.topography_method == "picard" and args.write_gradients:
+        raise ValueError("--write_gradients requires --topography_method rol")
     root = Path(args.output_path).resolve()
     root.mkdir(parents=True, exist_ok=True)
     tic = time.time()

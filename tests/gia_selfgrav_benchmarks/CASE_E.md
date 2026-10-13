@@ -134,6 +134,19 @@ central difference of fresh histories, and their relative difference. The
 check fails above 1% or if the taped and fresh objective disagree. It tests
 a constant surface direction; it is not a full mesh/time convergence study.
 
+For debugging in ParaView, add `--write_gradients` to the ROL command (or to
+PBS `EXTRA`). This writes `rol_gradients/topography_gradient.pvd` on the surface
+mesh at iteration 0 (the initial guess) and each subsequent ROL iteration.
+Each frame contains `topography_gradient_L2` and the corresponding
+`initial_topography_correction_m`. The gradient is the surface L2 gradient of
+the scaled objective with respect to the dimensionless correction control,
+as used by ROL; it is not a derivative with respect to topography in metres.
+The PVD time coordinate is the ROL iteration number, not physical time.
+`rol_gradients/iterations.json` records objective, RMS and gradient L2 norm.
+Output reuses existing derivatives without additional adjoint solves and
+does not include rejected line-search/trust-region trial points. This flag
+is separate from `--write_output` for the forward fields and requires ROL.
+
 Use the same options without `--smoke` for production. Revolve uses
 `--adjoint_checkpoints` RAM snapshots (default five) and recomputes states
 between them. Memory includes each stored coupled state, and runtime includes
