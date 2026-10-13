@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.polynomial.legendre import legder, legval
@@ -78,6 +77,7 @@ def model_profile(run, epoch, theta):
 
 
 def main():
+    matplotlib.use("Agg")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outputs", type=Path, default=HERE / "outputs")
     parser.add_argument("--max-colatitude", type=float, default=25)
@@ -95,14 +95,17 @@ def main():
         parser.error("Runs have no common epochs")
     showcase = [t for t in (0, 5, 20) if t in epochs]
     colors = plt.get_cmap("viridis")(np.linspace(0.1, 0.85, len(runs)))
-    profiles, errors = [plt.subplots(len(showcase), 3, figsize=(14, 3.1 * len(showcase)),
-                                    squeeze=False, layout="constrained", sharex=True)
-                        for _ in range(2)]
+    profiles, errors = [
+        plt.subplots(len(showcase), 3, figsize=(14, 3.1 * len(showcase)),
+                     squeeze=False, layout="constrained", sharex=True)
+        for _ in range(2)
+    ]
     # Degree 128 is the current practical baseline; higher cutoff is not
     # uniformly more accurate on this mesh. Fall back to the largest cutoff.
     best = next((r for r in runs if r[0] == 128), runs[-1])
-    best_figure, best_axes = plt.subplots(len(epochs), 3, figsize=(14, 2.55 * len(epochs)),
-                                        squeeze=False, layout="constrained", sharex=True)
+    best_figure, best_axes = plt.subplots(
+        len(epochs), 3, figsize=(14, 2.55 * len(epochs)),
+        squeeze=False, layout="constrained", sharex=True)
     records = []
     for epoch_index, t in enumerate(epochs):
         coefficients = taboo_coefficients(reference, t)
@@ -148,7 +151,8 @@ def main():
     for figure, axes, filename, title in [
         (*profiles, "load_convergence.png", "Load-degree comparison against TABOO"),
         (*errors, "load_convergence_errors.png", "G-ADOPT minus TABOO (metres)"),
-        (best_figure, best_axes, "best_vs_taboo.png", f"{best[1]} against TABOO, all epochs")]:
+        (best_figure, best_axes, "best_vs_taboo.png", f"{best[1]} against TABOO, all epochs")
+    ]:
         for ax in axes.flat:
             ax.axvline(10, color="grey", linestyle=":", linewidth=.8)
             ax.set_ylabel("m")
@@ -182,8 +186,9 @@ def main():
         axes[col].set_title(NAMES[col])
         axes[col].grid(alpha=.2)
     axes[0].legend()
-    figure.suptitle(f"Load convergence: 0–{args.max_colatitude:g}° RMS error, all sampled meridians\n"
-                   "TABOO 2–256; degree-10 baseline reconstructed from its spectrum")
+    figure.suptitle(
+        f"Load convergence: 0–{args.max_colatitude:g}° RMS error, all sampled meridians\n"
+        "TABOO 2–256; degree-10 baseline reconstructed from its spectrum")
     for extension in ("png", "pdf"):
         figure.savefig(args.outputs / f"load_convergence_rms.{extension}", dpi=180)
     plt.close(figure)
