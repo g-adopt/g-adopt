@@ -33,6 +33,10 @@ def add_arguments(parser):
                         help="E ROL: RAM snapshots for Revolve (recomputation between snapshots)")
     parser.add_argument("--check_topography_gradient", action="store_true",
                         help="E ROL: compare adjoint derivative with fresh central differences")
+    parser.add_argument("--check_topography_replay", action="store_true",
+                        help="E: compare tape replay with the recorded objective, then exit")
+    parser.add_argument("--check_topography_taylor", action="store_true",
+                        help="E: check second-order Taylor remainders of the gradient, then exit")
     parser.add_argument("--write_gradients", action="store_true",
                         help="E ROL: write surface L2 gradient and control at each iteration")
 
@@ -238,6 +242,47 @@ def gradient_check(reduced, correction, fresh_objective, output):
     return report
 
 
+def replay_check(reduced, correction, recorded_objective, output):
+    """Re-evaluate the tape at the original control without an adjoint solve."""
+    from firedrake.adjoint import stop_annotating
+    with stop_annotating():
+        x = correction.copy(deepcopy=True)
+    recorded = float(recorded_objective)
+    replayed = float(reduced(x))
+    error = abs(replayed - recorded)
+    tolerance = 1e-12 + 1e-8 * abs(recorded)
+    report = {"recorded_objective": recorded, "replayed_objective": replayed,
+              "absolute_difference": error, "tolerance": tolerance,
+              "passed": all(math.isfinite(v) for v in (recorded, replayed)) and error <= tolerance}
+    output(report)
+    if not report["passed"]:
+        raise RuntimeError(f"E tape replay check failed: {report}")
+    return report
+
+
+def taylor_check(reduced, correction, output):
+    """Run pyadjoint's Taylor test and restore the original control."""
+    import firedrake as fd
+    from firedrake.adjoint import stop_annotating
+    from pyadjoint import taylor_test
+    with stop_annotating():
+        x = correction.copy(deepcopy=True)
+        coordinates = fd.SpatialCoordinate(x.function_space().mesh())
+        radius = fd.sqrt(sum(v**2 for v in coordinates))
+        direction = fd.Function(x.function_space()).interpolate(
+            1.0 + 0.25 * coordinates[0] / radius)
+    try:
+        rate = float(taylor_test(reduced, x, direction))
+    finally:
+        reduced(x)
+    report = {"minimum_convergence_rate": rate, "minimum_rate_required": 1.9,
+              "passed": math.isfinite(rate) and rate >= 1.9}
+    output(report)
+    if not report["passed"]:
+        raise RuntimeError(f"E topography Taylor check failed: {report}")
+    return report
+
+
 class ROLGradientOutput:
     """Cache existing derivatives and export accepted ROL iterates off tape."""
 
@@ -289,8 +334,10 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
                                   get_working_tape, pause_annotation, stop_annotating)
     import firedrake as fd
     from checkpoint_schedules import Revolve
-    # Import inverse before clearing the tape: this module starts annotation.
-    from gadopt.inverse import LinMoreOptimiser, MinimizationProblem, minimisation_parameters
+    checks_only = args.check_topography_replay or args.check_topography_taylor
+    if not checks_only:
+        # Import inverse before clearing the tape: this module starts annotation.
+        from gadopt.inverse import LinMoreOptimiser, MinimizationProblem, minimisation_parameters
     tape = get_working_tape()
     pause_annotation()
     tape.clear_tape()
@@ -319,6 +366,16 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
     callbacks = {"derivative_cb_post": gradient_output.capture} if gradient_output else {}
     reduced = ReducedFunctional(objective, control, eval_cb_post=evaluation_callback, **callbacks)
     derivative_report = None
+    if args.check_topography_replay:
+        driver.log("  E checking tape replay at the recorded control")
+        report = replay_check(reduced, correction, float(objective),
+            lambda r: driver.common.write_json(str(root / "topography_replay.json"), r))
+        driver.log(f"  E tape replay passed: absolute objective difference {report['absolute_difference']:.3e}")
+    if args.check_topography_taylor:
+        driver.log("  E checking the topography gradient with a four-level Taylor test")
+        report = taylor_check(reduced, correction,
+            lambda r: driver.common.write_json(str(root / "topography_taylor.json"), r))
+        driver.log(f"  E Taylor test passed: minimum rate {report['minimum_convergence_rate']:.6f}")
     if args.check_topography_gradient:
         def fresh(value):
             solver, _, _, rms, _ = history(args, driver, parent, mantle, case, target_SL, frozen_slope,
@@ -328,6 +385,9 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
             return 0.5 * (rms / CONTROL_SCALE_M)**2
         derivative_report = gradient_check(reduced, correction, fresh,
             lambda r: driver.common.write_json(str(root / "topography_gradient.json"), r))
+    if checks_only:
+        tape.clear_tape()
+        return correction, evaluations, derivative_report
     parameters = copy.deepcopy(minimisation_parameters)
     parameters["Status Test"].update({"Iteration Limit": args.topography_max_iterations,
                                      "Gradient Tolerance": 1e-12, "Step Tolerance": 1e-14})
@@ -366,6 +426,9 @@ def run(args, driver):
     import firedrake as fd
     from pyadjoint import stop_annotating
     common = driver.common
+    checks_only = args.check_topography_replay or args.check_topography_taylor
+    if checks_only and (args.restart or args.topography_one_pass or args.write_gradients):
+        raise ValueError("Replay/Taylor checks cannot use --restart, --topography_one_pass or --write_gradients")
     if (not math.isfinite(args.topography_tolerance_m) or args.topography_tolerance_m <= 0
             or args.topography_max_iterations < 1):
         raise ValueError("E tolerance and maximum iterations must be positive")
@@ -375,7 +438,7 @@ def run(args, driver):
         raise ValueError("Use --restart within a history OR --topography_restart between histories")
     if args.topography_method == "rol" and (args.restart or args.topography_one_pass):
         raise ValueError("ROL restarts from a topography warm start, not a partially taped history")
-    if args.topography_method == "picard" and args.check_topography_gradient:
+    if args.topography_method == "picard" and args.check_topography_gradient and not checks_only:
         raise ValueError("--check_topography_gradient requires --topography_method rol")
     if args.topography_method == "picard" and args.write_gradients:
         raise ValueError("--write_gradients requires --topography_method rol")
@@ -416,18 +479,24 @@ def run(args, driver):
         if state is not None:
             initial_SL = fd.Function(target_SL.function_space()).interpolate(state.fields["initial_SL"])
             correction.interpolate((target_SL - initial_SL) * common.D_SCALE / CONTROL_SCALE_M)
-    if args.topography_method == "picard" and pass_number > args.topography_max_iterations:
+    if not checks_only and args.topography_method == "picard" and pass_number > args.topography_max_iterations:
         raise ValueError(f"Restart requests pass {pass_number}; increase --topography_max_iterations "
                          f"above {args.topography_max_iterations}")
     driver.log(driver.describe(case))
     driver.log(f"  E time step {step_yr:g} yr, {total_steps} steps to {case.terminal_time_kyr:g} kyr")
-    driver.log(f"  E topography method {args.topography_method}, tolerance {args.topography_tolerance_m:g} m RMS, "
-               f"fixed target-basin mask slope; start pass {pass_number}")
+    if checks_only:
+        driver.log("  E adjoint validation only; fixed target-basin mask slope")
+    else:
+        driver.log(f"  E topography method {args.topography_method}, tolerance {args.topography_tolerance_m:g} m RMS, "
+                   f"fixed target-basin mask slope; start pass {pass_number}")
     evaluations = gradient_report = None
-    if args.topography_method == "rol":
+    if args.topography_method == "rol" or checks_only:
         correction, evaluations, gradient_report = fit_rol(args, driver, parent, mantle, case, target_SL,
                                                           frozen_slope, correction, bulk, root)
         pass_number = 1
+        if checks_only:
+            driver.log("  E requested adjoint checks passed; exiting without topography fitting")
+            return
     final_solver = None
     for number in range(pass_number, args.topography_max_iterations + 1):
         directory = root / f"topography_{number:02d}"

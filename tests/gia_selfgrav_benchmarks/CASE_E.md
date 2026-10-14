@@ -119,7 +119,42 @@ history; it can also be supplied as a topography restart to repeat that fit.
 
 ## Adjoint/ROL
 
-This route additionally requires the ROL Python module used by
+To check the tape and gradient without starting an optimisation, run:
+
+```bash
+python3 martinec.py --case E --time_step_yr 500 \
+    --check_topography_replay --check_topography_taylor \
+    --output_path outputs/martinec_E_adjoint_checks
+```
+
+Either check can also be requested separately. These flags automatically use
+the adjoint history and exit after the requested checks; no
+`--topography_method rol` or ROL module is needed. Add `--smoke` for a small
+workflow check. They use the same `--adjoint_checkpoints` Revolve schedule as
+the fit and can start from `--topography_restart`. They cannot be combined
+with `--restart`, `--topography_one_pass`, or `--write_gradients`.
+
+`topography_replay.json` compares the original taped objective with a replay
+at the same control. Its tolerance is `1e-12 + 1e-8 * abs(original objective)`.
+This requires one extra forward replay and no adjoint solve.
+
+`--check_topography_taylor` calls `pyadjoint.taylor_test(reduced, control,
+direction)` directly, with the smooth surface direction `1 + 0.25*x/r`.
+Pyadjoint uses its standard four perturbations starting at 0.01 and prints
+remainders and convergence rates to stdout. `topography_taylor.json` saves
+the returned minimum convergence rate; the check fails below 1.9. The
+original control is restored afterwards. Failed checks write their report
+and raise an error. No fit summary is produced by these validation runs.
+
+A Taylor test checks the derivative of the replayed model. To also compare
+that derivative against independent fresh forward histories, add the existing
+`--check_topography_gradient` flag to this command. This adds the fresh
+central-difference check described below and still exits without fitting.
+These checks do not establish mesh/time convergence or validate every
+possible gradient direction. If the Taylor ladder reaches solver noise,
+inspect its printed remainders and solve tolerances.
+
+Running the optimisation additionally requires the ROL Python module used by
 `gadopt.inverse` (for example `pyroltrilinos`). First exercise the derivative
 against independent fresh forward solves:
 
