@@ -61,7 +61,8 @@ from gadopt.gia_gravity import (  # noqa: E402
     FluidCore, OMEGA_SQ_EARTH, SelfGravitatingGIASolver,
     self_gravitating_gia_space, selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_schur_solver_parameters)
-from gadopt.preconditioners import _SchurAinvBCache  # noqa: E402
+from gadopt.preconditioners import _RebuildRule, _SchurAinvBCache  # noqa: E402
+import gadopt.preconditioners  # noqa: E402
 from gadopt.stokes_integrators import newton_stokes_solver_parameters  # noqa: E402
 
 
@@ -97,7 +98,7 @@ PARITY_FLOOR = 1e-10
 #: below what is measured and ten orders above the 4e-15 round-off floor.
 TRANSPOSE_MARGIN = 1e-5
 
-#: How close the two `dense_schur_rebuild` arms must land on one another.
+#: How close the two `gia_rebuild` arms must land on one another.
 #: The rule chooses only how often the complement is rebuilt, and a
 #: preconditioner changes no residual, so both arms solve the same nonlinear
 #: system to the same SNES tolerance and differ only by where inside that
@@ -976,9 +977,10 @@ def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
     power law, because `operator_version` is `None` and the integer branch was
     the only one written.
     """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    params["gia_rebuild"] = "per_solve"
     solver, _, _ = tb.build(
-        meshes, "lowrank",
-        solver_parameters=iterative_params(ainvb=True, snes_type="newtonls"),
+        meshes, "lowrank", solver_parameters=params,
         approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
     solver.solve()
     # Vacuity guard: with one Newton iteration, per-iteration and per-solve
@@ -987,16 +989,15 @@ def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
         "the test is vacuous unless Newton took more than one iteration")
     cache = ainvb_cache(outer_pc(solver))
     assert cache.build_count == 1
-    # The block-0 blocks ARE reassembled at every Newton iteration, which is
-    # what makes "1" above a statement about the rule and not about a solve in
-    # which nothing moved.
-    assert tb.block0_context(solver).assembly_count >= 2
     solver.solve()
     assert cache.build_count == 2
+    # Block 0 follows the same rule: one assembly per solve, not one per
+    # Newton iteration.
+    assert tb.block0_context(solver).assembly_count == 2
 
 
 # ---------------------------------------------------------------------------
-# B2. The option `dense_schur_rebuild` on the cached apply
+# B2. The option `gia_rebuild` on the cached apply
 #
 # `_SchurAinvBCache` owns the complement on every route where the `Real` block
 # is narrow, which is the route the sea-level preset takes at 5 `Real` rows.
@@ -1027,7 +1028,7 @@ def power_law_arm(meshes, rebuild_rule):
       `(solver, z)` after one solve.
     """
     params = iterative_params(ainvb=True, snes_type="newtonls")
-    params["dense_schur_rebuild"] = rebuild_rule
+    params["gia_rebuild"] = rebuild_rule
     solver, z, _ = tb.build(
         meshes, "lowrank", solver_parameters=params,
         approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
@@ -1037,7 +1038,7 @@ def power_law_arm(meshes, rebuild_rule):
 
 @pytest.fixture(scope="module")
 def rebuild_rule_arms(meshes):
-    """One power-law solve under each value of `dense_schur_rebuild`."""
+    """One power-law solve under each value of `gia_rebuild`."""
     out = {}
     for rule in ("per_solve", "always"):
         solver, z = power_law_arm(meshes, rule)
@@ -1101,6 +1102,294 @@ def test_both_rebuild_rules_reach_the_same_state(rebuild_rule_arms):
     relative = np.linalg.norm(measured - reference) / scale
     assert relative < STATE_FLOOR, (
         f"the two rebuild rules reached states {relative:.3e} apart relative")
+
+
+# ---------------------------------------------------------------------------
+# B3. The value `lagged` of `gia_rebuild`
+#
+# A moving coastline makes the Jacobian depend on the state, so `per_solve`
+# rebuilds the complement once per nonlinear solve, at one block-0 solve per
+# `Real` row. `lagged` delays that rebuild over several solves. The unit tests
+# drive `_RebuildRule` directly through a stub application context, which
+# pins the decision table exactly and costs nothing; the march below shows
+# the option reaches the cached apply the preset puts on a narrow `Real` block,
+# and that the lag changes the cost and not the answer.
+# ---------------------------------------------------------------------------
+class _StubContext:
+    """A stand-in for the solver's application context in `_RebuildRule`.
+
+    `_RebuildRule` reads the context only through `_solver_appctx(pc)`, so the
+    tests replace that one function and pass this object as the `pc`.
+    """
+
+    def __init__(self, **values):
+        self.values = dict(values)
+
+
+@pytest.fixture
+def stub_appctx(monkeypatch):
+    """Route `_solver_appctx` to the `values` of a `_StubContext`."""
+    monkeypatch.setattr(
+        gadopt.preconditioners, "_solver_appctx", lambda pc: pc.values)
+
+
+def _rebuild_sequence(rule, solves, linear_its=None):
+    """The solve indices at which `rule` rebuilds, over `solves` solves.
+
+    The context mimics a power law or a moving coastline: `operator_version`
+    is `None`, and `gia_solve_index` counts 1, 2, ... . Each solve asks
+    `moved` twice, as two Newton iterations do.
+
+    Args:
+      rule: a `_RebuildRule`.
+      solves: how many nonlinear solves to run after the first build.
+      linear_its: optional list, the outer iterations of each solve, which is
+        published as the previous solve's count at the next solve.
+
+    Returns:
+      The list of solve indices at which `moved` answered True.
+    """
+    pc = _StubContext(operator_version=None, gia_solve_index=1)
+    rule.record(pc)
+    rebuilt = []
+    for index in range(2, solves + 2):
+        pc.values["gia_solve_index"] = index
+        if linear_its is not None:
+            pc.values["gia_last_solve_linear_its"] = linear_its[index - 2]
+            pc.values["gia_last_solve_newton_its"] = 2
+        for _newton in range(2):
+            if rule.moved(pc):
+                rebuilt.append(index)
+    return rebuilt
+
+
+def test_lagged_with_every_one_is_per_solve(stub_appctx):
+    """The defaults of the lag reproduce `per_solve` exactly.
+
+    CATCHES: an off-by-one in the count of solves since the last build, which
+    would make `every = 1` skip every second solve.
+    """
+    assert _rebuild_sequence(_RebuildRule(), 5) == [2, 3, 4, 5, 6]
+    assert _rebuild_sequence(_RebuildRule(every=1), 5) == [2, 3, 4, 5, 6]
+
+
+def test_lagged_rebuilds_every_k_solves(stub_appctx):
+    """`every = 3` rebuilds at solves 4 and 7 after a build at solve 1.
+
+    Each solve asks twice, so the list also shows that the second Newton
+    iteration of a solve never rebuilds again.
+
+    CATCHES: a stored index updated on a solve that did not rebuild, which
+    would make the count restart at every solve and never reach `k`.
+    """
+    assert _rebuild_sequence(_RebuildRule(every=3), 7) == [4, 7]
+
+
+def test_lagged_rebuilds_early_when_the_outer_count_grows(stub_appctx):
+    """`max_outer` rebuilds as soon as the previous solve got expensive.
+
+    Outer iterations per Newton iteration (2 Newton iterations per solve):
+    3, 3, 5, 3, ... against `max_outer = 4`. The solve after the one with 10
+    outer iterations (5 per Newton iteration) rebuilds although `every = 100`
+    is far away.
+
+    CATCHES: a threshold compared with the total count instead of the count
+    per Newton iteration, or read from the current solve instead of the
+    previous one.
+    """
+    its = [6, 6, 10, 6, 6]
+    rule = _RebuildRule(every=100, max_outer=4.0)
+    # The counts published at solve index i are those of solve i - 1, so the
+    # 10 at position 2 is read at index 4.
+    assert _rebuild_sequence(rule, 5, linear_its=its) == [4]
+
+
+def test_the_integer_branch_is_never_lagged(stub_appctx):
+    """A changed `operator_version` rebuilds at once under any lag.
+
+    A new `dt` or a new viscosity field is a jump of the operator, not a
+    drift, so the lag must not hold a complement of the old operator.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=1, gia_solve_index=1)
+    rule.record(pc)
+    pc.values.update(operator_version=2, gia_solve_index=2)
+    assert rule.moved(pc)
+
+
+def test_a_time_step_change_ends_the_lag(stub_appctx):
+    """On the state-dependent branch a new `dt` rebuilds at the next solve.
+
+    The solver publishes `operator_version = None` there, so no version moves
+    when `dt` changes; the rule has to see the change itself.
+
+    CATCHES: a lag that keeps the complement of the old time step for up to
+    `every - 1` solves.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=None, gia_solve_index=1, dt=1.0)
+    rule.record(pc)
+    pc.values["gia_solve_index"] = 2
+    assert not rule.moved(pc)
+    pc.values.update(gia_solve_index=3, dt=2.0)
+    assert rule.moved(pc)
+    # The new step is recorded with the build, so the lag holds again.
+    pc.values["gia_solve_index"] = 4
+    assert not rule.moved(pc)
+
+
+def lagged_march(meshes, rebuild_rule, solves, **lag):
+    """A power-law march of `solves` solves on the cached apply.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      rebuild_rule: the value of `gia_rebuild`.
+      solves: the number of nonlinear solves.
+      lag: `gia_rebuild_every` and `gia_rebuild_max_outer`,
+        written at the top level of the solver parameters as a driver does.
+
+    Returns:
+      A dict with the final state, the build count of the `Real`-block
+      complement and the assembly count of the block-0 blocks.
+    """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    if rebuild_rule is not None:
+        params["gia_rebuild"] = rebuild_rule
+    for key, value in lag.items():
+        params[f"gia_rebuild_{key}"] = value
+    solver, z, _ = tb.build(
+        meshes, "lowrank", solver_parameters=params,
+        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
+    for _ in range(solves):
+        solver.solve()
+    return {
+        "solver": solver,
+        "state": z.copy(deepcopy=True),
+        "builds": int(ainvb_cache(outer_pc(solver)).build_count),
+        "block0": int(tb.block0_context(solver).assembly_count),
+    }
+
+
+@pytest.fixture(scope="module")
+def lagged_arms(meshes):
+    """Four power-law solves under three settings of `gia_rebuild`.
+
+    `per_solve`; `lagged` with `every = 2`; and no option at all, which is
+    `lagged` with `every = DEFAULT_REBUILD_EVERY` (5).
+    """
+    return {
+        "per_solve": lagged_march(meshes, "per_solve", 4),
+        "lagged": lagged_march(meshes, "lagged", 4, every=2),
+        "default": lagged_march(meshes, None, 4),
+    }
+
+
+def test_lagged_reaches_the_cached_apply(lagged_arms):
+    """`lagged, every 2` builds half as often as `per_solve` over four solves.
+
+    `per_solve` builds at solves 1, 2, 3 and 4; `lagged` with `every = 2`
+    at solves 1 and 3.
+
+    CATCHES: the lag settings read by one class and not the other, in which
+    case the cached apply keeps rebuilding at every solve.
+    """
+    assert lagged_arms["per_solve"]["builds"] == 4
+    assert lagged_arms["lagged"]["builds"] == 2
+
+
+def test_the_default_is_a_lag_of_five_solves(lagged_arms):
+    """With no option the complement is built once over four solves.
+
+    The default rule is `lagged` with `every = DEFAULT_REBUILD_EVERY = 5`, so
+    the build at the first solve serves solves 2 to 4.
+
+    CATCHES: a default left at `per_solve` (4 builds) or a default `every`
+    of 1.
+    """
+    assert gadopt.preconditioners.DEFAULT_REBUILD_EVERY == 5
+    assert lagged_arms["default"]["builds"] == 1
+
+
+def test_block0_and_block1_rebuild_at_the_same_solves(lagged_arms):
+    """One rule: the block-0 blocks are reassembled exactly when the complement is.
+
+    `CondensedBlockPC` and the cached `Real`-block apply each build a
+    `_RebuildRule` from the same options and the same markers, so over a march
+    their counts agree under every setting. Both counts include the build at
+    set-up.
+
+    CATCHES: block 0 left on its own rule (it used to reassemble at every
+    Newton iteration on a state-dependent Jacobian, so its count would be the
+    number of Newton iterations, about twice the number of solves).
+    """
+    for name, arm in lagged_arms.items():
+        assert arm["block0"] == arm["builds"], (
+            f"{name}: block 0 assembled {arm['block0']} times, the complement "
+            f"was built {arm['builds']} times")
+
+
+def test_lagged_reaches_the_same_state(lagged_arms):
+    """The lag changes the preconditioner only, so the states agree.
+
+    FLOOR: `STATE_FLOOR`, the scatter of two Newton solves, here accumulated
+    over four solves of a march.
+    """
+    reference = np.concatenate([
+        np.asarray(sub.dat.data_ro).ravel()
+        for sub in lagged_arms["per_solve"]["state"].subfunctions])
+    measured = np.concatenate([
+        np.asarray(sub.dat.data_ro).ravel()
+        for sub in lagged_arms["lagged"]["state"].subfunctions])
+    relative = (np.linalg.norm(measured - reference)
+                / max(np.linalg.norm(reference), 1e-300))
+    assert relative < STATE_FLOOR, (
+        f"per_solve and lagged reached states {relative:.3e} apart relative")
+
+
+def test_a_time_step_change_rebuilds_a_lagged_cache(meshes):
+    """The same claim as the stub test above, through the real solver.
+
+    `every = 100` holds the complement over the two solves at one `dt`; the
+    third solve, after `dt.assign`, must build once more.
+
+    CATCHES: `_published_dt` reading a context that does not carry the
+    solver's `dt`, in which case the stub test passes and this one does not.
+    """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    params.update(gia_rebuild="lagged", gia_rebuild_every=100)
+    solver, _, _ = tb.build(
+        meshes, "lowrank", solver_parameters=params,
+        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
+    solver.solve()
+    solver.solve()
+    cache = ainvb_cache(outer_pc(solver))
+    assert cache.build_count == 1, (
+        f"{cache.build_count} builds over two solves at one dt under a lag "
+        "of 100: the lag does not hold")
+    solver.dt.assign(2.0 * float(solver.dt))
+    solver.solve()
+    assert cache.build_count == 2, (
+        f"{cache.build_count} builds after the dt change: the lag kept the "
+        "complement of the old time step")
+
+
+def test_the_solver_publishes_the_counts_of_the_last_solve(marched):
+    """After each solve the context carries that solve's own counts.
+
+    The `marched` fixture is Newtonian (`ksponly`), so one solve is one
+    linear solve and its outer count is the KSP's iteration number. The
+    fixture ran four solves, so a count that accumulated over solves would
+    be about four times too large.
+
+    CATCHES: a cumulative count, which would trip `max_outer` on every
+    solve after the first few and turn `lagged` into `per_solve`.
+    """
+    solver = marched["solver"]
+    appctx = solver.appctx
+    assert appctx["gia_last_solve_newton_its"] == 1
+    assert (appctx["gia_last_solve_linear_its"]
+            == solver.solver.snes.ksp.getIterationNumber())
+    assert appctx["gia_last_solve_linear_its"] > 0
 
 
 # ===========================================================================
@@ -1223,7 +1512,7 @@ def refusal_stderr(check):
 
 
 def test_an_unknown_rebuild_rule_is_refused_by_name(capsys):
-    """A misspelled `dense_schur_rebuild` value raises a NAMED `ValueError`.
+    """A misspelled `gia_rebuild` value raises a NAMED `ValueError`.
 
     The option decides how often the complement is rebuilt: `per_solve`, the
     rule the class has always had, or `always`, which rebuilds at every
@@ -1248,20 +1537,53 @@ def test_an_unknown_rebuild_rule_is_refused_by_name(capsys):
     options = PETSc.Options()
     # Written at the global prefix, which is the last link of the chain
     # `_option_along_the_prefix_chain` searches, so the bare PC below finds it.
-    options["dense_schur_rebuild"] = "per_step"
+    options["gia_rebuild"] = "per_step"
     try:
         pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
         # Constructed without running `__init__`, so that the call below is the
         # constructor itself and not a second entry point that could drift from
         # it. `inner`, `is0` and `is1` are never reached.
         cache = _SchurAinvBCache.__new__(_SchurAinvBCache)
-        with pytest.raises(ValueError, match="dense_schur_rebuild"):
+        with pytest.raises(ValueError, match="gia_rebuild"):
             cache.__init__(pc, None, None, None)
-        assert "dense_schur_rebuild" in capsys.readouterr().err, (
+        assert "gia_rebuild" in capsys.readouterr().err, (
             "the refusal never reached stderr, so a log reader would see only "
             "the PETSc error code that replaces it")
     finally:
-        del options["dense_schur_rebuild"]
+        del options["gia_rebuild"]
+
+
+@pytest.mark.parametrize("options, match", [
+    ({"gia_rebuild": "per_solve", "gia_rebuild_every": "3"},
+     "only applies with"),
+    ({"gia_rebuild": "lagged", "gia_rebuild_every": "0"},
+     "at least 1"),
+    ({"gia_rebuild": "lagged",
+      "gia_rebuild_max_outer": "-1"}, "0 \\(off\\) or positive"),
+])
+def test_a_wrong_lag_setting_is_refused_by_name(capsys, options, match):
+    """A lag setting with another rule, or out of range, is refused by name.
+
+    The same pattern as the test above: no solve, a bare PC, and the check is
+    the first action of `_SchurAinvBCache.__init__`.
+
+    CATCHES: `gia_rebuild_every` written with `per_solve` (the default is
+    `lagged`, so only an explicit other rule conflicts), which would run
+    `per_solve` under a label that says otherwise; `k = 0`, which would
+    rebuild on every `moved` call; a negative threshold.
+    """
+    petsc_options = PETSc.Options()
+    for key, value in options.items():
+        petsc_options[key] = value
+    try:
+        pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
+        cache = _SchurAinvBCache.__new__(_SchurAinvBCache)
+        with pytest.raises(ValueError, match=match):
+            cache.__init__(pc, None, None, None)
+        assert "gia_rebuild" in capsys.readouterr().err
+    finally:
+        for key in options:
+            del petsc_options[key]
 
 
 def test_a_partial_factorisation_is_refused():

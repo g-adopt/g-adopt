@@ -388,8 +388,10 @@ class TestPowerLaw:
         for key, value in differences.items():
             assert value < 1e-8, f"{key} differs by {value:.3e}"
 
+    @pytest.mark.parametrize("rule,expected", [
+        ("per_solve", [1, 2, 3]), (None, [1, 1, 2])])
     def test_dense_schur_complement_rebuilds_once_per_solve_for_a_power_law(
-            self, meshes):
+            self, meshes, rule, expected):
         """One dense complement per time step, not one per Newton iteration.
 
         `gadopt.DtNMultiplierDenseSchurPC` forms the whole multiplier Schur
@@ -405,13 +407,20 @@ class TestPowerLaw:
         `SelfGravitatingGIASolver.solve` increments before each nonlinear
         solve, and gated by `gia_jacobian_depends_on_solution`. A time-step
         change rebuilds under either rheology, which the last step checks.
+
+        `per_solve` builds at each of the three solves. The default
+        (`gia_rebuild = lagged`, every 5 solves) keeps the first complement
+        for the second solve and rebuilds at the third because `dt` changed.
         """
+        extra = dict(self.NEWTON)
+        if rule is not None:
+            extra["gia_rebuild"] = rule
         solver, _, _ = build(
             meshes, approximation_kwargs=self.POWER_LAW,
             solver_parameters=nested_preset(
                 snes_type="newtonls",
                 multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"),
-            solver_parameters_extra=dict(self.NEWTON))
+            solver_parameters_extra=extra)
         # The markers the rule reads must be in the context before the first
         # build, which happens inside the first solve.
         assert "operator_version" in solver.appctx
@@ -430,8 +439,8 @@ class TestPowerLaw:
         solver.dt.assign(0.5)
         solver.solve()
         counts.append(context.build_count)
-        print(f"\n    [dense, power law] build_count {counts}")
-        assert counts == [1, 2, 3]
+        print(f"\n    [dense, power law, {rule}] build_count {counts}")
+        assert counts == expected
 
     def test_dense_schur_complement_rebuilds_when_a_coefficient_changes(
             self, meshes):

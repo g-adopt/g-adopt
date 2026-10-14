@@ -5856,6 +5856,17 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             tape = get_working_tape()
             n0 = len(tape.get_blocks())
         super().solve()
+        # Publish the outer linear iterations and the Newton iterations of
+        # this solve. `gia_rebuild = lagged` reads their ratio at the
+        # next solve to decide whether its lagged complement of the `Real`
+        # block has become poor enough to rebuild. Both counts come from the
+        # SNES, which runs collectively, so they are the same on every rank.
+        # PETSc resets the linear count at the start of every SNESSolve.
+        snes = self.solver.snes
+        self.appctx["gia_last_solve_linear_its"] = int(
+            snes.getLinearSolveIterations())
+        self.appctx["gia_last_solve_newton_its"] = max(
+            1, int(snes.getIterationNumber()))
         if adopt:
             from .dtn_coupled_adjoint import adopt_coupled_lowrank_block
             adopt_coupled_lowrank_block(self, tape, n0)

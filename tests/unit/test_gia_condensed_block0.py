@@ -1039,23 +1039,34 @@ class TestPowerLaw:
         assert relative_difference(u, u_direct) < 1e-6
         assert relative_difference(psi, psi_direct) < 1e-6
 
-    def test_the_operator_is_rebuilt_at_every_newton_iteration(self, meshes):
-        """`operator_version` is `None` for a power law, so nothing is reused.
+    @pytest.mark.parametrize("rule", ["always", None])
+    def test_the_rebuild_rule_governs_a_power_law(self, meshes, rule):
+        """`operator_version` is `None` for a power law; `gia_rebuild` decides.
 
         The fingerprint that lets a Newtonian march reuse its blocks across
         time steps cannot express "the operator moves inside the solve", so
-        the solver publishes `None` and the class rebuilds on every update.
-        `assembly_count` is the readable consequence: it must equal the number
-        of Newton iterations, the first build being the one in `initialize`.
+        the solver publishes `None` and the shared rebuild rule decides.
+        `always` reassembles at every update, so `assembly_count` equals the
+        number of Newton iterations (the first build being the one in
+        `initialize`). The default (`lagged`, every 5 solves) keeps the blocks
+        of `initialize` for the whole first solve.
+
+        CATCHES: block 0 on a rule of its own that ignores `gia_rebuild`.
         """
+        extra = dict(_PowerLawSettings.NEWTON)
+        if rule is not None:
+            extra["gia_rebuild"] = rule
         solver, _, _ = build(
             meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
             solver_parameters=condensed_preset(snes_type="newtonls"),
-            solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
+            solver_parameters_extra=extra)
         solver.solve()
         context = block0_context(solver)
+        newton = solver.solver.snes.getIterationNumber()
         assert solver.appctx["operator_version"] is None
-        assert context.assembly_count == solver.solver.snes.getIterationNumber()
+        assert newton >= 2, "vacuous unless Newton took more than one iteration"
+        expected = newton if rule == "always" else 1
+        assert context.assembly_count == expected
 
     def test_the_displacement_split_switches_to_gmres(self, meshes):
         """A power law makes the condensed operator nonsymmetric, so no CG.

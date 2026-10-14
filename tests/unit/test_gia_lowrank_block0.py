@@ -330,9 +330,13 @@ def test_the_columns_survive_newton_on_a_power_law(meshes):
     every solve: the build counter stays at 1 while the assembly counter moves.
     """
     approx_kwargs = {"exponent": 3.0, "transition_stress": 1e-3}
+    # `always` reassembles the blocks at every Newton iteration, the most
+    # rebuilds any setting of the shared rule makes, which is the case this
+    # test needs: the columns must survive every one of them.
+    parameters = preset("lowrank", snes_type="newtonls")
+    parameters["gia_rebuild"] = "always"
     solver, _, _ = build(
-        meshes, "lowrank",
-        solver_parameters=preset("lowrank", snes_type="newtonls"),
+        meshes, "lowrank", solver_parameters=parameters,
         approximation_kwargs=approx_kwargs)
     solver.solve()
     assert solver.solver.snes.getIterationNumber() >= 2, (
