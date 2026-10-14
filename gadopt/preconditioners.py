@@ -3354,6 +3354,10 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
                 form, mat_type="aij", form_compiler_parameters=fcp))
         self._assemble_blocks()
 
+        # The nullspace bases by application-context key, built on the first
+        # call of `_set_displacement_nullspaces` and attached again on every
+        # operator rebuild.
+        self._displacement_nullspaces = {}
         self._set_displacement_nullspaces()
 
         # -- the low-rank DtN update, when the solver carries one -----------
@@ -3478,9 +3482,22 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         divergence-free space once the effective bulk/shear ratio
         `bulk_shear_ratio * (1 + dt/tau)` is large, so the rigid modes alone
         leave the smoother nothing to coarsen those modes onto.
+
+        Each basis is built once, on the first call, and the same PETSc
+        nullspace is attached again on every later operator rebuild. A
+        provider takes the displacement space alone, so its basis does not
+        change when the Jacobian changes. A new basis on every rebuild costs
+        one interpolation per mode, and inside the full solver the data of
+        the replaced modes is never freed: about 13 MB per rank and time
+        step at L2 on 4096 ranks, until a node exceeds its memory limit.
+        The cached basis keeps the memory constant over the run.
         """
         appctx = self.cxt.appctx
         matrix = self.S_uu.petscmat
+        # The `VectorSpaceBasis` is kept with its PETSc nullspace, so the
+        # Functions that hold the mode data live as long as this
+        # preconditioner does.
+        cache = self._displacement_nullspaces
         for key, setter in (
             ("condensed_field_nullspace", matrix.setNullSpace),
             ("condensed_field_transpose_nullspace",
@@ -3488,8 +3505,14 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
             ("condensed_field_near_nullspace", matrix.setNearNullSpace),
         ):
             provider = appctx.get(key)
-            if provider is not None:
-                setter(provider(self.displacement_space).nullspace())
+            if provider is None:
+                continue
+            if key not in cache:
+                basis = provider(self.displacement_space)
+                cache[key] = (basis, basis.nullspace())
+            # Attach again on every call: the reassembly keeps the matrix
+            # object, but attaching does not depend on PETSc keeping it.
+            setter(cache[key][1])
 
     def _published_version(self):
         """The operator version the solver publishes, or a sentinel.
@@ -3515,9 +3538,8 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         self._assemble_blocks()
         self.assembly_count += 1
         # The nullspaces are attached to the matrix object and survive the
-        # reassembly, but the near-nullspace providers may build their basis
-        # from the space alone, so setting them again costs one interpolation
-        # per rebuild and removes a dependence on PETSc's retention rules.
+        # reassembly. Attaching the cached bases again costs nothing and
+        # removes a dependence on PETSc's retention rules.
         self._set_displacement_nullspaces()
         # Bump the nest's object state and hand the operators over again, so
         # that PETSc rebuilds the GAMG hierarchies on the new entries instead
