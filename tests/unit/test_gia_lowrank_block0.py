@@ -330,9 +330,13 @@ def test_the_columns_survive_newton_on_a_power_law(meshes):
     every solve: the build counter stays at 1 while the assembly counter moves.
     """
     approx_kwargs = {"exponent": 3.0, "transition_stress": 1e-3}
+    # `always` reassembles the blocks at every Newton iteration, the most
+    # rebuilds any setting of the shared rule makes, which is the case this
+    # test needs: the columns must survive every one of them.
+    parameters = preset("lowrank", snes_type="newtonls")
+    parameters["gia_rebuild"] = "always"
     solver, _, _ = build(
-        meshes, "lowrank",
-        solver_parameters=preset("lowrank", snes_type="newtonls"),
+        meshes, "lowrank", solver_parameters=parameters,
         approximation_kwargs=approx_kwargs)
     solver.solve()
     assert solver.solver.snes.getIterationNumber() >= 2, (
@@ -371,6 +375,74 @@ def test_two_ranks_match_the_multiplier_path(meshes):
         reference_norm = fd.norm(z_ref.subfunctions[field])
         assert abs(fd.norm(z.subfunctions[field]) - reference_norm) < (
             1e-8 * reference_norm)
+
+
+# ---------------------------------------------------------------------------
+# 3b. The stopping rule of the outer FGMRES
+# ---------------------------------------------------------------------------
+def test_the_outer_stopping_options_reach_the_dictionary():
+    """`outer_atol`, `outer_max_it` and `outer_accept_capped` set the outer KSP.
+
+    The defaults leave the dictionary as callers had it before: no
+    `ksp_atol` (PETSc's own, effectively off), a cap of 200 and no
+    `ksp_converged_maxits`.
+
+    CATCHES: an option that never reaches the outer KSP, or a default that
+    changes the dictionary of every existing caller.
+    """
+    default = preset("lowrank")
+    assert "ksp_atol" not in default
+    assert "ksp_converged_maxits" not in default
+    assert default["ksp_max_it"] == 200
+    chosen = preset("lowrank", outer_atol=1e-11, outer_max_it=30,
+                    outer_accept_capped=True)
+    assert chosen["ksp_atol"] == 1e-11
+    assert chosen["ksp_max_it"] == 30
+    assert "ksp_converged_maxits" in chosen
+
+
+@pytest.mark.parametrize("kwargs", [{"outer_atol": -1.0},
+                                    {"outer_max_it": 0}])
+def test_the_preset_refuses_a_wrong_outer_stopping_option(kwargs):
+    with pytest.raises(ValueError, match="outer_atol must be >= 0"):
+        preset("lowrank", **kwargs)
+
+
+def test_a_capped_outer_solve_lets_newton_finish(meshes):
+    """With `outer_accept_capped`, Newton converges through capped outer solves.
+
+    An outer cap of 2 iterations stops every linear solve short of
+    `outer_rtol`. Without the option SNES ends with `DIVERGED_LINEAR_SOLVE`;
+    with it the capped solve counts as converged, Newton takes its update
+    and repeats until `snes_rtol`, and the state agrees with the one of the
+    uncapped preset. This is what lets a late Exp01 step, whose relative
+    target lies below the residual floor, finish instead of aborting.
+
+    FLOOR: the state agrees to 1e-3 relative, because Newton stops at
+    `snes_rtol = 1e-4` on the residual and not at the outer tolerance.
+    """
+    reference, z_ref, layout = build(
+        meshes, "lowrank",
+        solver_parameters=preset("lowrank", snes_type="newtonls"))
+    reference.solve()
+
+    capped = preset("lowrank", snes_type="newtonls", outer_max_it=2)
+    solver, _, _ = build(meshes, "lowrank", solver_parameters=capped)
+    with pytest.raises(fd.ConvergenceError, match="DIVERGED_LINEAR_SOLVE"):
+        solver.solve()
+
+    accepted = preset("lowrank", snes_type="newtonls", outer_max_it=2,
+                      outer_accept_capped=True)
+    solver, z, _ = build(meshes, "lowrank", solver_parameters=accepted)
+    solver.solve()
+    snes = solver.solver.snes
+    assert snes.getConvergedReason() > 0
+    # Vacuity guard: the cap really bound, so the option did something.
+    assert snes.getLinearSolveIterations() >= 2 * snes.getIterationNumber()
+    for field in (layout.displacement, layout.potential):
+        reference_norm = fd.norm(z_ref.subfunctions[field])
+        difference = fd.norm(z.subfunctions[field] - z_ref.subfunctions[field])
+        assert difference < 1e-3 * reference_norm
 
 
 # ---------------------------------------------------------------------------

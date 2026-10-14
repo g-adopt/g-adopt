@@ -475,21 +475,35 @@ def _option_along_the_prefix_chain(pc, name, reader, default):
     return default
 
 
-def _rebuild_rule_option(pc):
-    """The value of `dense_schur_rebuild` for a cache of the `Real` block.
+#: The default of `gia_rebuild_every`: a state-dependent Jacobian rebuilds
+#: its preconditioner pieces every 5 nonlinear solves. Measured on GIAMIP
+#: Exp01 at L0 (moving coastline, Maxwell rheology, 500 yr steps): a rebuild
+#: every 5 solves cut the solve time by 42 % against one per Newton iteration,
+#: with the same Newton and outer iteration counts and the same state to four
+#: digits (NOTES/EXP01-HANDOVER.md, section 16.13, giamip-exp01 worktree).
+DEFAULT_REBUILD_EVERY = 5
 
-    Two classes hold a factored complement of the `Real` block --
-    `DtNMultiplierDenseSchurPC`, which sits on block 1 of the fieldsplit, and
-    `_SchurAinvBCache`, which owns the whole apply on the outer PC -- and both
-    must answer the same option with the same two values. Otherwise a campaign
-    arm that writes the key measures a rule on one route and the default on
-    the other. One reader, called by both, is what keeps them together.
+
+def _rebuild_rule_option(pc):
+    """The value of `gia_rebuild`, the one rebuild rule of the GIA solver.
+
+    Every cached piece of the mechanics block follows this one rule: the
+    condensed block-0 blocks of `CondensedBlockPC` with their two GAMG
+    hierarchies (and through them the low-rank DtN columns of
+    `LowRankPotentialPC`, which rebuild only when those blocks change), and
+    the factored complement of the `Real` block, which two classes hold --
+    `DtNMultiplierDenseSchurPC`, on block 1 of the fieldsplit, and
+    `_SchurAinvBCache`, which owns the whole apply on the outer PC. One
+    option and one reader keep them together. Two rules would let block 0
+    and block 1 rebuild at different solves, so the effect of a lag would
+    depend on how the two combine, and a campaign arm that wrote one key
+    would measure a rule on one block and the default on the other.
     `selfgrav_dtn_iterative_solver_parameters` selects the cached apply
     wherever it forms the exact complement at all, and a caller reaches the
     block-1 class by passing `ainvb=False` or by naming it.
 
     The option is read along the whole chain of option prefixes above this
-    preconditioner, so a driver can write `dense_schur_rebuild` at the top
+    preconditioner, so a driver can write `gia_rebuild` at the top
     level of its solver parameters dictionary and reach the class wherever the
     nest puts it.
 
@@ -503,8 +517,11 @@ def _rebuild_rule_option(pc):
       pc: PETSc preconditioner.
 
     Returns:
-      `"per_solve"`, the default and the staleness-marker rule, or `"always"`,
-      one build per `update`.
+      `"lagged"`, the default: the staleness-marker rule with the rebuild of a
+      state-dependent Jacobian delayed over several nonlinear solves,
+      configured by `_rebuild_lag_options`; `"per_solve"`, the
+      staleness-marker rule with one build per nonlinear solve; or
+      `"always"`, one build per `update`.
 
     Raises:
       ValueError: when the option carries any other value. A misspelled value
@@ -513,12 +530,135 @@ def _rebuild_rule_option(pc):
         so.
     """
     rule = _option_along_the_prefix_chain(
-        pc, "dense_schur_rebuild", "getString", "per_solve")
-    if rule not in ("per_solve", "always"):
+        pc, "gia_rebuild", "getString", "lagged")
+    if rule not in ("per_solve", "always", "lagged"):
         raise _loud(ValueError(
-            "dense_schur_rebuild must be 'per_solve' or 'always'; it got "
-            f"{rule!r}."))
+            "gia_rebuild must be 'per_solve', 'always' or 'lagged'; "
+            f"it got {rule!r}."))
     return rule
+
+
+def _rebuild_lag_options(pc, rule):
+    """The two settings of `gia_rebuild = lagged`, read and checked.
+
+    A moving coastline makes the Jacobian depend on the state, so the solver
+    publishes `operator_version = None`. `per_solve` then rebuilds every
+    cached piece of the mechanics block once per nonlinear solve: the
+    condensed block-0 blocks with their two GAMG hierarchies, and the
+    complement of the `Real` block, which costs one block-0 solve per `Real`
+    row (5 of the 8 block-0 solves of an early case D step). All of these are
+    only a preconditioner, and the operator moves slowly (the coastline moves
+    by a fraction of a facet per step), so pieces built a few solves earlier
+    serve the outer FGMRES nearly as well. `lagged`, the default, rebuilds on
+    the state-dependent branch only when one of two conditions holds:
+
+    - `gia_rebuild_every = k` (an integer, at least 1, default
+      `DEFAULT_REBUILD_EVERY`): `k` or more nonlinear solves have run since
+      the last build. `k = 1` is `per_solve` exactly.
+    - `gia_rebuild_max_outer = m` (a real, default 0, which switches
+      the test off): the previous nonlinear solve took more than `m` outer
+      linear iterations per Newton iteration. The solver publishes both
+      counts after each solve (`gia_last_solve_linear_its` and
+      `gia_last_solve_newton_its` in the application context). A lagged
+      complement that has become poor shows as extra outer iterations, so this
+      test rebuilds as soon as the lag starts to cost more than it saves.
+
+    Two things end the lag at once, because there the operator jumps and does
+    not drift. A changed `operator_version` (the integer branch of
+    `_RebuildRule`, which a Jacobian that does not depend on the state uses)
+    is never lagged. And on the state-dependent branch a changed time step
+    rebuilds at the next solve: the solver publishes `operator_version = None`
+    there and fingerprints no coefficient, so `_RebuildRule` records the value
+    of `appctx["dt"]` at each build and compares it itself. Other coefficient
+    changes on a state-dependent Jacobian do not end the lag. In case D the
+    ice load changes at every step, and that slow change is what the lag is
+    for.
+
+    Both settings are refused when they are written but the rule is not
+    `lagged`, for the reason `_rebuild_rule_option` refuses a misspelled
+    rule: an arm that sets `k` and forgets the rule would report the cost of
+    `per_solve` and nothing in the log would say so.
+
+    Args:
+      pc: PETSc preconditioner.
+      rule: the value `_rebuild_rule_option` returned for the same PC.
+
+    Returns:
+      A dict with the keys `every` (int) and `max_outer` (float, 0 when the
+      test is off), ready to pass to `_RebuildRule`. For a rule other than
+      `lagged` it is `{"every": 1, "max_outer": 0.0}`, the `per_solve` values.
+
+    Raises:
+      ValueError: for a setting written without `lagged`, for `k < 1`, or for
+        `m < 0`.
+    """
+    names = ("gia_rebuild_every", "gia_rebuild_max_outer")
+    if rule != "lagged":
+        written = [name for name in names if _option_along_the_prefix_chain(
+            pc, name, "getString", None) is not None]
+        if written:
+            raise _loud(ValueError(
+                f"{', '.join(written)} only applies with "
+                f"gia_rebuild = 'lagged'; the rule is {rule!r}."))
+        return {"every": 1, "max_outer": 0.0}
+    every = _option_along_the_prefix_chain(
+        pc, names[0], "getInt", DEFAULT_REBUILD_EVERY)
+    max_outer = _option_along_the_prefix_chain(pc, names[1], "getReal", 0.0)
+    if every < 1:
+        raise _loud(ValueError(
+            f"gia_rebuild_every must be at least 1; it got {every}."))
+    if max_outer < 0:
+        raise _loud(ValueError(
+            "gia_rebuild_max_outer must be 0 (off) or positive; it "
+            f"got {max_outer}."))
+    return {"every": int(every), "max_outer": float(max_outer)}
+
+
+def _published_dt(pc):
+    """The time step in the solver's application context, as a float.
+
+    The solvers publish `appctx["dt"]`, a `Constant` or a number, and the
+    drivers change it with `dt.assign`. The value is the same on every rank.
+    `_RebuildRule` compares it between builds on the lagged branch, where no
+    other marker moves when the time step changes.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      The time step as a float, or `None` when the context carries none or it
+      cannot be read as one number.
+    """
+    dt = _solver_appctx(pc).get("dt")
+    if dt is None:
+        return None
+    try:
+        return float(dt)
+    except (TypeError, ValueError):
+        return None
+
+
+def _last_solve_outer_per_newton(pc):
+    """Outer linear iterations per Newton iteration of the previous solve.
+
+    `SelfGravitatingGIASolver.solve` writes the two counts into the
+    application context after every nonlinear solve. They come from the SNES,
+    which every rank runs collectively, so the ratio is the same on every rank
+    and a rebuild decision taken from it is entered by all ranks together.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      The ratio as a float, or `None` when the context does not carry the
+      counts (before the first solve, or a solver that does not publish them).
+    """
+    appctx = _solver_appctx(pc)
+    linear = appctx.get("gia_last_solve_linear_its")
+    newton = appctx.get("gia_last_solve_newton_its")
+    if linear is None or newton is None:
+        return None
+    return float(linear) / max(1, int(newton))
 
 
 def _staleness_markers(pc):
@@ -574,16 +714,88 @@ class _RebuildRule:
        field written between steps and `invalidate_jacobian` alike. A time step
        is a different operator because the effective bulk/shear ratio is
        `bulk_shear_ratio * (1 + dt/tau)`.
-    2. `operator_version` is `None` -- a power law, whose Jacobian depends on
-       the state, so no version number can describe it -- and `gia_solve_index`
-       moved: rebuild. That is one build per nonlinear solve, from the state
-       the solve starts at, never one per Newton iteration.
+    2. `operator_version` is `None` -- a power law or a moving coastline,
+       whose Jacobian depends on the state, so no version number can describe
+       it -- and `gia_solve_index` moved: rebuild. That is one build per
+       nonlinear solve, from the state the solve starts at, never one per
+       Newton iteration. A context with `None` and no solve index comes from a
+       solver that does not count its solves; it rebuilds at every update.
     3. The context carries neither marker: leave the cached object alone.
+
+    Branch 2 can be lagged (`gia_rebuild = lagged`, the default, see
+    `_rebuild_lag_options`): the rebuild then waits until `every` solves have
+    run since the last build, until the previous solve took more than
+    `max_outer` outer iterations per Newton iteration, or until the time step
+    differs from the one of the last build. With `every = 1` and
+    `max_outer = 0` the rule is branch 2 as written above.
+
+    This is the one rebuild rule of the GIA solver: `CondensedBlockPC` (block
+    0) and the two classes that hold the `Real`-block complement (block 1)
+    each build one through `from_options` and answer it at every `update`
+    through `due`. Their inputs are the same rank-consistent markers, so all
+    of them rebuild at the same solves.
+
+    Args:
+      every: rebuild on branch 2 only after this many nonlinear solves since
+        the last build. At least 1.
+      max_outer: also rebuild on branch 2 when the previous solve took more
+        than this many outer linear iterations per Newton iteration. 0 turns
+        the test off.
+      rule: the value of `gia_rebuild`; `"always"` builds at every update
+        (see `due`).
     """
 
-    def __init__(self):
+    def __init__(self, every=1, max_outer=0.0, rule="per_solve"):
         self._operator_version = None
         self._solve_index = None
+        self._every = int(every)
+        self._max_outer = float(max_outer)
+        #: The value of `gia_rebuild` this rule answers: `"always"` makes
+        #: `due` build at every update; the other two values go through
+        #: `moved`.
+        self.rule = rule
+        # The time step the current cached object was built at. Only the
+        # lagged branch reads it; see `_published_dt`.
+        self._dt = None
+
+    @classmethod
+    def from_options(cls, pc):
+        """The rule the options on this PC's prefix chain select.
+
+        Every class that caches a piece of the mechanics block builds its
+        rule here, so all of them read `gia_rebuild`, `gia_rebuild_every`
+        and `gia_rebuild_max_outer` the same way and rebuild at the same
+        solves. Read once at set-up and never per update, so the rule cannot
+        drift during a march; a refused value raises before any build.
+
+        Args:
+          pc: PETSc preconditioner.
+
+        Returns:
+          A `_RebuildRule`, not yet recorded.
+        """
+        rule = _rebuild_rule_option(pc)
+        return cls(rule=rule, **_rebuild_lag_options(pc, rule))
+
+    def due(self, pc):
+        """Whether the cached object must be built again at this update.
+
+        `always` builds whenever the context carries a staleness marker; the
+        markers are still adopted, so that a later comparison has the state
+        of this build to compare against. The other two values ask `moved`.
+
+        Args:
+          pc: PETSc preconditioner.
+
+        Returns:
+          True when the caller must build again.
+        """
+        if self.rule == "always":
+            _, _, present = _staleness_markers(pc)
+            if present:
+                self.record(pc)
+            return present
+        return self.moved(pc)
 
     @property
     def operator_version(self):
@@ -608,6 +820,7 @@ class _RebuildRule:
           pc: PETSc preconditioner.
         """
         self._operator_version, self._solve_index, _ = _staleness_markers(pc)
+        self._dt = _published_dt(pc)
 
     def moved(self, pc):
         """Whether the operator moved since the last recorded build.
@@ -631,14 +844,50 @@ class _RebuildRule:
                 # to the state-dependent branch compares against this build and
                 # not against an older one.
                 self._solve_index = solve_index
+                self._dt = _published_dt(pc)
                 return True
             return False
         if solve_index is None or self._solve_index is None:
-            return False
+            # A state-dependent Jacobian from a solver that does not count its
+            # solves: nothing says how far the operator moved, so rebuild at
+            # every update, which is the safe answer.
+            return solve_index is None
         if solve_index != self._solve_index:
+            if not self._lag_expired(pc, solve_index):
+                # Keep the stored index: the count of solves since the last
+                # build has to keep growing until the lag expires.
+                return False
             self._operator_version = version
             self._solve_index = solve_index
+            self._dt = _published_dt(pc)
             return True
+        return False
+
+    def _lag_expired(self, pc, solve_index):
+        """Whether a lagged complement must be rebuilt at this solve.
+
+        Always True with the defaults, which is the unlagged `per_solve`
+        rule. Every input is rank-consistent (the solve index and the SNES
+        counts), so every rank takes the same decision.
+
+        Args:
+          pc: PETSc preconditioner.
+          solve_index: the current `gia_solve_index`.
+
+        Returns:
+          True when `every` solves have run since the last build, when the
+          time step differs from the one of the last build, or when the
+          previous solve took more than `max_outer` outer iterations per
+          Newton iteration.
+        """
+        if solve_index - self._solve_index >= self._every:
+            return True
+        if _published_dt(pc) != self._dt:
+            return True
+        if self._max_outer > 0:
+            ratio = _last_solve_outer_per_newton(pc)
+            if ratio is not None and ratio > self._max_outer:
+                return True
         return False
 
 
@@ -837,7 +1086,7 @@ class _SchurAinvBCache:
 
     ## When the cache is rebuilt
 
-    The option `dense_schur_rebuild` selects the rule, with the same two
+    The option `gia_rebuild` selects the rule, with the same two
     values and the same meaning they have on `DtNMultiplierDenseSchurPC`.
     `per_solve`, the default, rebuilds when `_RebuildRule` says the operator
     moved. `always` rebuilds at every `update`, which is what a moving
@@ -845,6 +1094,9 @@ class _SchurAinvBCache:
     complement is stale before the solve that built it ends. `update` below
     carries the reasoning for each branch. Which value is cheaper at
     production scale is a measurement, which is why the rule is an option.
+    The third value, `lagged`, is `per_solve` with the rebuild of a
+    state-dependent Jacobian delayed over several nonlinear solves; its two
+    settings and the reason for it are in `_rebuild_lag_options`.
 
     Args:
       pc: the outer PETSc `PC`, used for its communicator, its operator layout
@@ -863,7 +1115,11 @@ class _SchurAinvBCache:
         # refused before the build spends `n` solves on it. The reader is
         # shared with `DtNMultiplierDenseSchurPC`, which holds the same
         # complement on the other block-1 route.
-        self._rebuild_rule = _rebuild_rule_option(pc)
+        # The rule is read here, before any build, so a refused value
+        # raises before it costs a build; `initialize`-time state is recorded
+        # in `reset`.
+        self._rule = _RebuildRule.from_options(pc)
+        self._rebuild_rule = self._rule.rule
         self.inner = inner
         self.ksp0, self.ksp1 = inner.getFieldSplitSchurGetSubKSP()
 
@@ -909,7 +1165,7 @@ class _SchurAinvBCache:
         self.Z = []
         self.S = np.zeros((self.n, self.n))
         self._factors = None
-        self._rule = _RebuildRule()
+        self._rule = _RebuildRule.from_options(pc)
         self._rule.record(pc)
         self.build(pc)
 
@@ -1046,7 +1302,7 @@ class _SchurAinvBCache:
     def update(self, pc):
         """Rebuild when the mechanics block moved, or when the blocks were replaced.
 
-        Two rules, selected by the option `dense_schur_rebuild` and read once
+        Two rules, selected by the option `gia_rebuild` and read once
         in `__init__`. The default `per_solve` rebuilds when `_RebuildRule`
         says the operator moved, which is once per changed operator version
         and, for a state-dependent Jacobian, once per nonlinear solve. The
@@ -1055,6 +1311,10 @@ class _SchurAinvBCache:
         coastline, where the ocean masks follow the unknowns and so sit in
         `A01`, `A10` and `A11` as well as in `A00`, and a complement formed at
         the start of a solve is stale before the solve ends.
+
+        The value `lagged` takes the `per_solve` branch; `_RebuildRule`
+        then delays the rebuild of a state-dependent Jacobian as
+        `_rebuild_lag_options` describes.
 
         Both rules leave the cache alone when the context carries neither
         staleness marker, because such a context is the multiplier path's
@@ -1085,21 +1345,11 @@ class _SchurAinvBCache:
         handles = self._sub_block_handles()
         replaced = handles != self._handles
         self._handles = handles
-        if self._rebuild_rule == "always":
-            _, _, present = _staleness_markers(pc)
-            if present:
-                # The markers are still adopted, so that a later comparison -
-                # the first `update` after a switch back - has the state of
-                # this build to compare against.
-                self._rule.record(pc)
-            if replaced or present:
-                self.build(pc)
-            return
-        # Both tests are evaluated: `moved` records the markers of the build it
+        # Both tests are evaluated: `due` records the markers of the build it
         # asks for, and skipping it when the handles moved would leave the rule
         # comparing against an older state.
-        moved = self._rule.moved(pc)
-        if replaced or moved:
+        due = self._rule.due(pc)
+        if replaced or due:
             self.build(pc)
 
     # -- the applies --------------------------------------------------------
@@ -1961,7 +2211,7 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     three-iteration step. A complement that lags the state costs outer
     iterations and changes no residual, so the cheap rule is the right trade.
 
-    ## The option `dense_schur_rebuild`
+    ## The option `gia_rebuild`
 
     Which of the two rules is cheaper comes from a measurement, so the rule
     is an option. The value `per_solve`, the default, is the pair of triggers
@@ -1972,7 +2222,9 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     sit in `A01`, `A10` and `A11` as well as in `A00`, because the sea-level
     `Shift` is a `Real` row, so every factor of a complement built at the
     start of a solve is stale in a way a power law does not make it. Which
-    value is cheaper at production scale is what job G4-rule measures.
+    value is cheaper at production scale is what job G4-rule measures. The
+    value `lagged` is `per_solve` with the rebuild of a state-dependent
+    Jacobian delayed over several nonlinear solves (`_rebuild_lag_options`).
 
     The option is read along the whole chain of option prefixes above this
     preconditioner, so a driver can write it at the top level of its solver
@@ -2054,13 +2306,14 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         Args:
           pc: PETSc preconditioner.
         """
-        self._rule = _RebuildRule()
-        self._rule.record(pc)
         # The rebuild rule, read once here and never re-read, so it cannot
-        # drift during a march. `_rebuild_rule_option` is shared with
+        # drift during a march. `_RebuildRule.from_options` is shared with
         # `_SchurAinvBCache`, the class that holds the same complement on the
-        # other block-1 route, so the two answer the option identically.
-        self._rebuild_rule = _rebuild_rule_option(pc)
+        # other block-1 route, and with `CondensedBlockPC` on block 0, so all
+        # three answer the options identically and rebuild at the same solves.
+        self._rule = _RebuildRule.from_options(pc)
+        self._rebuild_rule = self._rule.rule
+        self._rule.record(pc)
         # Counts builds over the life of this PC instance, `initialize`
         # included. Tests read it to pin the rebuild rule; nothing in the
         # solve path branches on it.
@@ -2101,27 +2354,21 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         it ends in the same place: one complement, built at the first adjoint
         solve and kept.
 
-        The option `dense_schur_rebuild` selects between the two rules. The
+        The option `gia_rebuild` selects between the two rules. The
         default `per_solve` is the pair of triggers above. `always` rebuilds
         at every call, which is one build per Newton iteration and per outer
         linear solve, and is worth its cost only where the operator moves fast
         inside a solve - a moving coastline, where the masks sit in every
         block of the `Real` row and column. Both rules leave the complement
         alone when the context carries neither marker, because that context is
-        an adjoint sweep and not a new state.
+        an adjoint sweep and not a new state. The value `lagged` takes the
+        `per_solve` branch, and `_RebuildRule` delays trigger 2 as
+        `_rebuild_lag_options` describes.
 
         Args:
           pc: PETSc preconditioner.
         """
-        if self._rebuild_rule == "always":
-            _, _, present = _staleness_markers(pc)
-            if present:
-                # The markers are still adopted, so that a later switch back
-                # to a comparison has a state to compare against.
-                self._rule.record(pc)
-                self._build(pc)
-            return
-        if self._rule.moved(pc):
+        if self._rule.due(pc):
             self._build(pc)
 
     def _appctx(self, pc):
@@ -2482,7 +2729,7 @@ class LowRankPotentialPC(fd.preconditioners.base.PCBase):
         # preconditioner without spelling out the nest it sits in.
         self._reuse_rtol = _option_along_the_prefix_chain(
             pc, "lowrank_reuse_rtol", "getReal", 0.0)
-        # Rank-constant for the same reason as `dense_schur_rebuild` above:
+        # Rank-constant for the same reason as `gia_rebuild` above:
         # the value comes from the solver parameters dictionary, which is one
         # object on every rank. A rank that read a different tolerance could
         # only pull every rank into a rebuild through the `MPI.LOR` below,
@@ -3419,12 +3666,14 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
     `SelfGravitatingGIASolver._attach_condensation_context` publishes one set
     for both routes:
 
-    - `operator_version`: the reuse fingerprint. A Newtonian march at fixed
-      `dt` has a constant Jacobian, so the four blocks and the GAMG
-      hierarchies built on them serve the whole march; the class reassembles
-      only when the version moves. `None` means "rebuild on every update",
-      which the solver publishes for a power law, where the Jacobian moves
-      inside one Newton solve.
+    - `operator_version` and `gia_solve_index`: the staleness markers that
+      `_RebuildRule` reads (option `gia_rebuild`, shared with the
+      `Real`-block complement). A Newtonian march at fixed `dt` has a
+      constant Jacobian, so the four blocks and the GAMG hierarchies built on
+      them serve the whole march; the class reassembles when the version
+      moves. `None` (a power law, a moving coastline) means the Jacobian
+      depends on the state; the rule then rebuilds every few nonlinear
+      solves, counted by `gia_solve_index`.
     - `condensed_field_nullspace`, `condensed_field_transpose_nullspace`,
       `condensed_field_near_nullspace`: each a callable taking the
       displacement space and returning a `VectorSpaceBasis`. The first two are
@@ -3708,13 +3957,18 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         self.condensed_ksp = ksp
 
         #: Assemblies of the four blocks, including the one above: a Newtonian
-        #: march at fixed `dt` must stay at 1, and a power law must reach the
-        #: Newton iteration count.
+        #: march at fixed `dt` must stay at 1; a state-dependent Jacobian
+        #: rebuilds as `gia_rebuild` says.
         self.assembly_count = 1
         #: Eliminations of `M`, one per `apply`. The whole point of the route
         #: is that this counts applications and not inner iterations.
         self.elimination_count = 0
-        self._operator_version = self._published_version()
+        # The one rebuild rule of the solver (`_RebuildRule.from_options`),
+        # the same object type and the same options as the `Real`-block
+        # complement on block 1, so the two blocks rebuild at the same solves.
+        # Recorded after the build above, which it then describes.
+        self._rule = _RebuildRule.from_options(pc)
+        self._rule.record(pc)
 
     def _assemble_blocks(self):
         """Reassemble the four blocks in place, keeping their `PETSc.Mat`s.
@@ -3809,27 +4063,32 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
             # object, but attaching does not depend on PETSc keeping it.
             setter(cache[key][1])
 
-    def _published_version(self):
-        """The operator version the solver publishes, or a sentinel.
-
-        The sentinel is a fresh object, so an application context without the
-        key never compares equal to a stored version and the blocks are
-        rebuilt on every update, which is the safe default.
-        """
-        return self.cxt.appctx.get("operator_version", object())
-
     def update(self, pc):
-        """Reassemble the four blocks when the Jacobian has moved.
+        """Reassemble the four blocks when the rebuild rule says so.
 
-        PETSc calls this on every linear solve. `operator_version` says
-        whether anything in the Jacobian changed since the blocks were built;
-        `None` (a power law) means it changed and cannot be described, so
-        rebuild.
+        PETSc calls this on every linear solve, that is at every Newton
+        iteration. `_RebuildRule` decides, the same rule the `Real`-block
+        complement on block 1 follows (option `gia_rebuild`):
+
+        - a changed integer `operator_version` (a new `dt`, a new coefficient
+          of a Jacobian that does not depend on the state) rebuilds at once;
+        - on a state-dependent Jacobian (`operator_version = None`: a power
+          law or a moving coastline) the default `lagged` rebuilds every
+          `gia_rebuild_every` nonlinear solves, at the first Newton iteration
+          of the solve, and at once when `dt` changes; `per_solve` rebuilds
+          once per solve; `always` at every update.
+
+        The blocks are a preconditioner. The residual and the Jacobian action
+        stay exact, so a stale set changes no converged state and costs only
+        Krylov iterations. Skipping the reassembly also skips the two GAMG
+        setups and, because the potential block does not move, the low-rank
+        DtN columns of `LowRankPotentialPC`.
+
+        Args:
+          pc: PETSc preconditioner.
         """
-        version = self._published_version()
-        if version is not None and version == self._operator_version:
+        if not self._rule.due(pc):
             return
-        self._operator_version = version
         self._assemble_blocks()
         self.assembly_count += 1
         # The nullspaces are attached to the matrix object and survive the
