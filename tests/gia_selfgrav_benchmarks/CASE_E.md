@@ -130,7 +130,7 @@ python3 martinec.py --case E --time_step_yr 500 \
 Either check can also be requested separately. These flags automatically use
 the adjoint history and exit after the requested checks; no
 `--topography_method rol` or ROL module is needed. Add `--smoke` for a small
-workflow check. They use the same `--adjoint_checkpoints` Revolve schedule as
+workflow check. They use the same `--adjoint_checkpointing` strategy as
 the fit and can start from `--topography_restart`. They cannot be combined
 with `--restart`, `--topography_one_pass`, or `--write_gradients`.
 
@@ -182,11 +182,46 @@ Output reuses existing derivatives without additional adjoint solves and
 does not include rejected line-search/trust-region trial points. This flag
 is separate from `--write_output` for the forward fields and requires ROL.
 
-Use the same options without `--smoke` for production. Revolve uses
-`--adjoint_checkpoints` RAM snapshots (default five) and recomputes states
-between them. Memory includes each stored coupled state, and runtime includes
-replays, adjoints and optimisation evaluations. Budget a separate job after
-measuring the smoke/production pilot. ROL supports a saved-topography warm
+Use the same options without `--smoke` for production. Select the adjoint
+strategy for ROL, replay checks or Taylor tests with:
+
+| Argument | Storage strategy |
+|---|---|
+| `--adjoint_checkpointing revolve` | Default: limited RAM snapshots and forward recomputation |
+| `--adjoint_checkpointing single_memory` | Store all adjoint dependencies in RAM |
+| `--adjoint_checkpointing single_disk` | Store adjoint dependencies on disk |
+
+`--adjoint_checkpoints` sets the snapshot count only for Revolve (default
+five). Single memory and single disk do not use this count. For single
+memory, verify the September 2026 checkpoint-clearing fix is present in
+pyadjoint; the published 2026.10.0 release contains it (see
+[CHECKPOINTING_REVIEW.md](CHECKPOINTING_REVIEW.md)).
+
+Single disk uses Firedrake's vector checkpoint backend with a communicator
+per node, preserving the existing volume/surface function spaces on restore.
+It requires Firedrake's `checkpoint_comm`/`checkpoint_dir` API and fails
+with a clear message if that API is unavailable. Function checkpoints use
+`PBS_JOBFS` when set, or `OUTPUT/adjoint_checkpoints` otherwise. Override
+this with `--adjoint_checkpoint_dir DIR`; the directory must be accessible
+to all ranks on each node. For example, a node-local replay check:
+
+```bash
+python3 martinec.py --case E --time_step_yr 500 \
+    --check_topography_replay --adjoint_checkpointing single_disk \
+    --adjoint_checkpoint_dir "$PBS_JOBFS" \
+    --output_path outputs/martinec_E_disk_replay
+```
+
+For a memory Taylor test, use `--check_topography_taylor
+--adjoint_checkpointing single_memory` instead. The selected strategy,
+package versions and resolved disk directories are logged and saved in
+`topography_checkpointing.json`. These settings do not change Picard
+histories or their persistent restart checkpoints. Adjoint disk files are
+temporary working data, not files for restarting a later job.
+
+Memory includes the selected stored data and solver workspaces; runtime
+includes replays, adjoints and optimisation evaluations. Budget a separate
+job after measuring the smoke/production pilot. ROL supports a saved-topography warm
 start via `--topography_restart`, but does not resume a partially taped
 history or retain optimiser state across jobs.
 

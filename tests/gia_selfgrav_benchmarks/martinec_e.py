@@ -6,6 +6,7 @@ the Picard route and the existing B/C/D cases do not need ROL.
 import copy
 import gc
 import math
+import os
 from pathlib import Path
 import shutil
 import time
@@ -30,7 +31,11 @@ def add_arguments(parser):
     parser.add_argument("--topography_restart", metavar="FILE",
                         help="E: start a NEW history from checkpoint_E_next.h5, same ranks")
     parser.add_argument("--adjoint_checkpoints", type=int, default=5,
-                        help="E ROL: RAM snapshots for Revolve (recomputation between snapshots)")
+                        help="E adjoint: RAM snapshot count for the revolve strategy only")
+    parser.add_argument("--adjoint_checkpointing", choices=("revolve", "single_memory", "single_disk"),
+                        default="revolve", help="E ROL/replay/Taylor: adjoint storage strategy")
+    parser.add_argument("--adjoint_checkpoint_dir", metavar="DIR",
+                        help="E single_disk: function checkpoint directory (default PBS_JOBFS, else output directory)")
     parser.add_argument("--check_topography_gradient", action="store_true",
                         help="E ROL: compare adjoint derivative with fresh central differences")
     parser.add_argument("--check_topography_replay", action="store_true",
@@ -328,12 +333,61 @@ class ROLGradientOutput:
             self.write_json(str(self.root / "iterations.json"), self.records)
 
 
+def configure_adjoint_checkpointing(args, tape, total_steps, comm, root):
+    """Select a storage schedule before any history blocks are recorded."""
+    from checkpoint_schedules import Revolve, SingleMemoryStorageSchedule, SingleDiskStorageSchedule
+    from firedrake.adjoint import enable_disk_checkpointing
+    strategy = args.adjoint_checkpointing
+    record = {"strategy": strategy, "steps": total_steps}
+    from importlib.metadata import version, PackageNotFoundError
+    for package in ("firedrake", "pyadjoint-ad", "checkpoint-schedules"):
+        try:
+            record[package] = version(package)
+        except PackageNotFoundError:
+            record[package] = "unknown"
+    if strategy == "revolve":
+        if total_steps < 2 or args.adjoint_checkpoints < 1:
+            raise ValueError("Revolve requires at least two steps and a positive snapshot count")
+        snapshots = min(args.adjoint_checkpoints, total_steps - 1)
+        schedule = Revolve(total_steps, snapshots)
+        record["ram_snapshots"] = snapshots
+    elif strategy == "single_memory":
+        schedule = SingleMemoryStorageSchedule()
+    else:
+        import inspect
+        from mpi4py import MPI
+        if not {"checkpoint_comm", "checkpoint_dir"}.issubset(inspect.signature(enable_disk_checkpointing).parameters):
+            raise RuntimeError("single_disk requires Firedrake's checkpoint_comm/checkpoint_dir disk backend")
+        if "firedrake" in tape._package_data:
+            raise RuntimeError("A disk checkpoint backend is already configured; use a fresh tape to select its directory")
+        # Preserve the existing volume/surface submesh function spaces on
+        # restore. Vector I/O uses one communicator/file group per node.
+        disk_dir = Path(args.adjoint_checkpoint_dir or os.environ.get("PBS_JOBFS")
+                        or Path(root) / "adjoint_checkpoints").expanduser().resolve()
+        disk_dir.mkdir(parents=True, exist_ok=True)
+        shared_dir = Path(root).resolve()
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        node_comm = comm.Split_type(MPI.COMM_TYPE_SHARED)
+        try:
+            enable_disk_checkpointing(dirname=str(shared_dir), comm=comm,
+                                      checkpoint_comm=node_comm, checkpoint_dir=str(disk_dir))
+        except Exception:
+            node_comm.Free()
+            raise
+        # The backend must retain this communicator until the tape is cleared.
+        record.update(function_checkpoint_dir=str(disk_dir), shared_checkpoint_dir=str(shared_dir),
+                      io="node communicator vector checkpoints")
+        schedule = SingleDiskStorageSchedule()
+    tape.enable_checkpointing(schedule)
+    return record
+
+
 def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
             correction, bulk_shear_ratio, root):
     from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
-                                  get_working_tape, pause_annotation, stop_annotating)
+                                  get_working_tape, pause_annotation, pause_disk_checkpointing,
+                                  stop_annotating)
     import firedrake as fd
-    from checkpoint_schedules import Revolve
     checks_only = args.check_topography_replay or args.check_topography_taylor
     if not checks_only:
         # Import inverse before clearing the tape: this module starts annotation.
@@ -342,9 +396,9 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
     pause_annotation()
     tape.clear_tape()
     total_steps, _ = time_grid(args, case.terminal_time_kyr, driver.T1_DT_YR)
-    if total_steps < 2:
-        raise ValueError("E adjoint checkpointing requires at least two time steps")
-    tape.enable_checkpointing(Revolve(total_steps, min(args.adjoint_checkpoints, total_steps - 1)))
+    checkpointing = configure_adjoint_checkpointing(args, tape, total_steps, parent.comm, root)
+    driver.common.write_json(str(root / "topography_checkpointing.json"), checkpointing)
+    driver.log(f"  E adjoint checkpointing: {checkpointing}")
     with stop_annotating():
         riesz = fd.RieszMap(correction.function_space(), "L2", constant_jacobian=True,
                             solver_parameters={"ksp_type": "cg", "pc_type": "jacobi", "ksp_rtol": 1e-10})
@@ -387,6 +441,7 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
             lambda r: driver.common.write_json(str(root / "topography_gradient.json"), r))
     if checks_only:
         tape.clear_tape()
+        pause_disk_checkpointing()
         return correction, evaluations, derivative_report
     parameters = copy.deepcopy(minimisation_parameters)
     parameters["Status Test"].update({"Iteration Limit": args.topography_max_iterations,
@@ -411,6 +466,7 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
         fitted = optimiser.rol_solver.rolvector.dat[0].copy(deepcopy=True)
     pause_annotation()
     tape.clear_tape()
+    pause_disk_checkpointing()
     return fitted, evaluations, derivative_report
 
 
@@ -432,8 +488,12 @@ def run(args, driver):
     if (not math.isfinite(args.topography_tolerance_m) or args.topography_tolerance_m <= 0
             or args.topography_max_iterations < 1):
         raise ValueError("E tolerance and maximum iterations must be positive")
-    if not 0 < args.topography_relaxation <= 1 or args.adjoint_checkpoints < 1:
-        raise ValueError("E relaxation must be in (0, 1]; adjoint snapshots must be positive")
+    if not 0 < args.topography_relaxation <= 1:
+        raise ValueError("E relaxation must be in (0, 1]")
+    if args.adjoint_checkpointing == "revolve" and args.adjoint_checkpoints < 1:
+        raise ValueError("Revolve adjoint snapshots must be positive")
+    if args.adjoint_checkpoint_dir and args.adjoint_checkpointing != "single_disk":
+        raise ValueError("--adjoint_checkpoint_dir requires --adjoint_checkpointing single_disk")
     if args.restart and args.topography_restart:
         raise ValueError("Use --restart within a history OR --topography_restart between histories")
     if args.topography_method == "rol" and (args.restart or args.topography_one_pass):
