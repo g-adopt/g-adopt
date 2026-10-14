@@ -5396,7 +5396,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
             def near_nullspace_provider(space, modes=modes):
                 # Built on the condensed displacement space the
-                # preconditioner hands over, once per operator build.
+                # preconditioner hands over. `CondensedBlockPC` calls this
+                # once and attaches the same basis on every operator rebuild.
                 return near_nullspace_basis(space, modes)
 
             self.appctx["condensed_field_near_nullspace"] = near_nullspace_provider
