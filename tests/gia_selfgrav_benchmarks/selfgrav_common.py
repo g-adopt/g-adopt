@@ -53,7 +53,7 @@ import numpy as np
 from gadopt import (COMM_WORLD, CheckpointFile,
                     CompressibleInternalVariableApproximation, Constant,
                     Function, FunctionSpace, JacobianDeterminant, Mesh,
-                    SpatialCoordinate, Submesh, VectorFunctionSpace, assemble,
+                    SpatialCoordinate, Submesh, VectorFunctionSpace, VertexOnlyMesh, assemble,
                     conditional, dot, interpolate, log, sqrt)
 from gadopt.gia_gravity import (FluidCore,
                                 selfgrav_dtn_iterative_solver_parameters)
@@ -868,6 +868,50 @@ def balanced_partition(plex, nparts):
     sizes = np.bincount(part, minlength=nparts).astype(PETSc.IntType)
     points = (np.argsort(part, kind="stable") + cstart).astype(PETSc.IntType)
     return sizes, points
+
+
+class PointSampler:
+    """Point evaluation of expressions of one mesh, in the input order.
+
+    A `VertexOnlyMesh` keeps only the points that its parent mesh contains,
+    in the order of the mesh partition. The sampler evaluates into the
+    `input_ordering` mesh, which restores the order the points were given in,
+    so that the output stays aligned with the published colatitudes.
+
+    A missing point reads back as zero and not as an error. The constructor
+    therefore interpolates the constant 1, which is exactly 1.0 at a located
+    point and 0.0 at a missing one, and every evaluation writes `nan` where
+    that mask is false.
+
+    Attributes:
+      found: a boolean array, `True` where the mesh contains the point.
+    """
+
+    def __init__(self, mesh, points):
+        """Locate the points.
+
+        Args:
+          mesh: the mesh to evaluate on.
+          points: an array of shape `(n, 3)`.
+        """
+        # "warn" and not "error": a missing point is counted in the output,
+        # and `test_benchmarks.py` refuses a profile with one.
+        self.vom = VertexOnlyMesh(mesh, points,
+                                  missing_points_behaviour="warn")
+        self._space = FunctionSpace(self.vom, "DG", 0)
+        self._ordered = FunctionSpace(self.vom.input_ordering, "DG", 0)
+        self.found = self._raw(Constant(1.0)) == 1.0
+
+    def _raw(self, expression):
+        """The point values in the input order, zero at a missing point."""
+        at_points = assemble(interpolate(expression, self._space))
+        ordered = Function(self._ordered)
+        ordered.interpolate(at_points)
+        return np.array(ordered.dat.data_ro, dtype=float)
+
+    def __call__(self, expression):
+        """A scalar UFL expression at the points, `nan` at a missing point."""
+        return np.where(self.found, self._raw(expression), np.nan)
 
 
 def md5sum(filename):

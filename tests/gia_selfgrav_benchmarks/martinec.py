@@ -135,7 +135,7 @@ import giamip  # noqa: E402
 import numpy as np  # noqa: E402
 from gadopt import (COMM_WORLD, Constant, Function,  # noqa: E402
                     FunctionSpace, ParameterLog, SpatialCoordinate,
-                    SphericalDtN, VertexOnlyMesh, VTKFile, acos, assemble,
+                    SphericalDtN, VTKFile, acos, assemble,
                     cos, dot, exp, interpolate, log, max_value, min_value,
                     sqrt)
 from gadopt.gia_gravity import (SeaLevel,  # noqa: E402
@@ -647,50 +647,6 @@ def profile_grid(case):
             for spec in case.profiles}
 
 
-class PointSampler:
-    """Point evaluation of expressions of one mesh, in the input order.
-
-    A `VertexOnlyMesh` keeps only the points that its parent mesh contains,
-    in the order of the mesh partition. The sampler evaluates into the
-    `input_ordering` mesh, which restores the order the points were given in,
-    so that the output stays aligned with the published colatitudes.
-
-    A missing point reads back as zero and not as an error. The constructor
-    therefore interpolates the constant 1, which is exactly 1.0 at a located
-    point and 0.0 at a missing one, and every evaluation writes `nan` where
-    that mask is false.
-
-    Attributes:
-      found: a boolean array, `True` where the mesh contains the point.
-    """
-
-    def __init__(self, mesh, points):
-        """Locate the points.
-
-        Args:
-          mesh: the mesh to evaluate on.
-          points: an array of shape `(n, 3)`.
-        """
-        # "warn" and not "error": a missing point is counted in the output,
-        # and `test_benchmarks.py` refuses a profile with one.
-        self.vom = VertexOnlyMesh(mesh, points,
-                                  missing_points_behaviour="warn")
-        self._space = FunctionSpace(self.vom, "DG", 0)
-        self._ordered = FunctionSpace(self.vom.input_ordering, "DG", 0)
-        self.found = self._raw(Constant(1.0)) == 1.0
-
-    def _raw(self, expression):
-        """The point values in the input order, zero at a missing point."""
-        at_points = assemble(interpolate(expression, self._space))
-        ordered = Function(self._ordered)
-        ordered.interpolate(at_points)
-        return np.array(ordered.dat.data_ro, dtype=float)
-
-    def __call__(self, expression):
-        """A scalar UFL expression at the points, `nan` at a missing point."""
-        return np.where(self.found, self._raw(expression), np.nan)
-
-
 def build_profile_samplers(parent, mantle, profiles):
     """One `PointSampler` per profile and per mesh.
 
@@ -706,8 +662,8 @@ def build_profile_samplers(parent, mantle, profiles):
         points = radius * np.column_stack((np.sin(theta) * np.cos(phi),
                                            np.sin(theta) * np.sin(phi),
                                            np.cos(theta)))
-        out[name] = {"mantle": PointSampler(mantle, points),
-                     "parent": PointSampler(parent, points)}
+        out[name] = {"mantle": common.PointSampler(mantle, points),
+                     "parent": common.PointSampler(parent, points)}
         found = int(np.count_nonzero(out[name]["mantle"].found
                                      & out[name]["parent"].found))
         log(f"  profile {name}: {found} of {len(points)} points located on "
