@@ -1082,26 +1082,47 @@ def test_gradient_is_indifferent_to_appctx_propagation(
 # wrong gradient.
 # ===========================================================================
 def test_stock_block_shape_is_unchanged():
-    """L25: the four private names route 1.5b binds to still exist."""
-    from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+    """L25: the private names the adopted block binds to still exist.
 
-    for name in ("_forward_solve", "_adjoint_solve",
-                 "_assemble_and_solve_tlm_eq"):
-        assert hasattr(NonlinearVariationalSolveBlock, name), (
-            f"NonlinearVariationalSolveBlock lost {name!r}: route 1.5b's "
+    Stock Firedrake: the three solve hooks of `NonlinearVariationalSolveBlock`
+    that `CoupledLowRankDtNSolveBlock` overrides. Firedrake PR 4638: the
+    methods and caches of `CachedSolverBlock` that
+    `CachedCoupledLowRankDtNSolveBlock` overrides or copies.
+    """
+    import inspect
+
+    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS, SOLVE_BLOCK_TYPE
+
+    if CACHED_SOLVER_BLOCKS:
+        names = ("recompute_component", "prepare_evaluate_adj",
+                 "evaluate_adj_component", "evaluate_tlm_component",
+                 "update_dependencies", "update_tlm_dependencies")
+        prepare = SOLVE_BLOCK_TYPE.prepare_evaluate_adj
+        # The copied tangent solve reads these three cache entries.
+        tlm_source = inspect.getsource(SOLVE_BLOCK_TYPE.evaluate_tlm_component)
+        for entry in ("tangent_cache.rhs", "tangent_cache.dFdm_forms",
+                      "tangent_cache.solver"):
+            assert entry in tlm_source, (
+                f"CachedSolverBlock.evaluate_tlm_component no longer uses "
+                f"{entry!r}: the copy in CachedCoupledLowRankDtNSolveBlock is "
+                f"out of date")
+    else:
+        names = ("_forward_solve", "_adjoint_solve",
+                 "_assemble_and_solve_tlm_eq")
+        prepare = SOLVE_BLOCK_TYPE.__mro__[1].prepare_evaluate_adj
+    for name in names:
+        assert hasattr(SOLVE_BLOCK_TYPE, name), (
+            f"{SOLVE_BLOCK_TYPE.__name__} lost {name!r}: route 1.5b's "
             f"adoption no longer applies (NOTES/fastdtn/REVIEW-ADJOINT.md S7.2)")
 
-    import inspect
-    source = inspect.getsource(
-        NonlinearVariationalSolveBlock.__mro__[1].prepare_evaluate_adj)
-    assert "adj_sol" in source, (
+    assert "adj_sol" in inspect.getsource(prepare), (
         "the `prepared` dict no longer carries 'adj_sol': the "
         "`evaluate_adj_component` override cannot reach the adjoint solution")
 
 
 def test_one_solve_adds_one_block(meshes):
     """L25 second half: `solve()` still adds exactly one solve block."""
-    from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+    from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
 
     _, sub = meshes
     tape = get_working_tape()
@@ -1116,8 +1137,11 @@ def test_one_solve_adds_one_block(meshes):
     finally:
         pause_annotation()
     added = tape.get_blocks()[n0:]
+    # The solve blocks that output the coupled solution. With Firedrake PR
+    # 4638 any enclosed-mass solve on R is a solve block of the same class.
     solve_blocks = [b for b in added
-                    if isinstance(b, NonlinearVariationalSolveBlock)]
+                    if isinstance(b, SOLVE_BLOCK_TYPE)
+                    and any(o.output is z for o in b.get_outputs())]
     print(f"    [L25] blocks added by solve(): "
           f"{[type(b).__name__ for b in added]}")
     assert len(solve_blocks) == 1
@@ -1133,7 +1157,7 @@ def test_one_solve_adds_one_block(meshes):
 # ===========================================================================
 def test_block_is_found_by_output_identity_not_position(meshes):
     """L26: an intervening block must not defeat the adoption."""
-    from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+    from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
 
     _, sub = meshes
     tape = get_working_tape()
@@ -1152,13 +1176,12 @@ def test_block_is_found_by_output_identity_not_position(meshes):
 
     added = tape.get_blocks()[n0:]
     ours = [b for b in added
-            if isinstance(b, NonlinearVariationalSolveBlock)
+            if isinstance(b, SOLVE_BLOCK_TYPE)
             and any(o.output is z for o in b.get_outputs())]
     print(f"    [L26] added {[type(b).__name__ for b in added]}; "
           f"last is {type(tape.get_blocks()[-1]).__name__}")
     assert len(ours) == 1, "output-identity search did not find exactly one block"
-    assert not isinstance(tape.get_blocks()[-1],
-                          NonlinearVariationalSolveBlock), (
+    assert not isinstance(tape.get_blocks()[-1], SOLVE_BLOCK_TYPE), (
         "this test no longer exercises the hazard: nothing landed after the "
         "solve block, so `get_blocks()[-1]` would have worked by luck")
 
@@ -1215,8 +1238,13 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     assert len(blocks) == 2 and blocks[0] is not blocks[1], (
         "the two solves produced the same block object: `adjoint_block` is not "
         "reset per annotated solve, so L27 cannot see what it tests")
-    assert blocks[0]._ad_solvers is blocks[1]._ad_solvers, (
-        "the two blocks no longer share `_ad_solvers`; this test no longer "
+    # The replay solvers the two blocks share: the `_ad_solvers` dict of the
+    # stock block, or the forward cache of a `CachedSolverBlock` (Firedrake
+    # PR 4638), whose solvers every block of one forward solver uses.
+    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS
+    shared = "forward_cache" if CACHED_SOLVER_BLOCKS else "_ad_solvers"
+    assert getattr(blocks[0], shared) is getattr(blocks[1], shared), (
+        f"the two blocks no longer share `{shared}`; this test no longer "
         "exercises the hazard it was written for (REVIEW-ADJOINT S6.3)")
 
     gradient = float(Jhat.derivative().dat.data_ro[0])
