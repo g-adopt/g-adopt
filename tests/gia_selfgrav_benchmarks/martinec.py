@@ -136,7 +136,7 @@ import numpy as np  # noqa: E402
 from gadopt import (COMM_WORLD, Constant, Function,  # noqa: E402
                     FunctionSpace, ParameterLog, SpatialCoordinate,
                     SphericalDtN, VTKFile, acos, assemble,
-                    cos, dot, exp, interpolate, log, max_value, min_value,
+                    cos, dot, exp, log, max_value, min_value,
                     sqrt)
 from gadopt.gia_gravity import (SeaLevel,  # noqa: E402
                                 SelfGravitatingGIASolver,
