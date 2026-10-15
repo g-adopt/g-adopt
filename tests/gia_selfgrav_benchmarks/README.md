@@ -132,6 +132,48 @@ Leave out `EXTRA_PYTHONPATH` if the module has `giamip`. The header of
 `vo05` and loads `firedrake/main`, the newest weekly build of the Firedrake
 module. For another project, edit the `-P` and storage lines.
 
+For Spada, the load and spectral diagnostics have independent cutoffs. Both
+default to degree 10, preserving the original run. For example, retain load
+degrees 2–128 while projecting only degrees 0–10 for diagnostics:
+
+```bash
+qsub -N spada_cap_n128 \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-n128,EXTRA=--load_nmax 128 --diagnostic_nmax 10 --write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+Alternatively, evaluate the cap in space and subtract only its analytic
+degree-0 and degree-1 components (`sigma_0 + sigma_1 cos(gamma)`):
+
+```bash
+qsub -N spada_cap_spatial \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-spatial,EXTRA=--load_representation spatial --diagnostic_nmax 10 --write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+`--load_representation spectral` is the default and uses `--load_nmax`.
+Spatial mode has no upper load cutoff, so `--load_nmax` is unused. Both modes
+omit degrees 0 and 1 before CG2 interpolation and use the same mesh and
+load prescription for the mechanics traction and gravity mass sheet. The
+spatial cap differs from a degree-128 series; mesh interpolation can introduce
+small low-degree components in either mode.
+
+`--diagnostic_nmax` must be at least 2 and, for the cap comparison, no larger
+than the available TABOO reference (currently 256). It controls the projected
+coefficient arrays and the reconstructed pole values and maximum V, not the
+detail retained by the solver or by direct profiles. If it exceeds a spectral
+load's cutoff, reference coefficients above that cutoff are zero. Larger
+diagnostic cutoffs still cost more surface assemblies. Use direct profiles
+to compare the full computed fields with the appropriate load reference.
+The existing benchmark tolerances were calibrated for the default degree-10
+configuration.
+
+The summary and checkpoint record `load_representation`, `load_nmax` (`null`
+for spatial mode), and `diagnostic_nmax`. The legacy summary key `nmax` now
+means the diagnostic cutoff. Restart with the same recorded settings. Old
+cap checkpoints infer their shared cutoff from the recorded diagnostic
+degrees; old polar-motion checkpoints are interpreted as degree-10 runs.
+
 After the jobs end, run the test on a login node in this directory, with the
 same module and the same `PYTHONPATH` as for the install:
 
@@ -353,3 +395,71 @@ with `RESTART=checkpoint_B.h5` finishes the case from the checkpoint at step
 (-119.9284 m). The module `petsc/main-20260920`, which `firedrake/main`
 loads, sets `OMPI_MCA_coll=^holl`. This value does not switch HCOLL off.
 Without HCOLL the Martinec steps take twice as long.
+
+## Direct Spada profiles and field plots
+
+For cap runs, `--write_profiles` saves direct finite-element U, V and N at
+all output epochs as `profiles_cap_<time>kyr.npz`. Arrays have shape
+`(longitude, colatitude)` in metres, with meridians at 0, 90 and 180 degrees
+longitude and colatitudes at 0.1 degree spacing. V is signed southward
+displacement, not tangential magnitude. Points sit 1e-6 Earth radii (about
+6.4 m) below the nominal surface to help locate them in the curved mesh.
+The depth fraction and point-found mask are saved; missing values are NaN
+and counted in the job output. N uses gravity at the nominal Earth surface.
+
+`--write_output` also saves displacement and potential as VTK at each epoch.
+These fields retain nondimensional units: multiply displacement by `D_SCALE`
+and potential by `G_BAR * D_SCALE` for physical units.
+
+Start with a smoke run in a new output folder, submitted from this directory:
+
+```bash
+mkdir -p smoke/spada-profiles
+qsub -N spada_profiles_smoke \
+    -l storage=scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50 \
+    -l ncpus=104 -l mem=500GB -l walltime=01:00:00 \
+    -v "DRIVER=spada,CASE=cap,SMOKE=1,OUTPUT=$PWD/smoke/spada-profiles,EXTRA=--write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+Adjust storage projects to the checkout/output locations. Check missing-point
+counts before a full run; the coarse mesh may need a larger inward offset.
+Set `--profile_depth_fraction` to adjust it, and check sensitivity to that
+offset before interpreting the samples as surface values.
+
+Plot with NumPy and Matplotlib installed (no Firedrake needed):
+
+```bash
+python3 plot_spada_profiles.py smoke/spada-profiles/summary_cap.json \
+    --profiles-dir smoke/spada-profiles --max-colatitude 25 \
+    --output smoke/spada-profiles/profiles_near.png
+```
+
+The plot overlays direct meridians, projected G-ADOPT profiles, matching
+truncated TABOO and all available TABOO degrees. No correction factors are
+applied. Omit `--profiles-dir` for existing summaries without sampled profiles.
+
+### Compare load prescriptions
+
+To compare load degrees and the spatial cap, put each full cap run's
+`summary_cap.json` and all its `profiles_cap_<time>kyr.npz` files in a separate
+subdirectory of `outputs/`, then run:
+
+```bash
+python3 plot_spada_load_convergence.py --outputs outputs --max-colatitude 25
+```
+
+This needs NumPy and Matplotlib, with no Firedrake. It writes PNG and PDF
+figures for the load comparison, differences from TABOO, RMS error versus
+load cutoff, and the degree-128 run against TABOO at all common epochs.
+It also writes `load_convergence_metrics.csv` with errors in metres and
+normalised by the reference peak amplitude. RMS errors pool the sampled
+meridians with uniform colatitude weighting. The profile comparison shows
+the 0-degree meridian; the degree-128 figure shows all three meridians.
+If degree 128 is absent, the latter figure uses the highest available cutoff.
+
+All comparisons use the fixed TABOO reference, degrees 2–256, without
+compressibility or timestep corrections. Direct G-ADOPT samples sit below
+the surface as described above. If this directory's legacy degree-10
+`summary_cap.json` is present, its reconstructed spectrum is included as a
+labelled baseline when no direct degree-10 dataset is available.
