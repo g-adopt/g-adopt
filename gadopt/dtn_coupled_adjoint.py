@@ -69,6 +69,28 @@ blocks of a timestep loop share one forward and one adjoint solver, so binding
 installed last. So the prefactor is computed from THIS block's saved dependency
 values and set on the shared operator immediately before each solve, and
 restored after.
+
+## Two Firedrakes: the stock solve block and the cached solver block
+
+Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
+puts a `CachedSolverBlock` on the tape for every annotated variational solve.
+Its forward, adjoint and tangent solvers are built once by the forward solver,
+from the forward solver's constructor keywords, and shared by every block that
+solver adds. The module supports both Firedrakes and finds out at import which
+one it runs on (`CACHED_SOLVER_BLOCKS`):
+
+  - stock: the adjoint keywords go to `solve` (`LowRankVariationalSolver`),
+    and the stock block becomes a `CoupledLowRankDtNSolveBlock` with the five
+    overrides above.
+  - cached: the adjoint and tangent keywords go to the constructor
+    (`derivative_constructor_kwargs`), the callbacks reach every cached solver
+    through the constructor keywords, and the cached block becomes a
+    `CachedCoupledLowRankDtNSolveBlock`, which binds `theta_psi` around each
+    solve and adds the theta derivative.
+
+On the cached Firedrake the constructor keywords need the fix that takes
+`adj_kwargs` and `tlm_kwargs` out of the keywords before the solver is
+initialised; without it the constructor raises `TypeError`.
 """
 
 from contextlib import contextmanager
@@ -80,9 +102,33 @@ from firedrake import (Cofunction, LinearVariationalProblem,
 from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
 from pyadjoint.tape import annotate_tape
 
-__all__ = ["CoupledLowRankDtNSolveBlock", "LowRankVariationalSolver",
-           "adopt_coupled_lowrank_block", "derivative_solver_kwargs",
-           "require_controls_reach_block"]
+# Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
+# replaces the stock solve block of an annotated variational solve with a
+# `CachedSolverBlock`. That block replays and differentiates through solvers
+# that the forward solver builds once and shares with every block it puts on
+# the tape, and it takes the keywords of the adjoint and tangent solvers from
+# the constructor of the forward solver, not from `solve`. Both Firedrakes are
+# supported here until the PR is merged: the module finds out once which one
+# it runs on.
+try:
+    from firedrake.adjoint_utils.blocks import CachedSolverBlock
+except ImportError:
+    CachedSolverBlock = None
+
+#: True on a Firedrake whose annotated variational solves put a
+#: `CachedSolverBlock` on the tape (Firedrake PR 4638).
+CACHED_SOLVER_BLOCKS = CachedSolverBlock is not None
+
+#: The class of the block an annotated variational solve puts on the tape on
+#: this Firedrake. Tests and the adopt function look for this class.
+SOLVE_BLOCK_TYPE = (CachedSolverBlock if CACHED_SOLVER_BLOCKS
+                    else NonlinearVariationalSolveBlock)
+
+__all__ = ["CACHED_SOLVER_BLOCKS", "CachedCoupledLowRankDtNSolveBlock",
+           "CoupledLowRankDtNSolveBlock",
+           "LowRankVariationalSolver", "SOLVE_BLOCK_TYPE",
+           "adopt_coupled_lowrank_block", "derivative_constructor_kwargs",
+           "derivative_solver_kwargs", "require_controls_reach_block"]
 
 
 def derivative_solver_kwargs(gia_solver, suffix: str, *, transpose: bool) -> dict:
@@ -150,11 +196,50 @@ class LowRankVariationalSolver(NonlinearVariationalSolver):
         # the tape keywords when it is recording and passes everything else
         # to the plain solve, which refuses them. `annotate_tape` on a COPY,
         # because it removes the `annotate` key from the mapping it is given
-        # and the wrapper needs to see that key itself.
-        if self.gia_solver is not None and annotate_tape(dict(kwargs)):
+        # and the wrapper needs to see that key itself. With cached solver
+        # blocks the keywords go to the constructor instead
+        # (`derivative_constructor_kwargs`), and `solve` refuses them.
+        if (not CACHED_SOLVER_BLOCKS and self.gia_solver is not None
+                and annotate_tape(dict(kwargs))):
             kwargs.setdefault("adj_kwargs", derivative_solver_kwargs(
                 self.gia_solver, "_lowrank_adj", transpose=True))
         return super().solve(**kwargs)
+
+
+def derivative_constructor_kwargs(gia_solver) -> dict:
+    """The adjoint and tangent keywords for the forward solver's constructor.
+
+    With cached solver blocks (Firedrake PR 4638) the forward solver builds
+    its adjoint and tangent linear solvers from `adj_kwargs` and `tlm_kwargs`
+    given to its constructor. Without them both would inherit the forward
+    keywords: the forward `snes_type` (Newton line search on a linear system,
+    one residual evaluation more per solve) and the forward nullspaces in the
+    forward slots. With the stock solve block the adjoint keywords go to
+    `solve` (`LowRankVariationalSolver.solve`) and the tangent solver is built
+    by `CoupledLowRankDtNSolveBlock`, so this returns nothing.
+
+    The keywords are read once, here. `derivative_solver_kwargs` copies the
+    solver parameters, so a later change of the forward dictionary does not
+    reach the derivative solvers. The application context is the forward one;
+    Firedrake clones its UFL entries for the cached solvers.
+
+    Args:
+      gia_solver: the `SelfGravitatingGIASolver` whose callbacks, context and
+        nullspaces the derivative solves carry. Its solver parameters,
+        nullspaces and context must be set before this is called.
+
+    Returns:
+      `{"adj_kwargs": ..., "tlm_kwargs": ...}` with cached solver blocks, else
+      an empty `dict`.
+    """
+    if not CACHED_SOLVER_BLOCKS:
+        return {}
+    return {
+        "adj_kwargs": derivative_solver_kwargs(
+            gia_solver, "_lowrank_adj", transpose=True),
+        "tlm_kwargs": derivative_solver_kwargs(
+            gia_solver, "_lowrank_tlm", transpose=False),
+    }
 
 
 def require_controls_reach_block(block, controls):
@@ -191,21 +276,27 @@ def _scalar(value) -> float:
         return float(np.asarray(value.dat.data_ro, dtype=float).reshape(-1)[0])
 
 
-class CoupledLowRankDtNSolveBlock(NonlinearVariationalSolveBlock):
-    """The stock coupled solve block, re-classed to carry `A + B`.
+class _ThetaPsiTerms:
+    """What both coupled low-rank blocks add to a stock solve block.
 
-    Never constructed directly: `adopt_coupled_lowrank_block` changes the
-    `__class__` of the stock block the annotated solve produced, so the
-    dependencies, the outputs and the `_ad_solvers` dict are the stock ones.
+    The low-rank feedback enters the residual and the Jacobian as
+    `theta_psi B0 psi` through PETSc callbacks, with
+    `theta_psi = scaling_factor B_mu / Lambda`. The callbacks read the
+    prefactor off the shared `dtn_operator`, which holds the LIVE value. Each
+    block binds the prefactor to its own saved values around its solves, and
+    adds the `(d theta_psi / dm) B0 psi` term, which no form carries, to the
+    adjoint gradient and to the tangent right-hand side.
+
+    Mixed into `CoupledLowRankDtNSolveBlock` (stock Firedrake) and
+    `CachedCoupledLowRankDtNSolveBlock` (Firedrake PR 4638). Neither is ever
+    constructed: `adopt_coupled_lowrank_block` changes the `__class__` of the
+    block the annotated solve produced.
     """
 
     #: The owning `SelfGravitatingGIASolver`, set by the adopt function. Carries
     #: the shared `dtn_operator`, the solver parameters and the
     #: `_include_theta_derivative` switch.
     gia_solver = None
-
-    def __str__(self):
-        return "CoupledLowRankDtNSolveBlock"
 
     # -- theta_psi, bound from THIS block's saved control values -------------
     def _saved_scalar(self, obj) -> float:
@@ -256,9 +347,9 @@ class CoupledLowRankDtNSolveBlock(NonlinearVariationalSolveBlock):
     # -- the low-rank action, as vectors ------------------------------------
     def _B0_psi(self) -> Cofunction:
         """`B0 psi` (prefactor one) at the forward solution, as a cofunction."""
-        Z = self.function_space
-        psi = self.get_outputs()[0].saved_output
-        out = Cofunction(Z.dual())
+        output = self.get_outputs()[0]
+        psi = output.saved_output
+        out = Cofunction(output.output.function_space().dual())
         op = self.gia_solver.dtn_operator
         with psi.dat.vec_ro as xv, out.dat.vec as yv:
             yv.set(0.0)
@@ -270,6 +361,57 @@ class CoupledLowRankDtNSolveBlock(NonlinearVariationalSolveBlock):
         B0_psi = self._B0_psi()
         with adj_sol.dat.vec_ro as lv, B0_psi.dat.vec_ro as bv:
             return float(lv.dot(bv))
+
+    # -- the theta derivative ------------------------------------------------
+    def _add_theta_adjoint_term(self, out, block_variable, prepared, adj_input):
+        """Add `-(d theta_psi / dm) lambda . (B0 psi)` to the gradient `out`.
+
+        The stock gradient is `-lambda^T dF/dm` from the forms, which do not
+        carry `B`. The missing part is a scalar times `d theta_psi / dm`, so it
+        is nonzero only for the controls `B_mu` and `Lambda`, which are `Real`
+        functions or constants: the term is added to every entry of `out`.
+        """
+        if not getattr(self.gia_solver, "_include_theta_derivative", True):
+            return out
+        if prepared is None or adj_input is None:
+            return out
+        control = block_variable.output
+        dth = self._dtheta(control)
+        if dth == 0.0:
+            return out
+        extra = -dth * self._lambda_dot_B0_psi(prepared["adj_sol"])
+        if out is None:
+            out = Cofunction(control.function_space().dual())
+        out.dat.data_wo[:] = np.asarray(out.dat.data_ro) + extra
+        return out
+
+    def _theta_tangent_coefficient(self) -> float:
+        """`(d theta_psi / dm) mdot`, summed over the dependencies that have a
+        tangent value. Zero when the theta derivative is switched off."""
+        if not getattr(self.gia_solver, "_include_theta_derivative", True):
+            return 0.0
+        coeff = 0.0
+        for dep in self.get_dependencies():
+            tlm = dep.tlm_value
+            if tlm is None:
+                continue
+            dth = self._dtheta(dep.output)
+            if dth != 0.0:
+                coeff += dth * _scalar(tlm)
+        return coeff
+
+
+class CoupledLowRankDtNSolveBlock(_ThetaPsiTerms, NonlinearVariationalSolveBlock):
+    """The stock coupled solve block, re-classed to carry `A + B`.
+
+    Used on a Firedrake without cached solver blocks. Never constructed
+    directly: `adopt_coupled_lowrank_block` changes the `__class__` of the
+    stock block the annotated solve produced, so the dependencies, the outputs
+    and the `_ad_solvers` dict are the stock ones.
+    """
+
+    def __str__(self):
+        return "CoupledLowRankDtNSolveBlock"
 
     # -- 1. forward replay through A + B ------------------------------------
     def _forward_solve(self, lhs, rhs, func, bcs, **kwargs):
@@ -297,42 +439,23 @@ class CoupledLowRankDtNSolveBlock(NonlinearVariationalSolveBlock):
                                prepared=None):
         out = super().evaluate_adj_component(inputs, adj_inputs, block_variable,
                                              idx, prepared)
-        if not getattr(self.gia_solver, "_include_theta_derivative", True):
-            return out
-        if prepared is None or adj_inputs[0] is None:
-            return out
-        control = block_variable.output
-        dth = self._dtheta(control)
-        if dth == 0.0:
-            return out
-        extra = -dth * self._lambda_dot_B0_psi(prepared["adj_sol"])
-        if out is None:
-            out = Cofunction(control.function_space().dual())
-        out.dat.data_wo[:] = np.asarray(out.dat.data_ro) + extra
-        return out
+        return self._add_theta_adjoint_term(out, block_variable, prepared,
+                                            adj_inputs[0])
 
     # -- 3 & 5. the tangent operator and its theta right-hand side ----------
     def _assemble_and_solve_tlm_eq(self, dFdu, dFdm, dudm, bcs):
-        if getattr(self.gia_solver, "_include_theta_derivative", True):
-            coeff = 0.0
-            for dep in self.get_dependencies():
-                tlm = dep.tlm_value
-                if tlm is None:
-                    continue
-                dth = self._dtheta(dep.output)
-                if dth != 0.0:
-                    coeff += dth * _scalar(tlm)
-            if coeff != 0.0:
-                # tangent rhs is `-(dF/dm) mdot`; add the `-(d theta/dm) B0 psi`
-                # column that the stock form is missing. Through the monolithic
-                # vec, never `dat.data`: `dFdm` is a cofunction on the MIXED
-                # space, whose `dat.data` is a tuple of per-field arrays.
-                B0_psi = self._B0_psi()
-                if not isinstance(dFdm, Cofunction):
-                    dFdm = assemble(dFdm)
-                dFdm = dFdm.copy()
-                with dFdm.dat.vec as dv, B0_psi.dat.vec_ro as bv:
-                    dv.axpy(-coeff, bv)
+        coeff = self._theta_tangent_coefficient()
+        if coeff != 0.0:
+            # tangent rhs is `-(dF/dm) mdot`; add the `-(d theta/dm) B0 psi`
+            # column that the stock form is missing. Through the monolithic
+            # vec, never `dat.data`: `dFdm` is a cofunction on the MIXED
+            # space, whose `dat.data` is a tuple of per-field arrays.
+            B0_psi = self._B0_psi()
+            if not isinstance(dFdm, Cofunction):
+                dFdm = assemble(dFdm)
+            dFdm = dFdm.copy()
+            with dFdm.dat.vec as dv, B0_psi.dat.vec_ro as bv:
+                dv.axpy(-coeff, bv)
         # The tangent operator as a FORM, not the pre-assembled matrix pyadjoint
         # hands in: a variational solve carries the two callbacks and the
         # forward context, and its residual is a plain form that a fieldsplit
@@ -348,6 +471,94 @@ class CoupledLowRankDtNSolveBlock(NonlinearVariationalSolveBlock):
         with self._theta_bound():
             tangent.solve()
         return dudm
+
+
+if CACHED_SOLVER_BLOCKS:
+    class CachedCoupledLowRankDtNSolveBlock(_ThetaPsiTerms, CachedSolverBlock):
+        """The cached solve block of Firedrake PR 4638, re-classed for `A + B`.
+
+        The forward, adjoint and tangent solvers of a `CachedSolverBlock` are
+        built once by the forward solver and shared by every block it puts on
+        the tape. They are built from the forward solver's constructor
+        keywords, so they carry both augmentation callbacks, and the adjoint
+        and tangent ones the keywords of `derivative_constructor_kwargs`:
+        `A + B` is on every operator with no override. What the forms cannot
+        carry is added here: `theta_psi` bound to this block's saved values
+        around each solve (the shared solvers make this necessary for every
+        block, since they read one prefactor), and the
+        `(d theta_psi / dm) B0 psi` term on the gradient and the tangent.
+
+        The second-order leg is refused: the Hessian of `theta_psi B0 psi` is
+        not written.
+        """
+
+        def __str__(self):
+            return "CachedCoupledLowRankDtNSolveBlock"
+
+        # -- forward replay through A + B -----------------------------------
+        def recompute_component(self, inputs, block_variable, idx, prepared):
+            with self._theta_bound():
+                return super().recompute_component(inputs, block_variable,
+                                                   idx, prepared)
+
+        # -- adjoint solve (A + B)^T lambda = seed ---------------------------
+        def prepare_evaluate_adj(self, inputs, adj_inputs, relevant_dependencies):
+            with self._theta_bound():
+                return super().prepare_evaluate_adj(inputs, adj_inputs,
+                                                    relevant_dependencies)
+
+        # -- the theta derivative on the adjoint gradient --------------------
+        def evaluate_adj_component(self, inputs, adj_inputs, block_variable,
+                                   idx, prepared=None):
+            out = super().evaluate_adj_component(inputs, adj_inputs,
+                                                 block_variable, idx, prepared)
+            return self._add_theta_adjoint_term(out, block_variable, prepared,
+                                                adj_inputs[0])
+
+        # -- the tangent, with the theta column on its right-hand side -------
+        def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable,
+                                   idx, prepared=None):
+            """The tangent solve of `CachedSolverBlock`, plus the theta column.
+
+            The same steps as `CachedSolverBlock.evaluate_tlm_component`: set
+            the dependencies and their tangent values on the cached forms,
+            assemble the right-hand side `-(dF/dm) mdot` term by term, and
+            solve with the cached tangent solver. Between the assembly and the
+            solve the `-(d theta/dm) mdot B0 psi` column is added, and the
+            solve runs with `theta_psi` bound to this block.
+            """
+            self.update_dependencies(use_output=True)
+            self.update_tlm_dependencies()
+
+            tlm_rhs = self.tangent_cache.rhs
+            tlm_rhs.zero()
+            for dFdm, dep in zip(self.tangent_cache.dFdm_forms,
+                                 self.get_dependencies()):
+                if dep.tlm_value is None:
+                    continue
+                if dep.output is self.forward_cache.func:
+                    continue
+                tlm_rhs += assemble(dFdm)
+
+            coeff = self._theta_tangent_coefficient()
+            if coeff != 0.0:
+                B0_psi = self._B0_psi()
+                with tlm_rhs.dat.vec as dv, B0_psi.dat.vec_ro as bv:
+                    dv.axpy(-coeff, bv)
+
+            solver = self.tangent_cache.solver
+            solver._problem.u.zero()
+            with self._theta_bound():
+                solver.solve()
+            return solver._problem.u.copy(deepcopy=True)
+
+        def prepare_evaluate_hessian(self, inputs, hessian_inputs, adj_inputs,
+                                     relevant_dependencies):
+            raise NotImplementedError(
+                "The second-order adjoint of the coupled low-rank DtN solve is "
+                "not written: the Hessian of theta_psi B0 psi is missing.")
+else:
+    CachedCoupledLowRankDtNSolveBlock = None
 
 
 def adopt_coupled_lowrank_block(gia_solver, tape, n0, controls=None):
@@ -367,13 +578,18 @@ def adopt_coupled_lowrank_block(gia_solver, tape, n0, controls=None):
         checked here: a control absent from the block's dependencies raises,
         rather than producing a silent `0.0` gradient later.
 
+    The block class depends on the Firedrake: a `NonlinearVariationalSolveBlock`
+    becomes a `CoupledLowRankDtNSolveBlock`, and with Firedrake PR 4638 a
+    `CachedSolverBlock` becomes a `CachedCoupledLowRankDtNSolveBlock`
+    (`SOLVE_BLOCK_TYPE`).
+
     Returns:
       The adopted block, or `None` if the solve added no annotated solve block.
     """
     added = tape.get_blocks()[n0:]
     solution = gia_solver.solution
     ours = [b for b in added
-            if isinstance(b, NonlinearVariationalSolveBlock)
+            if isinstance(b, SOLVE_BLOCK_TYPE)
             and any(o.output is solution for o in b.get_outputs())]
     if not ours:
         return None
@@ -383,7 +599,8 @@ def adopt_coupled_lowrank_block(gia_solver, tape, n0, controls=None):
             "solve started; route 1.5b needs exactly one to adopt. Identify by "
             "output identity, never by tape position (REVIEW-ADJOINT L26).")
     block = ours[0]
-    block.__class__ = CoupledLowRankDtNSolveBlock
+    block.__class__ = (CachedCoupledLowRankDtNSolveBlock if CACHED_SOLVER_BLOCKS
+                       else CoupledLowRankDtNSolveBlock)
     block.gia_solver = gia_solver
 
     if controls is not None:
