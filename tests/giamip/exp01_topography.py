@@ -36,6 +36,10 @@ THE CONTROL
     of the mantle are not on the surface and are not used). The optimisation
     starts from the observed bed (cold start).
 
+    The control carries an L2 Riesz map (`RieszMap` on the surface space,
+    built once, CG with Jacobi to 1e-12, `RIESZ_SOLVER_PARAMETERS`). ROL gets
+    the gradient through it, and the Taylor direction uses it too.
+
 WHAT IS ON THE TAPE
     Only the operations from the control to J:
 
@@ -115,7 +119,7 @@ import exp01 as driver  # noqa: E402
 
 import numpy as np  # noqa: E402
 from checkpoint_schedules import SingleDiskStorageSchedule  # noqa: E402
-from firedrake import CheckpointFile, Submesh, dx  # noqa: E402
+from firedrake import CheckpointFile, RieszMap, Submesh, dx  # noqa: E402
 from firedrake.adjoint import (Control, ReducedFunctional,  # noqa: E402
                                continue_annotation, enable_disk_checkpointing,
                                get_working_tape, pause_annotation,
@@ -134,6 +138,19 @@ import selfgrav_common as common  # noqa: E402
 from giamip.mip.inputs import GiamipExperiment  # noqa: E402
 
 D_SCALE = driver.D_SCALE
+
+#: The solver of the L2 Riesz map of the control: the mass matrix of the CG2
+#: surface space, solved by CG with a Jacobi preconditioner. The mass matrix
+#: is symmetric positive definite and Jacobi bounds its condition number
+#: independently of the mesh size, so CG converges in a few tens of
+#: iterations. The tight relative tolerance makes the representer equal to
+#: the one of a direct solve to round-off (7.6e-13 relative on a toy, serial
+#: and 3 ranks). No factorisation: the default of a `RieszMap` is a MUMPS LU,
+#: and one of those failed on Setonix (job 51055806, DIVERGED_LINEAR_SOLVE in
+#: the Riesz solve of a ROL gradient).
+RIESZ_SOLVER_PARAMETERS = {"ksp_type": "cg", "pc_type": "jacobi",
+                           "ksp_rtol": 1e-12, "ksp_atol": 0.0,
+                           "ksp_max_it": 1000}
 
 
 # --------------------------------------------------------------------------
@@ -215,6 +232,14 @@ class Exp01Topography:
         self.surface = Submesh(self.mantle, 2, driver.SURF_RE,
                                name="exp01_surface")
         self.V_bed = FunctionSpace(self.surface, "CG", 2)
+        # The L2 Riesz map of the control, built once and given to the
+        # Control. Without it, every gradient that ROL asks for
+        # (`derivative(apply_riesz=True)`) builds a new RieszMap from the
+        # string "L2", and with it a new solver, a new mass-matrix assembly
+        # and a new factorisation. `constant_jacobian=True`: the mass matrix
+        # does not depend on the control, so it is assembled once.
+        self.riesz_map = RieszMap(self.V_bed, "L2", constant_jacobian=True,
+                                  solver_parameters=RIESZ_SOLVER_PARAMETERS)
         # The observed bed on the surface, m. Mantle to surface follows the
         # submesh map (no point search).
         self.bed_obs = Function(self.V_bed, name="bed_observed_m")
@@ -409,7 +434,8 @@ def taylor_direction(gradient, problem, args):
         rng = np.random.default_rng(args.seed + COMM_WORLD.rank)
         h.dat.data_wo[:] = rng.uniform(-1.0, 1.0, h.dat.data_ro.shape)
     else:
-        h.assign(gradient.riesz_representation("L2"))
+        # The Riesz map of the control, the one ROL uses (built once).
+        h.assign(problem.riesz_map(gradient))
     with h.dat.vec_ro as v:
         largest = v.norm(PETSc.NormType.INFINITY)
     h.assign(h * (args.taylor_h_m / largest))
@@ -591,7 +617,9 @@ def main():
         f"{len(tape.get_blocks())} blocks")
     driver.memory_now("after the taped forward run")
 
-    control = Control(bed)
+    # The control carries its L2 Riesz map, so the gradient representer of
+    # every ROL iteration uses the same solver.
+    control = Control(bed, riesz_map=problem.riesz_map)
     record = {"args": vars(args), "mesh": problem.mesh_info,
               "solver": problem.solver_record, "J_taped": float(J),
               "taped_forward_s": taped_s, "forward_rows": problem.forward_rows,
