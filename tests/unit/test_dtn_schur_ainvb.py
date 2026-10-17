@@ -1238,6 +1238,62 @@ def test_a_time_step_change_ends_the_lag(stub_appctx):
     assert not rule.moved(pc)
 
 
+def _rebuild_sequence_over(rule, indices):
+    """The solve indices at which `rule` rebuilds, over a given index order.
+
+    The first index is the build; every later one is asked twice, as two
+    Newton iterations do. The context is that of a state-dependent Jacobian
+    (`operator_version = None`).
+
+    Args:
+      rule: a `_RebuildRule`.
+      indices: the `gia_solve_index` of each solve, in the order solved.
+
+    Returns:
+      The list of solve indices at which `moved` answered True.
+    """
+    pc = _StubContext(operator_version=None, gia_solve_index=indices[0])
+    rule.record(pc)
+    rebuilt = []
+    for index in indices[1:]:
+        pc.values["gia_solve_index"] = index
+        for _newton in range(2):
+            if rule.moved(pc):
+                rebuilt.append(index)
+    return rebuilt
+
+
+def test_an_adjoint_sweep_rebuilds_as_the_index_falls(stub_appctx):
+    """The lag counts solves in either direction of the solve index.
+
+    An adjoint sweep solves the taped steps from the last to the first, and
+    each solve block binds the index of its forward solve
+    (`gadopt.dtn_coupled_adjoint`), so the index falls by one per solve. The
+    rule must rebuild after `every` solves there too, and the next sweep, or
+    the next replay that starts again at index 1, must rebuild at its first
+    solve.
+
+    CATCHES: the signed difference `index - index at last build`, which is
+    negative on a backward sweep, so the lag never expires and the adjoint
+    keeps the preconditioner of its first solve for every step. With
+    `every = 1` that also breaks `per_solve`.
+    """
+    backward = list(range(10, 0, -1))
+    assert _rebuild_sequence_over(_RebuildRule(every=1), backward) == \
+        list(range(9, 0, -1))
+    assert _rebuild_sequence_over(_RebuildRule(every=4), backward) == [6, 2]
+    # Two sweeps back to back: the second starts 8 solves away from the last
+    # build at 2, so it rebuilds at once.
+    assert _rebuild_sequence_over(_RebuildRule(every=4), backward + backward) \
+        == [6, 2, 10, 6, 2]
+    # Two replays back to back: the second starts at index 1, 8 solves away
+    # from the last build at 9, so it rebuilds at the same solves as the
+    # first one.
+    forward = list(range(1, 11))
+    assert _rebuild_sequence_over(_RebuildRule(every=4), forward + forward) \
+        == [5, 9, 1, 5, 9]
+
+
 def lagged_march(meshes, rebuild_rule, solves, **lag):
     """A power-law march of `solves` solves on the cached apply.
 
