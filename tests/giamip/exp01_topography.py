@@ -37,7 +37,7 @@ THE CONTROL
     starts from the observed bed (cold start).
 
     The control carries an L2 Riesz map (`RieszMap` on the surface space,
-    built once, CG with Jacobi to 1e-12, `RIESZ_SOLVER_PARAMETERS`). ROL gets
+    built once, the solver of Firedrake's `project`, `RIESZ_SOLVER_PARAMETERS`). ROL gets
     the gradient through it, and the Taylor direction uses it too.
 
 WHAT IS ON THE TAPE
@@ -140,17 +140,15 @@ from giamip.mip.inputs import GiamipExperiment  # noqa: E402
 D_SCALE = driver.D_SCALE
 
 #: The solver of the L2 Riesz map of the control: the mass matrix of the CG2
-#: surface space, solved by CG with a Jacobi preconditioner. The mass matrix
-#: is symmetric positive definite and Jacobi bounds its condition number
-#: independently of the mesh size, so CG converges in a few tens of
-#: iterations. The tight relative tolerance makes the representer equal to
-#: the one of a direct solve to round-off (7.6e-13 relative on a toy, serial
-#: and 3 ranks). No factorisation: the default of a `RieszMap` is a MUMPS LU,
-#: and one of those failed on Setonix (job 51055806, DIVERGED_LINEAR_SOLVE in
-#: the Riesz solve of a ROL gradient).
-RIESZ_SOLVER_PARAMETERS = {"ksp_type": "cg", "pc_type": "jacobi",
-                           "ksp_rtol": 1e-12, "ksp_atol": 0.0,
-                           "ksp_max_it": 1000}
+#: surface space. The L2 Riesz map is the same solve as an L2 projection, so
+#: it uses the default solver of Firedrake's `project` for an assembled
+#: matrix (`firedrake/projection.py`): CG, block Jacobi with ICC on each
+#: block, relative tolerance 1e-8. No factorisation: the default of a
+#: `RieszMap` is a MUMPS LU built again at every gradient, and that solve
+#: failed on Setonix with the PyOP2 cache-key fix (jobs 51055806 and
+#: 51057023, DIVERGED_LINEAR_SOLVE in the Riesz solve of a ROL gradient).
+RIESZ_SOLVER_PARAMETERS = {"ksp_type": "cg", "ksp_rtol": 1e-8,
+                           "pc_type": "bjacobi", "sub_pc_type": "icc"}
 
 
 # --------------------------------------------------------------------------
@@ -370,6 +368,37 @@ def install_block_log(say):
 
     for name in names:
         wrap(name)
+
+
+class LoggedRieszMap:
+    """The Riesz map of the control, with a log line around every solve.
+
+    For debugging only (`--log_blocks`). Before the solve it logs the l2
+    norm of the gradient cofunction (a NaN or Inf there means the adjoint
+    produced it), and after it the iteration count and the converged reason
+    of the Riesz solver.
+
+    Args:
+      riesz_map: the `RieszMap` of the control.
+      say: the log function.
+    """
+
+    def __init__(self, riesz_map, say):
+        self._map, self._say = riesz_map, say
+
+    def __call__(self, value):
+        """Return the Riesz representer of `value`, as the wrapped map does."""
+        with value.dat.vec_ro as v:
+            gradient_norm = v.norm()
+        tic = time.time()
+        out = self._map(value)
+        # `RieszMap._solver` holds `(solver.solve, rhs, solution)`, built at
+        # the first call; the bound method gives the solver and its KSP.
+        ksp = self._map._solver[0].__self__.snes.getKSP()
+        self._say(f"  riesz: |gradient| {gradient_norm:.6e}, "
+                  f"{ksp.getIterationNumber()} iterations, reason "
+                  f"{ksp.getConvergedReason()}, {time.time() - tic:.2f} s")
+        return out
 
 
 # --------------------------------------------------------------------------
@@ -605,6 +634,8 @@ def main():
     enable_node_checkpointing(args, problem.mantle, say)
     if args.log_blocks:
         install_block_log(say)
+        # The control below takes `problem.riesz_map`, so the wrap goes first.
+        problem.riesz_map = LoggedRieszMap(problem.riesz_map, say)
 
     # The one taped forward run.
     continue_annotation()
