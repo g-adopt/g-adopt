@@ -1445,3 +1445,77 @@ def test_fluid_core_lowrank_parallel_forward_solve(meshes):
     assert abs(pressure) > 1e-12
     assert np.isfinite(float(J))
     assert comm.allgather(pressure) == [pressure, pressure]
+
+
+# ===========================================================================
+# The solve index in replay and adjoint
+#
+# The preconditioners of the iterative preset rebuild their cached pieces when
+# `gia_solve_index` in the application context moves. Only
+# `SelfGravitatingGIASolver.solve` raises it, and a replay or an adjoint sweep
+# does not call that method, so each block binds the index of its own forward
+# solve around its solves (`_bound_to_block`).
+# ===========================================================================
+def test_replay_and_adjoint_see_the_taped_solve_index(meshes, monkeypatch):
+    """Each replayed and adjoint solve shows the index of its forward solve.
+
+    A march of three taped solves. The preconditioners read the index through
+    `gadopt.preconditioners._staleness_markers`, which this test observes. The
+    replay must show the indices 1, 2, 3 in order, and the adjoint sweep 3, 2,
+    1. Without the binding, both show one fixed value for every solve: the
+    value of the last forward solve on stock Firedrake, or of the first taped
+    solve with cached solver blocks. After both, the forward solver's own count
+    must be unchanged, because on stock Firedrake the replay shares its dict.
+    """
+    import gadopt.preconditioners as preconditioners
+
+    control_name = "shear_modulus"
+    cmesh = control_mesh(meshes, control_name)
+    n_solves = 3
+    with stop_annotating():
+        control = real(cmesh, CONTROL_VALUES[control_name])
+        solver, z, layout = _build(
+            meshes, control_name, control, "lowrank", fluid_core=True,
+            solver_parameters=preset_parameters("iterative", "lowrank",
+                                                fluid_core=True))
+    continue_annotation()
+    try:
+        m = Control(control)
+        for _ in range(n_solves):
+            solver.solve()
+        J = _objective(z, layout, meshes[1])
+        Jhat = ReducedFunctional(J, m)
+    finally:
+        pause_annotation()
+
+    # Record the index every marker read returns. Solves that carry no index
+    # (the scalar mass solve on R) return None and are left out.
+    seen = []
+    original = preconditioners._staleness_markers
+
+    def spy(pc):
+        markers = original(pc)
+        if markers[1] is not None:
+            seen.append(markers[1])
+        return markers
+
+    monkeypatch.setattr(preconditioners, "_staleness_markers", spy)
+
+    def distinct_in_order():
+        """The recorded indices with consecutive repeats collapsed; clears."""
+        out = [i for k, i in enumerate(seen) if k == 0 or seen[k - 1] != i]
+        seen.clear()
+        return out
+
+    Jhat(control)
+    replay = distinct_in_order()
+    Jhat.derivative()
+    adjoint = distinct_in_order()
+    print(f"    [solve index] replay {replay} adjoint {adjoint}")
+    assert replay == list(range(1, n_solves + 1)), (
+        f"the replay showed the preconditioners the indices {replay}; each "
+        f"replayed solve must show the index of its own forward solve")
+    assert adjoint == list(range(n_solves, 0, -1)), (
+        f"the adjoint sweep showed the preconditioners the indices {adjoint}; "
+        f"each adjoint solve must show the index of its own forward solve")
+    assert solver.appctx["gia_solve_index"] == n_solves
