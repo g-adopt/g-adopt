@@ -723,11 +723,13 @@ class _RebuildRule:
     3. The context carries neither marker: leave the cached object alone.
 
     Branch 2 can be lagged (`gia_rebuild = lagged`, the default, see
-    `_rebuild_lag_options`): the rebuild then waits until `every` solves have
-    run since the last build, until the previous solve took more than
-    `max_outer` outer iterations per Newton iteration, or until the time step
-    differs from the one of the last build. With `every = 1` and
-    `max_outer = 0` the rule is branch 2 as written above.
+    `_rebuild_lag_options`): the rebuild then waits until the solve index is
+    `every` solves away from the one of the last build, in either direction,
+    until the previous solve took more than `max_outer` outer iterations per
+    Newton iteration, or until the time step differs from the one of the last
+    build. The index falls during an adjoint sweep, which is why the distance
+    counts and not the signed difference (`_lag_expired`). With `every = 1`
+    and `max_outer = 0` the rule is branch 2 as written above.
 
     This is the one rebuild rule of the GIA solver: `CondensedBlockPC` (block
     0) and the two classes that hold the `Real`-block complement (block 1)
@@ -736,8 +738,8 @@ class _RebuildRule:
     of them rebuild at the same solves.
 
     Args:
-      every: rebuild on branch 2 only after this many nonlinear solves since
-        the last build. At least 1.
+      every: rebuild on branch 2 only when the solve index is this many
+        solves away from the one of the last build. At least 1.
       max_outer: also rebuild on branch 2 when the previous solve took more
         than this many outer linear iterations per Newton iteration. 0 turns
         the test off.
@@ -874,13 +876,22 @@ class _RebuildRule:
           pc: PETSc preconditioner.
           solve_index: the current `gia_solve_index`.
 
+        The count of solves since the last build is the distance
+        `|solve_index - index at last build|`, not the signed difference. A
+        forward run and a replay raise the index by one per solve. An adjoint
+        sweep solves the taped steps from the last to the first, and each
+        solve block binds the index of its own forward solve
+        (`gadopt.dtn_coupled_adjoint`), so there the index falls by one per
+        solve. A signed difference is negative on that sweep, and the lag
+        would never expire.
+
         Returns:
-          True when `every` solves have run since the last build, when the
-          time step differs from the one of the last build, or when the
-          previous solve took more than `max_outer` outer iterations per
+          True when `every` solves separate this one from the last build,
+          when the time step differs from the one of the last build, or when
+          the previous solve took more than `max_outer` outer iterations per
           Newton iteration.
         """
-        if solve_index - self._solve_index >= self._every:
+        if abs(solve_index - self._solve_index) >= self._every:
             return True
         if _published_dt(pc) != self._dt:
             return True
