@@ -212,6 +212,29 @@ class AugmentedImplicitMatrixContext(ImplicitMatrixContext):
     `B` is symmetric, so the transpose action is the same action. Stated rather
     than inherited, because PETSc uses it for a transposed solve and getting it
     wrong would surface only in the adjoint.
+
+    **The declared nullspaces are made exact on the action.** A declared
+    nullspace is in general only an approximate kernel of the discrete
+    operator. The rigid rotation, for example, is annihilated only to about
+    `2e-6` relative, because `u . n_h` is not zero on curved facets
+    (`gadopt.rigid_rotation_nullspace`). PETSc removes the transpose
+    nullspace from the right-hand side once, and the displacement split of
+    the block-0 preconditioner removes the rotation from its input and its
+    output. A right-preconditioned outer FGMRES therefore never produces a
+    direction that reduces the rotation part of the residual, which equals
+    `-(A k) . x` and is not zero. The outer residual then stops at that part
+    and the solve runs to its cap, although every other part of the
+    residual is converged; past that point the FGMRES estimate falls below
+    the true residual, so some solves are also reported as converged when
+    they are not. Removing the transpose nullspace from the output of `mult`
+    (and the nullspace from the output of `multTranspose`) makes the declared
+    space an exact left kernel of the operator the Krylov method sees. The
+    residual then stays orthogonal to it and PETSc's default convergence
+    test measures only the equations the declaration keeps. The solution
+    the solve returns is unchanged up to the solver tolerance: it already
+    lies in the complement, and that equation is the one the declaration
+    drops. A wrongly declared nullspace now deletes part of the equations,
+    which is the same warning that `project_out_nullspace` carries.
     """
 
     #: Set by the installer. Not a constructor argument, because
@@ -228,12 +251,35 @@ class AugmentedImplicitMatrixContext(ImplicitMatrixContext):
             # guard that fails to install leaves this at 0 while every reason
             # code still reads converged.
             self.dtn_operator.jacobian_applications += 1
+        # The output of `A x` must lie in the range of A, which is orthogonal
+        # to the left kernel: the transpose nullspace declared on this matrix.
+        _remove_declared_space(mat.getTransposeNullSpace(), Y)
 
     def multTranspose(self, mat, X, Y):
         super().multTranspose(mat, X, Y)
         if self.dtn_operator is not None:
             self.dtn_operator.apply_local(X.array_r, Y.array_w)
             self.dtn_operator.jacobian_applications += 1
+        # The left kernel of A^T is the kernel of A: the declared nullspace.
+        _remove_declared_space(mat.getNullSpace(), Y)
+
+
+def _remove_declared_space(space, vec):
+    """Remove a declared PETSc nullspace from `vec`, in place, if one is set.
+
+    `Mat.getNullSpace` and `Mat.getTransposeNullSpace` return a wrapper around
+    a NULL handle when nothing is declared, so the handle is tested first.
+    `MatNullSpaceRemove` takes the orthonormal basis Firedrake built when the
+    space was attached (`VectorSpaceBasis.nullspace`), plus the constant
+    vector if the space declares one, and costs one dot product and one
+    vector update per basis vector.
+
+    Args:
+      space: a `PETSc.NullSpace`, possibly with a NULL handle.
+      vec: the PETSc vector to project, modified in place.
+    """
+    if space is not None and space.handle:
+        space.remove(vec)
 
 
 def install_augmented_context(Jmat, dtn_operator):
