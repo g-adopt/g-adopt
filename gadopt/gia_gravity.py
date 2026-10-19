@@ -742,18 +742,20 @@ def selfgrav_dtn_iterative_solver_parameters(
         for the rotational closure.
       outer_atol, outer_max_it, outer_accept_capped: the stopping rule of the
         outer FGMRES besides `outer_rtol`. `outer_rtol` is relative to the
-        residual a Newton iteration starts from. When a time step changes the
-        load very little that residual is tiny, and the relative target falls
-        below the floor the outer residual cannot go under. On GIAMIP Exp01 at
-        L0 with 2 kyr steps the start was 8e-7 at -2 ka (3e-5 to 3e-4 in
-        earlier steps), the floor about 1.2e-12, and `outer_rtol = 1e-6` asked
-        for 8e-13: the solve ran to its cap, SNES ended with
-        `DIVERGED_LINEAR_SOLVE` and the run aborted (Setonix jobs 50822246 and
-        50825501, NOTES/EXP01-HANDOVER.md in the giamip-exp01 worktree).
-        `outer_atol` (`ksp_atol`) is an absolute floor: the solve stops at the
-        larger of the relative target and this value. It is 0 (off) by default
-        because the floor depends on the scaling of the residual and on the
-        mesh; 1e-11 suits Exp01 at L0 and has to be measured at L1 and L2.
+        residual a Newton iteration starts from. When that residual is tiny,
+        the relative target can fall below a floor the outer residual cannot
+        go under, and the solve runs to its cap. One such floor is the part of
+        the residual along a declared transpose nullspace that is not an
+        exact left kernel of the discrete operator: the rigid rotation, which
+        curved facets annihilate only to about 2e-6 relative, gave a floor of
+        about 1.2e-12 on GIAMIP Exp01 at L0 (NOTES/EXP01-HANDOVER.md, section
+        17.4 and 18.9, in the giamip-exp01 worktree). The low-rank operator
+        removes the declared spaces from its action
+        (`gadopt.dtn_coupled.AugmentedImplicitMatrixContext`), so that floor
+        does not arise on the low-rank path. `outer_atol` (`ksp_atol`) is an
+        absolute floor for any other case: the solve stops at the larger of
+        the relative target and this value. It is 0 (off) by default because
+        a useful value depends on the scaling of the residual and on the mesh.
         `outer_accept_capped` (`ksp_converged_maxits`) counts a solve that
         reaches `outer_max_it` as converged, so Newton takes its update, which
         has already reduced the residual by several orders, and `snes_rtol`
