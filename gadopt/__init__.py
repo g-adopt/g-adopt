@@ -10,6 +10,7 @@ from .approximations import (
     QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
+from .adaptive_simulation import AdaptiveSimulation
 from .diagnostics import *
 from .level_set_tools import (
     LevelSetSolver,
@@ -47,6 +48,7 @@ from .utility import (
     TimestepAdaptor,
     free_surface_normal,
     free_surface_volume_multiplier,
+    function_name,
     get_boundary_ids,
     interpolate_1d_profile,
     log,

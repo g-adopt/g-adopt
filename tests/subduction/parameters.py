@@ -75,6 +75,8 @@ scales = {
     "Velocity": domain_height / reference_time,
     "Viscosity": reference_viscosity,
 }
+if not dimensionless:  # The fields are dimensional, so the output requires no scaling
+    scales = dict.fromkeys(scales, 1.0)
 
 # Non-dimensional numbers
 viscosity_scale = reference_viscosity if dimensionless else 1.0

@@ -1,20 +1,12 @@
 import firedrake as fd
 import gmsh
 from ufl.core.operator import Operator
-from ufl.indexed import Indexed
 
 
 def clip_expression(
     expr: Operator, minimum: float | Operator, maximum: float | Operator
 ) -> Operator:
     return fd.min_value(fd.max_value(expr, minimum), maximum)
-
-
-def function_name(field: fd.Function | Indexed) -> str:
-    if isinstance(field, Indexed):
-        return f"{field.ufl_operands[0].name()}_{field.ufl_operands[1].indices()[0]}"
-    else:
-        return field.name()
 
 
 def generate_mesh(

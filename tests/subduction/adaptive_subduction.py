@@ -1,9 +1,3 @@
-from collections.abc import Callable
-from pathlib import Path
-from shutil import rmtree
-
-from animate.adapt import adapt
-from animate.metric import RiemannianMetric
 from mpi4py import MPI
 
 from gadopt import *
@@ -12,109 +6,11 @@ from gadopt import *
 import parameters as prms
 from field_initialisation import initial_level_set, initial_temperature
 from rheology import material_viscosity
-from utility import function_name, generate_mesh
+from utility import generate_mesh
 # isort: on
 
 
-class AdaptiveSimulation:
-    def __init__(self):
-        match prms.mesh_generation:  # Mesh generation
-            case "firedrake":
-                self.mesh = RectangleMesh(
-                    *prms.mesh_elements, *prms.domain_dims, quadrilateral=False
-                )
-            case "gmsh":
-                if MPI.COMM_WORLD.rank == 0:
-                    generate_mesh(prms.domain_dims, prms.mesh_layers)
-
-                MPI.COMM_WORLD.barrier()
-
-                self.mesh = Mesh("mesh.msh")
-
-        # Time-stepping objects
-        self.time = Constant(0.0)  # Initial time
-        self.time_step = Constant(prms.time_step)  # Initial time step
-        self.step = 0  # A counter to keep track of the simulation time-loop iterations
-        self.checkpoint_counter = 0  # A counter to keep track of checkpoint files
-        self.output_counter = 0  # A counter to keep track of output files
-
-        self.initialise()  # Initialise solutions on the initial mesh
-
-        for iteration in range(prms.initial_adapt_loops):
-            # Adapt original mesh based on initial fields
-            log(f"Initial adapt iteration #{iteration}")
-            self.adapt_mesh(initial=True)
-
-            self.initialise()  # Initialise solutions on the adapted mesh
-
-        # Write initial checkpoint and output
-        self.write_checkpoint(initial=True)
-        self.write_output(initial=True)
-
-    def adapt_mesh(self, initial: bool = False) -> None:
-        def add_metric(field: Function, scale: float = 1.0, log: bool = False):
-            # Firedrake function for a metric over a mesh where a field lives
-            metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
-            metric.set_parameters(prms.metric_parameters)  # Set metric parameters
-            # Field Hessian
-            metric.compute_hessian(ln(field) / ln(10.0) if log else field)
-            metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
-
-            metric_magnitude.interpolate(sqrt(inner(metric, metric)))  # Frobenius norm
-            metric_magnitude_max = MPI.COMM_WORLD.allreduce(
-                metric_magnitude.dat.data_ro.max(), MPI.MAX
-            )
-            # Scale metric by the maximum value of its Frobenius norm across the mesh
-            metric.assign(scale * metric / metric_magnitude_max)
-
-            metrics.append(metric)
-
-        for field_specs in self.fields.values():
-            if field_specs["include_in_metric"] and "expr" in field_specs:
-                field_specs["field"].interpolate(field_specs["expr"])
-
-        for call_count in range(prms.adapt_calls):
-            log(f"Adapt call #{call_count}")
-
-            M = TensorFunctionSpace(self.mesh, "CG", 1)
-            N = FunctionSpace(self.mesh, "CG", 1)
-            metric_magnitude = Function(N)
-
-            metrics = []
-            for field_specs in self.fields.values():
-                if not field_specs["include_in_metric"]:
-                    continue
-
-                if isinstance(field_specs["field"].ufl_element(), VectorElement):
-                    for dim in range(field_specs["field"].ufl_shape[0]):
-                        add_metric(
-                            field_specs["field"][dim],
-                            field_specs["metric_mods"]["scale"][dim],
-                            field_specs["metric_mods"]["log"][dim],
-                        )
-                else:
-                    add_metric(field_specs["field"], **field_specs["metric_mods"])
-
-            overall_metric = metrics[0].copy(deepcopy=True)  # Overall metric
-            overall_metric.rename("Metric (overall)")
-            # Minimum in all directions across all metrics
-            overall_metric.intersect(*metrics[1:])
-            # Ensure boundedness (symmetric positive-definite)
-            overall_metric.enforce_spd()
-            # Rescale metric to achieve the desired target complexity
-            overall_metric.normalise()
-
-            # Adapting the mesh can generate new nodes outside of the original mesh
-            # Increase tolerance to ensure point location does not fail
-            self.mesh.tolerance = 0.1
-            # Generate new mesh based on overall metric
-            self.mesh = adapt(self.mesh, overall_metric, serialise=True)
-
-            if initial:
-                break
-
-            self.interpolate_fields()
-
+class AdaptiveSubduction(AdaptiveSimulation):
     def initialise(self) -> None:
         # Set up solvers
         self.set_up(initial=True)
@@ -130,28 +26,6 @@ class AdaptiveSimulation:
         # Initialise Stokes fields (velocity, pressure, and free-surface height)
         log("Initial Stokes solve")
         self.stokes_solver.solve()
-
-    def interpolate_fields(self) -> None:
-        for field_specs in self.fields.values():
-            if not field_specs["include_in_metric"] and "expr" in field_specs:
-                continue
-
-            field = field_specs.pop("field")
-            space = FunctionSpace(self.mesh, field.ufl_element())
-            new_field = Function(space, name=field.name())
-            new_field.interpolate(field)
-            field_specs["field"] = new_field
-
-    def run(self) -> None:
-        while True:  # Mesh adaptivity loop
-            self.time_loop()  # Run the time loop
-
-            # Exit loop after reaching target time
-            if float(self.time) >= prms.time_end:
-                break
-
-            self.adapt_mesh()  # Adapt mesh based on current fields
-            self.set_up()  # Set simulation objects on the new mesh
 
     def set_up(self, initial: bool = False) -> None:
         # Mesh
@@ -178,17 +52,20 @@ class AdaptiveSimulation:
         self.T = Function(Q, name="Temperature")
         self.psi = Function(K, name="Level set")
 
-        self.solutions = [*self.stokes.subfunctions, self.T, self.psi]
+        # The Stokes function is checkpointed as a single mixed entry
+        self.solutions = [self.stokes, self.T, self.psi]
+        # The state carried across mesh adaptation and written as output
+        state_fields = [*self.stokes.subfunctions, self.T, self.psi]
 
         if not initial:
-            for solution in self.solutions:
-                solution.assign(self.fields[solution.name()]["field"])
+            for field in state_fields:
+                field.assign(self.fields[field.name()]["field"])
 
             self.fields.clear()
 
         self.fields = {
             field.name(): {"field": field, "output": Function(field, name=field.name())}
-            for field in self.solutions
+            for field in state_fields
         }
 
         # Rheology
@@ -380,49 +257,28 @@ class AdaptiveSimulation:
 
                 break
 
-    def write_checkpoint(self, initial: bool = False) -> None:
-        if initial and MPI.COMM_WORLD.rank == 0:
-            check_dir = Path("checkpoints").resolve()
-            if check_dir.is_dir():
-                rmtree(check_dir)
-            check_dir.mkdir()
-
-        if initial:
-            MPI.COMM_WORLD.barrier()
-
-        with CheckpointFile(
-            f"checkpoints/checkpoint_{self.checkpoint_counter}.h5", "w"
-        ) as checkpoint_file:
-            checkpoint_file.save_mesh(self.mesh)
-            checkpoint_file.save_function(self.stokes, name="Stokes")
-            checkpoint_file.save_function(self.T, name="Temperature")
-            checkpoint_file.save_function(self.psi, name="Level set")
-
-        self.checkpoint_counter += 1
-
-    def write_output(self, initial: bool = False) -> None:
-        if initial:
-            self.output_file = VTKFile("output.pvd", adaptive=True)
-
-        output_fields = []
-        for field_specs in self.fields.values():
-            scale = field_specs["scale"] if prms.dimensionless else 1.0
-            field_data = field_specs.get("expr", field_specs["field"])
-
-            if isinstance(scale, Callable):
-                field_specs["output"].interpolate(scale(field_data))
-            else:
-                field_specs["output"].interpolate(scale * field_data)
-
-            output_fields.append(field_specs["output"])
-
-        self.output_file.write(
-            *output_fields, time=float(self.time) / prms.myr_to_seconds
-        )
-
-        self.output_counter += 1
-
 
 if __name__ == "__main__":
-    simulation = AdaptiveSimulation()
+    match prms.mesh_generation:  # Mesh generation
+        case "firedrake":
+            mesh = RectangleMesh(
+                *prms.mesh_elements, *prms.domain_dims, quadrilateral=False
+            )
+        case "gmsh":
+            if MPI.COMM_WORLD.rank == 0:
+                generate_mesh(prms.domain_dims, prms.mesh_layers)
+
+            MPI.COMM_WORLD.barrier()
+
+            mesh = Mesh("mesh.msh")
+
+    simulation = AdaptiveSubduction(
+        mesh=mesh,
+        metric_parameters=prms.metric_parameters,
+        time_end=prms.time_end,
+        time_normalisation=prms.myr_to_seconds,
+        time_step=prms.time_step,
+        adapt_calls=prms.adapt_calls,
+        initial_adapt_loops=prms.initial_adapt_loops,
+    )
     simulation.run()

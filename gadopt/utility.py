@@ -20,6 +20,7 @@ from scipy.linalg import solveh_banded
 from ufl.core.expr import Expr
 from ufl.core.operator import Operator
 from ufl.corealg.traversal import traverse_unique_terminals
+from ufl.indexed import Indexed
 
 try:
     MeshSequenceGeometry = fd.MeshSequenceGeometry
@@ -808,3 +809,21 @@ def initialise_background_field(
                 f,
             )
         )
+
+
+def function_name(field: fd.Function | Indexed) -> str:
+    """Returns the name of a field or of one component of a split field.
+
+    Args:
+      field:
+        Firedrake function or an indexed component of one
+
+    Returns:
+      The name of the field, with an underscore and the component index appended for
+      indexed components.
+
+    """
+    if isinstance(field, Indexed):
+        return f"{field.ufl_operands[0].name()}_{field.ufl_operands[1].indices()[0]}"
+
+    return field.name()
