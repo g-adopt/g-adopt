@@ -42,6 +42,7 @@ import sys
 from pathlib import Path
 
 import firedrake as fd
+from firedrake.petsc import PETSc
 import numpy as np
 import pytest
 from firedrake.adjoint import (
@@ -253,7 +254,8 @@ def real(mesh, value):
 
 
 def _build(meshes, control_name, control, representation, *,
-           rotation=False, declare_nullspace=False, b_mu=None,
+           rotation=False, declare_nullspace=False,
+           declare_transpose_nullspace=False, b_mu=None,
            fluid_core=False, solver_parameters="direct",
            approximation_kwargs=None, solver_parameters_extra=None):
     """Assemble the coupled solver with exactly one control live.
@@ -317,6 +319,10 @@ def _build(meshes, control_name, control, representation, *,
     if declare_nullspace:
         from gadopt import rigid_rotation_nullspace
         kwargs["nullspace"] = rigid_rotation_nullspace(Z, layout)
+        if declare_transpose_nullspace:
+            # As the GIAMIP Exp01 driver does: the rotation is also a left
+            # kernel, so the right-hand side is made orthogonal to it.
+            kwargs["transpose_nullspace"] = kwargs["nullspace"]
     if solver_parameters_extra:
         kwargs["solver_parameters_extra"] = solver_parameters_extra
 
@@ -1519,3 +1525,104 @@ def test_replay_and_adjoint_see_the_taped_solve_index(meshes, monkeypatch):
         f"the adjoint sweep showed the preconditioners the indices {adjoint}; "
         f"each adjoint solve must show the index of its own forward solve")
     assert solver.appctx["gia_solve_index"] == n_solves
+
+
+# ===========================================================================
+# Declared nullspaces are exact on the low-rank operator
+#
+# The rigid rotation is declared as nullspace and transpose nullspace, but the
+# discrete operator annihilates it only to about 2e-6 relative (curved
+# facets). The block-0 preconditioner removes the rotation from its input and
+# output, so a right-preconditioned outer FGMRES cannot reduce the rotation
+# part of the residual, and on GIAMIP Exp01 the adjoint solves stalled there
+# and ran to their cap. `AugmentedImplicitMatrixContext` removes the declared
+# spaces from its action, which makes them exact. These tests check that
+# property directly on the operators the Krylov solves use.
+# ===========================================================================
+def _rotation_content(space, vec):
+    """Largest |k . vec| / |vec| over the vectors k of a PETSc nullspace."""
+    norm = vec.norm()
+    return max(abs(k.dot(vec)) for k in space.getVecs()) / norm
+
+
+def _random_vector(mat):
+    """A reproducible random vector in the domain of `mat`."""
+    x = mat.createVecRight()
+    rand = PETSc.Random().create(comm=x.getComm())
+    rand.setSeed(20261019)
+    rand.setFromOptions()
+    x.setRandom(rand)
+    rand.destroy()
+    return x
+
+
+def _assert_spaces_exact(mat, label):
+    """`mat` removes its transpose nullspace from `A x`, its nullspace from
+    `A^T x`, and is the augmented low-rank operator."""
+    from gadopt.dtn_coupled import AugmentedImplicitMatrixContext
+
+    assert isinstance(mat.getPythonContext(), AugmentedImplicitMatrixContext), (
+        f"{label}: the operator is not the augmented low-rank context, so this "
+        f"test would not exercise the projection")
+    left, right = mat.getTransposeNullSpace(), mat.getNullSpace()
+    assert left.handle and right.handle, (
+        f"{label}: the solver did not attach both declared spaces")
+    x = _random_vector(mat)
+    y = mat.createVecLeft()
+    mat.mult(x, y)
+    after_mult = _rotation_content(left, y)
+    mat.multTranspose(x, y)
+    after_transpose = _rotation_content(right, y)
+    print(f"    [{label}] |k . Ax|/|Ax| {after_mult:.2e}  "
+          f"|k . A^T x|/|A^T x| {after_transpose:.2e}")
+    # Round-off level: about 2e-18 with the projection. Without it, a random
+    # x on this mesh gives about 1e-11, the facet error of the rotation.
+    assert after_mult < 1e-14, (
+        f"{label}: A x has {after_mult:.3e} of its norm along the declared "
+        f"transpose nullspace; the declared space is not a left kernel")
+    assert after_transpose < 1e-14, (
+        f"{label}: A^T x has {after_transpose:.3e} of its norm along the "
+        f"declared nullspace")
+
+
+def _adjoint_solver(block):
+    """The adjoint solver of an adopted coupled block, on either Firedrake."""
+    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS
+    if CACHED_SOLVER_BLOCKS:
+        return block.adjoint_cache.solver
+    return block._ad_solvers["adjoint_lvs"]
+
+
+def test_declared_nullspaces_are_exact_on_the_lowrank_operator(meshes):
+    """The forward and the adjoint operator of the low-rank solve.
+
+    One taped solve with the rotation declared as nullspace and transpose
+    nullspace, then one gradient, so that both the forward Jacobian and the
+    adjoint solver's operator (whose spaces are swapped,
+    `derivative_solver_kwargs`) exist. For a random x, A x must have no
+    component along the declared transpose nullspace and A^T x none along the
+    declared nullspace, to round-off.
+    """
+    control_name = "shear_modulus"
+    cmesh = control_mesh(meshes, control_name)
+    with stop_annotating():
+        control = real(cmesh, CONTROL_VALUES[control_name])
+        solver, z, layout = _build(
+            meshes, control_name, control, "lowrank", fluid_core=True,
+            declare_nullspace=True, declare_transpose_nullspace=True,
+            solver_parameters=preset_parameters("iterative", "lowrank",
+                                                fluid_core=True))
+    continue_annotation()
+    try:
+        m = Control(control)
+        solver.solve()
+        J = _objective(z, layout, meshes[1])
+        Jhat = ReducedFunctional(J, m)
+    finally:
+        pause_annotation()
+    Jhat.derivative()
+
+    forward, _ = solver.solver.snes.getJacobian()[:2]
+    _assert_spaces_exact(forward, "forward")
+    adjoint, _ = _adjoint_solver(solver.adjoint_block).snes.getJacobian()[:2]
+    _assert_spaces_exact(adjoint, "adjoint")
