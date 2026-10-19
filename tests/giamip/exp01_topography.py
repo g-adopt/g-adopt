@@ -577,7 +577,8 @@ def parse_args():
     p.add_argument("--gia_rebuild_every", type=int, default=None)
     p.add_argument("--gia_rebuild_max_outer", type=float, default=None)
     p.add_argument("--block0_max_it", type=int, default=50)
-    p.add_argument("--outer_atol", type=float, default=1.0e-11)
+    # 0 (off), as in the forward driver: see its `--outer_atol`.
+    p.add_argument("--outer_atol", type=float, default=0.0)
     p.add_argument("--outer_max_it", type=int, default=30)
     return p.parse_args()
 

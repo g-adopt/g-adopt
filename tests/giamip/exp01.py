@@ -743,10 +743,9 @@ def build_solver(parent, mantle, earth, scales, forcing, dt, args):
     parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=layout.condensed, outer_rtol=OUTER_RTOL,
         block0_rtol=BLOCK0_RTOL, block0_max_it=args.block0_max_it,
-        # The stopping rule of the outer FGMRES: an absolute floor for the
-        # late steps, whose relative target lies below the residual floor
-        # (about 1.2e-12 at L0), and a capped solve counted as converged so
-        # Newton finishes the step. See the preset's docstring.
+        # The stopping rule of the outer FGMRES: an optional absolute floor
+        # (`--outer_atol`, off by default) and a capped solve counted as
+        # converged so Newton finishes the step. See the preset's docstring.
         outer_atol=args.outer_atol, outer_max_it=args.outer_max_it,
         outer_accept_capped=True,
         snes_type="newtonls",
@@ -1306,9 +1305,12 @@ def parse_args():
     # residual. The outer FGMRES accepts an inexact block-0 solve.
     p.add_argument("--block0_max_it", type=int, default=200)
     # The stopping rule of the outer FGMRES (preset arguments `outer_*`).
-    p.add_argument("--outer_atol", type=float, default=1.0e-11,
-                   help="absolute tolerance of the outer FGMRES (the residual "
-                        "floor is about 1.2e-12 at L0)")
+    # 0 (off): the low-rank operator removes the declared rigid rotation from
+    # its action, so the outer residual has no floor above round-off and
+    # every solve converges on outer_rtol (verified on Setonix, steps 51-62
+    # at L0, NOTES/EXP01-HANDOVER.md section 18.9).
+    p.add_argument("--outer_atol", type=float, default=0.0,
+                   help="absolute tolerance of the outer FGMRES (0: off)")
     p.add_argument("--outer_max_it", type=int, default=30,
                    help="iteration cap of the outer FGMRES; a solve at the "
                         "cap counts as converged")
