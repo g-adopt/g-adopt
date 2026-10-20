@@ -503,8 +503,8 @@ def timer_decorator(func):
 class InteriorBC(DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
     @cached_property
-    def nodes(self):
-        return np.array(list(set(range(self._function_space.node_count)) - set(super().nodes)))
+    def _nodes(self):
+        return np.setdiff1d(np.arange(self._function_space.node_count), super()._nodes)
 
 
 def absv(u):
