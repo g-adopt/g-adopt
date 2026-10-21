@@ -4,6 +4,7 @@ from firedrake.output import VTKFile
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
+    BurgersApproximation,
     CompressibleInternalVariableApproximation,
     ExtendedBoussinesqApproximation,
     IncompressibleMaxwellApproximation,
@@ -26,6 +27,7 @@ from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
 from .solver_options_manager import DeleteParam
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
+    BurgersSolver,
     CoupledInternalVariableSolver,
     InternalVariableSolver,
     StokesSolver,

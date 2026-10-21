@@ -21,7 +21,7 @@ from types import MappingProxyType
 import firedrake as fd
 from ufl.core.expr import Expr
 
-from .approximations import BaseApproximation, BaseGIAApproximation
+from .approximations import BaseApproximation, BaseGIAApproximation, BurgersApproximation
 from .equations import Equation
 from .free_surface_equation import free_surface_terms
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
@@ -1320,6 +1320,66 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         )
 
         return combined_normal_stress
+
+
+class BurgersSolver(CoupledInternalVariableSolver):
+    r"""Fully implicit displacement/transient/permanent-strain Burgers solver.
+
+    ``solution`` must use a mixed space ``[V, S, S]``: total displacement,
+    recoverable Kelvin strain and permanent viscous strain, in that order.
+    The two tensor evolution equations use backward Euler:
+
+    $$ (e_t-e_t^{old})/\Delta t + (\mu_t/\eta_t)e_t-s/(2\eta_t)=0, $$
+    $$ (e_v-e_v^{old})/\Delta t-s/(2\eta_{ss}(s))=0. $$
+
+    Both strains and displacement enter the new stress. Firedrake differentiates
+    the full residual for Newton, including the permanent viscosity's stress
+    dependence. History is copied only after a successful solve, as in the
+    parent solver. To restart, initialise all three solution fields before
+    constructing the solver.
+
+    Other arguments and boundary conditions follow CoupledInternalVariableSolver.
+    A direct solve is the default; the inherited iterative preconditioner has
+    not been validated for this constitutive system. ``constant_jacobian`` is
+    unsupported: the time step and nonlinear tangent may change between solves.
+    """
+
+    name = "Burgers"
+
+    def __init__(self, solution, approximation, /, *, dt, **kwargs):
+        if not isinstance(approximation, BurgersApproximation):
+            raise TypeError("BurgersSolver requires a BurgersApproximation")
+        shapes = [field.ufl_shape for field in solution.subfunctions]
+        dimension = solution.function_space().mesh().geometric_dimension
+        if shapes != [(dimension,), (dimension, dimension), (dimension, dimension)]:
+            raise ValueError("BurgersSolver requires mixed fields [displacement, transient strain, permanent strain]")
+        if kwargs.get("constant_jacobian", False):
+            raise ValueError("BurgersSolver requires constant_jacobian=False")
+        kwargs.setdefault("solver_parameters", "direct")
+        super().__init__(solution, approximation, dt=dt, **kwargs)
+
+    def set_equations(self) -> None:
+        u, transient, permanent = self.solution_split
+        approximation = self.approximation
+        dev_stress = approximation.deviatoric_stress(u, [transient, permanent])
+        terms = [compressible_viscoelastic_terms,
+                 [mass_term, sink_term, source_term], [mass_term, source_term]]
+        attrs = [
+            {"stress": approximation.stress(u, internal_variables=[transient, permanent]),
+             "source": approximation.buoyancy(u) * self.k},
+            {"source": dev_stress / (2 * approximation.transient_viscosity),
+             "sink_coeff": approximation.transient_shear_modulus / approximation.transient_viscosity,
+             "dt": self.dt, "trial_old": self.solution_old_split[1], "use_irksome": False},
+            {"source": dev_stress / (2 * approximation.permanent_viscosity(dev_stress)),
+             "dt": self.dt, "trial_old": self.solution_old_split[2], "use_irksome": False},
+        ]
+        for i, (residual_terms, eq_attrs) in enumerate(zip(terms, attrs)):
+            self.equations.append(Equation(
+                self.tests[i], self.solution_space[i], residual_terms,
+                eq_attrs=eq_attrs, approximation=approximation, bcs=self.weak_bcs,
+                quad_degree=self.quad_degree,
+                scaling_factor=self.scaling_factor if i == 0 else -self.scaling_factor,
+            ))
 
 
 class BoundaryNormalStressSolver(SolverConfigurationMixin):

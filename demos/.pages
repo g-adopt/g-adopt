@@ -26,6 +26,7 @@
         - [adaptive_base_case](mantle_convection/adaptive_base_case.ipynb)
 - [Glacial isostatic adjustment](glacial_isostatic_adjustment/index.md)
     - [base_case](glacial_isostatic_adjustment/base_case.ipynb)
+    - [burgers_rheology](glacial_isostatic_adjustment/burgers_rheology.ipynb)
     - [2d_cylindrical](glacial_isostatic_adjustment/2d_cylindrical.ipynb)
     - [2d_cylindrical_lvv](glacial_isostatic_adjustment/2d_cylindrical_lvv.ipynb)
     - [adjoint_ice](glacial_isostatic_adjustment/adjoint_ice.ipynb)

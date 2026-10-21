@@ -1086,6 +1086,72 @@ class CompressibleInternalVariableApproximation(InternalVariableApproximation):
         return 0
 
 
+class BurgersApproximation(CompressibleInternalVariableApproximation):
+    r"""Compressible Burgers body with explicit physical creep strains.
+
+    An elastic spring, a linear Kelvin element and a permanent-creep dashpot
+    act in series. With total displacement ``u`` and internal variables
+    ``[transient_strain, permanent_strain]``, the deviatoric stress is
+
+    $$ s = 2\mu\left(\mathrm{dev}\,\varepsilon(u)-e_t-e_v\right). $$
+
+    The Kelvin element obeys $\dot e_t=(s-2\mu_t e_t)/(2\eta_t)$.
+    Only permanent creep, $\dot e_v=s/(2\eta_{ss}(s))$, uses the inherited
+    composite power-law factor. ``exponent=1`` recovers linear Burgers.
+    ``viscosity`` is the steady viscosity at ``background_stress``; the
+    transition stress and background stress follow the parent's sqrt(J2)
+    convention. All material parameters can be scalar coefficients or fields.
+
+    Use with :class:`BurgersSolver`, not the Maxwell internal-variable solvers.
+    Inherited one-entry material lists describe the elastic spring and steady
+    dashpot for interface compatibility, not two Maxwell relaxation modes.
+    The bulk response stays elastic. Internal strains should initially be
+    symmetric and deviatoric (with the missing component inferred in 2D plane
+    strain); zero initial strains satisfy this requirement.
+
+    Args:
+      bulk_modulus: Elastic bulk modulus.
+      density: Reference density.
+      shear_modulus: Instantaneous elastic shear modulus, mu.
+      viscosity: Reference permanent-creep viscosity, eta_ss.
+      transient_shear_modulus: Kelvin shear modulus, mu_t.
+      transient_viscosity: Kelvin viscosity, eta_t.
+      **kwargs: CompressibleInternalVariableApproximation options, including
+        bulk_shear_ratio, exponent, transition_stress, background_stress and B_mu.
+    """
+
+    def __init__(
+        self,
+        bulk_modulus: Function | Number,
+        density: Function | Number,
+        shear_modulus: Function | Number,
+        viscosity: Function | Number,
+        *,
+        transient_shear_modulus: Function | Number,
+        transient_viscosity: Function | Number,
+        **kwargs,
+    ):
+        if isinstance(shear_modulus, list) or isinstance(viscosity, list):
+            raise ValueError("Burgers parameters describe individual elements, not Maxwell-mode lists")
+        super().__init__(bulk_modulus, density, shear_modulus, viscosity, **kwargs)
+        self.steady_viscosity = self.viscosity[0]
+        self.transient_shear_modulus = ensure_constant(transient_shear_modulus)
+        self.transient_viscosity = ensure_constant(transient_viscosity)
+
+    def deviatoric_stress(self, u, internal_variables):
+        if len(internal_variables) != 2:
+            raise ValueError("Burgers requires [transient_strain, permanent_strain]")
+        transient, permanent = internal_variables
+        return 2 * self.mu0 * (self.deviatoric_strain(u) - transient - permanent)
+
+    def permanent_viscosity(self, dev_stress):
+        """Stress-dependent viscosity of the permanent dashpot only."""
+        return self.steady_viscosity * self.power_law_factor(dev_stress)
+
+    def effective_viscosity(self, dt):
+        raise NotImplementedError("Explicit Burgers strains require BurgersSolver")
+
+
 class MaxwellApproximation(CompressibleInternalVariableApproximation):
     """Maxwell viscoelastic rheology.
 
