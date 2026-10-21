@@ -1236,15 +1236,19 @@ class CoupledInternalVariableSolver(StokesSolverBase):
 
     def set_equations(self) -> None:
         u, *internal_variables = self.solution_split
+        if len(internal_variables) != len(self.approximation.maxwell_times):
+            raise ValueError("Number of internal variables and Maxwell modes must be consistent")
         stress = self.approximation.stress(
             u, internal_variables=internal_variables)
         source = self.approximation.buoyancy(u) * self.k
         strain = self.approximation.deviatoric_strain(u)
         dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
-        visc_factor = self.approximation.power_law_factor(dev_stress)
+        visc_factors = self.approximation.power_law_factors(dev_stress)
         # Build a local list so that self.approximation.maxwell_times is never mutated.
-        # For n=1 (Newtonian) visc_factor is identically 1 and has no effect.
-        maxwell_times = [mt * visc_factor for mt in self.approximation.maxwell_times]
+        # Each mode can have its own exponent, transition and background stress.
+        # All factors use the total deviatoric stress, as in the shared law.
+        maxwell_times = [mt * factor for mt, factor in
+                         zip(self.approximation.maxwell_times, visc_factors)]
 
         residual_terms = [compressible_viscoelastic_terms]
         eqs_attrs = [{"stress": stress, "source": source}]

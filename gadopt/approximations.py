@@ -7,6 +7,7 @@ G-ADOPT queries variables and methods from the approximation.
 """
 
 import abc
+from math import isfinite
 from numbers import Number
 from typing import Optional
 from warnings import warn
@@ -683,6 +684,17 @@ class InternalVariableApproximation(BaseGIAApproximation):
     For more information regarding the specific implementation in G-ADOPT please see
     Scott et al. 2025.
 
+    ``exponent``, ``transition_stress`` and ``background_stress`` accept a
+    scalar/field shared by all modes or a list/tuple with one entry per
+    modulus/viscosity pair. ``CoupledInternalVariableSolver`` evaluates a
+    separate factor for each mode using the total deviatoric stress, as in
+    Crawford Appendix A, equations A10--A13. For zero background stress and
+    n_i > 1, their parameter gamma_i is equivalent to
+    ``transition_stress_i = sqrt(2) * mu0 * gamma_i**(-1/(n_i-1))``.
+    A linear mode uses exponent=1 (equivalent to gamma_i=0 at fixed reference
+    time); its transition stress may be None. These modes do not individually
+    represent physical Kelvin and permanent-creep strains in nonlinear models.
+
     Al-Attar, David, and Jeroen Tromp. "Sensitivity kernels for viscoelastic loading
     based on adjoint methods." Geophysical Journal International 196.1 (2014): 34-77.
 
@@ -705,9 +717,9 @@ class InternalVariableApproximation(BaseGIAApproximation):
       viscosity:         viscosity
       bulk_shear_ratio:  Ratio of bulk to shear modulus
       exponent:          Power-law stress exponent n. Defaults to 1, which recovers
-                         Newtonian (linear) viscosity with no special casing. Set n > 1
-                         for composite (diffusion + dislocation) creep. The power-law
-                         factor is always evaluated; for n=1 it is identically 1.
+                         Newtonian (linear) viscosity. Set n > 1 for composite
+                         (diffusion + dislocation) creep. A scalar/field broadcasts;
+                         a list/tuple sets one exponent per Maxwell mode.
       transition_stress: Stress level (in sqrt(J2) units, consistent with
                          second_stress_invariant) at which diffusion and dislocation
                          creep contribute equally. Defaults to 1; the value is
@@ -737,9 +749,9 @@ class InternalVariableApproximation(BaseGIAApproximation):
         viscosity: Function | Number | list,
         *,
         bulk_shear_ratio: Function | Number = 1,
-        exponent: Function | Number = 1,
-        transition_stress: Function | Number = 1,
-        background_stress: Function | Number = 0,
+        exponent: Function | Number | list | tuple = 1,
+        transition_stress: Function | Number | list | tuple = 1,
+        background_stress: Function | Number | list | tuple = 0,
         **kwargs,
     ):
         self.bulk_modulus = ensure_constant(bulk_modulus)
@@ -773,6 +785,31 @@ class InternalVariableApproximation(BaseGIAApproximation):
         self.exponent = exponent
         self.transition_stress = transition_stress
         self.background_stress = background_stress
+        # Scalars (including spatial fields) broadcast to every Maxwell mode.
+        # Validate sequences before the solver builds any variational forms.
+        for name in ("exponent", "transition_stress", "background_stress"):
+            for value in self._branch_parameters(getattr(self, name), name):
+                if isinstance(value, Number) and (
+                    not isfinite(value)
+                    or (name == "exponent" and value < 1)
+                    or (name == "transition_stress" and value <= 0)
+                    or (name == "background_stress" and value < 0)
+                ):
+                    raise ValueError(f"Invalid {name}: {value}")
+        for n, sigma_star in zip(
+            self._branch_parameters(exponent, "exponent"),
+            self._branch_parameters(transition_stress, "transition_stress"),
+        ):
+            if sigma_star is None and not (isinstance(n, Number) and n == 1):
+                raise ValueError("transition_stress=None requires a numeric exponent=1")
+
+    def _branch_parameters(self, value, name):
+        """Broadcast a coefficient or validate one entry per Maxwell mode."""
+        if isinstance(value, (list, tuple)):
+            if len(value) != len(self.maxwell_times):
+                raise ValueError(f"{name} must have one entry per Maxwell mode")
+            return value
+        return [value] * len(self.maxwell_times)
 
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         r"""The deviatoric strain $\mathrm{dev}(\mathrm{sym}(\nabla u))$.
@@ -910,7 +947,18 @@ class InternalVariableApproximation(BaseGIAApproximation):
         """
         return sqrt(0.5 * inner(dev_stress, dev_stress) + 1e-16)
 
-    def power_law_factor(self, dev_stress):
+    def power_law_factors(self, dev_stress):
+        """One total-stress-driven viscosity factor per Maxwell mode.
+
+        ``exponent``, ``transition_stress`` and ``background_stress`` each
+        accept a scalar/field or a list/tuple in material-list order. Scalars
+        retain the existing shared-factor behaviour. These are relaxation
+        modes, not physical transient and permanent strains.
+        """
+        return [self.power_law_factor(dev_stress, branch=i)
+                for i in range(len(self.maxwell_times))]
+
+    def power_law_factor(self, dev_stress, *, branch=None):
         """Return the composite creep viscosity correction factor.
 
         For composite (diffusion + dislocation) creep the effective viscosity is
@@ -936,11 +984,28 @@ class InternalVariableApproximation(BaseGIAApproximation):
         mathematically correct value of 1. A conditional is used to guard the
         exponentiation when the base is zero so that n=1 (Newtonian) layers
         correctly return f=1 regardless of background_stress.
+        With mode-specific parameters, provide ``branch`` or use
+        ``power_law_factors``. A numeric exponent of one returns unity directly,
+        allowing ``transition_stress=None`` for an explicitly linear mode.
         """
+        parameters = (self.exponent, self.transition_stress, self.background_stress)
+        if branch is None:
+            if len(self.maxwell_times) > 1 and any(
+                isinstance(value, (list, tuple)) for value in parameters
+            ):
+                raise ValueError("Use power_law_factors() or specify branch for mode-specific parameters")
+            branch = 0
+        if not 0 <= branch < len(self.maxwell_times):
+            raise IndexError("Maxwell branch index out of range")
+        n, sigma_star, sigma_bg = (
+            self._branch_parameters(value, name)[branch]
+            for value, name in zip(parameters, ("exponent", "transition_stress", "background_stress"))
+        )
+        if isinstance(n, Number) and n == 1:
+            return ufl.as_ufl(1)
         sigma = self.second_stress_invariant(dev_stress)
-        n = self.exponent
-        a = self.background_stress / self.transition_stress
-        b = (sigma + self.background_stress) / self.transition_stress
+        a = sigma_bg / sigma_star
+        b = (sigma + sigma_bg) / sigma_star
         # Guard against 0^0: UFL evaluates 0^0 as 0 rather than 1. This
         # only arises when n=1 (exponent n-1 = 0); for n>1, a zero base
         # raised to a positive power correctly evaluates to 0. Conditioning
