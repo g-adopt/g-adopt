@@ -42,7 +42,7 @@ from .sources import Source
 # Interpolation config
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(frozen=True)
 class InterpolationConfig:
     """Spherical kNN-interpolation knobs.
 
@@ -62,12 +62,19 @@ class InterpolationConfig:
     boundary is encoded by zero-thickness halo seeds, the threshold
     degenerates into a pathological-query guard and the actual roll-off
     length is controlled by ``gaussian_sigma`` instead.
+
+    Note: This dataclass is frozen, so every field must also be hashable.
+    ``ScalarFieldConnector`` uses this object by value as the key for the
+    shared interpolation-geometry cache, so a list, dict, or set field would
+    make the config unhashable and cause cache insertion to fail. Freezing the
+    dataclass also prevents post-construction assignment from bypassing
+    ``__post_init__`` validation.
     """
 
-    kernel: str = "idw"
-    k_neighbors: int = 50
-    distance_threshold: float = 0.1
-    gaussian_sigma: float = 0.04
+    kernel: str = "idw"  # Inverse Distance Weighting
+    k_neighbors: int = 50  # Number of nearest neighbors to consider
+    distance_threshold: float = 0.1  # Distance threshold in radians
+    gaussian_sigma: float = 0.04  # Sigma, only for Gaussian kernel
 
     def __post_init__(self):
         valid_kernels = ("idw", "gaussian")
@@ -235,6 +242,9 @@ class ScalarFieldConnector:
         self._cached_result = result
         self._cached_coords_ref = weakref.ref(target_coords)
 
+    def _construct_cache_key(self, target_coords: np.ndarray):
+        return (hash(target_coords.tobytes()), self.interpolation)
+
     # Computation
     def _compute(
         self,
@@ -251,7 +261,11 @@ class ScalarFieldConnector:
         # (source cloud, target coords, cfg) — not on the gathered property —
         # so it is identical across every output sharing this source at a given
         # age. Build it once and cache it on the source; siblings reuse it.
-        key = (hash(target_coords.tobytes()), id(self.interpolation))
+        # The key is (coords content hash, config by value); the config is
+        # frozen and hashable, so two configs holding the same numbers share one
+        # build. The coords hash is collidable in principle (2^-64), unlike the
+        # by-value config half.
+        key = self._construct_cache_key(target_coords)
         bundle = self.source.get_or_build_geometry(
             key, lambda: self._interp_geometry(source_xyz, target_coords)
         )
