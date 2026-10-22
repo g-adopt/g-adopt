@@ -3,13 +3,63 @@ r"""This module contains classes that augment default Firedrake preconditioners.
 """
 
 import firedrake as fd
-from ufl.indexed import Indexed
 from firedrake.petsc import PETSc
+from ufl.indexed import Indexed
+
 from .utility import InteriorBC
 
 
+class StokesMassInvPC(fd.MassInvPC):
+    """Version of MassInvPC that prescribes the quadrature degree of its form.
+
+    The viscosity-weighted pressure mass approximates the Schur complement of the Stokes
+    system. Firedrake's MassInvPC integrates it with a quadrature degree estimated from
+    the integrand, which explodes for strongly nonlinear viscosities (their nested
+    fractional powers compound multiplicatively), running the quadrature rule
+    construction out of memory. The measure prescribed here carries the quadrature
+    degree used for the solver's Stokes terms.
+    """
+
+    def form(
+        self,
+        pc: fd.PETSc.PC,
+        test: fd.Argument,
+        trial: fd.Argument,
+    ) -> tuple[fd.Form, list[fd.DirichletBC]]:
+        """Sets the form.
+
+        Args:
+          pc:
+            PETSc preconditioner
+          test:
+            Firedrake test function
+          trial:
+            Firedrake trial function
+        """
+        # Skip MassInvPC in the hierarchy to fetch the parent operator's BCs
+        _, bcs = super(fd.MassInvPC, self).form(pc)
+
+        appctx = self.get_appctx(pc)
+        # An estimated degree explodes for strongly nonlinear viscosities; the
+        # solver's volume measure carries the degree used for the Stokes terms
+        dx = appctx.get("dx") or fd.dx(degree=6)
+        mu = appctx.get("mu", 1.0)
+        a = fd.inner((1 / mu) * trial, test) * dx
+
+        return a, bcs
+
+
 class FreeSurfaceMassInvPC(fd.MassInvPC):
-    """Version of MassInvPC that includes free surface variables."""
+    """Version of MassInvPC that includes free surface variables.
+
+    The free-surface deflection's diagonal block in the Schur complement of the coupled
+    system carries two contributions: a mass term, scaled by the free-surface buoyancy
+    and the time step, `buoyancy * theta / dt`, which dominates for time steps well
+    below the free-surface relaxation time; and the velocity-mediated coupling, scaled
+    by `1 / mu`, which dominates otherwise. Including both terms, with the buoyancy
+    prefactor of the free-surface equations, makes the preconditioner consistent across
+    regimes and material parameterisations.
+    """
 
     def form(
         self,
@@ -29,14 +79,26 @@ class FreeSurfaceMassInvPC(fd.MassInvPC):
         """
         appctx = self.get_appctx(pc)
 
+        # The quadrature degree must be prescribed: with a strongly nonlinear viscosity,
+        # its nested fractional powers make an estimated degree explode, and the
+        # quadrature rule construction runs out of memory. The solver's volume measure
+        # carries the degree it uses for the Stokes terms.
+        dx = appctx.get("dx") or fd.dx(degree=6)
         # N.B. trials[0] is pressure
         mu = appctx.get("mu", 1.0)
-        a = fd.inner(1 / mu * trials[0], tests[0]) * fd.dx
+        a = fd.inner(1 / mu * trials[0], tests[0]) * dx
 
         ds = appctx["ds"]
+        theta = appctx.get("theta")
+        dt = appctx.get("dt")
         bcs = []
-        for bc_id, (eta_ind, _) in appctx["free_surface"].items():
-            a += 1 / mu * fd.inner(trials[eta_ind - 1], tests[eta_ind - 1]) * ds(bc_id)
+        for bc_id, (eta_ind, buoyancy) in appctx["free_surface"].items():
+            # Without a time step, only the velocity-mediated coupling contributes,
+            # matching the scaling of the pressure mass
+            scale = 1 / mu
+            if dt is not None and theta is not None:
+                scale = scale + buoyancy * theta / dt
+            a += scale * fd.inner(trials[eta_ind - 1], tests[eta_ind - 1]) * ds(bc_id)
 
             bcs.append(InteriorBC(trials.function_space()[eta_ind - 1], 0, bc_id))
 
