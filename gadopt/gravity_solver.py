@@ -107,8 +107,14 @@ __all__ = ["CylindricalDtN", "DtNGravityForm", "SphericalDtN", "GravitySolver"]
 #: For the one-by-one systems on a `Real` space that define the enclosed-mass
 #: scalars. The operator is a nonzero number, so `preonly` + Jacobi is an exact
 #: solve rather than a preconditioning choice, and it must not inherit the
-#: gravity solver's own fieldsplit options.
+#: gravity solver's own fieldsplit options. `snes_type: ksponly` is named
+#: although `LinearVariationalSolver` defaults to it, because a tape replay
+#: can rebuild the solve as a `NonlinearVariationalSolver` (Firedrake PR 4638),
+#: whose default is Newton line search. For a control with zero net mass the
+#: right-hand side is at round-off, and Newton then never meets its relative
+#: tolerance.
 real_scalar_solver_parameters = {
+    "snes_type": "ksponly",
     "ksp_type": "preonly",
     "pc_type": "jacobi",
 }

@@ -575,6 +575,8 @@ def selfgrav_dtn_iterative_solver_parameters(
     *, condensed: bool = True, block0_rtol: float = 1e-4,
     outer_rtol: float = 1e-6, block0_max_it: int = 200,
     snes_rtol: float = 1e-4,
+    outer_atol: float = 0.0, outer_max_it: int = 200,
+    outer_accept_capped: bool = False,
     snes_type: str = "newtonls",
     u_pc: str = DEFAULT_DISPLACEMENT_PC,
     multiplier_pc: str | None = None,
@@ -738,6 +740,30 @@ def selfgrav_dtn_iterative_solver_parameters(
         which the mechanics rows dominate; rows scaled by `Omega_sq = 1.566e-3`
         are converged to correspondingly fewer digits, which is a live question
         for the rotational closure.
+      outer_atol, outer_max_it, outer_accept_capped: the stopping rule of the
+        outer FGMRES besides `outer_rtol`. `outer_rtol` is relative to the
+        residual a Newton iteration starts from. When that residual is tiny,
+        the relative target can fall below a floor the outer residual cannot
+        go under, and the solve runs to its cap. One such floor is the part of
+        the residual along a declared transpose nullspace that is not an
+        exact left kernel of the discrete operator: the rigid rotation, which
+        curved facets annihilate only to about 2e-6 relative, gave a floor of
+        about 1.2e-12 on GIAMIP Exp01 at L0 (NOTES/EXP01-HANDOVER.md, section
+        17.4 and 18.9, in the giamip-exp01 worktree). The low-rank operator
+        removes the declared spaces from its action
+        (`gadopt.dtn_coupled.AugmentedImplicitMatrixContext`), so that floor
+        does not arise on the low-rank path. `outer_atol` (`ksp_atol`) is an
+        absolute floor for any other case: the solve stops at the larger of
+        the relative target and this value. It is 0 (off) by default because
+        a useful value depends on the scaling of the residual and on the mesh.
+        `outer_accept_capped` (`ksp_converged_maxits`) counts a solve that
+        reaches `outer_max_it` as converged, so Newton takes its update, which
+        has already reduced the residual by several orders, and `snes_rtol`
+        ends the step at the next iteration. It needs no scale and catches a
+        floor higher than `outer_atol`; with it, a cap near 30 bounds the cost
+        of such a solve (normal steps take 2-7 outer iterations per Newton
+        iteration). It is off by default, so a solve that cannot reach its
+        tolerance still fails loudly unless the caller asks otherwise.
       snes_type: the outer method. `"newtonls"` is the default because
         this preset serves a power-law rheology as well as a Newtonian one.
         With `exponent != 1` the residual is nonlinear and Newton is the method
@@ -1246,6 +1272,10 @@ def selfgrav_dtn_iterative_solver_parameters(
     # well would put a second line in the log for one block-0 application,
     # and `bench_dtn_baseline.parse_counts` counts an application per line.
     new_block0 = not condensed and block0 == "condensed"
+    if outer_atol < 0 or outer_max_it < 1:
+        raise ValueError(
+            f"outer_atol must be >= 0 and outer_max_it >= 1; they are "
+            f"{outer_atol} and {outer_max_it}")
     p = {
         "mat_type": "matfree",
         "snes_type": snes_type,
@@ -1257,7 +1287,7 @@ def selfgrav_dtn_iterative_solver_parameters(
 
         "ksp_type": "fgmres",
         "ksp_rtol": outer_rtol,
-        "ksp_max_it": 200,
+        "ksp_max_it": outer_max_it,
         "ksp_converged_reason": None,
 
         "pc_type": "python",
@@ -1306,6 +1336,14 @@ def selfgrav_dtn_iterative_solver_parameters(
 
         **block1,
     }
+    if outer_atol > 0:
+        # The absolute floor of the outer solve; see `outer_atol` above. Left
+        # out at 0, so the default dictionary is the one callers had before.
+        p["ksp_atol"] = outer_atol
+    if outer_accept_capped:
+        # PETSc counts an outer solve that reaches `outer_max_it` as converged
+        # (`CONVERGED_ITS`); see `outer_accept_capped` above.
+        p["ksp_converged_maxits"] = None
 
     def inner(pc_python, extra=None):
         d = {"ksp_type": "preonly", "pc_type": "python",
@@ -5396,7 +5434,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
             def near_nullspace_provider(space, modes=modes):
                 # Built on the condensed displacement space the
-                # preconditioner hands over, once per operator build.
+                # preconditioner hands over. `CondensedBlockPC` calls this
+                # once and attaches the same basis on every operator rebuild.
                 return near_nullspace_basis(space, modes)
 
             self.appctx["condensed_field_near_nullspace"] = near_nullspace_provider
@@ -5655,7 +5694,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # adjoint solver's keywords on every annotated solve, so the adjoint
         # carries the two callbacks, this context and `ksponly`
         # (`gadopt.dtn_coupled_adjoint`, "Both augmentations, and ksponly").
-        from .dtn_coupled_adjoint import LowRankVariationalSolver
+        # With Firedrake PR 4638 the adjoint and tangent keywords go to the
+        # constructor (`derivative_constructor_kwargs`); otherwise nothing is
+        # added here and `LowRankVariationalSolver.solve` supplies them.
+        from .dtn_coupled_adjoint import (LowRankVariationalSolver,
+                                          derivative_constructor_kwargs)
         self.solver = LowRankVariationalSolver(
             self.problem,
             solver_parameters=self.solver_parameters,
@@ -5666,6 +5709,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             options_prefix=self.name,
             post_function_callback=self.augment_residual,
             post_jacobian_callback=self.augment_jacobian,
+            **derivative_constructor_kwargs(self),
         )
         self.solver.gia_solver = self
 
@@ -5855,6 +5899,17 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             tape = get_working_tape()
             n0 = len(tape.get_blocks())
         super().solve()
+        # Publish the outer linear iterations and the Newton iterations of
+        # this solve. `gia_rebuild = lagged` reads their ratio at the
+        # next solve to decide whether its lagged complement of the `Real`
+        # block has become poor enough to rebuild. Both counts come from the
+        # SNES, which runs collectively, so they are the same on every rank.
+        # PETSc resets the linear count at the start of every SNESSolve.
+        snes = self.solver.snes
+        self.appctx["gia_last_solve_linear_its"] = int(
+            snes.getLinearSolveIterations())
+        self.appctx["gia_last_solve_newton_its"] = max(
+            1, int(snes.getIterationNumber()))
         if adopt:
             from .dtn_coupled_adjoint import adopt_coupled_lowrank_block
             adopt_coupled_lowrank_block(self, tape, n0)

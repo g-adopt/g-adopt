@@ -42,6 +42,7 @@ import sys
 from pathlib import Path
 
 import firedrake as fd
+from firedrake.petsc import PETSc
 import numpy as np
 import pytest
 from firedrake.adjoint import (
@@ -253,7 +254,8 @@ def real(mesh, value):
 
 
 def _build(meshes, control_name, control, representation, *,
-           rotation=False, declare_nullspace=False, b_mu=None,
+           rotation=False, declare_nullspace=False,
+           declare_transpose_nullspace=False, b_mu=None,
            fluid_core=False, solver_parameters="direct",
            approximation_kwargs=None, solver_parameters_extra=None):
     """Assemble the coupled solver with exactly one control live.
@@ -317,6 +319,10 @@ def _build(meshes, control_name, control, representation, *,
     if declare_nullspace:
         from gadopt import rigid_rotation_nullspace
         kwargs["nullspace"] = rigid_rotation_nullspace(Z, layout)
+        if declare_transpose_nullspace:
+            # As the GIAMIP Exp01 driver does: the rotation is also a left
+            # kernel, so the right-hand side is made orthogonal to it.
+            kwargs["transpose_nullspace"] = kwargs["nullspace"]
     if solver_parameters_extra:
         kwargs["solver_parameters_extra"] = solver_parameters_extra
 
@@ -1082,26 +1088,47 @@ def test_gradient_is_indifferent_to_appctx_propagation(
 # wrong gradient.
 # ===========================================================================
 def test_stock_block_shape_is_unchanged():
-    """L25: the four private names route 1.5b binds to still exist."""
-    from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+    """L25: the private names the adopted block binds to still exist.
 
-    for name in ("_forward_solve", "_adjoint_solve",
-                 "_assemble_and_solve_tlm_eq"):
-        assert hasattr(NonlinearVariationalSolveBlock, name), (
-            f"NonlinearVariationalSolveBlock lost {name!r}: route 1.5b's "
+    Stock Firedrake: the three solve hooks of `NonlinearVariationalSolveBlock`
+    that `CoupledLowRankDtNSolveBlock` overrides. Firedrake PR 4638: the
+    methods and caches of `CachedSolverBlock` that
+    `CachedCoupledLowRankDtNSolveBlock` overrides or copies.
+    """
+    import inspect
+
+    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS, SOLVE_BLOCK_TYPE
+
+    if CACHED_SOLVER_BLOCKS:
+        names = ("recompute_component", "prepare_evaluate_adj",
+                 "evaluate_adj_component", "evaluate_tlm_component",
+                 "update_dependencies", "update_tlm_dependencies")
+        prepare = SOLVE_BLOCK_TYPE.prepare_evaluate_adj
+        # The copied tangent solve reads these three cache entries.
+        tlm_source = inspect.getsource(SOLVE_BLOCK_TYPE.evaluate_tlm_component)
+        for entry in ("tangent_cache.rhs", "tangent_cache.dFdm_forms",
+                      "tangent_cache.solver"):
+            assert entry in tlm_source, (
+                f"CachedSolverBlock.evaluate_tlm_component no longer uses "
+                f"{entry!r}: the copy in CachedCoupledLowRankDtNSolveBlock is "
+                f"out of date")
+    else:
+        names = ("_forward_solve", "_adjoint_solve",
+                 "_assemble_and_solve_tlm_eq")
+        prepare = SOLVE_BLOCK_TYPE.__mro__[1].prepare_evaluate_adj
+    for name in names:
+        assert hasattr(SOLVE_BLOCK_TYPE, name), (
+            f"{SOLVE_BLOCK_TYPE.__name__} lost {name!r}: route 1.5b's "
             f"adoption no longer applies (NOTES/fastdtn/REVIEW-ADJOINT.md S7.2)")
 
-    import inspect
-    source = inspect.getsource(
-        NonlinearVariationalSolveBlock.__mro__[1].prepare_evaluate_adj)
-    assert "adj_sol" in source, (
+    assert "adj_sol" in inspect.getsource(prepare), (
         "the `prepared` dict no longer carries 'adj_sol': the "
         "`evaluate_adj_component` override cannot reach the adjoint solution")
 
 
 def test_one_solve_adds_one_block(meshes):
     """L25 second half: `solve()` still adds exactly one solve block."""
-    from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+    from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
 
     _, sub = meshes
     tape = get_working_tape()
@@ -1116,8 +1143,11 @@ def test_one_solve_adds_one_block(meshes):
     finally:
         pause_annotation()
     added = tape.get_blocks()[n0:]
+    # The solve blocks that output the coupled solution. With Firedrake PR
+    # 4638 any enclosed-mass solve on R is a solve block of the same class.
     solve_blocks = [b for b in added
-                    if isinstance(b, NonlinearVariationalSolveBlock)]
+                    if isinstance(b, SOLVE_BLOCK_TYPE)
+                    and any(o.output is z for o in b.get_outputs())]
     print(f"    [L25] blocks added by solve(): "
           f"{[type(b).__name__ for b in added]}")
     assert len(solve_blocks) == 1
@@ -1133,7 +1163,7 @@ def test_one_solve_adds_one_block(meshes):
 # ===========================================================================
 def test_block_is_found_by_output_identity_not_position(meshes):
     """L26: an intervening block must not defeat the adoption."""
-    from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+    from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
 
     _, sub = meshes
     tape = get_working_tape()
@@ -1152,13 +1182,12 @@ def test_block_is_found_by_output_identity_not_position(meshes):
 
     added = tape.get_blocks()[n0:]
     ours = [b for b in added
-            if isinstance(b, NonlinearVariationalSolveBlock)
+            if isinstance(b, SOLVE_BLOCK_TYPE)
             and any(o.output is z for o in b.get_outputs())]
     print(f"    [L26] added {[type(b).__name__ for b in added]}; "
           f"last is {type(tape.get_blocks()[-1]).__name__}")
     assert len(ours) == 1, "output-identity search did not find exactly one block"
-    assert not isinstance(tape.get_blocks()[-1],
-                          NonlinearVariationalSolveBlock), (
+    assert not isinstance(tape.get_blocks()[-1], SOLVE_BLOCK_TYPE), (
         "this test no longer exercises the hazard: nothing landed after the "
         "solve block, so `get_blocks()[-1]` would have worked by luck")
 
@@ -1215,8 +1244,13 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     assert len(blocks) == 2 and blocks[0] is not blocks[1], (
         "the two solves produced the same block object: `adjoint_block` is not "
         "reset per annotated solve, so L27 cannot see what it tests")
-    assert blocks[0]._ad_solvers is blocks[1]._ad_solvers, (
-        "the two blocks no longer share `_ad_solvers`; this test no longer "
+    # The replay solvers the two blocks share: the `_ad_solvers` dict of the
+    # stock block, or the forward cache of a `CachedSolverBlock` (Firedrake
+    # PR 4638), whose solvers every block of one forward solver uses.
+    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS
+    shared = "forward_cache" if CACHED_SOLVER_BLOCKS else "_ad_solvers"
+    assert getattr(blocks[0], shared) is getattr(blocks[1], shared), (
+        f"the two blocks no longer share `{shared}`; this test no longer "
         "exercises the hazard it was written for (REVIEW-ADJOINT S6.3)")
 
     gradient = float(Jhat.derivative().dat.data_ro[0])
@@ -1417,3 +1451,178 @@ def test_fluid_core_lowrank_parallel_forward_solve(meshes):
     assert abs(pressure) > 1e-12
     assert np.isfinite(float(J))
     assert comm.allgather(pressure) == [pressure, pressure]
+
+
+# ===========================================================================
+# The solve index in replay and adjoint
+#
+# The preconditioners of the iterative preset rebuild their cached pieces when
+# `gia_solve_index` in the application context moves. Only
+# `SelfGravitatingGIASolver.solve` raises it, and a replay or an adjoint sweep
+# does not call that method, so each block binds the index of its own forward
+# solve around its solves (`_bound_to_block`).
+# ===========================================================================
+def test_replay_and_adjoint_see_the_taped_solve_index(meshes, monkeypatch):
+    """Each replayed and adjoint solve shows the index of its forward solve.
+
+    A march of three taped solves. The preconditioners read the index through
+    `gadopt.preconditioners._staleness_markers`, which this test observes. The
+    replay must show the indices 1, 2, 3 in order, and the adjoint sweep 3, 2,
+    1. Without the binding, both show one fixed value for every solve: the
+    value of the last forward solve on stock Firedrake, or of the first taped
+    solve with cached solver blocks. After both, the forward solver's own count
+    must be unchanged, because on stock Firedrake the replay shares its dict.
+    """
+    import gadopt.preconditioners as preconditioners
+
+    control_name = "shear_modulus"
+    cmesh = control_mesh(meshes, control_name)
+    n_solves = 3
+    with stop_annotating():
+        control = real(cmesh, CONTROL_VALUES[control_name])
+        solver, z, layout = _build(
+            meshes, control_name, control, "lowrank", fluid_core=True,
+            solver_parameters=preset_parameters("iterative", "lowrank",
+                                                fluid_core=True))
+    continue_annotation()
+    try:
+        m = Control(control)
+        for _ in range(n_solves):
+            solver.solve()
+        J = _objective(z, layout, meshes[1])
+        Jhat = ReducedFunctional(J, m)
+    finally:
+        pause_annotation()
+
+    # Record the index every marker read returns. Solves that carry no index
+    # (the scalar mass solve on R) return None and are left out.
+    seen = []
+    original = preconditioners._staleness_markers
+
+    def spy(pc):
+        markers = original(pc)
+        if markers[1] is not None:
+            seen.append(markers[1])
+        return markers
+
+    monkeypatch.setattr(preconditioners, "_staleness_markers", spy)
+
+    def distinct_in_order():
+        """The recorded indices with consecutive repeats collapsed; clears."""
+        out = [i for k, i in enumerate(seen) if k == 0 or seen[k - 1] != i]
+        seen.clear()
+        return out
+
+    Jhat(control)
+    replay = distinct_in_order()
+    Jhat.derivative()
+    adjoint = distinct_in_order()
+    print(f"    [solve index] replay {replay} adjoint {adjoint}")
+    assert replay == list(range(1, n_solves + 1)), (
+        f"the replay showed the preconditioners the indices {replay}; each "
+        f"replayed solve must show the index of its own forward solve")
+    assert adjoint == list(range(n_solves, 0, -1)), (
+        f"the adjoint sweep showed the preconditioners the indices {adjoint}; "
+        f"each adjoint solve must show the index of its own forward solve")
+    assert solver.appctx["gia_solve_index"] == n_solves
+
+
+# ===========================================================================
+# Declared nullspaces are exact on the low-rank operator
+#
+# The rigid rotation is declared as nullspace and transpose nullspace, but the
+# discrete operator annihilates it only to about 2e-6 relative (curved
+# facets). The block-0 preconditioner removes the rotation from its input and
+# output, so a right-preconditioned outer FGMRES cannot reduce the rotation
+# part of the residual, and on GIAMIP Exp01 the adjoint solves stalled there
+# and ran to their cap. `AugmentedImplicitMatrixContext` removes the declared
+# spaces from its action, which makes them exact. These tests check that
+# property directly on the operators the Krylov solves use.
+# ===========================================================================
+def _rotation_content(space, vec):
+    """Largest |k . vec| / |vec| over the vectors k of a PETSc nullspace."""
+    norm = vec.norm()
+    return max(abs(k.dot(vec)) for k in space.getVecs()) / norm
+
+
+def _random_vector(mat):
+    """A reproducible random vector in the domain of `mat`."""
+    x = mat.createVecRight()
+    rand = PETSc.Random().create(comm=x.getComm())
+    rand.setSeed(20261019)
+    rand.setFromOptions()
+    x.setRandom(rand)
+    rand.destroy()
+    return x
+
+
+def _assert_spaces_exact(mat, label):
+    """`mat` removes its transpose nullspace from `A x`, its nullspace from
+    `A^T x`, and is the augmented low-rank operator."""
+    from gadopt.dtn_coupled import AugmentedImplicitMatrixContext
+
+    assert isinstance(mat.getPythonContext(), AugmentedImplicitMatrixContext), (
+        f"{label}: the operator is not the augmented low-rank context, so this "
+        f"test would not exercise the projection")
+    left, right = mat.getTransposeNullSpace(), mat.getNullSpace()
+    assert left.handle and right.handle, (
+        f"{label}: the solver did not attach both declared spaces")
+    x = _random_vector(mat)
+    y = mat.createVecLeft()
+    mat.mult(x, y)
+    after_mult = _rotation_content(left, y)
+    mat.multTranspose(x, y)
+    after_transpose = _rotation_content(right, y)
+    print(f"    [{label}] |k . Ax|/|Ax| {after_mult:.2e}  "
+          f"|k . A^T x|/|A^T x| {after_transpose:.2e}")
+    # Round-off level: about 2e-18 with the projection. Without it, a random
+    # x on this mesh gives about 1e-11, the facet error of the rotation.
+    assert after_mult < 1e-14, (
+        f"{label}: A x has {after_mult:.3e} of its norm along the declared "
+        f"transpose nullspace; the declared space is not a left kernel")
+    assert after_transpose < 1e-14, (
+        f"{label}: A^T x has {after_transpose:.3e} of its norm along the "
+        f"declared nullspace")
+
+
+def _adjoint_solver(block):
+    """The adjoint solver of an adopted coupled block, on either Firedrake."""
+    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS
+    if CACHED_SOLVER_BLOCKS:
+        return block.adjoint_cache.solver
+    return block._ad_solvers["adjoint_lvs"]
+
+
+def test_declared_nullspaces_are_exact_on_the_lowrank_operator(meshes):
+    """The forward and the adjoint operator of the low-rank solve.
+
+    One taped solve with the rotation declared as nullspace and transpose
+    nullspace, then one gradient, so that both the forward Jacobian and the
+    adjoint solver's operator (whose spaces are swapped,
+    `derivative_solver_kwargs`) exist. For a random x, A x must have no
+    component along the declared transpose nullspace and A^T x none along the
+    declared nullspace, to round-off.
+    """
+    control_name = "shear_modulus"
+    cmesh = control_mesh(meshes, control_name)
+    with stop_annotating():
+        control = real(cmesh, CONTROL_VALUES[control_name])
+        solver, z, layout = _build(
+            meshes, control_name, control, "lowrank", fluid_core=True,
+            declare_nullspace=True, declare_transpose_nullspace=True,
+            solver_parameters=preset_parameters("iterative", "lowrank",
+                                                fluid_core=True))
+    continue_annotation()
+    try:
+        m = Control(control)
+        solver.solve()
+        J = _objective(z, layout, meshes[1])
+        Jhat = ReducedFunctional(J, m)
+    finally:
+        pause_annotation()
+    Jhat.derivative()
+
+    forward, _ = solver.solver.snes.getJacobian()[:2]
+    _assert_spaces_exact(forward, "forward")
+    adjoint, _ = _adjoint_solver(solver.adjoint_block).snes.getJacobian()[:2]
+    _assert_spaces_exact(adjoint, "adjoint")

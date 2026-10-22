@@ -2054,7 +2054,7 @@ def rebuild_parameters(preset=None, **overrides):
         `selfgrav_dtn_iterative_solver_parameters`, for example
         `u_ksp_max_it` or `multiplier_pc`.
       overrides: extra entries written into the dictionary the preset
-        returned, for example `lowrank_reuse_rtol` or `dense_schur_rebuild`.
+        returned, for example `lowrank_reuse_rtol` or `gia_rebuild`.
         These are plain PETSc options that no preset argument names.
 
     Returns:
@@ -2122,14 +2122,19 @@ class TestLiveMaskRebuildRules:
     from for the whole run. `Shift` is a `Real` unknown, so the masks sit in
     `A01`, `A10` and `A11` as well as in `A00` and every cached factor is
     stale together. Two options let a run trade accuracy of those caches
-    against their cost: `lowrank_reuse_rtol` and `dense_schur_rebuild`. Which
+    against their cost: `lowrank_reuse_rtol` and `gia_rebuild`. Which
     value is right at production scale is measured on Gadi and not here; these
     tests pin what each value does.
     """
 
     @pytest.fixture(scope="class")
     def live_exact(self, meshes):
-        """One live-mask shoreline solve under the default cache rules.
+        """One live-mask shoreline solve that rebuilds block 0 at every update.
+
+        `gia_rebuild = always`, so the condensed blocks and with them the
+        low-rank columns follow the coastline at every Newton iteration, which
+        is the case the tests below need. The default (`lagged`) keeps the
+        blocks of the first Newton iteration for the whole solve.
 
         Class-scoped: three tests read it and the solve is the expensive part.
 
@@ -2137,9 +2142,9 @@ class TestLiveMaskRebuildRules:
             `(solver, z, layout)`.
         """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  representation="lowrank",
-                                  solver_parameters=rebuild_parameters())
+        solver, z, layout = build(
+            meshes, surface_fields(sub, "shoreline"), representation="lowrank",
+            solver_parameters=rebuild_parameters(gia_rebuild="always"))
         solver.solve()
         assert solver_converged(solver)
         return solver, z, layout
@@ -2205,11 +2210,12 @@ class TestLiveMaskRebuildRules:
 
     def test_the_condensed_block_reassembles_at_every_newton_iteration(
             self, live_exact):
-        """`CondensedBlockPC.assembly_count` equals the Newton iteration count.
+        """Under `always`, `assembly_count` equals the Newton iteration count.
 
-        `operator_version` is `None`, so the class reassembles its blocks at
-        every linear solve. Newton takes one linear solve per iteration, and
-        the count starts at 1 at `initialize`, so the two numbers are equal.
+        `operator_version` is `None` and `gia_rebuild = always`, so the class
+        reassembles its blocks at every linear solve. Newton takes one linear
+        solve per iteration, and the count starts at 1 at `initialize`, so the
+        two numbers are equal.
 
         Item 5 of the handout. Without the predicate change the version is a
         fixed integer, the count stays at 1 for the whole march, and the
@@ -2298,10 +2304,13 @@ class TestLiveMaskRebuildRules:
         # so a tolerance that holds them at 1 is doing something.
         assert exact_potential.column_builds > 1
 
+        # The same `always` rule as `live_exact`, so the blocks move at every
+        # Newton iteration and the tolerance is what holds the columns.
         solver, z, _ = build(
             meshes, surface_fields(sub, "shoreline"),
             representation="lowrank",
-            solver_parameters=rebuild_parameters(lowrank_reuse_rtol=1e-3))
+            solver_parameters=rebuild_parameters(lowrank_reuse_rtol=1e-3,
+                                                 gia_rebuild="always"))
         solver.solve()
         assert solver_converged(solver)
         _, potential = block0_and_potential(solver)
@@ -2310,19 +2319,21 @@ class TestLiveMaskRebuildRules:
         assert potential.column_builds == 1
         assert solved_fields_agree(z, z_exact, layout, rel=1e-6) == []
 
-    @pytest.mark.parametrize("rule,builds", [("per_solve", 1), ("always", 3)])
-    def test_the_dense_schur_rebuild_rule(self, meshes, rule, builds):
-        """`dense_schur_rebuild` selects one build per solve or one per update.
+    @pytest.mark.parametrize("rule,builds", [
+        ("lagged", 1), ("per_solve", 1), ("always", 3)])
+    def test_the_gia_rebuild_rule(self, meshes, rule, builds):
+        """`gia_rebuild` selects one build per solve or one per update.
 
         `gadopt.DtNMultiplierDenseSchurPC` is named here, because the preset
         leaves block 1 to the cached apply of `gadopt.DtNTwoBlockSchurPC` at
         this width and that class owns no complement to rebuild.
 
-        `per_solve`, the default, is the rule the class already had for a
-        Jacobian no version number can describe: build at the first Newton
-        iteration of a solve, from the state that solve starts at, and keep it
-        for the rest of the solve. `always` builds at every `update`, which is
-        one build per linear solve and so one per Newton iteration.
+        `per_solve` is the rule for a Jacobian no version number can
+        describe: build at the first Newton iteration of a solve, from the
+        state that solve starts at, and keep it for the rest of the solve.
+        `lagged`, the default, is the same within one solve and differs only
+        across solves. `always` builds at every `update`, which is one build
+        per linear solve and so one per Newton iteration.
 
         The expected counts are therefore 1 and the Newton iteration count.
         The iteration count is asserted to be the 3 the parametrisation was
@@ -2332,7 +2343,7 @@ class TestLiveMaskRebuildRules:
         _, sub = meshes
         parameters = rebuild_parameters(
             preset=dict(multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"),
-            dense_schur_rebuild=rule)
+            gia_rebuild=rule)
         solver, _, _ = build(meshes, surface_fields(sub, "shoreline"),
                              representation="lowrank",
                              solver_parameters=parameters)
@@ -2340,7 +2351,7 @@ class TestLiveMaskRebuildRules:
         assert solver_converged(solver)
         iterations = solver.solver.snes.getIterationNumber()
         complement = block1_context(solver)
-        print(f"dense_schur_rebuild={rule}: build_count "
+        print(f"gia_rebuild={rule}: build_count "
               f"{complement.build_count}, {iterations} Newton iterations")
         assert complement._rebuild_rule == rule
         assert iterations == 3

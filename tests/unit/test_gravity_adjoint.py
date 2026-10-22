@@ -38,6 +38,7 @@ from pyadjoint import AdjFloat
 from pyadjoint.tape import annotate_tape
 
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
+from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS, SOLVE_BLOCK_TYPE
 from gadopt.spherical_harmonics import real_spherical_harmonic
 from test_gravity_solver import RMAX, annulus_mesh, shell_mesh_3d
 
@@ -358,6 +359,10 @@ def _solves_on(blocks, predicate):
     out = []
     for b in blocks:
         space = getattr(b, "function_space", None)
+        if space is None and isinstance(b, SOLVE_BLOCK_TYPE):
+            # A `CachedSolverBlock` (Firedrake PR 4638) keeps no space of its
+            # own; the space of its one output is the space solved on.
+            space = b.get_outputs()[0].output.function_space()
         if space is not None and predicate(space):
             out.append(b)
     return out
@@ -453,7 +458,11 @@ def test_tape_structure(mesh_2d_mm, variant):
     # defines the enclosed mass for the 2-D monopole datum. It is load-bearing
     # - severing it is the 325% gradient error the datum exists to avoid - so
     # it must reach J.
-    assert solve_counts["NonlinearVariationalSolveBlock"] == 1
+    # Stock Firedrake tapes `solve(a == L, u)` as a `SolveVarFormBlock` and the
+    # gravity solve as a `NonlinearVariationalSolveBlock`. With Firedrake PR
+    # 4638 both are `CachedSolverBlock`s, so that class appears twice.
+    assert solve_counts[SOLVE_BLOCK_TYPE.__name__] == (
+        2 if CACHED_SOLVER_BLOCKS else 1)
     assert len(_mixed_space_solves(solve_blocks)) == 1
     mass_solves = _real_space_solves(solve_blocks)
     assert len(mass_solves) == 1

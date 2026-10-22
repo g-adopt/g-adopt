@@ -106,8 +106,8 @@ def main():
             if direct is not None:
                 selected = direct["colatitude_deg"] <= args.max_colatitude
                 for longitude, values, found in zip(direct["longitude_deg"],
-                                                   direct[f"{quantity}_m"],
-                                                   direct["found"]):
+                                                    direct[f"{quantity}_m"],
+                                                    direct["found"]):
                     ax.plot(direct["colatitude_deg"][selected],
                             np.where(found, values, np.nan)[selected],
                             linewidth=0.9, alpha=0.75,
