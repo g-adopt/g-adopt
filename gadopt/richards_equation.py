@@ -1,0 +1,209 @@
+r"""Richards equation terms for unsaturated flow.
+
+This module implements the individual terms for the Richards equation for
+variational unsaturated flow. The Richards equation describes movement of
+the wetting phase in a two-phase flow system, if we ignore the
+compressibility of the dry phase.
+
+All terms are considered as if they were on the left-hand side of the equation,
+leading to the following UFL expression returned by the ``Equation``'s
+``residual`` method:
+
+$$
+  \frac{\partial \theta}{\partial t} + F(h) = 0.
+$$
+
+The Richards equation in mixed form:
+
+$$
+  \frac{\partial \theta}{\partial t} + S_s S \frac{\partial h}{\partial t}
+  - \nabla \cdot (K \nabla h) - \nabla \cdot (K \nabla z) = 0
+$$
+
+where:
+- $h$ is the pressure head
+- $S_s$ is the specific storage coefficient
+- $S(h) = (\theta - \theta_r)/(\theta_s - \theta_r)$ is the effective saturation
+- $C(h) = d\theta/dh$ is the specific moisture capacity
+- $K(h)$ is the hydraulic conductivity
+- $z$ is the vertical coordinate (gravity term)
+
+The discretisation deliberately carries the mass term as the conservative
+$\partial \theta / \partial t$ form rather than expanding it via the chain rule
+into $C(h)\,\partial h/\partial t$. With the stage-value stepper this yields the
+exact finite difference $(\theta_{new} - \theta_{old})/\Delta t$, which keeps mass
+balance exact for DG. As a consequence $C(h) = d\theta/dh$ is the physical moisture
+capacity listed above but never appears explicitly in the residual.
+
+"""
+
+from firedrake import *
+from irksome import Dt
+from ufl.indexed import Indexed
+
+from .equations import Equation
+from .utility import is_continuous, upward_normal
+
+__all__ = [
+    "richards_mass_term",
+    "richards_gravity_term",
+]
+
+
+def richards_mass_term(
+    eq: Equation, trial: Argument | Indexed | Function
+) -> Form:
+    r"""Richards equation mass term for moisture storage.
+
+    The mass term accounts for water storage changes and has two parts:
+
+    $$
+    \frac{\partial \theta}{\partial t} + S_s S \frac{\partial h}{\partial t}
+    $$
+
+    The moisture content change d(theta)/dt is expressed as Dt(theta(h)).
+    When used with a StageValueTimeStepper, this is automatically discretised
+    as a conservative finite difference (theta(h_new) - theta(h_old))/dt
+    rather than the chain-rule expansion C(h)*dh/dt, preserving exact mass
+    conservation for DG discretisations.
+
+    The specific storage term Ss*S*dh/dt uses Dt(h) since it is already
+    formulated directly in terms of h.
+
+    Args:
+        eq: G-ADOPT Equation instance
+        trial: Firedrake trial function for pressure head
+
+    Returns:
+        UFL form for the mass term
+    """
+    soil_curve = eq.soil_curve
+
+    # Moisture content change: d(theta)/dt
+    F = inner(eq.test, Dt(soil_curve.moisture_content(trial))) * eq.dx
+
+    # Specific storage: Ss * S * dh/dt (standard Dt, linear in h for given S).
+    # We skip this term when Ss is identically zero, to avoid polluting the form
+    # with a zero-coefficient TimeDerivative that can confuse the nonlinear solver.
+    # SoilCurve always wraps Ss, so it is either a Constant we can evaluate, or a
+    # Function (a spatially varying storage, or an inversion control) that must
+    # never be float()'d and so always keeps the term.
+    Ss = soil_curve.Ss
+    if not (isinstance(Ss, Constant) and float(Ss) == 0.0):
+        theta = soil_curve.moisture_content(trial)
+        S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
+        F += inner(eq.test, Ss * S * Dt(trial)) * eq.dx
+
+    return F
+
+
+def richards_gravity_term(
+    eq: Equation, trial: Argument | Indexed | Function
+) -> Form:
+    r"""Richards gravity term for gravity-driven flow with upwinding.
+
+    The gravity term represents the gravity-driven water flux:
+
+    $$
+    \nabla \cdot (K \nabla z)
+    $$
+
+    where $z$ is the elevation (upward coordinate); $\nabla z$ is supplied by
+    ``upward_normal``, so the term is correct both in a Cartesian box and on the
+    sphere. (In a Cartesian box with $z$ the vertical coordinate this reduces to
+    the familiar $\partial K/\partial z$.) For DG discretizations, we use upwinding
+    on interior facets to ensure stability.
+
+    The weak form is:
+
+    $$
+    \int_\Omega K \frac{\partial \phi}{\partial z} dx
+    - \int_{\mathcal{I}} \text{jump}(\phi) \cdot (q_n^+ - q_n^-) dS
+    - \int_{\partial \Omega_D} \phi \, K \, \nabla z \cdot n \, ds
+    $$
+
+    where $q_n = 0.5(q \cdot n - |q \cdot n|)$ is the upwinded flux and
+    $q = K \nabla z$ is the gravity-driven flux. The negative part selects the
+    upstream trace of $K$ from the cell *above* the facet: gravity-driven
+    information propagates downward, so the upwind side is the upper cell.
+
+    The last integral runs over boundaries carrying a weakly imposed Dirichlet
+    head. There, the total flux is $K \nabla(h + z)$, but the Nitsche
+    consistency term supplied by ``scalar_equation.diffusion_term`` is built
+    from $h$ alone, so its gravity half has to be contributed here. Without it
+    the scheme is inconsistent on those boundaries: the residual retains a
+    spurious $\int_{\partial \Omega_D} \phi \, K \, \nabla z \cdot n \, ds$,
+    which is precisely the free-drainage flux that should be crossing them.
+    Flux boundaries and unspecified boundaries need no such term — for those,
+    carrying no gravity boundary integral is exactly the right natural
+    condition — so this is applied only on the Dirichlet path.
+
+    Args:
+        eq: G-ADOPT Equation instance
+        trial: Firedrake trial function for pressure head
+
+    Returns:
+        UFL form for the gravity term
+    """
+    soil_curve = eq.soil_curve
+
+    # Evaluate hydraulic conductivity at trial function
+    K = soil_curve.hydraulic_conductivity(trial)
+
+    # Upward unit vector grad(z) = e_z; upward_normal gives the last Cartesian
+    # basis vector in a box and X/r on the sphere, so this also works on a sphere.
+    k = upward_normal(eq.mesh)
+
+    # Volume integral: \int K * \partial v/\partial z dx = \int K * \grad z \cdot \grad v dx
+    F = inner(K * k, grad(eq.test)) * eq.dx
+
+    # Upwinding on interior facets for DG
+    if not is_continuous(eq.trial_space):
+        # Gravity-driven flux
+        q = K * k
+
+        # Gravity drives drainage downward. Writing the elevation-head part as a
+        # conservation law d(theta)/dt + d_z(Phi) = 0 with flux Phi = -K, the
+        # characteristic speed is dPhi/dtheta = -K'(theta) < 0 (K increases with
+        # theta), so information propagates downward and the upstream (upwind)
+        # side of a facet is the cell ABOVE it. We therefore take the NEGATIVE
+        # part of q.n, which selects the upper trace of K (verified for both
+        # facet orientations): with n('+') and n('-') each pointing outward from
+        # their own cell, only the side whose outward normal points downward
+        # contributes, and that is the upper cell. The minus sign on
+        # jump(eq.test) below accounts for jump giving test('+') - test('-'),
+        # whereas we want test_up - test_down.
+        q_n = 0.5 * (dot(q, eq.n) - abs(dot(q, eq.n)))
+
+        # Add upwind flux term
+        F -= jump(eq.test) * (q_n('+') - q_n('-')) * eq.dS
+
+    # Gravity half of the flux on weakly imposed Dirichlet head boundaries.
+    # `scalar_equation.diffusion_term` keys those off 'q' (RichardsSolver
+    # translates the user-facing 'h' in `set_boundary_conditions`), and its
+    # consistency term carries K grad(h).n only, so the K grad(z).n part is
+    # added here to complete the total flux. K is taken from the interior
+    # trace, which makes the pair a single Nitsche treatment of the potential
+    # h + z: the symmetry and penalty terms need no change, because
+    # (h + z) - (h_D + z) = h - h_D. For this boundary consistency term alone
+    # it matches what `reference_for_diffusion = z` would produce; setting that
+    # attribute globally is not equivalent, since it would also add
+    # K grad(z).grad(phi) to the volume integral, duplicating the term above,
+    # and would replace the upwinded interior-facet gravity flux with a centred
+    # average. Deliberately outside the DG branch
+    # above: it applies wherever a weak Dirichlet head exists, though in
+    # practice RichardsSolver only generates those for discontinuous spaces
+    # (continuous ones get a strong DirichletBC instead).
+    for bc_id, bc in eq.bcs.items():
+        if 'q' in bc:
+            F -= eq.test * K * dot(k, eq.n) * eq.ds(bc_id)
+
+    return F
+
+
+# Set required and optional attributes for each term
+richards_mass_term.required_attrs = {'soil_curve'}
+richards_mass_term.optional_attrs = set()
+
+richards_gravity_term.required_attrs = {'soil_curve'}
+richards_gravity_term.optional_attrs = set()
