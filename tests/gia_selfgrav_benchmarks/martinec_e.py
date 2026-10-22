@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 # Scale of the surface-only correction control, not a physical constant.
 CONTROL_SCALE_M = 1000.0
+OBJECTIVE_NORMALISATION = "whole-surface integral"
 # Kept separate from B/C/D smoke truncation: E must reach its terminal time.
 SMOKE_STEPS = 6
 
@@ -89,13 +90,33 @@ def surface_error(solver, target_SL, common):
     return solver.sea_level() - target_SL
 
 
-def error_rms(solver, target_SL, common):
+def surface_area(solver, common):
+    """Nondimensional area, using the terminal error's solver measure."""
     import firedrake as fd
     dss = solver.sea_level_measure()(common.SURF_RE)
     area = float(fd.assemble(fd.Constant(1) * dss))
+    if not math.isfinite(area) or area <= 0:
+        raise FloatingPointError(f"Invalid E surface area: {area}")
+    return area
+
+
+def objective_from_rms(rms_m, area):
+    """Integral objective from physical, area-normalised RMS in metres."""
+    return 0.5 * area * (rms_m / CONTROL_SCALE_M)**2
+
+
+def objective_rms(objective, area):
+    """Physical, area-normalised RMS in metres from the integral objective."""
+    return CONTROL_SCALE_M * math.sqrt(2 * float(objective) / area)
+
+
+def error_rms(solver, target_SL, common):
+    import firedrake as fd
+    dss = solver.sea_level_measure()(common.SURF_RE)
+    area = surface_area(solver, common)
     error = surface_error(solver, target_SL, common)
     squared = float(fd.assemble(error**2 * dss))
-    if not math.isfinite(area) or area <= 0 or not math.isfinite(squared) or squared < 0:
+    if not math.isfinite(squared) or squared < 0:
         raise FloatingPointError(f"Invalid E surface error integral: area={area}, squared={squared}")
     return common.D_SCALE * math.sqrt(squared / area)
 
@@ -155,6 +176,7 @@ def history(args, driver, parent, mantle, case, target_SL, frozen_slope,
             parameter_log.log_str(" ".join(driver.ROW_KEYS))
             for row in rows:
                 parameter_log.log_str(" ".join(str(row[key]) for key in driver.ROW_KEYS))
+
             def record():
                 return {**record_base, "rows": rows, "wall_s": time.time() - record_base["tic"],
                         "cumulative_wall_s": record_base["cumulative_wall_s"] + time.time() - record_base["tic"]}
@@ -188,10 +210,10 @@ def history(args, driver, parent, mantle, case, target_SL, frozen_slope,
         wall = time.time() - tick
         if tape is not None and step == total_steps:
             dss = solver.sea_level_measure()(common.SURF_RE)
-            with stop_annotating():
-                area = float(fd.assemble(fd.Constant(1) * dss))
+            # Match the dimensionless control to the surface L2 metric used
+            # by ROL: a nearly identity forward map then has Hessian ~I.
             objective = fd.assemble(0.5 * (common.D_SCALE / CONTROL_SCALE_M)**2
-                                    * surface_error(solver, target_SL, common)**2 / area * dss)
+                                    * surface_error(solver, target_SL, common)**2 * dss)
         with stop_annotating():
             if directory is None:
                 driver.log(f"  E {'taped' if tape is not None else 'evaluation'} history "
@@ -291,13 +313,14 @@ def taylor_check(reduced, correction, output):
 class ROLGradientOutput:
     """Cache existing derivatives and export accepted ROL iterates off tape."""
 
-    def __init__(self, root, riesz, write_json):
+    def __init__(self, root, riesz, write_json, area):
         import firedrake as fd
         self.root = Path(root) / "rol_gradients"
         self.root.mkdir(parents=True, exist_ok=True)
         self.vtk = fd.VTKFile(str(self.root / "topography_gradient.pvd"))
         self.riesz = riesz
         self.write_json = write_json
+        self.area = area
         self.records = []
         self.cached = None
 
@@ -327,9 +350,11 @@ class ROLGradientOutput:
             correction_m.assign(evaluated_control * CONTROL_SCALE_M)
             self.vtk.write(gradient, correction_m, time=float(iteration))
             self.records.append({"iteration": int(iteration), "objective": float(objective),
-                                 "rms_m": CONTROL_SCALE_M * math.sqrt(2 * float(objective)),
+                                 "rms_m": objective_rms(objective, self.area),
                                  "gradient_L2_norm": float(fd.norm(gradient)),
-                                 "control_scale_m": CONTROL_SCALE_M})
+                                 "control_scale_m": CONTROL_SCALE_M,
+                                 "objective_normalisation": OBJECTIVE_NORMALISATION,
+                                 "surface_area_nondimensional": self.area})
             self.write_json(str(self.root / "iterations.json"), self.records)
 
 
@@ -385,8 +410,8 @@ def configure_adjoint_checkpointing(args, tape, total_steps, comm, root):
 def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
             correction, bulk_shear_ratio, root):
     from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
-                                  get_working_tape, pause_annotation, pause_disk_checkpointing,
-                                  stop_annotating)
+                                   get_working_tape, pause_annotation, pause_disk_checkpointing,
+                                   stop_annotating)
     import firedrake as fd
     checks_only = args.check_topography_replay or args.check_topography_taylor
     if not checks_only:
@@ -405,40 +430,56 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
     continue_annotation()
     control = Control(correction, riesz_map=riesz)
     try:
-        _, _, _, _, objective = history(args, driver, parent, mantle, case, target_SL, frozen_slope,
-                                        correction, bulk_shear_ratio, tape=tape)
+        solver, _, _, _, objective = history(args, driver, parent, mantle, case, target_SL, frozen_slope,
+                                             correction, bulk_shear_ratio, tape=tape)
     finally:
         pause_annotation()
+    with stop_annotating():
+        area = surface_area(solver, driver.common)
+    del solver
+    goal = objective_from_rms(args.topography_tolerance_m, area)
+    # Keep scaling metadata outside the restart configuration: existing
+    # checkpoints remain valid topography warm starts and Picard restarts.
+    driver.common.write_json(str(root / "topography_objective.json"), {
+        "objective_normalisation": OBJECTIVE_NORMALISATION,
+        "surface_area_nondimensional": area, "control_scale_m": CONTROL_SCALE_M,
+        "rms_tolerance_m": args.topography_tolerance_m, "objective_tolerance": goal})
+    driver.log(f"  E objective: {OBJECTIVE_NORMALISATION}, area {area:.12g}; "
+               f"objective tolerance {goal:.12g} = {args.topography_tolerance_m:g} m RMS")
     evaluations = []
+
     def evaluation_callback(value, controls):
         if not math.isfinite(float(value)) or float(value) < 0:
             raise FloatingPointError(f"Invalid E objective: {value}")
         evaluations.append({"evaluation": len(evaluations) + 1, "objective": float(value),
-                            "rms_m": CONTROL_SCALE_M * math.sqrt(max(0.0, 2 * float(value)))})
+                            "rms_m": objective_rms(value, area),
+                            "objective_normalisation": OBJECTIVE_NORMALISATION,
+                            "surface_area_nondimensional": area, "control_scale_m": CONTROL_SCALE_M})
         driver.common.write_json(str(root / "topography_rol_evaluations.json"), evaluations)
-    gradient_output = ROLGradientOutput(root, riesz, driver.common.write_json) if args.write_gradients else None
+    gradient_output = ROLGradientOutput(root, riesz, driver.common.write_json, area) if args.write_gradients else None
     callbacks = {"derivative_cb_post": gradient_output.capture} if gradient_output else {}
     reduced = ReducedFunctional(objective, control, eval_cb_post=evaluation_callback, **callbacks)
     derivative_report = None
     if args.check_topography_replay:
         driver.log("  E checking tape replay at the recorded control")
         report = replay_check(reduced, correction, float(objective),
-            lambda r: driver.common.write_json(str(root / "topography_replay.json"), r))
+                              lambda r: driver.common.write_json(str(root / "topography_replay.json"), r))
         driver.log(f"  E tape replay passed: absolute objective difference {report['absolute_difference']:.3e}")
     if args.check_topography_taylor:
         driver.log("  E checking the topography gradient with a four-level Taylor test")
         report = taylor_check(reduced, correction,
-            lambda r: driver.common.write_json(str(root / "topography_taylor.json"), r))
+                              lambda r: driver.common.write_json(str(root / "topography_taylor.json"), r))
         driver.log(f"  E Taylor test passed: minimum rate {report['minimum_convergence_rate']:.6f}")
     if args.check_topography_gradient:
         def fresh(value):
             solver, _, _, rms, _ = history(args, driver, parent, mantle, case, target_SL, frozen_slope,
-                                          value, bulk_shear_ratio)
+                                           value, bulk_shear_ratio)
+            fresh_value = objective_from_rms(rms, surface_area(solver, driver.common))
             del solver
             gc.collect()
-            return 0.5 * (rms / CONTROL_SCALE_M)**2
+            return fresh_value
         derivative_report = gradient_check(reduced, correction, fresh,
-            lambda r: driver.common.write_json(str(root / "topography_gradient.json"), r))
+                                           lambda r: driver.common.write_json(str(root / "topography_gradient.json"), r))
     if checks_only:
         tape.clear_tape()
         pause_disk_checkpointing()
@@ -451,7 +492,7 @@ def fit_rol(args, driver, parent, mantle, case, target_SL, frozen_slope,
     # outside any topography correction (1e23 m in the control scale).
     optimiser = LinMoreOptimiser(MinimizationProblem(reduced, bounds=(-1e20, 1e20)), parameters)
     import ROL
-    goal = 0.5 * (args.topography_tolerance_m / CONTROL_SCALE_M)**2
+
     class TopographyStatusTest(ROL.StatusTest):
         def check(self, status):
             optimiser.iteration += 1
@@ -552,7 +593,7 @@ def run(args, driver):
     evaluations = gradient_report = None
     if args.topography_method == "rol" or checks_only:
         correction, evaluations, gradient_report = fit_rol(args, driver, parent, mantle, case, target_SL,
-                                                          frozen_slope, correction, bulk, root)
+                                                           frozen_slope, correction, bulk, root)
         pass_number = 1
         if checks_only:
             driver.log("  E requested adjoint checks passed; exiting without topography fitting")
@@ -566,7 +607,7 @@ def run(args, driver):
         within_restart = state if args.restart and number == pass_number else None
         with stop_annotating():
             solver, _, rows, rms, _ = history(args, driver, parent, mantle, case, target_SL, frozen_slope,
-                                             correction, bulk, directory, within_restart, base)
+                                              correction, bulk, directory, within_restart, base)
             passes.append({"pass": number, "terminal_topography_rms_m": rms,
                            "steps": rows[-1]["step"], "h_UF_m_last": rows[-1]["h_UF_m"],
                            "ocean_area_last": rows[-1]["ocean_area"], "directory": directory.name})

@@ -35,8 +35,34 @@ this discretisation. `--topography_max_iterations` can increase it.
 `--topography_method rol` uses Firedrake adjoint and G-ADOPT's Lin-More ROL
 optimiser. The control is a CG2 correction on the outer mantle surface,
 scaled by 1000 m; interior topography DOFs are not optimisation variables.
-The objective is half the area-normalised squared terminal error divided by
-`(1000 m)^2`. The same maximum-iterations option limits ROL iterations;
+The objective is the whole-surface integral
+
+```
+J = 0.5 * integral_surface (terminal_error_m / C)^2 dS
+C = 1000 m
+A = integral_surface 1 dS
+RMS_m = C * sqrt(2 * J / A)
+J_tolerance = 0.5 * A * (tolerance_m / C)^2
+```
+
+Here `dS` is the solver's nondimensional surface measure; `A` is measured
+using that same measure, rather than an analytic spherical area. The control
+and error use the same 1000 m scale. If the terminal response to an initial
+topography change is close to identity, the surface L2 Hessian is then close
+to identity too, matching ROL's initial Hessian model. This follows the
+scaling used in the Exp01 initial-topography inversion, expressed in E's
+dimensionless control units. It improves the scale of the proposed updates;
+it does not guarantee convergence.
+
+Earlier E runs divided this objective by `A`. The new objective and its
+gradient are therefore larger by `A` (about 61 on the production sphere),
+throughout the optimisation. The minimiser and physical RMS tolerance are
+unchanged. Raw objective and gradient values from old runs must be multiplied
+by their measured area before comparing them with new runs. RMS values can
+be compared directly. The fresh-forward gradient check and ROL stopping test
+use the same new scaling.
+
+The same maximum-iterations option limits ROL iterations;
 each iteration may require several forward/adjoint histories. An independent
 forward history evaluates the final control. Optimiser termination alone
 does not establish convergence. The optimiser also stops when its objective
@@ -178,6 +204,8 @@ the scaled objective with respect to the dimensionless correction control,
 as used by ROL; it is not a derivative with respect to topography in metres.
 The PVD time coordinate is the ROL iteration number, not physical time.
 `rol_gradients/iterations.json` records objective, RMS and gradient L2 norm.
+It also records the objective normalisation, measured nondimensional surface
+area and control scale so that RMS can be recovered from the objective.
 Output reuses existing derivatives without additional adjoint solves and
 does not include rejected line-search/trust-region trial points. This flag
 is separate from `--write_output` for the forward fields and requires ROL.
@@ -237,7 +265,12 @@ history or retain optimiser state across jobs.
 - `checkpoint_E_next.h5`: updated Picard guess for the next history, when needed.
 - `--write_output`: mechanics/potential VTK files plus initial and terminal
   topography in metres for each pass.
-- ROL additionally writes `topography_rol_evaluations.json`.
+- ROL additionally writes `topography_rol_evaluations.json`, including the
+  objective normalisation, measured surface area and control scale.
+- `topography_objective.json`: scaling metadata and the objective threshold
+  corresponding to the requested physical RMS tolerance, written for ROL
+  and adjoint validation runs. Scaling metadata is separate from the restart
+  configuration, so existing topography warm starts remain usable.
 
 The published E comparisons are ocean area (Fig. 18) and `h_UF` (Fig. 19)
 over 0–15 kyr. `giamip` supplies these via `BenchmarkResult.reference("E")`.
