@@ -47,6 +47,7 @@ from .utility import (
     InteriorBC,
     LayerAveraging,
     ParameterLog,
+    RichardsTimestepAdaptor,
     TimestepAdaptor,
     interpolate_1d_profile,
     log,
