@@ -87,7 +87,12 @@ CHECKPOINTING
     there use node memory; put them on `/scratch` when the node memory is
     short. On Gadi `$PBS_JOBFS` is the local disk of each node (up to
     400 GB per node on `normalsr`, set with `#PBS -l jobfs`), which uses no
-    node memory.
+    node memory. In a PBS job the script stops if `--checkpoint_dir` is
+    outside `$PBS_JOBFS`: the tape stays on the node disk. Firedrake also
+    makes one small shared directory (`firedrake_adjoint_checkpoint_*`) in
+    the working directory for the data of `checkpointable_mesh` and
+    `checkpoint_init_data`; this script uses neither, so that directory
+    holds one empty HDF5 file and no tape data.
 
 MEMORY
     The node memory grows with the number of taped steps. In the probes of
@@ -841,7 +846,7 @@ def free_taping_solver(problem, say, diag=None):
     objects = ""
     if info["objects_before"] is not None:
         b, a = info["objects_before"], info["objects_after"]
-        objects = (f"; rank 0 live objects before -> after: "
+        objects = ("; rank 0 live objects before -> after: "
                    + ", ".join(f"{k} {b[k]} -> {a[k]}" for k in b))
     say(f"  free taping solver: released in {wall:.1f} s ({info.get('tree')} "
         f"torn down, {info.get('rounds')} cleanup rounds, heap trimmed "
@@ -887,7 +892,8 @@ def parse_args():
     # Checkpointing.
     p.add_argument("--checkpoint_dir", default=None,
                    help="directory of the tape checkpoints, one per node "
-                        "(default $PBS_JOBFS on Gadi, else $TMPDIR)")
+                        "(default $PBS_JOBFS on Gadi, else $TMPDIR; in a "
+                        "PBS job it must be inside $PBS_JOBFS)")
     # Debugging.
     p.add_argument("--log_memory", action="store_true",
                    help="log the memory after every taped step")
@@ -941,6 +947,20 @@ def enable_node_checkpointing(args, mesh, say):
     """
     base = (args.checkpoint_dir or os.environ.get("PBS_JOBFS")
             or os.environ.get("TMPDIR", "/tmp"))
+    # On Gadi the tape goes to the local disk of each node, `$PBS_JOBFS`,
+    # and nowhere else (decision R11 of the r2 production): the tape of a
+    # full march is hundreds of GB per node, and on /scratch or /g/data it
+    # would load the shared Lustre file system and its quota. A
+    # `--checkpoint_dir` outside `$PBS_JOBFS` in a PBS job is therefore an
+    # error. Setonix has no `$PBS_JOBFS`, so the option keeps its meaning
+    # there.
+    jobfs = os.environ.get("PBS_JOBFS")
+    if jobfs:
+        inside = os.path.realpath(base) == os.path.realpath(jobfs) or \
+            os.path.realpath(base).startswith(os.path.realpath(jobfs) + os.sep)
+        if not inside:
+            raise SystemExit(f"--checkpoint_dir {base} is outside $PBS_JOBFS "
+                             f"({jobfs}); the tape must stay on the node disk")
     # The job id of Slurm (Setonix) or PBS (Gadi), else the process id. The
     # process id differs between ranks, so it is taken from rank 0.
     job = os.environ.get("SLURM_JOB_ID") or os.environ.get("PBS_JOBID")

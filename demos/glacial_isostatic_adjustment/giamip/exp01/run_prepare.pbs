@@ -22,6 +22,8 @@
 #   NP      the MPI ranks (default: all cores of the job, PBS_NCPUS)
 #   EXTRA   further arguments of prepare_exp01.py
 #   ENV_FILE the environment file (default ENV_DEFAULT below)
+#   GDRIFT_DATA_DIR the g-drift data cache (default gdrift-data in the
+#           software directory; read by Exp08, Exp11 and Exp12 only)
 #
 #PBS -N exp01-prep
 #PBS -P xd2
@@ -47,6 +49,13 @@ PERSIST=/g/data/xd2/sg8812/giamip-software
 ENV_DEFAULT=${PERSIST}/env-giamip-pr4638-pr5544-pyop2fixes.sh
 ENV_FILE=${ENV_FILE:-${ENV_DEFAULT}}
 source ${ENV_FILE}
+# The g-drift data cache of the experiments with a 3-D earth from
+# tomography (Exp08, Exp11, Exp12). Their prepare scripts import g-drift,
+# which reads its datasets from $GDRIFT_DATA_DIR; a compute node has no
+# network, so the files must be there already. g-drift itself comes from the
+# PYTHONPATH of the environment file (decision R7). The other experiments do
+# not import g-drift, and the variable changes nothing for them.
+export GDRIFT_DATA_DIR=${GDRIFT_DATA_DIR:-${PERSIST}/gdrift-data}
 
 HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp01
 MESH=${MESH:-${PERSIST}/meshes/n2_giamip_all_o1/n2_giamip_all_o1.msh}

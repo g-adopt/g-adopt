@@ -5,7 +5,11 @@
 #
 # The job must have the nodes and ranks of the prepare job that wrote the
 # input file; the script stops with an error otherwise. The tape checkpoints
-# go to $PBS_JOBFS, the local disk of each node, one directory per node.
+# go to $PBS_JOBFS, the local disk of each node, one directory per node, and
+# nowhere else (decision R11 of the r2 production): the script has no
+# variable for another tape directory, it stops if EXTRA names one, and
+# invert_exp01.py stops in a PBS job if --checkpoint_dir is outside
+# $PBS_JOBFS.
 #
 # Submit from the run directory. The resources in the #PBS lines are for one
 # node. For n nodes, give ncpus = 104 n, mem = 500 n GB and jobfs = 400 n GB
@@ -26,7 +30,6 @@
 #   STEPS           stop the march after this many steps (empty: to year 0)
 #   ITERATIONS      ROL iterations (default 10)
 #   RESTART         a state.h5 to continue from (empty: cold start)
-#   CHECKPOINT_DIR  the tape checkpoints (default $PBS_JOBFS of each node)
 #   NP              the MPI ranks (default: all cores of the job, PBS_NCPUS)
 #   EXTRA           further arguments of invert_exp01.py (for example
 #                   "--log_memory --diagnostics")
@@ -36,6 +39,16 @@
 #                   node_memory_<host>.txt in the run directory at this
 #                   interval (20 is a good value), also up to an out-of-memory
 #                   kill of the ranks. The samplers stop when mpiexec ends.
+#   JOBFS_SAMPLER   the interval in seconds of the jobfs sampler (default
+#                   60; 0: no sampler). One node_jobfs_sampler.sh per node
+#                   appends the size of $PBS_JOBFS (the tape of that node)
+#                   to node_jobfs_<host>.txt in the run directory. At the
+#                   end the job prints the largest size of each node and,
+#                   with STEPS, the size per taped step and its projection
+#                   to the full march (R11). $PBS_JOBFS is removed with the
+#                   job, so these files are the only record of the tape
+#                   size per node; the PBS footer gives one number for the
+#                   whole job.
 #   ENV_FILE        the environment file (default ENV_DEFAULT below)
 #   WATCHDOG_MIN    stop a job that makes no progress (empty: no watchdog).
 #                   With a value, the job stops when neither
@@ -91,7 +104,20 @@ HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp01
 OUT=${OUT:-${PBS_O_WORKDIR}}
 INPUTS=${INPUTS:?set INPUTS to the input file of the prepare job}
 MODE=${MODE:?set MODE=taylor or MODE=invert}
-CHECKPOINT_DIR=${CHECKPOINT_DIR:-${PBS_JOBFS}}
+# The tape directory is always the local disk of each node (R11). A
+# CHECKPOINT_DIR from the environment of an older submit line, or a
+# --checkpoint_dir in EXTRA, would move the tape; both stop the job before
+# any work.
+if [ -n "${CHECKPOINT_DIR:-}" ] && [ "${CHECKPOINT_DIR}" != "${PBS_JOBFS}" ]; then
+    echo "error: CHECKPOINT_DIR=${CHECKPOINT_DIR} is set; the tape goes to \$PBS_JOBFS only (R11)" >&2
+    exit 1
+fi
+case " ${EXTRA:-} " in
+    *" --checkpoint_dir"*)
+        echo "error: EXTRA names --checkpoint_dir; the tape goes to \$PBS_JOBFS only (R11)" >&2
+        exit 1 ;;
+esac
+CHECKPOINT_DIR=${PBS_JOBFS}
 
 ARGS="--inputs ${INPUTS} --output_path ${OUT} --mode ${MODE}"
 ARGS="${ARGS} --iterations ${ITERATIONS:-10}"
@@ -157,14 +183,18 @@ mpiexec -np ${NODES} --map-by ppr:1:node /bin/bash -c \
     'echo "env check $(hostname -s): OMPI_MCA_coll_hcoll_enable=${OMPI_MCA_coll_hcoll_enable:-unset} PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-unset} core limit of the launcher $(ulimit -c)"' \
     || echo "env check failed (exit $?); the run continues"
 
-# The node memory samplers: one per node, started with pbsdsh on the first
-# task of each node in $PBS_NODEFILE (one line per core, the lines of a node
-# together). They run outside MPI, so an out-of-memory kill of a rank does
-# not stop them; the stop file ends them after mpiexec.
+# The node samplers: one per node and kind, started with pbsdsh on the
+# first task of each node in $PBS_NODEFILE (one line per core, the lines of
+# a node together). They run outside MPI, so an out-of-memory kill of a rank
+# does not stop them; the stop file ends them after mpiexec.
 SAMPLERS=""
+STOP_SAMPLER=${OUT}/.node_sampler_stop_${PBS_JOBID}
+rm -f ${STOP_SAMPLER}
+# The longest interval of the running samplers: the wait at the end must
+# let each of them see the stop file once.
+SAMPLER_WAIT=0
 if [ -n "${MEMORY_SAMPLER:-}" ]; then
-    STOP_SAMPLER=${OUT}/.node_memory_stop_${PBS_JOBID}
-    rm -f ${STOP_SAMPLER}
+    SAMPLER_WAIT=${MEMORY_SAMPLER}
     for i in "${!NODE_HOSTS[@]}"; do
         # stdin from /dev/null: a background task must not read the stdin
         # of the job script.
@@ -172,6 +202,19 @@ if [ -n "${MEMORY_SAMPLER:-}" ]; then
             ${OUT} ${MEMORY_SAMPLER} ${STOP_SAMPLER} < /dev/null &
         SAMPLERS="${SAMPLERS} $!"
         echo "node memory sampler on ${NODE_HOSTS[$i]} (task ${NODE_TASKS[$i]}), every ${MEMORY_SAMPLER} s"
+    done
+fi
+# The jobfs samplers (R11): the size of the tape of each node, on by
+# default. One du of a few large files per minute costs nothing against
+# the run.
+JOBFS_SAMPLER=${JOBFS_SAMPLER:-60}
+if [ "${JOBFS_SAMPLER}" != "0" ]; then
+    [ "${JOBFS_SAMPLER}" -gt "${SAMPLER_WAIT}" ] && SAMPLER_WAIT=${JOBFS_SAMPLER}
+    for i in "${!NODE_HOSTS[@]}"; do
+        pbsdsh -n ${NODE_TASKS[$i]} -- /bin/bash ${HERE}/node_jobfs_sampler.sh \
+            ${OUT} ${JOBFS_SAMPLER} ${STOP_SAMPLER} ${PBS_JOBFS} < /dev/null &
+        SAMPLERS="${SAMPLERS} $!"
+        echo "node jobfs sampler on ${NODE_HOSTS[$i]} (task ${NODE_TASKS[$i]}), every ${JOBFS_SAMPLER} s"
     done
 fi
 
@@ -264,17 +307,39 @@ if [ -n "${SAMPLERS}" ]; then
     # One more interval lets each sampler see the stop file and write its
     # last line; then the pbsdsh processes are ended in any case.
     touch ${STOP_SAMPLER}
-    sleep $(( MEMORY_SAMPLER + 5 ))
+    sleep $(( SAMPLER_WAIT + 5 ))
     kill ${SAMPLERS} 2>/dev/null || true
     rm -f ${STOP_SAMPLER}
 fi
 
-# $PBS_JOBFS is removed with the job. A CHECKPOINT_DIR on a shared file
-# system is not, and pyadjoint writes the shared part of the disk
-# checkpointer in the working directory.
-if [ "${CHECKPOINT_DIR}" != "${PBS_JOBFS}" ]; then
-    rm -rf ${CHECKPOINT_DIR}/giamip-adjoint-${PBS_JOBID}
+# The tape size per node (R11), from the files of the jobfs samplers of
+# this job (the lines after the start of this job; a file of an earlier job
+# in the same run directory has older lines). The projection to the full
+# march assumes the same tape per taped step: the steps of the march to
+# year 0 come from the record of the prepare job beside INPUTS
+# ("year0_step"). It is a line of text only and changes nothing.
+if [ "${JOBFS_SAMPLER}" != "0" ]; then
+    STEPS_FULL=$(grep -o '"year0_step": *[0-9]*' "${INPUTS%.h5}.json" 2>/dev/null | head -1 | grep -o '[0-9]*$')
+    PEAK_ALL=0
+    for i in "${!NODE_HOSTS[@]}"; do
+        host=${NODE_HOSTS[$i]%%.*}
+        peak=$(awk -v t0=${START} '$1 >= t0 && $4 == "used_gb" {if ($5 > m) m = $5} END {printf "%.2f", m}' \
+            ${OUT}/node_jobfs_${host}.txt 2>/dev/null)
+        echo "jobfs peak ${host}: ${peak:-?} GB"
+        PEAK_ALL=$(awk -v a=${PEAK_ALL} -v b=${peak:-0} 'BEGIN {print (b > a) ? b : a}')
+    done
+    echo "jobfs peak of the busiest node: ${PEAK_ALL} GB (the r2 jobs request jobfs=400 GB per node)"
+    if [ -n "${STEPS:-}" ] && [ -n "${STEPS_FULL}" ]; then
+        awk -v p=${PEAK_ALL} -v s=${STEPS} -v n=${STEPS_FULL} 'BEGIN {
+            printf "jobfs per taped step %.3f GB on the busiest node; projected tape of the full march (%d steps): %.1f GB per node\n", p / s, n, p / s * n }'
+    fi
 fi
+
+# $PBS_JOBFS, and with it the tape, is removed with the job. pyadjoint
+# writes the shared part of the disk checkpointer (an empty HDF5 file in
+# this script, see CHECKPOINTING in invert_exp01.py) in the working
+# directory; its exit handler removes it, and this removes what a killed
+# run left.
 rm -rf ${PBS_O_WORKDIR}/firedrake_adjoint_checkpoint_* 2>/dev/null || true
 date
 echo "exit code ${status}"
