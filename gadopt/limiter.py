@@ -10,7 +10,7 @@ from firedrake import TensorProductElement, VectorElement, HDivElement, MixedEle
 from firedrake.functionspaceimpl import WithGeometry
 from ufl import triangle
 import numpy as np
-from pyop2.profiling import timed_region, timed_function, timed_stage  # NOQA
+from firedrake.petsc import PETSc
 import pyop3 as op3
 from typing import Optional
 from firedrake.adjoint import annotate_tape
@@ -308,7 +308,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         """
         if annotate_tape():
             raise RuntimeError('Limiting is currently not compatible for adjoint modelling.')
-        with timed_stage('limiter'):
+        with PETSc.Log.Stage("limiter"):
 
             if self.is_vector:
                 tmp_func = self.P1DG.get_work_function()
