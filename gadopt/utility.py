@@ -373,7 +373,8 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
             variant = 'equispaced'
     if v_variant is None:
         v_variant = 'equispaced'
-    if cell_dim == (2, 1) or (1, 1):
+    # Extruded meshes (2-D or 1-D base) take a tensor-product element.
+    if cell_dim in ((2, 1), (1, 1)):
         if v_family is None:
             v_family = h_family
         if v_degree is None:
