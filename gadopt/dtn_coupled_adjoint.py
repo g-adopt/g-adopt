@@ -127,8 +127,10 @@ SOLVE_BLOCK_TYPE = (CachedSolverBlock if CACHED_SOLVER_BLOCKS
 __all__ = ["CACHED_SOLVER_BLOCKS", "CachedCoupledLowRankDtNSolveBlock",
            "CoupledLowRankDtNSolveBlock",
            "LowRankVariationalSolver", "SOLVE_BLOCK_TYPE",
-           "adopt_coupled_lowrank_block", "derivative_constructor_kwargs",
-           "derivative_solver_kwargs", "require_controls_reach_block"]
+           "TapingSolverReleasedError", "adopt_coupled_lowrank_block",
+           "derivative_constructor_kwargs", "derivative_solver_kwargs",
+           "live_solver_objects", "release_taping_solver",
+           "require_controls_reach_block"]
 
 
 def derivative_solver_kwargs(gia_solver, suffix: str, *, transpose: bool) -> dict:
@@ -358,7 +360,7 @@ class _ThetaPsiTerms:
     def _bound_to_block(self):
         """Bind what the shared solvers read to this block for one solve.
 
-        Two values are bound, and both restored on exit:
+        Three values are bound, and all restored on exit:
 
         - `theta_psi` on the shared `dtn_operator`, from this block's saved
           control values. The augmentation callbacks read it at every
@@ -373,6 +375,16 @@ class _ThetaPsiTerms:
           every later step of every sweep. With it, a replay rebuilds at the
           same steps as the forward run, and the adjoint sweep rebuilds as it
           walks back through the steps.
+        - `gia_dt` in the application context, set to the time step of this
+          block's forward solve (`_saved_dt`). The rebuild rule also
+          rebuilds when the time step differs from the one of the last build
+          (`gadopt.preconditioners._published_dt`). The solver's own `dt`
+          object holds its live value, which during a replay or an adjoint
+          sweep is the value of the last forward assignment, not the value
+          of the step being solved. Without this binding a march whose time
+          step changes rebuilds at the change in the forward run only, and
+          the replay and the adjoint keep a preconditioner built for the
+          other time step until the solve count expires the lag.
 
         Yields:
           The shared `dtn_operator`.
@@ -384,12 +396,22 @@ class _ThetaPsiTerms:
         # contexts alone. Each context is restored to its own previous value,
         # so the forward solver's count is unchanged after a replay on stock
         # Firedrake, where the replay shares the forward dict.
-        contexts = ([] if self.gia_solve_index is None
-                    else self._solve_index_contexts())
+        all_contexts = self._solve_index_contexts()
+        contexts = [] if self.gia_solve_index is None else all_contexts
         missing = object()
         saved_index = [ctx.get("gia_solve_index", missing) for ctx in contexts]
         for ctx in contexts:
             ctx["gia_solve_index"] = self.gia_solve_index
+        # The time step of this block, bound in every context the
+        # preconditioners read (not only those with a solve index: the time
+        # step is a property of the solve, whatever the index). A time step
+        # that is not a dependency of the block (a float) cannot change on
+        # the tape and is left alone.
+        dt = self._saved_dt()
+        dt_contexts = [] if dt is None else all_contexts
+        saved_dt = [ctx.get("gia_dt", missing) for ctx in dt_contexts]
+        for ctx in dt_contexts:
+            ctx["gia_dt"] = dt
         try:
             yield op
         finally:
@@ -399,6 +421,30 @@ class _ThetaPsiTerms:
                     ctx.pop("gia_solve_index", None)
                 else:
                     ctx["gia_solve_index"] = value
+            for ctx, value in zip(dt_contexts, saved_dt):
+                if value is missing:
+                    ctx.pop("gia_dt", None)
+                else:
+                    ctx["gia_dt"] = value
+
+    def _saved_dt(self):
+        """The time step of this block's forward solve, as a float, or None.
+
+        A time step that is a `Function` on the Real space is a coefficient
+        of the residual and so a dependency of the solve block, and its
+        saved output is its value at this point of the tape: the value of
+        the forward solve in an adjoint sweep, and the replayed value in a
+        replay. A float or a `Constant` (a UFL constant value, not a
+        coefficient, so not a dependency) gives None, and the rule then
+        reads the live value.
+        """
+        dt = getattr(self.gia_solver, "dt", None)
+        if dt is None:
+            return None
+        for dep in self.get_dependencies():
+            if dep.output is dt:
+                return _scalar(dep.saved_output)
+        return None
 
     # -- the low-rank action, as vectors ------------------------------------
     def _B0_psi(self) -> Cofunction:
@@ -688,3 +734,383 @@ def adopt_coupled_lowrank_block(gia_solver, tape, n0, controls=None):
 
     gia_solver.adjoint_block = block
     return block
+
+
+# -- Releasing the taping solver after the taped forward run ------------------
+#
+# With cached solver blocks (Firedrake PR 4638) the tape replays through a
+# cached forward solver and differentiates through a cached adjoint solver.
+# Both are built by the taping solver at its first annotated solve, from its
+# constructor keywords, and every coupled block holds them directly
+# (`block.forward_cache`, `block.adjoint_cache`). After the taped forward run
+# the taping solver is never solved again in a Taylor test or an inversion,
+# but it keeps its whole preconditioner tree (the outer `DtNTwoBlockSchurPC`,
+# its `_SchurAinvBCache`, the `CondensedBlockPC` of block 0 with its GAMG
+# hierarchy and the `LowRankPotentialPC`). That is a third preconditioner set
+# beside the two of the cached solvers, and on the 4-round GIAMIP mesh it is
+# about 1.6 GB per rank. `release_taping_solver` frees it.
+
+
+class TapingSolverReleasedError(RuntimeError):
+    """Raised by any use of a taping solver after `release_taping_solver`."""
+
+
+class _ReleasedTapingSolver:
+    """Stands in for `SelfGravitatingGIASolver.solver` after the release.
+
+    Any attribute access raises `TapingSolverReleasedError`, so a forward
+    solve that is attempted after the release stops with a message that names
+    the cause, not with a PETSc null-object error deep inside a solve. It
+    holds no reference to the released solver.
+    """
+
+    def __getattr__(self, name):
+        raise TapingSolverReleasedError(
+            f"the taping solver was released by "
+            f"gadopt.dtn_coupled_adjoint.release_taping_solver (attribute "
+            f"{name!r} was asked for). The replay and the adjoint use the "
+            "cached solvers of the tape; a new forward solve needs a new "
+            "SelfGravitatingGIASolver.")
+
+
+#: The gadopt preconditioner classes whose instances `live_solver_objects`
+#: counts. One live `DtNTwoBlockSchurPC` with `initialized` true is one
+#: preconditioner set.
+_PC_CLASS_NAMES = ("DtNTwoBlockSchurPC", "_SchurAinvBCache",
+                   "CondensedBlockPC", "LowRankPotentialPC")
+
+
+def live_solver_objects():
+    """Count the live Python wrappers of PETSc solver objects on this rank.
+
+    The count walks `gc.get_objects()`, so it costs about one second per
+    million Python objects; call it a few times per run, not per solve. It
+    sees Python objects only: a PETSc object that only C code references
+    (for example a GAMG level inside a destroyed PC) has no wrapper and is
+    not counted. The PETSc log view (object creations and destructions per
+    stage) gives the C-level count.
+
+    Returns:
+      A dict with the number of `PETSc.SNES`, `KSP`, `PC`, `Mat`, `Vec` and
+      `DM` wrappers, the number of instances of each gadopt preconditioner
+      class of `_PC_CLASS_NAMES`, and `pc_sets`: the number of initialised
+      `DtNTwoBlockSchurPC` instances, one per preconditioner set.
+    """
+    import gc
+
+    from petsc4py import PETSc
+
+    from . import preconditioners as pcs
+
+    petsc_types = {"snes": PETSc.SNES, "ksp": PETSc.KSP, "pc": PETSc.PC,
+                   "mat": PETSc.Mat, "vec": PETSc.Vec, "dm": PETSc.DM}
+    gadopt_types = {name: getattr(pcs, name) for name in _PC_CLASS_NAMES
+                    if hasattr(pcs, name)}
+    counts = {key: 0 for key in (*petsc_types, *gadopt_types, "pc_sets")}
+    for obj in gc.get_objects():
+        for key, cls in petsc_types.items():
+            if isinstance(obj, cls):
+                counts[key] += 1
+                break
+        else:
+            for key, cls in gadopt_types.items():
+                if type(obj) is cls:
+                    counts[key] += 1
+                    if key == "DtNTwoBlockSchurPC" and getattr(
+                            obj, "initialized", False):
+                        counts["pc_sets"] += 1
+                    break
+    return counts
+
+
+def _resident_gb():
+    """The resident size of this process now, in GB (1e9 bytes), or None.
+
+    `/proc/self/statm` on Linux; `psutil` elsewhere if it is installed.
+    """
+    import os
+    try:
+        with open("/proc/self/statm") as handle:
+            pages = int(handle.read().split()[1])
+        return pages * os.sysconf("SC_PAGE_SIZE") / 1.0e9
+    except OSError:
+        pass
+    try:
+        import psutil
+        return psutil.Process().memory_info().rss / 1.0e9
+    except ImportError:
+        return None
+
+
+#: Helper classes of a Python PC context whose KSPs and PCs belong to that
+#: PC alone, so `_solver_tree` walks into them.
+_TREE_HELPER_CLASS_NAMES = ("_SchurAinvBCache",)
+
+
+def _solver_tree(ksp):
+    """The KSPs and PCs below `ksp`, children before parents.
+
+    The walk follows what a solver tree holds: the PC of every KSP, the
+    sub-KSPs of a set-up fieldsplit PC, and, for a Python PC, every KSP or PC
+    that its Python context holds as an attribute, also one level down in a
+    plain helper object of the context (`DtNTwoBlockSchurPC.ainvb`, the
+    `_SchurAinvBCache`, holds the two sub-KSPs of the inner fieldsplit;
+    only the classes of `_TREE_HELPER_CLASS_NAMES`).
+    Each PETSc object is visited once (by its handle).
+
+    Returns:
+      `(ksps, python_pcs)`: lists of new wrappers, children first.
+    """
+    from petsc4py import PETSc
+
+    ksps, python_pcs, seen = [], [], set()
+
+    def petsc_children(obj):
+        """The KSPs and PCs held as attributes of a Python object."""
+        found = []
+        for value in vars(obj).values():
+            if isinstance(value, (PETSc.KSP, PETSc.PC)):
+                found.append(value)
+            elif type(value).__name__ in _TREE_HELPER_CLASS_NAMES:
+                # Only named helpers: another gadopt object of a context can
+                # be shared with the cached solvers (`dtn`, the low-rank
+                # operator), and nothing of theirs may be torn down.
+                found.extend(v for v in vars(value).values()
+                             if isinstance(v, (PETSc.KSP, PETSc.PC)))
+        return found
+
+    def visit(obj):
+        if not obj.handle or obj.handle in seen:
+            return
+        seen.add(obj.handle)
+        if isinstance(obj, PETSc.KSP):
+            visit(obj.getPC())
+            ksps.append(obj)
+            return
+        kind = obj.getType()
+        if kind == "fieldsplit":
+            try:
+                subs = obj.getFieldSplitSubKSP()
+            except PETSc.Error:
+                subs = []
+            for sub in subs:
+                visit(sub)
+        elif kind == "python":
+            context = obj.getPythonContext()
+            if context is not None:
+                for child in petsc_children(context):
+                    visit(child)
+            python_pcs.append(obj)
+
+    visit(ksp)
+    return ksps, python_pcs
+
+
+def _return_free_heap():
+    """Give the free pages of the C heap back to the system (glibc only).
+
+    glibc keeps freed small blocks in the process heap, so the resident size
+    does not fall when a preconditioner tree is destroyed: the next build of
+    the same process reuses the space, but the node cannot. `malloc_trim(0)`
+    returns the free pages at the top of the heap and the free whole pages
+    inside it. Elsewhere (macOS, musl) this does nothing.
+
+    Returns:
+      True if `malloc_trim` was called.
+    """
+    import ctypes
+    import ctypes.util
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
+        trim = libc.malloc_trim
+    except (OSError, AttributeError):
+        return False
+    trim.argtypes = [ctypes.c_size_t]
+    trim(0)
+    return True
+
+
+def _petsc_wrapper_count():
+    """The number of live Python wrappers of PETSc objects on this rank."""
+    import gc
+
+    from petsc4py import PETSc
+    return sum(1 for obj in gc.get_objects() if isinstance(obj, PETSc.Object))
+
+
+def release_taping_solver(gia_solver, *, max_rounds=12, count_objects=True):
+    """Free the taping solver of a coupled low-rank GIA solver and its preconditioner.
+
+    Call this once after the taped forward run, with annotation paused, and
+    before the first replay or adjoint. After it the replay and the adjoint
+    run through the cached solvers of the tape exactly as before, so J and
+    the gradient are unchanged to the last bit. Only memory is freed: the
+    SNES, KSP and PC of the taping solver, the Python preconditioner tree
+    with every assembled block, GAMG hierarchy and low-rank column, the
+    matrix-free Jacobian context, the work vectors, and the sub-DMs that
+    the fieldsplit made.
+
+    What stays, because the tape needs it: the `SelfGravitatingGIASolver`
+    (`gia_solver`) with its `dtn_operator`, `appctx`, the two augmentation
+    callbacks (bound methods that the cached solvers call), the problem,
+    the solution `Function` and the nullspace objects. The cached solvers
+    hold none of the released objects (each `NonlinearVariationalSolver`
+    has its own SNES and context, and its preconditioner assembles from its
+    own forms on copies of the coefficients).
+
+    The order of the release, and why:
+
+    1. `pc.setType("none")` on every Python PC of the tree, the deepest
+       first (`_solver_tree`: the outer `DtNTwoBlockSchurPC`, the
+       `CondensedBlockPC` of block 0, the `LowRankPotentialPC` of its
+       potential split). This calls each Python context's `destroy` and
+       drops the context in C (`PCDestroy_Python`), whatever else still
+       holds the PETSc PC. A plain `snes.destroy()` frees only what nothing
+       else references: a Python wrapper of the SNES, KSP or PC kept by
+       other code (a monitor list) keeps the whole tree, and on two or more
+       ranks the PETSc PC of the potential split of the taping block 0
+       stays referenced at the C level after the tree above it is
+       destroyed (seen on 2 ranks, not in serial; the holder was not found),
+       which kept its `LowRankPotentialPC` with its copy of the potential
+       block, its columns and its GAMG KSP alive.
+    2. `ksp.reset()` on every KSP of the tree and `snes.reset()`: the Krylov
+       and SNES work vectors and the references to the operators.
+    3. `snes.destroy()`, and `gia_solver.solver` is replaced by a stand-in
+       that raises `TapingSolverReleasedError` on any use. This drops the
+       last Python reference to the `LowRankVariationalSolver`, and with it
+       its `_SNESContext`, the matrix-free Jacobian and the saved DM hooks.
+    4. Rounds of `gc.collect()` and `PETSc.garbage_cleanup(comm)` until no
+       rank sees a change in its number of live PETSc wrappers. A parallel
+       PETSc object whose last Python reference goes is not destroyed at
+       once: petsc4py puts it into a garbage map, and only the collective
+       `garbage_cleanup` destroys it. Destroying it can drop the Python
+       context of a nested preconditioner or matrix, whose own wrappers
+       then go into the map, so each level of Python contexts in the tree
+       costs one round. The tree has at least four such levels (outer PC,
+       inner fieldsplit with its sub-KSPs, `CondensedBlockPC` and its
+       matrices, `LowRankPotentialPC` and its KSP), and on two ranks three
+       rounds left the `LowRankPotentialPC` alive. A round in which no
+       wrapper is freed puts nothing new into the map and empties it, so
+       the loop stops after the first such round (and after at least three
+       rounds). Serial objects are destroyed at once, so on one rank the
+       loop ends early.
+    5. `malloc_trim(0)` on glibc (`_return_free_heap`). Without it the
+       freed blocks stay in the heap of the process: the next
+       preconditioner build of the process reuses them, but the resident
+       size does not fall and the node cannot use the pages.
+
+    On a Firedrake without cached solver blocks this does nothing: the
+    replay there goes through the stock solve block, and releasing its
+    solver is not tested.
+
+    Collective on the communicator of the solution.
+
+    Args:
+      gia_solver: the `SelfGravitatingGIASolver` of the taped run. Its
+        `adjoint_block` must be the adopted coupled block of the last taped
+        solve.
+      max_rounds: the largest number of `gc.collect` and `garbage_cleanup`
+        rounds.
+      count_objects: count the live solver objects before and after with
+        `live_solver_objects` (about one second per million Python objects).
+
+    Returns:
+      A dict: `released` (bool), `reason` (str, why nothing was released, or
+      empty), `rss_gb_before` and `rss_gb_after` (this rank, or None),
+      `objects_before` and `objects_after` (dicts of `live_solver_objects`,
+      this rank, or None), `rounds` (the cleanup rounds run), `tree` (the
+      number of KSPs and Python PCs torn down), `heap_trimmed` (whether
+      `malloc_trim` ran) and `seconds`.
+    """
+    import gc
+    import time
+
+    from petsc4py import PETSc
+
+    tic = time.perf_counter()
+    result = {"released": False, "reason": "", "rss_gb_before": None,
+              "rss_gb_after": None, "objects_before": None,
+              "objects_after": None, "rounds": 0, "tree": None,
+              "heap_trimmed": False, "seconds": 0.0}
+
+    # Every early return below is taken on every rank alike: the conditions
+    # depend on the code path and on the tape, which are the same on all
+    # ranks, so no rank enters a collective call alone.
+    if not CACHED_SOLVER_BLOCKS:
+        result["reason"] = ("no cached solver blocks (Firedrake without PR "
+                            "4638): nothing is released")
+        return result
+    solver = gia_solver.solver
+    if isinstance(solver, _ReleasedTapingSolver):
+        result["reason"] = "already released"
+        return result
+    if annotate_tape():
+        raise RuntimeError(
+            "release_taping_solver: annotation is on. Release the taping "
+            "solver after the taped forward run, with annotation paused; a "
+            "solve annotated after the release has no solver.")
+    block = getattr(gia_solver, "adjoint_block", None)
+    if block is None:
+        # No coupled solve is on the tape, so no cached solver exists, and
+        # the taping solver is the only solver of this problem.
+        result["reason"] = "no coupled solve block on the tape"
+        return result
+    # The cached solvers must be other objects than the taping solver;
+    # otherwise the release would destroy the solver of the replay.
+    for name in ("forward_cache", "adjoint_cache", "tangent_cache"):
+        cache = getattr(block, name, None)
+        if cache is not None and getattr(cache, "solver", None) is solver:
+            raise RuntimeError(
+                f"release_taping_solver: the {name} of the tape uses the "
+                "taping solver itself, so it cannot be released.")
+
+    comm = gia_solver.solution.function_space().mesh().comm
+    result["rss_gb_before"] = _resident_gb()
+    if count_objects:
+        result["objects_before"] = live_solver_objects()
+
+    snes = solver.snes
+    # 1. Drop every Python context of the preconditioner tree in C, the
+    # deepest first (see the docstring), then reset every KSP of the tree.
+    ksps, python_pcs = _solver_tree(snes.getKSP())
+    result["tree"] = {"ksps": len(ksps), "python_pcs": len(python_pcs)}
+    for pc in python_pcs:
+        pc.setType("none")
+    # 2. The work vectors and the operator references.
+    for ksp in ksps:
+        ksp.reset()
+    snes.reset()
+    # 3. The SNES itself and the last Python reference to the solver. The
+    # walk's wrappers go first, so that they hold no reference.
+    pc = ksp = None
+    del pc, ksp, ksps, python_pcs
+    snes.destroy()
+    del snes
+    solver.gia_solver = None
+    gia_solver.solver = _ReleasedTapingSolver()
+    del solver
+    # 4. Destroy what the drops put into PETSc's garbage map, level by level,
+    # until a round frees no wrapper on any rank. The decision is reduced
+    # over the ranks, so every rank runs the same number of collective
+    # cleanups.
+    from mpi4py import MPI
+    previous = None
+    for index in range(max_rounds):
+        gc.collect()
+        PETSc.garbage_cleanup(comm)
+        count = _petsc_wrapper_count()
+        changed = comm.allreduce(int(count != previous), op=MPI.MAX)
+        previous = count
+        result["rounds"] = index + 1
+        if index + 1 >= 3 and not changed:
+            break
+    # 5. The freed heap pages back to the node (glibc), so the resident size
+    # shows the release and other processes of the node can use the pages.
+    result["heap_trimmed"] = _return_free_heap()
+
+    result["rss_gb_after"] = _resident_gb()
+    if count_objects:
+        result["objects_after"] = live_solver_objects()
+    result["released"] = True
+    result["seconds"] = time.perf_counter() - tic
+    return result

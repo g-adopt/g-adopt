@@ -568,8 +568,10 @@ def _rebuild_lag_options(pc, rule):
     `_RebuildRule`, which a Jacobian that does not depend on the state uses)
     is never lagged. And on the state-dependent branch a changed time step
     rebuilds at the next solve: the solver publishes `operator_version = None`
-    there and fingerprints no coefficient, so `_RebuildRule` records the value
-    of `appctx["dt"]` at each build and compares it itself. Other coefficient
+    there and fingerprints no coefficient, so `_RebuildRule` records the time
+    step of the solve at each build (`_published_dt`: the block's own time
+    step `appctx["gia_dt"]` during a replay or an adjoint sweep, else
+    `appctx["dt"]`) and compares it itself. Other coefficient
     changes on a state-dependent Jacobian do not end the lag. In case D the
     ice load changes at every step, and that slow change is what the lag is
     for.
@@ -617,10 +619,18 @@ def _rebuild_lag_options(pc, rule):
 def _published_dt(pc):
     """The time step in the solver's application context, as a float.
 
-    The solvers publish `appctx["dt"]`, a `Constant` or a number, and the
-    drivers change it with `dt.assign`. The value is the same on every rank.
-    `_RebuildRule` compares it between builds on the lagged branch, where no
-    other marker moves when the time step changes.
+    The solvers publish `appctx["dt"]`, a `Constant`, a `Function` on the
+    Real space or a number, and the drivers change it with `dt.assign`. The
+    value is the same on every rank. `_RebuildRule` compares it between
+    builds on the lagged branch, where no other marker moves when the time
+    step changes.
+
+    During a replay or an adjoint sweep the `dt` object holds the value of
+    the last forward assignment, not the value of the step being solved.
+    The coupled low-rank solve block therefore binds `appctx["gia_dt"]` to
+    the time step of its own forward solve around each of its solves
+    (`gadopt.dtn_coupled_adjoint`, `_bound_to_block`), and that value wins
+    when it is present.
 
     Args:
       pc: PETSc preconditioner.
@@ -629,7 +639,8 @@ def _published_dt(pc):
       The time step as a float, or `None` when the context carries none or it
       cannot be read as one number.
     """
-    dt = _solver_appctx(pc).get("dt")
+    ctx = _solver_appctx(pc)
+    dt = ctx.get("gia_dt", ctx.get("dt"))
     if dt is None:
         return None
     try:
@@ -840,7 +851,12 @@ class _RebuildRule:
         if not present:
             return False
         if version is not None:
-            if version != self._operator_version:
+            # The version moves when the forward run assigns a new dt, but
+            # not in a replay or an adjoint sweep, which do not touch the
+            # live coefficients; there the time step of the solve block
+            # (`_published_dt`, `gia_dt`) is what moves.
+            if (version != self._operator_version
+                    or _published_dt(pc) != self._dt):
                 self._operator_version = version
                 # Carry the solve index across with it, so that a later switch
                 # to the state-dependent branch compares against this build and

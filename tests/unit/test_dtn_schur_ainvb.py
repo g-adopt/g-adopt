@@ -1263,6 +1263,46 @@ def _rebuild_sequence_over(rule, indices):
     return rebuilt
 
 
+def test_the_block_time_step_wins_over_the_live_one(stub_appctx):
+    """During a replay or an adjoint sweep `gia_dt` is the time step of the solve.
+
+    The live `dt` holds the last forward value; the solve block binds its
+    own time step as `gia_dt`. A change of `gia_dt` with the live `dt`
+    unchanged ends the lag.
+
+    CATCHES: a rule that reads the live `dt` and keeps the complement of the
+    other time step through the replay and the adjoint.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=None, gia_solve_index=1, dt=0.5,
+                      gia_dt=1.0)
+    rule.record(pc)
+    pc.values["gia_solve_index"] = 2
+    assert not rule.moved(pc)
+    pc.values.update(gia_solve_index=3, gia_dt=0.5)
+    assert rule.moved(pc)
+
+
+def test_the_integer_branch_sees_a_block_time_step_change(stub_appctx):
+    """With a fixed `operator_version` a new `gia_dt` still rebuilds.
+
+    A replay or an adjoint sweep does not move `operator_version` (it does
+    not assign the live coefficients), so on the integer branch the time
+    step of the solve block is what changes.
+
+    CATCHES: an integer branch that compares the version only and keeps the
+    complement of the other time step in a replay.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=7, gia_solve_index=1, gia_dt=1.0)
+    rule.record(pc)
+    assert not rule.moved(pc)
+    pc.values.update(gia_solve_index=2, gia_dt=0.5)
+    assert rule.moved(pc)
+    pc.values["gia_solve_index"] = 3
+    assert not rule.moved(pc)
+
+
 def test_an_adjoint_sweep_rebuilds_as_the_index_falls(stub_appctx):
     """The lag counts solves in either direction of the solve index.
 
