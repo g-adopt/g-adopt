@@ -491,6 +491,239 @@ def build_meshes(msh, radial, n_levels):
     return parent, mantle, counts
 
 
+#: The bits per axis of the Hilbert curve of `checkpoint_balanced_partition`.
+#: The locally refined meshes have cells of 2.5 km at the coast, much finer
+#: than the 12 km step of `HILBERT_BITS`. 2^16 steps give 0.2 km at Re, so
+#: few cells share one key. The key has 48 bits, which fits in int64.
+CHECKPOINT_HILBERT_BITS = 16
+
+#: The DMPlex labels that a saved topology carries and that depend on the
+#: distribution of the run that saved it. Firedrake's own `CheckpointFile`
+#: load removes the `pyop2_*` labels; `firedrake_is_ghost` is the label of
+#: the same kind that Firedrake with pyop3 writes (the 8 Re mesh was saved
+#: by that version). Firedrake makes these labels again for the new
+#: distribution.
+DISTRIBUTION_LABELS = ("pyop2_core", "pyop2_owned", "pyop2_ghost",
+                       "firedrake_is_ghost")
+
+
+def checkpoint_topology_name(path, mesh_name):
+    """The name of the DMPlex topology of mesh `mesh_name` in a `CheckpointFile`.
+
+    Firedrake stores a pickled `{mesh name: topology name}` dict as the
+    attribute `firedrake_mesh_name_topology_name_map` of the group
+    `topologies`. Read on rank 0 with h5py and broadcast.
+
+    Args:
+      path: the `.h5` file of `CheckpointFile.save_mesh`.
+      mesh_name: the name of the mesh in that file.
+
+    Returns:
+      The topology name, the name of the group under `topologies/`.
+    """
+    import pickle
+
+    import h5py
+
+    name = None
+    if COMM_WORLD.rank == 0:
+        with h5py.File(path, "r") as f:
+            raw = f["topologies"].attrs["firedrake_mesh_name_topology_name_map"]
+            name = pickle.loads(raw.tobytes())[mesh_name]
+    return COMM_WORLD.bcast(name, root=0)
+
+
+def checkpoint_balanced_partition(plex, nparts, mantle_tags):
+    """The partition of `mantle_balanced_partition`, for a DMPlex loaded in parallel.
+
+    `mantle_balanced_partition` needs the whole mesh on rank 0, as the gmsh
+    reader gives it. A DMPlex loaded from a `CheckpointFile` with
+    `topologyLoad` is spread over all ranks instead: each rank holds a
+    contiguous piece of the cells of the file, with the vertices of its cells
+    (this is the "naive" distribution that Firedrake's own load
+    redistributes). This function makes the same partition from that state:
+
+    1. Each rank computes the Hilbert key of the centroid direction of each
+       of its cells (`CHECKPOINT_HILBERT_BITS` bits per axis) and marks the
+       mantle cells.
+    2. Rank 0 gathers the keys of all mantle cells (13.7 M int64 values for
+       the 8 Re mesh, about 110 MB), sorts them and splits the sorted list
+       into `nparts` pieces of equal count. A stable sort over the gathered
+       order makes the split deterministic. Rank 0 sends each rank the part
+       of each of its mantle cells, and sends every rank the first key of
+       each part.
+    3. Every other cell (buffer, inner shell) goes to the part whose key
+       range covers its key, as in `mantle_balanced_partition`.
+
+    Each part is then a solid-angle sector through all shells, and the
+    mantle cell counts of the parts differ by at most one. The buffer cells
+    are not balanced. They hold only the gravitational potential, so they
+    cost much less per cell than the mantle cells.
+
+    Collective.
+
+    Args:
+      plex: the DMPlex from `topologyLoad`, `labelsLoad` and
+        `coordinatesLoad`, before any distribution.
+      nparts: the number of ranks.
+      mantle_tags: the cell tags of the mantle region.
+
+    Returns:
+      `(sizes, points)` for `distribution_parameters["partition"]`: on each
+      rank, the number of its cells that go to each part and the local
+      indices of its cells (0 for the first cell of the rank) sorted by
+      part. PETSc's shell partitioner takes these per rank when the DMPlex
+      is distributed.
+
+    Raises:
+      RuntimeError: if a rank holds a cell that it does not own. The shell
+        partition must list every cell of the rank once.
+    """
+    cstart, cend = plex.getHeightStratum(0)
+    ncells = cend - cstart
+    # A cell that is a leaf of the point SF belongs to another rank. The
+    # loaded DMPlex has none, but the shell partition would be wrong with
+    # one, so check.
+    _, leaves, _ = plex.getPointSF().getGraph()
+    leaves = np.asarray(leaves if leaves is not None else [], dtype=np.int64)
+    ghost_cells = int(np.count_nonzero((leaves >= cstart) & (leaves < cend)))
+    if COMM_WORLD.allreduce(ghost_cells, op=MPI.SUM):
+        raise RuntimeError("checkpoint_balanced_partition: the loaded DMPlex "
+                           "has cells owned by another rank")
+    # 1. The direction of the centroid of every cell, from its vertices.
+    # The local coordinate vector holds the vertices of every local cell,
+    # also those owned by another rank.
+    section = plex.getCoordinateSection()
+    coordinates = plex.getCoordinatesLocal()
+    centroid = np.array([plex.vecGetClosure(section, coordinates, c)
+                         .reshape(-1, 3).mean(axis=0)
+                         for c in range(cstart, cend)]).reshape(ncells, 3)
+    direction = centroid / np.linalg.norm(centroid, axis=1)[:, None]
+    bits = CHECKPOINT_HILBERT_BITS
+    scale = (1 << bits) - 1
+    key = hilbert_keys(np.rint((direction + 1.0) * 0.5 * scale), bits)
+    mantle = np.zeros(ncells, dtype=bool)
+    for tag in mantle_tags:
+        if plex.getStratumSize("Cell Sets", tag) > 0:
+            points = np.asarray(plex.getStratumIS("Cell Sets", tag)
+                                .getIndices())
+            # The refinement of the 8 Re mesh passed the cell tags on to the
+            # faces, edges and vertices of each cell (77 M labelled points
+            # for 22 M cells), so only the points of the cell stratum count.
+            points = points[(points >= cstart) & (points < cend)]
+            mantle[points - cstart] = True
+    mantle_index = np.flatnonzero(mantle)
+    mantle_keys = np.ascontiguousarray(key[mantle_index], dtype=np.int64)
+
+    # 2. The equal split of the sorted mantle keys, on rank 0.
+    counts = np.array(COMM_WORLD.allgather(len(mantle_keys)), dtype=np.int64)
+    total = int(counts.sum())
+    displacements = np.concatenate([[0], np.cumsum(counts)[:-1]])
+    gathered = (np.empty(total, dtype=np.int64) if COMM_WORLD.rank == 0
+                else None)
+    COMM_WORLD.Gatherv(mantle_keys,
+                       [gathered, counts, displacements, MPI.INT64_T]
+                       if COMM_WORLD.rank == 0 else None, root=0)
+    if COMM_WORLD.rank == 0:
+        order = np.argsort(gathered, kind="stable")
+        part_all = np.empty(total, dtype=np.int64)
+        part_all[order] = (np.arange(total, dtype=np.int64) * nparts) // total
+        # The first key of each part, in key order.
+        first = np.searchsorted(part_all[order], np.arange(nparts),
+                                side="left")
+        starts = gathered[order][first]
+        del order
+    else:
+        part_all, starts = None, None
+    part_mantle = np.empty(len(mantle_keys), dtype=np.int64)
+    COMM_WORLD.Scatterv([part_all, counts, displacements, MPI.INT64_T]
+                        if COMM_WORLD.rank == 0 else None,
+                        part_mantle, root=0)
+    starts = COMM_WORLD.bcast(starts, root=0)
+    del part_all, gathered
+
+    # 3. Every other cell goes to the part whose key range covers its key.
+    part = np.empty(ncells, dtype=np.int64)
+    part[mantle_index] = part_mantle
+    other = np.flatnonzero(~mantle)
+    part[other] = np.clip(
+        np.searchsorted(starts, key[other], side="right") - 1, 0, nparts - 1)
+    sizes = np.bincount(part, minlength=nparts).astype(PETSc.IntType)
+    # PETSc maps the entries of a shell partition through the local cell
+    # numbering (`PetscPartitionerDMPlexPartition`: entry i is the i-th owned
+    # cell of the height stratum), so the entries count from 0 and not from
+    # `cstart`. For the serial gmsh DMPlex of `mantle_balanced_partition`,
+    # `cstart` is 0 and the two agree.
+    points = np.argsort(part, kind="stable").astype(PETSc.IntType)
+    return sizes, points
+
+
+def load_checkpoint_meshes(path, mesh_name, radial):
+    """Load a refined P1 mesh from a `CheckpointFile`, balance the mantle, curve it.
+
+    The locally refined GIAMIP meshes (for example `giamip_8re_r4`, NOTES
+    handout of 2026-10-23) are refined already and come as `CheckpointFile`
+    files, not as gmsh files. `build_meshes` cannot read them. This function
+    gives the same result as `build_meshes` with no refinement:
+
+    1. Load the DMPlex topology, its labels and its vertex coordinates from
+       the file, as `CheckpointFile._load_mesh_topology` does, but without
+       the Firedrake mesh: the DMPlex is spread over the ranks in contiguous
+       pieces of the file. The labels that belong to the distribution of the
+       saving run are removed (`DISTRIBUTION_LABELS`).
+    2. Make the mantle-balanced partition from that state
+       (`checkpoint_balanced_partition`) and build the Firedrake mesh with
+       it. Firedrake distributes the DMPlex with PETSc's shell partitioner.
+       A default load would balance all cells, and the 8.4 M buffer cells of
+       the 8 Re mesh would leave the ranks with very different mantle work.
+    3. Curve the mesh with `giamsh.refine.curve_mesh`, cut and curve the
+       mantle submesh (`mantle_mesh`), and check for folded cells.
+
+    The vertex coordinates of the file must be snapped to the spheres (the
+    P1 file of the mesh build is), because `curve_mesh` moves each P2 node
+    to the radius of the P1 interpolant of the vertex radii. This is the
+    rule that made the P2 file of the same build, so the curved parent
+    equals the P2 file of the build at every node.
+
+    Collective.
+
+    Args:
+      path: the P1 mesh file.
+      mesh_name: the name of the mesh in the file.
+      radial: the `giamsh.radial.RadialStructure` of the sidecar.
+
+    Returns:
+      `(parent, mantle, counts)` as `build_meshes`.
+    """
+    mantle_tags = list(radial.region_tags("mantle"))
+    topology_name = checkpoint_topology_name(path, mesh_name)
+    viewer = PETSc.ViewerHDF5().create(path, mode="r", comm=COMM_WORLD)
+    plex = PETSc.DMPlex().create(comm=COMM_WORLD)
+    plex.setName(topology_name)
+    viewer.pushFormat(format=PETSc.Viewer.Format.HDF5_PETSC)
+    plex.distributionSetName(None)
+    sfXB = plex.topologyLoad(viewer)
+    plex.labelsLoad(viewer, sfXB)
+    plex.coordinatesLoad(viewer, sfXB)
+    viewer.popFormat()
+    viewer.destroy()
+    for label in DISTRIBUTION_LABELS:
+        if plex.hasLabel(label):
+            plex.removeLabel(label)
+    sizes, points = checkpoint_balanced_partition(plex, COMM_WORLD.size,
+                                                  mantle_tags)
+    linear = Mesh(plex, distribution_parameters={"partition": (sizes, points)},
+                  distribution_name=distribution_name(), name="giamip_linear")
+    parent = giamsh_refine.curve_mesh(linear, name=PARENT_NAME)
+    mantle = mantle_mesh(parent, mantle_tags)
+    counts = mesh_counts(parent, mantle)
+    counts["folded_cells_parent"] = giamsh_refine.folded_cells(parent)
+    counts["folded_cells_mantle"] = giamsh_refine.folded_cells(mantle)
+    if counts["folded_cells_parent"] or counts["folded_cells_mantle"]:
+        raise RuntimeError(f"folded cells after the curving: {counts}")
+    return parent, mantle, counts
+
+
 #: The DMPlex label that marks every mantle cell with the value 1.
 MANTLE_LABEL = "giamip_mantle_cells"
 
@@ -523,23 +756,30 @@ def mantle_mesh(parent, mantle_tags):
     if not dm.hasLabel(MANTLE_LABEL):
         dm.createLabel(MANTLE_LABEL)
     label = dm.getLabel(MANTLE_LABEL)
+    # Only cells go into the label. The gmsh meshes tag cells only; the
+    # locally refined 8 Re mesh tags the faces, edges and vertices of each
+    # cell too.
+    cstart, cend = dm.getHeightStratum(0)
     for tag in mantle_tags:
         if dm.getStratumSize("Cell Sets", tag) > 0:
             for point in dm.getStratumIS("Cell Sets", tag).getIndices():
-                label.setValue(point, 1)
+                if cstart <= point < cend:
+                    label.setValue(point, 1)
     submesh = Submesh(parent, 3, 1, label_name=MANTLE_LABEL)
     return giamsh_refine.curve_mesh(submesh, name=MANTLE_NAME)
 
 
 def mesh_counts(parent, mantle):
-    """Global cell counts and the spread of the mantle cells over the ranks."""
+    """Global cell counts and the spread of the mantle and parent cells over the ranks."""
     local_mantle = mantle.cell_set.size
     counts = COMM_WORLD.allgather(local_mantle)
-    return {"cells_parent": COMM_WORLD.allreduce(parent.cell_set.size,
-                                                 op=MPI.SUM),
+    parent_counts = COMM_WORLD.allgather(parent.cell_set.size)
+    return {"cells_parent": int(sum(parent_counts)),
             "cells_mantle": int(sum(counts)),
             "mantle_cells_per_rank_min": int(min(counts)),
             "mantle_cells_per_rank_max": int(max(counts)),
+            "parent_cells_per_rank_min": int(min(parent_counts)),
+            "parent_cells_per_rank_max": int(max(parent_counts)),
             "ranks": COMM_WORLD.size}
 
 
@@ -1304,6 +1544,280 @@ def time_step(mantle, value=1.0):
     return Function(FunctionSpace(mantle, "R", 0), name="dt").assign(value)
 
 
+# --------------------------------------------------------------------------
+# Schedule C: the protocol steps plus the fast melt windows
+# --------------------------------------------------------------------------
+
+#: The last year of every march with a step after year 0 (the end of the
+#: GIAMIP protocol).
+SCHEDULE_LAST_YEAR = 1000
+
+#: The windows of schedule C (design handout 8.3, decisions S33 and S34), by
+#: the file of the ice history, as `(first year, end year, step in yr)`. A
+#: step that starts inside a window has the step length of that window; any
+#: other step goes to the next protocol year (500 yr before year -26000,
+#: 100 yr after). The windows follow the fast melt of each history after Lau
+#: (2023), Sect. 3.1: 10 yr steps in the fastest melt, 25 yr steps in the
+#: kyr before and after it. The handout lists ICE-6G_D (Exp12) and GLAC3c
+#: profile 1 (Exp09) in full. For profile 2 (Exp10) it says "the same
+#: pattern at 15-14 ka and 11-10 ka": the Exp09 pattern is 25 yr from 1 kyr
+#: before the first 10 yr window to 1 kyr after the last one, with 25 yr
+#: also between the two windows, so Exp10 has 25 yr from 14 to 11 ka.
+SCHEDULE_C_WINDOWS = {
+    # ICE-6G_D (Exp12): MWP-1A, 15 to 13 ka.
+    "iceHistory-ICE-6G_D.nc": ((-16000, -15000, 25), (-15000, -13000, 10),
+                               (-13000, -11000, 25)),
+    # GLAC3c profile 1 (Exp09): 15 to 14 ka and 12 to 11 ka.
+    "iceHistory-GLAC3c_profile1.nc": ((-16000, -15000, 25),
+                                      (-15000, -14000, 10),
+                                      (-14000, -12000, 25),
+                                      (-12000, -11000, 10),
+                                      (-11000, -10000, 25)),
+    # GLAC3c profile 2 (Exp10): 15 to 14 ka and 11 to 10 ka.
+    "iceHistory-GLAC3c_profile2.nc": ((-16000, -15000, 25),
+                                      (-15000, -14000, 10),
+                                      (-14000, -11000, 25),
+                                      (-11000, -10000, 10),
+                                      (-10000, -9000, 25)),
+}
+
+#: The number of steps of schedule C from 122 ka to +1000 yr (design
+#: handout 8.3: 732 for Exp12 and 762 for Exp09; Exp10 by the reading of
+#: `SCHEDULE_C_WINDOWS`). The protocol alone has 192 + 260 + 10 = 462
+#: steps; each kyr at 25 yr adds 30 steps, each kyr at 10 yr adds 90.
+SCHEDULE_C_STEPS_122KA = {"iceHistory-ICE-6G_D.nc": 732,
+                          "iceHistory-GLAC3c_profile1.nc": 762,
+                          "iceHistory-GLAC3c_profile2.nc": 792}
+
+
+def schedule_c_windows(ice_file):
+    """The windows of schedule C for the ice history `ice_file` (a basename).
+
+    Raises:
+      KeyError: if schedule C has no windows for that history.
+    """
+    if ice_file not in SCHEDULE_C_WINDOWS:
+        raise KeyError(f"schedule C has no windows for the ice history "
+                       f"{ice_file}")
+    return SCHEDULE_C_WINDOWS[ice_file]
+
+
+def schedule_c_years(start, protocol_years, windows, last=SCHEDULE_LAST_YEAR):
+    """Every year of schedule C, from `start` to `last`.
+
+    Each step either has the length of the window it starts in, or goes to
+    the next protocol year. The years are integers, built by adding whole
+    step lengths, so no rounding error accumulates and every protocol year
+    is a year of the schedule. A window must start and end at a protocol
+    year and its step must divide the window: then a step inside a window
+    never jumps over a protocol year or over the end of the window.
+
+    Args:
+      start: the first year (the start of the experiment), a protocol year.
+      protocol_years: the protocol years of giamip, ascending.
+      windows: `(first year, end year, step)` triples (`SCHEDULE_C_WINDOWS`).
+      last: the last year of the schedule.
+
+    Returns:
+      A NumPy integer array of the years, `start` first, `last` last.
+
+    Raises:
+      ValueError: if a window or the schedule breaks one of these rules.
+    """
+    protocol = [int(round(y)) for y in protocol_years]
+    if any(float(y) != float(p) for y, p in zip(protocol_years, protocol)):
+        raise ValueError("the protocol years are not whole years")
+    pset = set(protocol)
+    for first, end, step in windows:
+        if (first not in pset or end not in pset or step <= 0
+                or (end - first) % step != 0):
+            raise ValueError(f"window {(first, end, step)}: its ends must be "
+                             f"protocol years and its step must divide it")
+        # A protocol year inside the window must be a year of the window.
+        inside = [p for p in protocol if first < p < end]
+        if any((p - first) % step != 0 for p in inside):
+            raise ValueError(f"window {(first, end, step)}: its step does "
+                             f"not reach every protocol year inside it")
+    # The windows must be in order and must not overlap: a year belongs to
+    # one window at most.
+    for (_, end, _), (first, _, _) in zip(windows[:-1], windows[1:]):
+        if end > first:
+            raise ValueError(f"windows {windows}: not in order or overlapping")
+    if int(start) not in pset or last not in pset:
+        raise ValueError(f"start {start} or last {last} is not a protocol "
+                         f"year")
+    years = [int(start)]
+    while years[-1] < last:
+        year = years[-1]
+        step = next((s for first, end, s in windows if first <= year < end),
+                    None)
+        if step is None:
+            # The next protocol year.
+            following = [p for p in protocol if p > year]
+            years.append(following[0])
+        else:
+            years.append(year + step)
+    years = np.asarray(years, dtype=np.int64)
+    missing = sorted(p for p in pset
+                     if int(start) <= p <= last and p not in set(years.tolist()))
+    if years[-1] != last or missing:
+        raise ValueError(f"schedule C from {start} ends at {years[-1]} or "
+                         f"misses protocol years {missing[:5]}")
+    return years
+
+
+def ice_bracket(protocol_years, year):
+    """The two protocol slices around `year` and the weight of the second.
+
+    Design handout P9 and S34: the ice at a year between two protocol years
+    is linear in time between them, ice(t) = (1 - w) ice(k) + w ice(k + 1),
+    w = (t - t_k) / (t_{k+1} - t_k), with t_k <= t < t_{k+1}. At a protocol
+    year w is 0 and the ice is slice k itself. The prepare script (the ice of
+    the input file) and the forward script (`LinearIce`) both take k and w
+    from here, so the same year gives the same two numbers in both.
+
+    Args:
+      protocol_years: the protocol years, ascending, as floats.
+      year: the year.
+
+    Returns:
+      `(k, w)`: the index of the first slice and the weight (a float) of
+      slice k + 1; w is exactly 0.0 at a protocol year.
+
+    Raises:
+      ValueError: if `year` is outside the protocol years.
+    """
+    years = np.asarray(protocol_years, dtype=float)
+    k = int(np.searchsorted(years, year, side="right")) - 1
+    if k < 0 or year > years[-1]:
+        raise ValueError(f"year {year} is outside the protocol years")
+    if year == years[k]:
+        return k, 0.0
+    return k, float((year - years[k]) / (years[k + 1] - years[k]))
+
+
+def linear_ice_into(out, a, w, b=None):
+    """Write `(1 - w) a + w b` into `out`, node by node (all CG1 Functions).
+
+    The one formula of the ice between two protocol slices, used by the
+    prepare script and the forward script, so the ice of a year is the same
+    bit for bit in the input file and in the forward run when both start
+    from the same two slices. At w = 0 the result is a copy of `a`, bit for
+    bit (no arithmetic). Owned and halo nodes alike: the halo values equal
+    those of the owners, and the combination is node by node, so they stay
+    equal. A UFL expression with the weight as a literal would compile a new
+    kernel for every weight.
+
+    Args:
+      out: the target Function.
+      a: slice k.
+      w: the weight of slice k + 1 (`ice_bracket`).
+      b: slice k + 1; not read when w = 0.
+
+    Returns:
+      `out`.
+    """
+    if w == 0.0:
+        out.dat.data_wo_with_halos[:] = a.dat.data_ro_with_halos
+        return out
+    out.dat.data_wo_with_halos[:] = ((1.0 - w) * a.dat.data_ro_with_halos
+                                     + w * b.dat.data_ro_with_halos)
+    return out
+
+
+def march_ice(read_slice, brackets, space):
+    """The ice of every year of a march, linear in time between slices.
+
+    The ice of the input file of schedule C (`prepare_expXX.py --schedule
+    windows`). Each protocol slice is read once; the two slices around the
+    current year are kept, and each year gets a new Function with the
+    combination of `linear_ice_into` (a copy of the slice at a protocol
+    year). The forward script makes the same numbers with `LinearIce` from
+    the same slices.
+
+    Args:
+      read_slice: `read_slice(k)` returns protocol slice k as a CG1 Function
+        (`SurfaceForcing.ice`).
+      brackets: `(k, w)` of every year of the march (`ice_bracket`).
+      space: the CG1 space of the ice.
+
+    Returns:
+      A list of Functions named `ICE_NAME`, one per year.
+    """
+    ice = []
+    slices = {}
+    for k, w in brackets:
+        # Drop the slices that the march has passed.
+        for old in [j for j in slices if j < k]:
+            del slices[old]
+        for j in ((k,) if w == 0.0 else (k, k + 1)):
+            if j not in slices:
+                slices[j] = read_slice(j)
+        target = Function(space, name=ICE_NAME)
+        linear_ice_into(target, slices[k], w,
+                        slices[k + 1] if w != 0.0 else None)
+        ice.append(target)
+    return ice
+
+
+def check_linear_ice(years, ice, protocol_years, scratch):
+    """Check that the ice of a schedule-C march is linear between its slices.
+
+    For every year of the march that is not a protocol year, the ice must
+    equal `linear_ice_into` of the ice of the two bracketing protocol years
+    of the same march, bit for bit. The protocol years of the march are
+    themselves entries of `ice`. This is the check that the inversion (which
+    reads `ice` from the input file) sees the same linear ice as the forward
+    run of schedule C. Collective.
+
+    In the prepare job (before the write) the difference is exactly 0. After
+    a write and a read of the input file it is not: `read_inputs`
+    interpolates each field from its broken copy on the parent mesh onto the
+    mantle, which is exact only to round-off (about 3e-19 in units of D,
+    1e-12 m, at L0). The forward run therefore compares the difference with
+    a tolerance relative to the largest ice (`max_abs_ice`). The inversion
+    and the forward run both read the same file, so they march the same ice
+    either way.
+
+    Args:
+      years: the years of the march.
+      ice: the ice of every year of the march (CG1 Functions on the mantle).
+      protocol_years: the protocol years of giamip.
+      scratch: a CG1 Function for the combination.
+
+    Returns:
+      `{"years_checked": n, "max_abs_diff": d, "max_abs_ice": m}` (d and m
+      over all ranks, units of D; d is 0.0 when the ice is linear bit for
+      bit; m is the largest ice of the march).
+
+    Raises:
+      ValueError: if a bracketing protocol year is not a year of the march.
+    """
+    position = {float(y): j for j, y in enumerate(years)}
+    p_years = np.asarray(protocol_years, dtype=float)
+    worst = 0.0
+    largest = max((float(np.max(np.abs(f.dat.data_ro), initial=0.0))
+                   for f in ice), default=0.0)
+    n = 0
+    for j, year in enumerate(years):
+        k, w = ice_bracket(p_years, float(year))
+        if w == 0.0:
+            continue
+        ja, jb = position.get(p_years[k]), position.get(p_years[k + 1])
+        if ja is None or jb is None:
+            raise ValueError(f"year {year}: the bracketing protocol years "
+                             f"are not in the march")
+        linear_ice_into(scratch, ice[ja], w, ice[jb])
+        d = np.max(np.abs(scratch.dat.data_ro - ice[j].dat.data_ro),
+                   initial=0.0)
+        worst = max(worst, float(d))
+        n += 1
+    worst = COMM_WORLD.allreduce(worst, op=MPI.MAX)
+    largest = COMM_WORLD.allreduce(largest, op=MPI.MAX)
+    return {"years_checked": n, "max_abs_diff": worst,
+            "max_abs_ice": largest}
+
+
 def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
                  options, record=None):
     """The coupled self-gravitating sea-level solver of the experiment.
@@ -1436,6 +1950,15 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
         parameters["gia_rebuild_every"] = options.gia_rebuild_every
     if options.gia_rebuild_max_outer is not None:
         parameters["gia_rebuild_max_outer"] = options.gia_rebuild_max_outer
+    # `invert_exp04.py --diagnostics` records the iterations of every KSP of
+    # every solve in its own table (`exp04_diagnostics`). The converged-
+    # reason lines of the preset (two per block-0 iteration on the condensed
+    # route) then only fill stdout, so they are removed. A converged-reason
+    # key is a viewer and changes no solve. Every other caller passes options
+    # without `diagnostics` and keeps the preset unchanged.
+    if getattr(options, "diagnostics", False):
+        for key in [k for k in parameters if k.endswith("ksp_converged_reason")]:
+            del parameters[key]
 
     # A rigid rotation of the mantle moves no water and has no mass moment
     # for a spherically symmetric density, so it stays in the kernel with sea

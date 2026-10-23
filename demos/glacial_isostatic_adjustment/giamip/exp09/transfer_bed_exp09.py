@@ -100,7 +100,7 @@ WHAT IS WRITTEN (--start)
     evaluated at the target nodes. `bed`: the source bed at the target
     nodes.
     The observed bed of a finer mesh resolves topography that the source
-    mesh does not (L0 -> L1 of Exp09: 147 m RMS between the two observed
+    mesh does not (L0 -> L1 of Exp01: 147 m RMS between the two observed
     beds against 12.3 m RMS change of the L0 inversion). With `bed` a
     finer inversion starts with the missing topography in its misfit; with
     `change` it starts from the observed topography of its own mesh plus
@@ -861,7 +861,7 @@ def main():
     values = bed.dat.data_ro_with_halos[geom["on_re"]]
     # The number of owned target nodes on Re, summed over the ranks: the
     # count of CG2 nodes on Re of the target mesh (vertices plus edge nodes,
-    # for Exp09 530 322 at L1 and 2 121 282 at L2). `transfer` has already
+    # for Exp01 530 322 at L1 and 2 121 282 at L2). `transfer` has already
     # checked it against the MAX-reduced indicator of the nodes on Re.
     n_target = COMM_WORLD.allreduce(int(owned.sum()), op=MPI.SUM)
     lo = COMM_WORLD.allreduce(float(values[owned].min()) if owned.any()

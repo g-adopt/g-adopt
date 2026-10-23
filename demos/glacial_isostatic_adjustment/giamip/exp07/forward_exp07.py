@@ -94,6 +94,34 @@ THE FINE SCHEDULES (Exp09, Exp10, Exp12; design handout 8.3 and 12.7)
     a change of dt, and when a solve needed more than FINE_REBUILD_MAX_OUTER
     outer iterations per Newton iteration, unless the options say otherwise.
 
+SCHEDULE C (`--schedule windows`; Exp09, Exp10, Exp12; S33, S34)
+    The protocol steps (500 yr to year -26000, then 100 yr to +1000) plus
+    the fast melt windows of the ice history at 25 yr and 10 yr
+    (`exp07_common.SCHEDULE_C_WINDOWS`, design handout 8.3): 732 steps from
+    122 ka for ICE-6G_D, 762 for GLAC3c profile 1, 792 for profile 2. The
+    years come from `exp07_common.schedule_c_years`, which the prepare
+    script also uses (`prepare_expXX.py --schedule windows`), so the
+    inversion on schedule C and this run march the same years. Output,
+    preconditioner rule, checkpoints and restart are those of the fine
+    schedules.
+
+    The ice. When the state file holds the schedule-C march (its record
+    says `"schedule": "windows"` and its years are the years of this
+    schedule up to year 0), the steps up to year 0 take their ice from the
+    file, as the inversion does, so this run and the inversion see the same
+    ice at every step, bit for bit. Before the march the run checks the ice
+    of the file: at each non-protocol year it must equal the linear
+    combination of the two protocol slices of the file to 1e-12 of the
+    largest ice (`exp07_common.check_linear_ice`; the prepare job checks it
+    bit for bit before the write, and the read of the file interpolates
+    each field, exact only to round-off), and at every year it must equal the
+    ice made here from giamip (`LinearIce`) within the tolerance of the
+    transfer test (the transfer of the prepare job and of this run differ
+    by about 1e-10 m). The steps after year 0 read the ice from giamip
+    (`LinearIce`, at protocol years only, so a copy of the slice). With a
+    state file of another march (for example the 2 kyr inversion), every
+    step takes the ice of `LinearIce`, as in the fine schedules.
+
 THE RESTART
     With checkpoints (the fine schedules by default, or `--checkpoint_every`
     or `--wall_limit_hours`) the run copies the state file into the output
@@ -712,8 +740,8 @@ class SurfaceOutput:
             # and the nodal CG2 field (a check of the surface field).
             "S_check": (sea_surface - (self.N_m + self.shift_const)) ** 2 * dss,
             # The misfit of `invert_exp07.BedInversion.misfit`.
-            "misfit": Constant(0.5 * D_SCALE ** 2)
-                      * (SL - self.SL_obs) ** 2 * dss,
+            "misfit": (Constant(0.5 * D_SCALE ** 2)
+                       * (SL - self.SL_obs) ** 2 * dss),
         }
         self.area = float(assemble(self.forms["area"]))
 
@@ -945,7 +973,7 @@ LAST_YEAR = 1000
 #: start inside a window are 10 yr long; the other steps after 26 ka are
 #: 25 yr long.
 FINE_B_WINDOWS = {
-    # ICE-6G_D (Exp07, Exp12): MWP-1A, 15 to 13 ka.
+    # ICE-6G_D (Exp01, Exp12): MWP-1A, 15 to 13 ka.
     "iceHistory-ICE-6G_D.nc": ((-15000, -13000),),
     # GLAC3c profile 1 (Exp03, Exp09): 15 to 14 ka and 12 to 11 ka.
     "iceHistory-GLAC3c_profile1.nc": ((-15000, -14000), (-12000, -11000)),
@@ -959,7 +987,7 @@ FINE_B_WINDOWS = {
 FINE_REBUILD_EVERY = 100
 #: The rebuild guard of the fine schedules when `--gia_rebuild_max_outer` is
 #: not given: rebuild when the previous solve took more than this many outer
-#: iterations per Newton iteration. The Maxwell protocol runs of Exp07,
+#: iterations per Newton iteration. The Maxwell protocol runs of Exp01,
 #: Exp03, Exp04 and Exp11 (rebuild every 20 solves, 462 steps each) had a
 #: median of 2, a 90th percentile of 4 and a largest value of 5, so 6 means
 #: "worse than any step of those runs".
@@ -1070,30 +1098,28 @@ class LinearIce:
 
     def bracket(self, year):
         """The protocol index k with t_k <= year < t_{k+1} (the last k at the end)."""
-        k = int(np.searchsorted(self.years, year, side="right")) - 1
-        if k < 0 or year > self.years[-1]:
-            raise ValueError(f"year {year} is outside the protocol years")
-        return k
+        return common.ice_bracket(self.years, year)[0]
 
     def set(self, year, out):
         """Write the ice of `year` into `out` (a CG1 Function on the mantle).
 
+        The bracket, the weight and the combination come from
+        `exp07_common.ice_bracket` and `exp07_common.linear_ice_into`, the
+        functions with which the prepare script writes the ice of a
+        schedule-C input file, so the same year gives the same nodal values
+        from the same two slices.
+
         Returns:
           `(k, w)`: the bracket and the weight of slice k + 1.
         """
-        k = self.bracket(year)
+        k, w = common.ice_bracket(self.years, year)
         # Drop the slices that the march has passed.
         for old in [j for j in self.slices if j < k]:
             del self.slices[old]
         a = self._slice(k)
-        if year == self.years[k]:
-            # A protocol year: an exact copy of the slice.
-            out.dat.data_wo_with_halos[:] = a.dat.data_ro_with_halos
-            return k, 0.0
-        b = self._slice(k + 1)
-        w = (year - self.years[k]) / (self.years[k + 1] - self.years[k])
-        out.dat.data_wo_with_halos[:] = ((1.0 - w) * a.dat.data_ro_with_halos
-                                         + w * b.dat.data_ro_with_halos)
+        # At a protocol year (w = 0): an exact copy of the slice.
+        b = None if w == 0.0 else self._slice(k + 1)
+        common.linear_ice_into(out, a, w, b)
         return k, w
 
 
@@ -1335,7 +1361,8 @@ def parse_args():
                         "'none' to skip)")
     p.add_argument("--output_path", default="./")
     p.add_argument("--schedule",
-                   choices=["inversion", "protocol", "fine", "fine_b"],
+                   choices=["inversion", "protocol", "fine", "fine_b",
+                            "windows"],
                    default="inversion",
                    help="the steps of the march: those of the input file "
                         "(2 kyr, then +1000 yr), every model year of the "
@@ -1345,7 +1372,10 @@ def parse_args():
                         "(fine_b: 100 yr, then 25 yr and 10 yr in the fast "
                         "melt windows), with the ice linear in time between "
                         "the protocol years and the output at the protocol "
-                        "years only")
+                        "years only, or schedule C (windows: the protocol "
+                        "steps plus 25 yr and 10 yr steps in the fast melt "
+                        "windows, the march of the inversion on schedule "
+                        "C)")
     p.add_argument("--steps", type=int, default=None,
                    help="stop the march after this many steps")
     p.add_argument("--plus_step", choices=["auto", "always", "never"],
@@ -1445,7 +1475,9 @@ def main():
     """Run the forward march and write the outputs."""
     args = parse_args()
     protocol = args.schedule == "protocol"
-    fine = args.schedule in ("fine", "fine_b")
+    # Schedule C (`windows`) is a fine schedule: output at the protocol
+    # years, the same preconditioner rule, checkpoints and restart.
+    fine = args.schedule in ("fine", "fine_b", "windows")
     # The protocol schedule rebuilds the preconditioner every 20 solves
     # unless the command line says otherwise; the inversion schedule keeps
     # the solver default, so that it repeats the inversion's own march. The
@@ -1602,6 +1634,9 @@ def main():
     # belongs to it, as giamip defines them.
     protocol_years = np.asarray(experiment.model_years(), dtype=float)
     protocol_steps = np.asarray(experiment.forcing_steps())
+    # The steps whose ice comes from the input file in a fine schedule
+    # (schedule C with a schedule-C state file); empty otherwise.
+    file_steps = set()
     # Each entry of `schedule` is (step, year, dt_yr, ice): `ice` is a
     # callable that returns the ice of the end of the step (backward Euler)
     # as a CG1 Function on the mantle, so the protocol schedule reads one
@@ -1617,16 +1652,30 @@ def main():
         n_forcing = len(f_years)
         is_protocol = (np.array_equal(f_years, protocol_years)
                        and np.array_equal(f_steps, protocol_steps))
-        # The protocol position of every year of the input file. Each year
-        # of the 2 kyr march is a protocol year with the same ice slice.
-        positions = np.searchsorted(f_years, years)
+        # A state file of the schedule-C march (S34): its years between two
+        # protocol years hold the linear ice of `exp07_common.linear_ice_into`
+        # and have no protocol slice of their own (protocol step -1 in the
+        # record). With `--schedule windows` its steps up to year 0 take
+        # their ice from the file (SCHEDULE C in the module docstring).
+        c_file = (args.schedule == "windows"
+                  and record["march"].get("schedule") == "windows")
+        # The years of the input file that are protocol years: every year
+        # of a 2 kyr march, the protocol years of a schedule-C march.
+        f_year_set = set(f_years.tolist())
+        p_index = np.array([k for k, y in enumerate(years)
+                            if (not c_file) or float(y) in f_year_set],
+                           dtype=int)
+        # The protocol position of each of those years. Each of them is a
+        # protocol year with the same ice slice.
+        positions = np.searchsorted(f_years, years[p_index])
         inside = bool(np.all(positions < n_forcing))
         shared = (inside
                   and np.array_equal(f_years[np.minimum(positions,
-                                                        n_forcing - 1)], years)
+                                                        n_forcing - 1)],
+                                     years[p_index])
                   and np.array_equal(
                       f_steps[np.minimum(positions, n_forcing - 1)],
-                      np.asarray(record["march"]["protocol_steps"])))
+                      np.asarray(record["march"]["protocol_steps"])[p_index]))
         zero = np.flatnonzero(f_years == 0.0)
         dts = np.diff(f_years)
         say(f"  forcing: {n_forcing} protocol years from giamip "
@@ -1635,6 +1684,10 @@ def main():
             f"years with the same ice slices: {shared}; steps of "
             f"{sorted(set(dts.tolist()))} yr; year 0 is step "
             f"{int(zero[0]) if zero.size else None}")
+        if (record["march"].get("schedule") == "windows"
+                and args.schedule != "windows"):
+            raise SystemExit("the state file holds the march of schedule C; "
+                             "run it with --schedule windows")
         if not (is_protocol and shared and zero.size == 1):
             raise RuntimeError("the forcing steps of giamip are not the "
                                "protocol years, or do not contain the march "
@@ -1646,7 +1699,9 @@ def main():
         # march if one differs, so the ice of this run is the ice of the
         # inversion at every year that both have.
         worst = {"ice_max_diff_m": 0.0, "year": None, "ice_max_m": 0.0}
-        for k, position in enumerate(positions):
+        # A schedule-C file is compared in the loop below, at every year
+        # with `LinearIce`, which reads each protocol slice once.
+        for k, position in ([] if c_file else zip(p_index, positions)):
             here = forcing.ice(int(position))
             d_ice = max_abs_diff(here, ice[k]) * D_SCALE
             ice_max = vec_max_abs(ice[k]) * D_SCALE
@@ -1658,6 +1713,46 @@ def main():
                 worst = {"ice_max_diff_m": d_ice, "year": float(years[k]),
                          "ice_max_m": ice_max}
             del here
+        if c_file:
+            # Every year of the file against the ice made here from giamip
+            # by `LinearIce`, with the same tolerance: at a protocol year a
+            # copy of the slice transferred here, between protocol years
+            # the combination of two such slices. `LinearIce` reads each
+            # protocol slice once in this pass.
+            here_linear = LinearIce(forcing, f_years)
+            here = Function(forcing.cg1)
+            for k, year in enumerate(years):
+                here_linear.set(float(year), here)
+                d_ice = max_abs_diff(here, ice[k]) * D_SCALE
+                ice_max = vec_max_abs(ice[k]) * D_SCALE
+                if d_ice > 1e-9 * max(ice_max, 1.0):
+                    raise RuntimeError(
+                        f"the ice of year {year:.0f} made here differs "
+                        f"from the input file by {d_ice:.3e} m")
+                if d_ice >= worst["ice_max_diff_m"]:
+                    worst = {"ice_max_diff_m": d_ice, "year": float(year),
+                             "ice_max_m": ice_max}
+            del here, here_linear
+            # Inside the file: the ice of every year between two protocol
+            # years is the combination of the two protocol slices of the
+            # file, so the inversion marched the linear ice. The prepare job
+            # checked this bit for bit before the write; after the read
+            # (`read_inputs` interpolates from the parent copy) it holds to
+            # round-off, so the test is relative to the largest ice.
+            linear_check = common.check_linear_ice(
+                years, ice, f_years, Function(ice[0].function_space()))
+            linear_tol = 1e-12 * max(linear_check["max_abs_ice"], 1e-30)
+            linear_check["tolerance"] = linear_tol
+            say(f"  input file of schedule C: the ice of the "
+                f"{linear_check['years_checked']} years between protocol "
+                f"years against the linear combination of its protocol "
+                f"slices: largest difference "
+                f"{linear_check['max_abs_diff']:.3e} (tolerance "
+                f"{linear_tol:.3e}, units of D)")
+            checks["linear_ice_of_file"] = linear_check
+            if linear_check["max_abs_diff"] > linear_tol:
+                raise RuntimeError("the ice of the input file is not linear "
+                                   "between its protocol slices")
         d_sl = max_abs_diff(forcing.SL_obs, SL_obs) * D_SCALE
         say(f"  transfer test: ice of the {n_ice} shared years, giamip now "
             f"against the input file: largest difference "
@@ -1670,8 +1765,10 @@ def main():
                                "reproduce the input file")
         # The ice of the 2 kyr steps is not used any more; only the ice of
         # step 0 (in `I` and `I_init`) is. Dropping the list frees one CG1
-        # field per 2 kyr step.
-        ice = None
+        # field per 2 kyr step. A schedule-C file keeps it: its steps up to
+        # year 0 take their ice from it.
+        if not c_file:
+            ice = None
     if protocol:
         last = n_forcing - 1 if args.steps is None else min(n_forcing - 1,
                                                             args.steps)
@@ -1699,19 +1796,39 @@ def main():
         # protocol position as the output index, so the surface file holds
         # a contiguous series 0, 1, 2, ... like the protocol schedule.
         ice_file = os.path.basename(str(forcing.ice_history.path))
-        windows = FINE_B_WINDOWS.get(ice_file)
-        if args.schedule == "fine_b" and windows is None:
-            raise RuntimeError(f"no 10 yr windows of schedule B for the ice "
-                               f"history {ice_file}")
-        fine_y = fine_years(args.schedule, int(f_years[0]), f_years,
-                            windows or ())
+        if args.schedule == "windows":
+            # Schedule C: the years of `exp07_common.schedule_c_years`, the
+            # function of the prepare script of schedule C.
+            windows = common.schedule_c_windows(ice_file)
+            fine_y = common.schedule_c_years(int(f_years[0]), f_years,
+                                             windows, LAST_YEAR)
+        else:
+            windows = FINE_B_WINDOWS.get(ice_file)
+            if args.schedule == "fine_b" and windows is None:
+                raise RuntimeError(f"no 10 yr windows of schedule B for the "
+                                   f"ice history {ice_file}")
+            fine_y = fine_years(args.schedule, int(f_years[0]), f_years,
+                                windows or ())
         fine_dts = np.diff(fine_y)
         position = {int(y): k for k, y in enumerate(f_years)}
         linear = LinearIce(forcing, f_years)
         n_fine = len(fine_y) - 1
         last = n_fine if args.steps is None else min(n_fine, args.steps)
+        if c_file:
+            # The march of the file must be the beginning of this schedule,
+            # to year 0, so its step j is step j here.
+            if not (np.array_equal(years, fine_y[:n_ice].astype(float))
+                    and float(fine_y[year0]) == 0.0
+                    and year0 == n_ice - 1):
+                raise RuntimeError("the march of the schedule-C input file "
+                                   "is not schedule C of this run to year 0")
+            # The steps 1 .. year 0 take the ice of the file, as the
+            # inversion does (`I.assign(ice[step])`).
+            file_steps = set(range(1, n_ice))
         schedule = [(index, float(fine_y[index]), float(fine_dts[index - 1]),
-                     (lambda year=float(fine_y[index]): linear.set(year, I)),
+                     ((lambda index=index: I.assign(ice[index]))
+                      if index in file_steps else
+                      (lambda year=float(fine_y[index]): linear.set(year, I))),
                      position.get(int(fine_y[index])))
                     for index in range(1, last + 1)]
         year0_step = int(np.flatnonzero(fine_y == 0)[0])
@@ -1734,9 +1851,20 @@ def main():
                               "year0_step": year0_step,
                               "dt_values_yr": sorted(set(fine_dts.tolist())),
                               "dt_change_after_year": dt_change,
-                              "windows_10yr": windows,
-                              "ice_history": ice_file}
+                              # The 10 yr windows of schedule B, or the
+                              # (first, end, step) windows of schedule C.
+                              "windows_10yr": (windows if args.schedule
+                                               != "windows" else None),
+                              "windows": (windows if args.schedule
+                                          == "windows" else None),
+                              "ice_history": ice_file,
+                              "ice_from_input_file_steps": (
+                                  [min(file_steps), max(file_steps)]
+                                  if file_steps else None)}
     else:
+        if record["march"].get("schedule") == "windows":
+            raise SystemExit("the state file holds the march of schedule C; "
+                             "run it with --schedule windows")
         last = year0 if args.steps is None else min(year0, args.steps)
         plus = (args.plus_step == "always"
                 or (args.plus_step == "auto" and last == year0))
@@ -1910,12 +2038,18 @@ def main():
             previous_dt = dt_yr
         # Backward Euler: the load at the end of the step. In the protocol
         # schedule the callable reads and transfers the ice of this step
-        # now; in the fine schedules it combines the two bracketing slices.
+        # now; in the fine schedules it combines the two bracketing slices,
+        # or (schedule C with a schedule-C file, steps to year 0) copies the
+        # ice of the input file.
         set_ice()
-        if (fine and out_index is not None
+        if (fine and out_index is not None and step not in file_steps
                 and len(ice_checks) < args.ice_check_years):
             # The ice of a protocol year must be the protocol slice bit for
-            # bit: compare with a fresh read and transfer from giamip.
+            # bit: compare with a fresh read and transfer from giamip. The
+            # steps with the ice of the input file are not compared: that
+            # ice is the prepare job's transfer, which differs from a fresh
+            # transfer by round-off; the transfer test before the march
+            # compared it.
             fresh = forcing.ice(out_index)
             d = max_abs_diff(fresh, I)
             ice_checks.append({"year": year, "max_abs_diff": d})

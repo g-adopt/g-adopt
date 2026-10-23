@@ -224,6 +224,76 @@ A directory for experiment XX is a copy of the Exp01 directory
 The march length comes from the case file through `coarse_step_indices`.
 An experiment that starts at 80 ka has 40 steps.
 
+## On Gadi: the production on giamip_8re_r2
+
+The production of 2026-10 runs on Gadi (NCI) on the mesh `giamip_8re_r2`:
+an outer sphere at 8 Re and 2 rounds of local refinement near the coasts
+and the ice margins, 4 957 665 cells. The decisions of this phase are in
+`NOTES/team/r2-production/00-brief.md` of the worktree (not in the
+repository). Exp03 runs on 6 `normalsr` nodes (624 ranks). The
+input file holds a mesh partitioned for that rank count, so every solver
+job of the experiment uses it.
+
+| file | purpose |
+|---|---|
+| `run_prepare.pbs` | the input file (`prepare_exp03.py`) |
+| `run_transfer.pbs` | the final L0 bed onto the r2 input file (`transfer_bed_exp03.py`) |
+| `run_invert.pbs` | the inversion, with the watchdog and the node memory and jobfs samplers |
+| `run_forward.pbs` | the forward run from the final bed, with checkpoints and a restart |
+| `run_paraview.pbs` | the ParaView series of the forward run (1 rank) |
+| `run_images.pbs` | the 4K images of the forward run, one half of the steps per job (project vo05) |
+| `run_archive.pbs` | the records and the final state from /scratch to /g/data |
+| `node_memory_sampler.sh`, `node_jobfs_sampler.sh`, `signal_ranks.sh` | the helpers of `run_invert.pbs` |
+| `probe_partition.py` | what each part of the mantle-balanced partition of a mesh holds |
+| `../submit_r2.sh` | submits the jobs of one stage for one experiment and node count |
+
+The job scripts and helpers of this table (except `../submit_r2.sh`) and
+`exp03_common.py`, `exp03_diagnostics.py`, `invert_exp03.py`,
+`forward_exp03.py`, `paraview_exp03.py` and `transfer_bed_exp03.py` are
+copies of the Exp01 files with `exp01`, `Exp01` and `EXP01` changed to
+`exp03`, `Exp03` and `EXP03`, except `env-exp01-pr4638-pyop2fix.sh`,
+`EXP01_MPLCONFIGDIR`, `EXP01_ALLOW_CORE_DUMPS`, `tests/giamip/exp01.py`,
+`views_exp01_L1.json` and the Exp01 measurements in the comments. Do not
+edit them here: a change goes into the Exp01 file and is copied out.
+
+The march is the protocol steps, as in the final L0 run: the prepare job
+gets `--step_years 100` (500 yr steps to year -26000, then 100 yr steps),
+and the forward run `SCHEDULE=protocol`. The transfer writes the r2
+observed bed plus the change of the final L0 inversion (`START=change`);
+the source is
+`/g/data/xd2/sg8812/gia-mip/exp03/L0/invert-protocol/state.h5`. The tape of
+the inversion goes to `$PBS_JOBFS` of each node and nowhere else.
+
+The steps, on a Gadi login node in a login shell, from this directory:
+
+1. `bash ../submit_r2.sh 03 6 ready` submits the prepare job, the
+   transfer and the 3-step test, each after the one before.
+2. Read the records. Prepare: `prepare/inputs_exp03.json` (the cell counts
+   against the sidecar, the statistics per layer, the ice volume check).
+   Transfer: `transfer/inputs_exp03_transfer_bed.json` (the coverage, the
+   RMS of the bed change against the L0 value, the largest distance of a
+   target node from the source surface). 3-step test: J, the memory per
+   node, and the jobfs lines at the end of the job output (the tape per
+   taped step and its projection to the full march, which must fit in
+   400 GB per node).
+3. `bash ../submit_r2.sh 03 6 invert` submits the inversion
+   (48 h wall time). It stops at an RMS misfit below 1 mm or after 10 ROL
+   iterations.
+4. If the inversion stops at the wall time, `bash ../submit_r2.sh 03
+   6 restart` continues it with `RESTART=state.h5` in the same
+   directory.
+5. `bash ../submit_r2.sh 03 6 forward` submits the forward run, the
+   ParaView job, the two image jobs and the archive job, each after the
+   one before. If the forward run stops at the wall time (exit code 3),
+   PBS deletes the jobs after it; `FORWARD_RESTART=1 bash ../submit_r2.sh
+   03 6 forward` continues the run and submits them again.
+
+| item | path |
+|---|---|
+| run directory | `/scratch/xd2/$USER/giamip/exp03/8re_r2-6nodes/` (`prepare/`, `transfer/`, `invert-3steps/`, `invert/`, `jobs_r2.txt`) |
+| forward run, ParaView files, images | `/g/data/xd2/sg8812/gia-mip/exp03/r2/forward-protocol/` |
+| archive of the records and the final state | `/g/data/xd2/sg8812/gia-mip/exp03/r2/` |
+
 ## Run log
 
 | date | job | what | result |

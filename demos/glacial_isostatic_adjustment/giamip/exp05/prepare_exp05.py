@@ -8,7 +8,11 @@ WHAT THIS SCRIPT DOES
 
     1. Read the coarse giamsh mesh, partition it so that every rank holds
        the same number of mantle cells, refine it `--refine` times, curve it
-       to P2 and cut the mantle submesh (`exp05_common.build_meshes`).
+       to P2 and cut the mantle submesh (`exp05_common.build_meshes`). A
+       mesh that is refined already and saved as a P1 `CheckpointFile`
+       (`.h5`, for example the 8 Re mesh `giamip_8re_r4_linear`) is loaded
+       with the same mantle-balanced partition and curved
+       (`exp05_common.load_checkpoint_meshes`).
     2. Make the earth fields on the mantle from the earth model of the
        experiment (`giamip.earth`): density, shear and bulk modulus (DG1),
        viscosity (DG0) and gravity (CG2), all non-dimensional.
@@ -521,13 +525,25 @@ def parse_args():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mesh", required=True,
-                   help="the coarse giamsh .msh file; its .json sidecar must "
-                        "be beside it")
+                   help="the coarse giamsh .msh file, or a P1 mesh in a "
+                        "CheckpointFile (.h5, refined already, for example "
+                        "giamip_8re_r4_linear.h5); its .json sidecar must be "
+                        "beside it unless --sidecar names it")
+    p.add_argument("--mesh_name", default=None,
+                   help="the name of the mesh in a .h5 mesh file")
+    p.add_argument("--sidecar", default=None,
+                   help="the .json sidecar of the mesh (default: the mesh "
+                        "file with the suffix .json)")
     p.add_argument("--mesh_md5", default=MESH_MD5,
                    help="the expected MD5 of the mesh file ('' to skip)")
     p.add_argument("--refine", type=int, default=0,
-                   help="uniform refinement levels (0 for L0)")
+                   help="uniform refinement levels (0 for L0; a .h5 mesh "
+                        "takes 0 only)")
     p.add_argument("--output_path", default="./")
+    p.add_argument("--ice_steps", type=int, default=None,
+                   help="write the ice of steps 0 .. this step only (short "
+                        "tests on a large mesh; the inversion then runs "
+                        "with --steps at most this value)")
     p.add_argument("--step_years", type=int, default=2000,
                    help="the uniform step of the march, years")
     p.add_argument("--core_density", choices=["mean", "cmb"], default="mean")
@@ -569,7 +585,7 @@ def main():
     md5 = COMM_WORLD.bcast(md5, root=0)
     if args.mesh_md5 and md5 != args.mesh_md5:
         raise RuntimeError(f"{args.mesh} has MD5 {md5}, not {args.mesh_md5}")
-    sidecar = os.path.splitext(args.mesh)[0] + ".json"
+    sidecar = args.sidecar or os.path.splitext(args.mesh)[0] + ".json"
     with open(sidecar) as handle:
         sidecar_record = json.load(handle)
     radial = RadialStructure.from_dict(sidecar_record["radial"])
@@ -577,10 +593,37 @@ def main():
         raise RuntimeError(f"mesh surface radius {radial.radius('surface')} "
                            f"against the earth model {scales.Re}")
     tic = time.time()
-    parent, mantle, counts = common.build_meshes(args.mesh, radial,
-                                                 args.refine)
+    if args.mesh.endswith(".h5"):
+        # A refined mesh in a CheckpointFile: loaded with the mantle-balanced
+        # partition and curved here, never refined again.
+        if args.refine:
+            raise RuntimeError("a .h5 mesh is refined already; --refine "
+                               "must be 0")
+        if not args.mesh_name:
+            raise RuntimeError("a .h5 mesh needs --mesh_name")
+        parent, mantle, counts = common.load_checkpoint_meshes(
+            args.mesh, args.mesh_name, radial)
+        # The sidecar of a refined mesh records its cells per layer. The
+        # loaded mesh and its mantle submesh must have the same counts; a
+        # label that marks points other than cells would change them.
+        final = sidecar_record.get("final", {})
+        if "cells_per_layer" in final:
+            expected = {
+                "cells_parent": int(final["cells"]),
+                "cells_mantle": int(sum(final["cells_per_layer"][name] for
+                                        name in radial.to_dict()["regions"]
+                                        ["mantle"]))}
+            found = {key: int(counts[key]) for key in expected}
+            if found != expected:
+                raise RuntimeError(f"cell counts {found} against the sidecar "
+                                   f"{expected}")
+    else:
+        parent, mantle, counts = common.build_meshes(args.mesh, radial,
+                                                     args.refine)
     timings["mesh_s"] = time.time() - tic
     mesh_record = {"file": os.path.abspath(args.mesh), "md5": md5,
+                   "mesh_name": args.mesh_name,
+                   "sidecar": os.path.abspath(sidecar),
                    "sidecar_inputs": sidecar_record.get("inputs"),
                    "refine_levels": args.refine,
                    "distribution_name": common.distribution_name(),
@@ -605,10 +648,14 @@ def main():
     years = np.asarray(forcing.years, dtype=float)
     year0 = int(np.flatnonzero(np.isclose(years, 0.0))[0])
     # The march of the inversion runs from the first year to year 0; the
-    # file holds the ice of steps 0 .. year0.
+    # file holds the ice of steps 0 .. year0, or of steps 0 .. --ice_steps
+    # for a short test (the full ice of the 8 Re mesh is about 200 GB).
     n_ice = year0 + 1
-    say(f"  march: {n_ice - 1} steps of {args.step_years} yr, years "
-        f"{years[0]:.0f} .. {years[year0]:.0f}")
+    if args.ice_steps is not None:
+        n_ice = min(n_ice, args.ice_steps + 1)
+    say(f"  march: {year0} steps of {args.step_years} yr, years "
+        f"{years[0]:.0f} .. {years[year0]:.0f}; ice of steps 0 .. "
+        f"{n_ice - 1} in the file")
 
     # The ice of every step, made once and kept: the writer and the volume
     # check use it. At L0 one CG1 field is small.

@@ -1,0 +1,210 @@
+#!/bin/bash
+# GIAMIP Exp08: the forward run from the bed of an inversion
+# (forward_exp08.py), on Gadi (NCI), queue normalsr (104 cores and 500 GB
+# per node), with checkpoints and a restart after the wall time. This is the
+# PBS version of run_forward_protocol.slurm and run_forward_fine.slurm.
+#
+# SCHEDULE selects the march (forward_exp08.py, THE TWO SCHEDULES and THE
+# FINE SCHEDULES):
+#   protocol (default)  every model year of the GIAMIP protocol: 500 yr
+#                       steps to year -26000, then 100 yr steps to +1000
+#                       (462 steps from 122 ka, 378 from 80 ka). The
+#                       inversions of the Maxwell experiments on r2 march
+#                       these years to year 0.
+#   windows             schedule C, the protocol steps plus 25 yr and 10 yr
+#                       steps in the fast melt windows (Exp09, Exp10,
+#                       Exp12). With a schedule-C state file the ice to year
+#                       0 comes from the file, as in the inversion.
+# The surface fields and the scalars are written at the protocol years in
+# both cases, so paraview_exp08.py reads the same series.
+#
+# The job must have the nodes and ranks of the prepare job that wrote the
+# input file of the inversion; the script stops with an error otherwise.
+# Nothing is taped, so the job uses no $PBS_JOBFS for a tape.
+#
+# Submit from the run directory of the forward run. For the r2 production
+# that directory is on gdata, so that the outputs need no copy:
+#
+#   F=/g/data/xd2/sg8812/gia-mip/exp08/r2/forward-protocol
+#   mkdir -p $F && cd $F
+#   qsub -l ncpus=624,mem=3000GB,jobfs=2400GB,walltime=48:00:00 \
+#       -v STATE=/scratch/xd2/$USER/giamip/exp08/8re_r2-6nodes/invert/state.h5 \
+#       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp08/run_forward.pbs
+#
+# Exp09, Exp10 and Exp12 add SCHEDULE=windows and use the directory
+# forward-windows; ../submit_r2.sh sets both for each experiment.
+#
+# THE RESTART. The run copies STATE into the run directory
+# (forward_state.h5), loads its meshes and fields from that copy and writes
+# its checkpoints into it. The copy has the size of the state file (the
+# input file with the ice of every step of the march plus the beds of the
+# ROL iterations). With WALL_LIMIT_HOURS (default: the wall time of the job
+# minus 1 h) the run writes a last checkpoint before that time, stops and
+# leaves the file RESTART_NEEDED. This job then exits with code 3, so that
+# jobs that wait for it with afterok (ParaView, images, archive) never run
+# on a part of the march. Submit the next leg in the same directory with
+# RESTART=1 and the same node count; it continues from the last checkpoint
+# and appends to the surface file and the parameter log. The job does not
+# submit the next leg itself: the watcher of the production does that
+# (decision R9), together with new ParaView, image and archive jobs
+# (submit_r2.sh ... forward with FORWARD_RESTART=1).
+#
+# Exit codes: 0 the march is finished (summary_forward.json says
+# "finished"); 3 the run stopped at the wall limit with a checkpoint
+# (RESTART_NEEDED); 4 the script exited with 0 without a finished summary;
+# any other code is the code of mpiexec.
+#
+# THE SURFACE FILE. On Setonix the surface file went on one stripe of the
+# flash pool, because the default layout of /scratch put some files on slow
+# disk OSTs (run_forward_protocol.slurm, NOTES of 2026-10-20). Gadi /g/data
+# has one stripe by default and no OST pools, so this script keeps the
+# default layout and only prints it.
+#
+# Variables (pass them with -v NAME=value,...):
+#   STATE             the state.h5 of the inversion (required on the first
+#                     leg; a restart reads forward_state.h5)
+#   SCHEDULE          protocol (default) or windows (see above)
+#   REBUILD_EVERY     solves between preconditioner rebuilds (default 100,
+#                     the setting of the r2 inversions; the rule also
+#                     rebuilds at every change of dt)
+#   WALL_LIMIT_HOURS  stop with a checkpoint before this wall time (default:
+#                     the wall time of the job minus 1 h)
+#   CHECKPOINT_EVERY  steps between periodic checkpoints (default 100: a
+#                     checkpoint at the first protocol year at or after
+#                     every 100 steps, and at year 0). A run that stops for
+#                     another reason than the wall limit (a node fault)
+#                     then continues with RESTART=1 from at most 100 steps
+#                     back. Each checkpoint appends the displacement, the
+#                     internal variables and the potential to
+#                     forward_state.h5: an estimated 0.7 GB per set of
+#                     internal variables on r2 (24 values per mantle cell,
+#                     3.49 M cells; Exp09 and Exp12 carry one set per EB
+#                     element) and about 0.2 GB for the rest.
+#   RESTART           1 to continue from the last checkpoint
+#   NP                the MPI ranks (default: all cores of the job)
+#   EXTRA             further arguments of forward_exp08.py
+#   ENV_FILE          the environment file (default ENV_DEFAULT below)
+#   GDRIFT_DATA_DIR   the g-drift data cache (Exp08, Exp11, Exp12 only:
+#                     forward_expXX.py imports prepare_expXX.py)
+#
+#PBS -N exp08-fwd
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=500GB
+#PBS -l jobfs=400GB
+#PBS -l walltime=48:00:00
+#PBS -l storage=scratch/xd2+gdata/xd2+gdata/fp50
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+# No core files from the processes of the first node (a stopped job of many
+# ranks can fill the quota with them).
+ulimit -c 0
+PERSIST=/g/data/xd2/sg8812/giamip-software
+# The environment of the inversion, so both jobs run the same code: the same
+# default as in run_invert.pbs (ENV_DEFAULT there explains the files). The
+# forward run also imports giamip (the ice of every protocol year), as the
+# prepare job does in the same environment.
+ENV_DEFAULT=${PERSIST}/env-giamip-pr4638-pr5544-pyop2fixes.sh
+ENV_FILE=${ENV_FILE:-${ENV_DEFAULT}}
+source ${ENV_FILE}
+# The g-drift data cache (see run_prepare.pbs): the forward run imports the
+# prepare script of its experiment for the ice transfer.
+export GDRIFT_DATA_DIR=${GDRIFT_DATA_DIR:-${PERSIST}/gdrift-data}
+
+HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp08
+OUT=${OUT:-${PBS_O_WORKDIR}}
+SCHEDULE=${SCHEDULE:-protocol}
+REBUILD_EVERY=${REBUILD_EVERY:-100}
+RESTART=${RESTART:-0}
+case ${SCHEDULE} in
+    protocol|windows) ;;
+    *) echo "error: SCHEDULE=${SCHEDULE}; use protocol or windows" >&2; exit 1 ;;
+esac
+
+# The wall time of this job from the PBS server (Resource_List.walltime,
+# HH:MM:SS). The default wall limit of the run is this time minus 1 h: the
+# run needs that margin for its last checkpoint (the save of the
+# checkpoint and three of the slowest recent steps, forward_exp08.py).
+if [ -z "${WALL_LIMIT_HOURS:-}" ]; then
+    LIMIT=$(qstat -f ${PBS_JOBID} 2>/dev/null | awk '/Resource_List.walltime/ {print $3}')
+    if [ -z "${LIMIT}" ]; then
+        # Without the wall time a default could be longer than the job, and
+        # PBS would stop the run without a checkpoint.
+        echo "error: qstat gave no wall time for ${PBS_JOBID}; set WALL_LIMIT_HOURS" >&2
+        exit 1
+    fi
+    WALL_LIMIT_HOURS=$(echo "${LIMIT}" | awk -F: '{printf "%.2f", $1 + $2 / 60 + $3 / 3600 - 1}')
+    echo "job wall time ${LIMIT}, wall limit of the run ${WALL_LIMIT_HOURS} h"
+fi
+# A wall limit of 0 or less would stop the run after its first step.
+if [ "$(awk -v w=${WALL_LIMIT_HOURS} 'BEGIN {print (w > 0) ? 1 : 0}')" != "1" ]; then
+    echo "error: the wall limit ${WALL_LIMIT_HOURS} h is not positive" >&2
+    exit 1
+fi
+
+ARGS="--output_path ${OUT} --schedule ${SCHEDULE}"
+ARGS="${ARGS} --gia_rebuild_every ${REBUILD_EVERY}"
+ARGS="${ARGS} --wall_limit_hours ${WALL_LIMIT_HOURS}"
+ARGS="${ARGS} --checkpoint_every ${CHECKPOINT_EVERY:-100}"
+mkdir -p ${OUT}
+if [ "${RESTART}" = "1" ]; then
+    # The state argument is required by the script; a restart reads the
+    # run's own copy (forward_state.h5) and ignores it for the meshes.
+    if [ ! -e "${OUT}/forward_state.h5" ]; then
+        echo "error: RESTART=1, but ${OUT}/forward_state.h5 does not exist" >&2
+        exit 1
+    fi
+    ARGS="${ARGS} --state ${STATE:-${OUT}/forward_state.h5} --restart"
+else
+    STATE=${STATE:?set STATE to the state.h5 of the inversion}
+    # A new run in a directory of an earlier run would append to nothing
+    # and overwrite its surface file; stop instead.
+    if [ -e "${OUT}/forward_exp08_surface.h5" ]; then
+        echo "error: ${OUT} holds the surface file of an earlier run; use RESTART=1 or a new directory" >&2
+        exit 1
+    fi
+    rm -f ${OUT}/RESTART_NEEDED
+    ARGS="${ARGS} --state ${STATE}"
+fi
+ARGS="${ARGS} ${EXTRA:-}"
+
+NP=${NP:-${PBS_NCPUS}}
+NODES=$(( PBS_NCPUS / 104 ))
+# The same number of ranks on every node; one rank per core by default.
+MAP=""
+if [ "${NP}" -lt "${PBS_NCPUS}" ]; then
+    MAP="--map-by ppr:$(( (NP + NODES - 1) / NODES )):node"
+fi
+echo "job ${PBS_JOBID} on ${NODES} nodes, ${NP} ranks"
+echo "worktree ${MY_GADOPT} at $(cd ${MY_GADOPT} && git rev-parse --short HEAD 2>/dev/null)"
+echo "firedrake overlay ${FIREDRAKE_PR4638_OVERLAY}: $(head -1 ${FIREDRAKE_PR4638_OVERLAY}/../BRANCH_COMMIT)"
+echo "environment ${ENV_FILE}"
+echo "pyop2 copy ${PYOP2_FIXES_OVERLAY:-${PYOP2_MIXED_DATASET_FIX}}"
+echo "Lustre layout of new files in ${OUT}: $(lfs getstripe -d -c ${OUT} 2>/dev/null) stripe(s)"
+echo "arguments: ${ARGS}"
+date
+
+mpiexec -np ${NP} ${MAP} python3 ${HERE}/forward_exp08.py ${ARGS}
+status=$?
+date
+echo "exit code of mpiexec ${status}"
+
+# The gate for the jobs after this one (afterok): exit 0 only for a
+# finished march. The summary of a finished run says "state": "finished";
+# a stop at the wall limit writes "checkpointed" and RESTART_NEEDED.
+if [ ${status} -eq 0 ]; then
+    if [ -e ${OUT}/RESTART_NEEDED ]; then
+        echo "RESTART_NEEDED: $(cat ${OUT}/RESTART_NEEDED); submit the next leg with RESTART=1 in ${OUT}"
+        exit 3
+    fi
+    if ! grep -q '"state": "finished"' ${OUT}/summary_forward.json 2>/dev/null; then
+        echo "error: the run exited with 0, but ${OUT}/summary_forward.json does not say finished" >&2
+        exit 4
+    fi
+    echo "the march is finished"
+fi
+exit ${status}

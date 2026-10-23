@@ -1,0 +1,146 @@
+#!/bin/bash
+# GIAMIP Exp04: move the inverted bed of one mesh onto the input file of
+# another mesh (transfer_bed_exp04.py), on Gadi (NCI), queue normalsr (104
+# cores and 500 GB per node). This is the PBS version of run_transfer.slurm.
+#
+# The job must have the nodes and ranks of the prepare job that wrote the
+# target file; the script stops with an error otherwise. The target file is
+# changed in place: the bed is appended as entry 0 of
+# bed_start_parent_cg2_m. An inversion then starts from it with
+# RESTART=<target> (run_invert.pbs, MODE=invert).
+#
+# The source can be on another mesh and another rank count. For the r2
+# production the source is the final L0 bed of the same experiment (mesh
+# n2_giamip_all_o1, written on 384 ranks on Setonix) and the target is the
+# r2 input file (mesh giamip_8re_r2, 624 ranks or more). The script loads
+# the source mesh with Firedrake's default partition on the rank count of
+# this job, reads the facets of Re of the source, and evaluates the source
+# bed at the target nodes on Re along the ray through each node
+# (transfer_bed_exp04.py, THE EVALUATION). The two coarse meshes differ, so
+# the log has a WARNING line for the different MD5; that line is expected.
+#
+# Before the append, the job copies the target to <target>.bak in the same
+# directory and removes the copy only after the script exits with 0 (which
+# includes its reload check of the appended entry). If the job fails, the
+# .bak file is the clean prepare output: move it back over the target before
+# a new transfer. The job stops if a .bak file already exists, so a clean
+# copy is never overwritten by a copy of a broken target.
+#
+# Submit from the transfer run directory (its log and record go to OUT, by
+# default that directory). The resources in the #PBS lines are for one
+# node. For n nodes, give ncpus = 104 n, mem = 500 n GB and jobfs = 400 n GB
+# on the qsub line, for example on 6 nodes for the r2 input file of Exp04:
+#
+#   R=/scratch/xd2/$USER/giamip/exp04/8re_r2-6nodes
+#   mkdir -p $R/transfer && cd $R/transfer
+#   qsub -l ncpus=624,mem=3000GB,jobfs=2400GB \
+#       -v TARGET=$R/prepare/inputs_exp04.h5,SOURCE=/g/data/xd2/sg8812/gia-mip/exp04/L0/invert-protocol/state.h5 \
+#       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp04/run_transfer.pbs
+#
+# The final L0 bed of Exp09, Exp10 and Exp12 (schedule C) is in
+# .../L0/invert-c/state.h5 instead of .../L0/invert-protocol/state.h5.
+# ../submit_r2.sh chooses the source of each experiment.
+#
+# Read the record <target stem>_transfer_bed.json (or the log) after the
+# job: the coverage (target_nodes_on_re against
+# target_nodes_on_re_indicator), the RMS of the bed change
+# (rms.written_minus_target_observed_m) against the RMS change of the
+# source inversion, and the largest distance of a target node from the
+# source surface (largest_gap_to_source_surface_over_Re).
+#
+# Variables (pass them with -v NAME=value,...):
+#   TARGET  the input file of prepare_exp04.py on the target mesh (required)
+#   SOURCE  the state.h5 of the source inversion (required)
+#   START   change (default) or bed: write the target observed bed plus
+#           the change of the source inversion, or the source bed. A change
+#           of mesh uses change: the observed bed of a finer mesh resolves
+#           topography that the source mesh does not, and change starts the
+#           finer inversion from its own observed bed plus the correction
+#           that the source inversion found
+#   OUT     the directory of the log and the JSON record (default: the
+#           submit directory)
+#   NP      the MPI ranks (default: all cores of the job, PBS_NCPUS)
+#   EXTRA   further arguments of transfer_bed_exp04.py (for example
+#           --target_sha256 yes)
+#   ENV_FILE the environment file (default ENV_DEFAULT below)
+#
+#PBS -N exp04-xfer
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=500GB
+#PBS -l jobfs=400GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=scratch/xd2+gdata/xd2+gdata/fp50
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+# No core files from the processes of the first node (a stopped job of many
+# ranks can fill the scratch quota with them).
+ulimit -c 0
+PERSIST=/g/data/xd2/sg8812/giamip-software
+# The environment of the inversion, so both jobs run the same code: the same
+# default as in run_invert.pbs (ENV_DEFAULT there explains the files).
+ENV_DEFAULT=${PERSIST}/env-giamip-pr4638-pr5544-pyop2fixes.sh
+ENV_FILE=${ENV_FILE:-${ENV_DEFAULT}}
+source ${ENV_FILE}
+
+HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp04
+TARGET=${TARGET:?set TARGET to the input file of the target mesh}
+SOURCE=${SOURCE:?set SOURCE to the state.h5 of the source inversion}
+OUT=${OUT:-${PBS_O_WORKDIR}}
+
+ARGS="--target ${TARGET} --source ${SOURCE} --start ${START:-change}"
+ARGS="${ARGS} --output_path ${OUT} ${EXTRA:-}"
+
+NP=${NP:-${PBS_NCPUS}}
+NODES=$(( PBS_NCPUS / 104 ))
+# The same number of ranks on every node; one rank per core by default.
+MAP=""
+if [ "${NP}" -lt "${PBS_NCPUS}" ]; then
+    MAP="--map-by ppr:$(( (NP + NODES - 1) / NODES )):node"
+fi
+echo "job ${PBS_JOBID} on ${NODES} nodes, ${NP} ranks"
+echo "worktree ${MY_GADOPT} at $(cd ${MY_GADOPT} && git rev-parse --short HEAD 2>/dev/null)"
+echo "environment ${ENV_FILE}"
+echo "arguments: ${ARGS}"
+date
+
+# The backup of the target. HDF5 has no journal, so a job that stops
+# during the append (time limit, out of memory, a file system error) can
+# leave a target that no longer loads. The copy is in the directory of the
+# target and costs the size of the target for the time of the job (about
+# 50-100 GB for an r2 input file with the ice of the whole march, a few
+# minutes for cp on /scratch).
+BACKUP=${TARGET}.bak
+if [ -e "${BACKUP}" ]; then
+    echo "error: ${BACKUP} exists; it can be the clean copy of a failed" \
+        "transfer. Move it back over the target or remove it first." >&2
+    exit 1
+fi
+echo "copying the target to ${BACKUP}"
+date
+if ! cp -p "${TARGET}" "${BACKUP}"; then
+    echo "error: the copy of the target failed; the target is unchanged" >&2
+    rm -f "${BACKUP}"
+    exit 1
+fi
+date
+
+mpiexec -np ${NP} ${MAP} python3 ${HERE}/transfer_bed_exp04.py ${ARGS}
+status=$?
+
+# The script exits with 0 only after its reload check of the appended
+# entry, so only then is the backup no longer needed. On any other exit the
+# backup stays as the clean target.
+if [ ${status} -eq 0 ]; then
+    rm -f "${BACKUP}"
+    echo "transfer done; removed ${BACKUP}"
+else
+    echo "transfer failed; the clean target is ${BACKUP}" >&2
+fi
+date
+echo "exit code ${status}"
+exit ${status}

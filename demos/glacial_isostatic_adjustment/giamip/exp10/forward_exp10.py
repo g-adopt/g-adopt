@@ -740,8 +740,8 @@ class SurfaceOutput:
             # and the nodal CG2 field (a check of the surface field).
             "S_check": (sea_surface - (self.N_m + self.shift_const)) ** 2 * dss,
             # The misfit of `invert_exp10.BedInversion.misfit`.
-            "misfit": Constant(0.5 * D_SCALE ** 2)
-                      * (SL - self.SL_obs) ** 2 * dss,
+            "misfit": (Constant(0.5 * D_SCALE ** 2)
+                       * (SL - self.SL_obs) ** 2 * dss),
         }
         self.area = float(assemble(self.forms["area"]))
 
@@ -973,7 +973,7 @@ LAST_YEAR = 1000
 #: start inside a window are 10 yr long; the other steps after 26 ka are
 #: 25 yr long.
 FINE_B_WINDOWS = {
-    # ICE-6G_D (Exp10, Exp12): MWP-1A, 15 to 13 ka.
+    # ICE-6G_D (Exp01, Exp12): MWP-1A, 15 to 13 ka.
     "iceHistory-ICE-6G_D.nc": ((-15000, -13000),),
     # GLAC3c profile 1 (Exp03, Exp09): 15 to 14 ka and 12 to 11 ka.
     "iceHistory-GLAC3c_profile1.nc": ((-15000, -14000), (-12000, -11000)),
@@ -987,7 +987,7 @@ FINE_B_WINDOWS = {
 FINE_REBUILD_EVERY = 100
 #: The rebuild guard of the fine schedules when `--gia_rebuild_max_outer` is
 #: not given: rebuild when the previous solve took more than this many outer
-#: iterations per Newton iteration. The Maxwell protocol runs of Exp10,
+#: iterations per Newton iteration. The Maxwell protocol runs of Exp01,
 #: Exp03, Exp04 and Exp11 (rebuild every 20 solves, 462 steps each) had a
 #: median of 2, a 90th percentile of 4 and a largest value of 5, so 6 means
 #: "worse than any step of those runs".

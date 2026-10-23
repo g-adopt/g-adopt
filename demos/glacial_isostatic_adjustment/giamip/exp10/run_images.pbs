@@ -1,0 +1,123 @@
+#!/bin/bash
+# GIAMIP Exp10: the 4K images of a forward run (render_views.py of the
+# GIAMIP viz directory on Gadi, ParaView 6.1.1 with OSPRay), one half of the
+# steps per job, on Gadi queue normal, project vo05. This is the job of
+# /g/data/xd2/sg8812/gia-mip/viz/render_exp.pbs, made for any run
+# directory.
+#
+# The job writes the views file of the run, VIEWS (default
+# views_exp10_r2.json in the run directory), from a template views file
+# (TEMPLATE) with two changes: "input" is the ParaView series of the run
+# and "output_dir" is frames/ in the run directory. Everything else comes
+# from the template: the views, the 3840 x 2880 size, the samples per pixel
+# and the fixed colour ranges, which are the same for all GIAMIP runs (the
+# min and max over the nine L0 protocol runs, field_ranges.py). The default
+# template is views_exp01_L1.json: subdivision 2 of each P2 triangle (the
+# finer mesh of L1 needed one level less than L0 for the same subdivided
+# edge length). SUBDIVISION sets another level. The r2 surface has finer
+# cells near the coasts and coarser cells far from them, so compare one
+# image of each view with the L0 image of the same year before both halves
+# of all runs are made.
+#
+# The steps are split into 16 chunks (render_views.py --chunk/--nchunks);
+# this job runs chunks 8*HALF .. 8*HALF+7 as 8 pvbatch processes with 6
+# OSPRay threads each (8 x 6 = 48 cores, the fastest of 1x48, 4x12, 8x6 in
+# the test job 181725392). render_views.py skips images that exist, so a
+# job that stopped renders only the missing images when it runs again.
+#
+# Submit from the run directory of the forward run, one job per half, after
+# the ParaView job:
+#
+#   cd /g/data/xd2/sg8812/gia-mip/exp10/r2/forward-protocol
+#   qsub -W depend=afterok:<paraview job> -v HALF=0 $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp10/run_images.pbs
+#   qsub -W depend=afterok:<paraview job> -v HALF=1 $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp10/run_images.pbs
+#
+# Time: an L1 chunk (926 images in 16 chunks) took 1 h 52 min. The wall
+# time of 5 h leaves room for the larger r2 surface; a job that stops at the
+# wall time continues with the same qsub line.
+#
+# Variables (pass them with -v NAME=value,...):
+#   HALF         0 or 1, the half of the chunks (required)
+#   RUN          the run directory (default: the submit directory)
+#   VIZ          the viz directory (default /g/data/xd2/sg8812/gia-mip/viz)
+#   TEMPLATE     the template views file (default $VIZ/views_exp01_L1.json)
+#   VIEWS        the views file of this run (default
+#                $RUN/views_exp10_r2.json)
+#   SUBDIVISION  the subdivision level of the P2 triangles (default: the
+#                value of the template)
+#
+#PBS -N exp10-img
+#PBS -P vo05
+#PBS -q normal
+#PBS -l ncpus=48
+#PBS -l mem=190GB
+#PBS -l jobfs=10GB
+#PBS -l walltime=05:00:00
+#PBS -l storage=gdata/xd2+scratch/xd2
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+module load paraview/6.1.1
+HALF=${HALF:?set HALF=0 or HALF=1}
+case ${HALF} in
+    0|1) ;;
+    *) echo "error: HALF=${HALF}; use 0 or 1" >&2; exit 1 ;;
+esac
+RUN=${RUN:-${PBS_O_WORKDIR}}
+VIZ=${VIZ:-/g/data/xd2/sg8812/gia-mip/viz}
+TEMPLATE=${TEMPLATE:-${VIZ}/views_exp01_L1.json}
+VIEWS=${VIEWS:-${RUN}/views_exp10_r2.json}
+PVD=${RUN}/paraview/forward_exp10_fields.pvd
+if [ ! -e "${PVD}" ]; then
+    echo "error: ${PVD} does not exist; run the ParaView job first" >&2
+    exit 1
+fi
+
+# The views file of this run. Both halves write the same content; each
+# writes a file of its own and renames it over VIEWS, so that the other half
+# never reads a half-written file. The system Python of Gadi is enough for
+# the JSON edit (-I: no user site and no PYTHON variables of the job).
+TMP_VIEWS=${VIEWS}.tmp.${PBS_JOBID%%.*}
+/usr/bin/python3 -I - "${TEMPLATE}" "${TMP_VIEWS}" "${PVD}" "${RUN}/frames" "${SUBDIVISION:-}" <<'EOF'
+import json
+import sys
+
+template, out, pvd, frames, subdivision = sys.argv[1:6]
+with open(template) as handle:
+    views = json.load(handle)
+views["input"] = pvd
+views["output_dir"] = frames
+views["_comment_run"] = ("Written by run_images.pbs from " + template
+                         + ": input and output_dir of this run"
+                         + (", subdivision " + subdivision if subdivision
+                            else "") + "; every other key from the template.")
+if subdivision:
+    views.setdefault("geometry", {})["subdivision"] = int(subdivision)
+with open(out, "w") as handle:
+    json.dump(views, handle, indent=2)
+    handle.write("\n")
+EOF
+mv -f "${TMP_VIEWS}" "${VIEWS}" || exit 1
+echo "views file ${VIEWS} (template ${TEMPLATE}, subdivision ${SUBDIVISION:-of the template})"
+
+LOG=${RUN}/frames-logs/half${HALF}_${PBS_JOBID%%.*}
+mkdir -p ${LOG}
+# pvbatch on a compute node has no X server; VTK falls back to an
+# off-screen context, which OSPRay does not need anyway.
+unset DISPLAY
+date
+pids=()
+for k in 0 1 2 3 4 5 6 7; do
+    c=$(( 8 * HALF + k ))
+    OSPRAY_NUM_THREADS=6 /usr/bin/time -v pvbatch ${VIZ}/render_views.py \
+        --config ${VIEWS} --chunk ${c} --nchunks 16 > ${LOG}/chunk${c}.out 2> ${LOG}/chunk${c}.err &
+    pids+=($!)
+done
+status=0
+for p in "${pids[@]}"; do wait ${p} || status=1; done
+date
+echo "images: $(find ${RUN}/frames -name '*.png' ! -name '*.tmp*' 2>/dev/null | wc -l) PNG files in ${RUN}/frames"
+echo "exit status ${status}"
+exit ${status}

@@ -1,0 +1,346 @@
+#!/bin/bash
+# GIAMIP Exp05: the bed at the start of the run by adjoint (invert_exp05.py),
+# on Gadi (NCI), queue normalsr (104 cores, 500 GB memory and 400 GB local
+# disk per node).
+#
+# The job must have the nodes and ranks of the prepare job that wrote the
+# input file; the script stops with an error otherwise. The tape checkpoints
+# go to $PBS_JOBFS, the local disk of each node, one directory per node, and
+# nowhere else (decision R11 of the r2 production): the script has no
+# variable for another tape directory, it stops if EXTRA names one, and
+# invert_exp05.py stops in a PBS job if --checkpoint_dir is outside
+# $PBS_JOBFS.
+#
+# Submit from the run directory. The resources in the #PBS lines are for one
+# node. For n nodes, give ncpus = 104 n, mem = 500 n GB and jobfs = 400 n GB
+# on the qsub line, for example a 2-step Taylor test on 10 nodes:
+#
+#   mkdir -p /scratch/xd2/$USER/giamip/exp05/8re-10nodes/taylor-2steps
+#   cd /scratch/xd2/$USER/giamip/exp05/8re-10nodes/taylor-2steps
+#   qsub -l ncpus=1040,mem=5000GB,jobfs=4000GB \
+#       -v INPUTS=../prepare/inputs_exp05.h5,MODE=taylor,STEPS=2,EXTRA="--log_memory" \
+#       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp05/run_invert.pbs
+#
+# A run that stopped at the time limit continues with RESTART=state.h5 (in
+# the same run directory).
+#
+# Variables (pass them with -v NAME=value,...):
+#   INPUTS          the input file of the prepare job (required)
+#   MODE            taylor or invert (required)
+#   STEPS           stop the march after this many steps (empty: to year 0)
+#   ITERATIONS      ROL iterations (default 10)
+#   RESTART         a state.h5 to continue from (empty: cold start)
+#   NP              the MPI ranks (default: all cores of the job, PBS_NCPUS)
+#   EXTRA           further arguments of invert_exp05.py (for example
+#                   "--log_memory --diagnostics")
+#   MEMORY_SAMPLER  the interval in seconds of the node memory sampler (empty:
+#                   no sampler). With a value, one node_memory_sampler.sh per
+#                   node appends the node memory to
+#                   node_memory_<host>.txt in the run directory at this
+#                   interval (20 is a good value), also up to an out-of-memory
+#                   kill of the ranks. The samplers stop when mpiexec ends.
+#   JOBFS_SAMPLER   the interval in seconds of the jobfs sampler (default
+#                   60; 0: no sampler). One node_jobfs_sampler.sh per node
+#                   appends the size of $PBS_JOBFS (the tape of that node)
+#                   to node_jobfs_<host>.txt in the run directory. At the
+#                   end the job prints the largest size of each node and,
+#                   with STEPS, the size per taped step and its projection
+#                   to the full march (R11). $PBS_JOBFS is removed with the
+#                   job, so these files are the only record of the tape
+#                   size per node; the PBS footer gives one number for the
+#                   whole job.
+#   ENV_FILE        the environment file (default ENV_DEFAULT below)
+#   WATCHDOG_MIN    stop a job that makes no progress (empty: no watchdog).
+#                   With a value, the job stops when neither
+#                   invert_exp05.log nor the copy of the job output
+#                   (stdout_<job id>.txt, both in the run directory) has
+#                   changed for this many minutes. Before the stop, every
+#                   rank writes its Python stacks (SIGUSR1). The job adds
+#                   --log_blocks (a log line per replay and adjoint step)
+#                   unless EXTRA has it or --diagnostics. 30 is a good
+#                   value: the longest silent part of a healthy run is then
+#                   the first step with its preconditioner build, about
+#                   10 min on giamip_8re_r2 and 11 min on giamip_8re_r3.
+#
+#PBS -N exp05-inv
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=500GB
+#PBS -l jobfs=400GB
+#PBS -l walltime=10:00:00
+#PBS -l storage=scratch/xd2+gdata/xd2+gdata/fp50
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+# No core files from the processes of the first node. A job of 1040 ranks
+# that was stopped with SIGABRT wrote 345 GB of core files into its run
+# directory. The ranks of the other nodes do not inherit this limit (the MPI
+# daemons start them), so invert_exp05.py sets the same limit on every rank.
+ulimit -c 0
+PERSIST=/g/data/xd2/sg8812/giamip-software
+# The environment files:
+# - env-giamip-pr4638-pr5544-pyop2fix.sh: Firedrake 2026.10.0 with the PR
+#   4638 overlay (cached replay solvers and the appctx fix) and PR 5544 (the
+#   adjoint solution of each block is freed after the adjoint of its step),
+#   and the PyOP2 copy with the MixedDataSet cache-key fix (without it the
+#   memory grows at every replay and adjoint step). The runs of the mesh
+#   sweep up to step C used it.
+# - env-giamip-pr4638-pr5544-pyop2fixes.sh (the default): the same, with
+#   the make_so fix of the PyOP2 compile race in the PyOP2 copy, HCOLL off
+#   and PYTHONFAULTHANDLER=1 (the comments in the file give the reasons).
+#   The one-node race test passes with it and hangs with the old file, and
+#   the 3-step invert tests of giamip_8re_r2 on 5 and 6 nodes give the J of
+#   the old file (jobs 182140614/5, 182141032, 182141059/60).
+# ENV_FILE selects one of them, or another file, for example one whose
+# MY_GADOPT is another clone of the branch.
+ENV_DEFAULT=${PERSIST}/env-giamip-pr4638-pr5544-pyop2fixes.sh
+ENV_FILE=${ENV_FILE:-${ENV_DEFAULT}}
+source ${ENV_FILE}
+
+HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp05
+OUT=${OUT:-${PBS_O_WORKDIR}}
+INPUTS=${INPUTS:?set INPUTS to the input file of the prepare job}
+MODE=${MODE:?set MODE=taylor or MODE=invert}
+# The tape directory is always the local disk of each node (R11). A
+# CHECKPOINT_DIR from the environment of an older submit line, or a
+# --checkpoint_dir in EXTRA, would move the tape; both stop the job before
+# any work.
+if [ -n "${CHECKPOINT_DIR:-}" ] && [ "${CHECKPOINT_DIR}" != "${PBS_JOBFS}" ]; then
+    echo "error: CHECKPOINT_DIR=${CHECKPOINT_DIR} is set; the tape goes to \$PBS_JOBFS only (R11)" >&2
+    exit 1
+fi
+case " ${EXTRA:-} " in
+    *" --checkpoint_dir"*)
+        echo "error: EXTRA names --checkpoint_dir; the tape goes to \$PBS_JOBFS only (R11)" >&2
+        exit 1 ;;
+esac
+CHECKPOINT_DIR=${PBS_JOBFS}
+
+ARGS="--inputs ${INPUTS} --output_path ${OUT} --mode ${MODE}"
+ARGS="${ARGS} --iterations ${ITERATIONS:-10}"
+ARGS="${ARGS} --checkpoint_dir ${CHECKPOINT_DIR}"
+if [ -n "${STEPS:-}" ]; then
+    ARGS="${ARGS} --steps ${STEPS}"
+fi
+if [ -n "${RESTART:-}" ]; then
+    ARGS="${ARGS} --restart_state ${RESTART}"
+fi
+ARGS="${ARGS} ${EXTRA:-}"
+# The watchdog needs a log line at least every few minutes. Without
+# --log_blocks or --diagnostics the driver writes nothing during a replay
+# sweep or an adjoint sweep: in the 3-step tests on giamip_8re_r2 that was
+# 634 s of silence, and at the 452 protocol steps it is 7 to 10 h per sweep,
+# so the watchdog would stop a healthy job. With the watchdog on, the job
+# therefore adds --log_blocks: one log line (time and memory, four small
+# reductions) per replay step and per adjoint step, which costs nothing
+# against a step of about a minute and changes no number of the run.
+if [ -n "${WATCHDOG_MIN:-}" ]; then
+    case " ${ARGS} " in
+        *" --log_blocks "*|*" --diagnostics "*) ;;
+        *) ARGS="${ARGS} --log_blocks" ;;
+    esac
+fi
+
+# Fewer ranks than cores (NP) reproduce a run of another machine, for
+# example the 384 ranks of the Setonix L0 runs on 4 nodes of 104 cores.
+NP=${NP:-${PBS_NCPUS}}
+NODES=$(( PBS_NCPUS / 104 ))
+# The same number of ranks on every node; one rank per core by default.
+MAP=""
+if [ "${NP}" -lt "${PBS_NCPUS}" ]; then
+    MAP="--map-by ppr:$(( (NP + NODES - 1) / NODES )):node"
+fi
+echo "job ${PBS_JOBID} on ${NODES} nodes, ${NP} ranks"
+echo "worktree ${MY_GADOPT} at $(cd ${MY_GADOPT} && git rev-parse --short HEAD 2>/dev/null)"
+echo "firedrake overlay ${FIREDRAKE_PR4638_OVERLAY}: $(head -1 ${FIREDRAKE_PR4638_OVERLAY}/../BRANCH_COMMIT)"
+echo "environment ${ENV_FILE}"
+echo "pyop2 copy ${PYOP2_FIXES_OVERLAY:-${PYOP2_MIXED_DATASET_FIX}}"
+echo "arguments: ${ARGS}"
+date
+
+# The first task of each node in $PBS_NODEFILE (one line per core, the lines
+# of a node together): the samplers and the watchdog start one process per
+# node on it with pbsdsh.
+NODE_HOSTS=()
+NODE_TASKS=()
+index=0
+while read -r host; do
+    case " ${NODE_HOSTS[*]:-} " in
+        *" ${host} "*) ;;
+        *) NODE_HOSTS+=("${host}"); NODE_TASKS+=("${index}") ;;
+    esac
+    index=$(( index + 1 ))
+done < ${PBS_NODEFILE}
+
+# What the ranks of each node see: one process per node prints the HCOLL
+# switch, the faulthandler variable and its core limit. This shows whether
+# the variables of the environment file reach the other nodes. It takes a
+# few seconds and stops nothing if it fails.
+mpiexec -np ${NODES} --map-by ppr:1:node /bin/bash -c \
+    'echo "env check $(hostname -s): OMPI_MCA_coll_hcoll_enable=${OMPI_MCA_coll_hcoll_enable:-unset} PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-unset} core limit of the launcher $(ulimit -c)"' \
+    || echo "env check failed (exit $?); the run continues"
+
+# The node samplers: one per node and kind, started with pbsdsh on the
+# first task of each node in $PBS_NODEFILE (one line per core, the lines of
+# a node together). They run outside MPI, so an out-of-memory kill of a rank
+# does not stop them; the stop file ends them after mpiexec.
+SAMPLERS=""
+STOP_SAMPLER=${OUT}/.node_sampler_stop_${PBS_JOBID}
+rm -f ${STOP_SAMPLER}
+# The longest interval of the running samplers: the wait at the end must
+# let each of them see the stop file once.
+SAMPLER_WAIT=0
+if [ -n "${MEMORY_SAMPLER:-}" ]; then
+    SAMPLER_WAIT=${MEMORY_SAMPLER}
+    for i in "${!NODE_HOSTS[@]}"; do
+        # stdin from /dev/null: a background task must not read the stdin
+        # of the job script.
+        pbsdsh -n ${NODE_TASKS[$i]} -- /bin/bash ${HERE}/node_memory_sampler.sh \
+            ${OUT} ${MEMORY_SAMPLER} ${STOP_SAMPLER} < /dev/null &
+        SAMPLERS="${SAMPLERS} $!"
+        echo "node memory sampler on ${NODE_HOSTS[$i]} (task ${NODE_TASKS[$i]}), every ${MEMORY_SAMPLER} s"
+    done
+fi
+# The jobfs samplers (R11): the size of the tape of each node, on by
+# default. One du of a few large files per minute costs nothing against
+# the run.
+JOBFS_SAMPLER=${JOBFS_SAMPLER:-60}
+if [ "${JOBFS_SAMPLER}" != "0" ]; then
+    [ "${JOBFS_SAMPLER}" -gt "${SAMPLER_WAIT}" ] && SAMPLER_WAIT=${JOBFS_SAMPLER}
+    for i in "${!NODE_HOSTS[@]}"; do
+        pbsdsh -n ${NODE_TASKS[$i]} -- /bin/bash ${HERE}/node_jobfs_sampler.sh \
+            ${OUT} ${JOBFS_SAMPLER} ${STOP_SAMPLER} ${PBS_JOBFS} < /dev/null &
+        SAMPLERS="${SAMPLERS} $!"
+        echo "node jobfs sampler on ${NODE_HOSTS[$i]} (task ${NODE_TASKS[$i]}), every ${JOBFS_SAMPLER} s"
+    done
+fi
+
+# The output of mpiexec goes to the job output, as before, and to a copy in
+# the run directory. PBS on Gadi writes the job output file only at the end
+# of the job, so the watchdog reads the copy to see that the run is alive.
+STDOUT_COPY=${OUT}/stdout_${PBS_JOBID}.txt
+RUN_LOG=${OUT}/invert_exp05.log
+START=$(date +%s)
+mpiexec -np ${NP} ${MAP} python3 ${HERE}/invert_exp05.py ${ARGS} \
+    > >(tee -a ${STDOUT_COPY}) 2>&1 &
+MPIEXEC_PID=$!
+
+# Send one signal to every rank on every node (signal_ranks.sh, one copy
+# per node), and wait until the copies are done. Each copy appends one line
+# per signalled rank to the file of the second argument.
+signal_all_ranks() {
+    local sig=$1 record=$2 i pids=""
+    for i in "${!NODE_HOSTS[@]}"; do
+        pbsdsh -n ${NODE_TASKS[$i]} -- /bin/bash ${HERE}/signal_ranks.sh ${sig} ${record} < /dev/null &
+        pids="${pids} $!"
+    done
+    wait ${pids} 2>/dev/null || true
+}
+
+# The watchdog. A healthy run writes a log line at least once per solve, so
+# a run whose log and output have not changed for WATCHDOG_MIN minutes is
+# taken to be hung: in the mesh sweep six runs sat for 8 to 29 min with all
+# ranks inside MPI and no line written, until they were deleted by hand or
+# reached the wall time. The watchdog then (1) sends SIGUSR1, on which every
+# rank writes the Python stacks of its threads to stderr (faulthandler in
+# invert_exp05.py) and continues, (2) waits 90 s for the stacks to reach the
+# output, (3) sends SIGTERM to the ranks, after which mpiexec ends, and (4)
+# deletes the job with qdel if mpiexec still runs 120 s later. The job then
+# ends early and does not use the rest of its wall time.
+watchdog() {
+    local limit=$(( WATCHDOG_MIN * 60 )) newest idle waited
+    while kill -0 ${MPIEXEC_PID} 2>/dev/null; do
+        sleep 60
+        # The newest change of the two files. A log of an earlier job in the
+        # same run directory is older than the start of this job, so the
+        # start time is the lower bound.
+        newest=$(stat -c %Y ${RUN_LOG} ${STDOUT_COPY} 2>/dev/null | sort -n | tail -1)
+        newest=${newest:-${START}}
+        [ "${newest}" -lt "${START}" ] && newest=${START}
+        idle=$(( $(date +%s) - newest ))
+        if [ "${idle}" -ge "${limit}" ]; then
+            {
+                echo "watchdog: no change of ${RUN_LOG} or ${STDOUT_COPY} for $(( idle / 60 )) min (limit ${WATCHDOG_MIN} min) at $(date)"
+                echo "watchdog: SIGUSR1 to every rank (stack dump)"
+            } | tee -a ${OUT}/watchdog_${PBS_JOBID}.txt
+            signal_all_ranks USR1 ${OUT}/watchdog_${PBS_JOBID}.txt
+            sleep 90
+            echo "watchdog: SIGTERM to every rank at $(date)" | tee -a ${OUT}/watchdog_${PBS_JOBID}.txt
+            signal_all_ranks TERM ${OUT}/watchdog_${PBS_JOBID}.txt
+            waited=0
+            while kill -0 ${MPIEXEC_PID} 2>/dev/null && [ "${waited}" -lt 120 ]; do
+                sleep 10
+                waited=$(( waited + 10 ))
+            done
+            if kill -0 ${MPIEXEC_PID} 2>/dev/null; then
+                echo "watchdog: mpiexec still runs, qdel ${PBS_JOBID} at $(date)" | tee -a ${OUT}/watchdog_${PBS_JOBID}.txt
+                qdel ${PBS_JOBID}
+            fi
+            return
+        fi
+    done
+}
+
+WATCHDOG_PID=""
+if [ -n "${WATCHDOG_MIN:-}" ]; then
+    echo "watchdog on: the job stops after ${WATCHDOG_MIN} min without a change of ${RUN_LOG} or ${STDOUT_COPY}"
+    watchdog < /dev/null &
+    WATCHDOG_PID=$!
+fi
+
+wait ${MPIEXEC_PID}
+status=$?
+if [ -n "${WATCHDOG_PID}" ]; then
+    # The wait collects the stopped watchdog, so that bash prints no
+    # "Terminated" line for it.
+    kill ${WATCHDOG_PID} 2>/dev/null || true
+    wait ${WATCHDOG_PID} 2>/dev/null || true
+    if [ -e ${OUT}/watchdog_${PBS_JOBID}.txt ]; then
+        echo "the watchdog stopped this job (${OUT}/watchdog_${PBS_JOBID}.txt)"
+    fi
+fi
+
+if [ -n "${SAMPLERS}" ]; then
+    # One more interval lets each sampler see the stop file and write its
+    # last line; then the pbsdsh processes are ended in any case.
+    touch ${STOP_SAMPLER}
+    sleep $(( SAMPLER_WAIT + 5 ))
+    kill ${SAMPLERS} 2>/dev/null || true
+    rm -f ${STOP_SAMPLER}
+fi
+
+# The tape size per node (R11), from the files of the jobfs samplers of
+# this job (the lines after the start of this job; a file of an earlier job
+# in the same run directory has older lines). The projection to the full
+# march assumes the same tape per taped step: the steps of the march to
+# year 0 come from the record of the prepare job beside INPUTS
+# ("year0_step"). It is a line of text only and changes nothing.
+if [ "${JOBFS_SAMPLER}" != "0" ]; then
+    STEPS_FULL=$(grep -o '"year0_step": *[0-9]*' "${INPUTS%.h5}.json" 2>/dev/null | head -1 | grep -o '[0-9]*$')
+    PEAK_ALL=0
+    for i in "${!NODE_HOSTS[@]}"; do
+        host=${NODE_HOSTS[$i]%%.*}
+        peak=$(awk -v t0=${START} '$1 >= t0 && $4 == "used_gb" {if ($5 > m) m = $5} END {printf "%.2f", m}' \
+            ${OUT}/node_jobfs_${host}.txt 2>/dev/null)
+        echo "jobfs peak ${host}: ${peak:-?} GB"
+        PEAK_ALL=$(awk -v a=${PEAK_ALL} -v b=${peak:-0} 'BEGIN {print (b > a) ? b : a}')
+    done
+    echo "jobfs peak of the busiest node: ${PEAK_ALL} GB (the r2 jobs request jobfs=400 GB per node)"
+    if [ -n "${STEPS:-}" ] && [ -n "${STEPS_FULL}" ]; then
+        awk -v p=${PEAK_ALL} -v s=${STEPS} -v n=${STEPS_FULL} 'BEGIN {
+            printf "jobfs per taped step %.3f GB on the busiest node; projected tape of the full march (%d steps): %.1f GB per node\n", p / s, n, p / s * n }'
+    fi
+fi
+
+# $PBS_JOBFS, and with it the tape, is removed with the job. pyadjoint
+# writes the shared part of the disk checkpointer (an empty HDF5 file in
+# this script, see CHECKPOINTING in invert_exp05.py) in the working
+# directory; its exit handler removes it, and this removes what a killed
+# run left.
+rm -rf ${PBS_O_WORKDIR}/firedrake_adjoint_checkpoint_* 2>/dev/null || true
+date
+echo "exit code ${status}"
+exit ${status}

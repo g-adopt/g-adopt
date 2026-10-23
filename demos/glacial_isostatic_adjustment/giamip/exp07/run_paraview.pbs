@@ -1,0 +1,71 @@
+#!/bin/bash
+# GIAMIP Exp07: the ParaView series of a forward run (paraview_exp07.py), on
+# Gadi (NCI), queue normalsr. This is the PBS version of run_paraview.slurm.
+#
+# One rank is enough and gives the fewest VTK files (a VTKFile writes one
+# file per rank and step). The L1 series of Exp01 (463 steps, 4 times the
+# surface cells of L0) took 184 s on one rank on Setonix and holds 52 GB.
+#
+# Do not use the rank count of the forward run (624 for 6 nodes). On that
+# count CheckpointFile loads the surface submesh with its saved
+# distribution, and that load is broken: the loaded mesh counts cells more
+# than once (Setonix job 51182555: area 248.4 instead of 61.0 on 384 ranks;
+# 1 and 16 ranks give the right mesh). Any other count partitions the mesh
+# again and loads it correctly. The script checks the area of the loaded
+# surface.
+#
+# Submit from the run directory of the forward run, for example:
+#
+#   cd /g/data/xd2/sg8812/gia-mip/exp07/r2/forward-protocol
+#   qsub $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp07/run_paraview.pbs
+#
+# Variables (pass them with -v NAME=value,...):
+#   INPUT    the surface file (default forward_exp07_surface.h5 in the
+#            submit directory)
+#   OUTDIR   the directory of the ParaView series (default paraview/ in the
+#            submit directory)
+#   NP       the MPI ranks (default: the ncpus of the job, 1)
+#   EXTRA    further arguments of paraview_exp07.py (for example --degree 1)
+#   ENV_FILE the environment file (default ENV_DEFAULT below)
+#
+# The memory request is 64 GB for one rank. Setonix measured 3.78 GB for
+# the 63-step L0 series. The r2 surface has more cells than L1, and the
+# memory at 463 steps on r2 is not measured; 64 GB leaves room. A job of
+# 1 core and 64 GB on normalsr is charged for the memory share of a node
+# (64 / 500 of 104 cores), a few SU for a run of minutes.
+#
+#PBS -N exp07-pv
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=1
+#PBS -l mem=64GB
+#PBS -l jobfs=10GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=scratch/xd2+gdata/xd2+gdata/fp50
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+PERSIST=/g/data/xd2/sg8812/giamip-software
+# The environment of the forward run (ENV_DEFAULT of run_invert.pbs).
+ENV_DEFAULT=${PERSIST}/env-giamip-pr4638-pr5544-pyop2fixes.sh
+ENV_FILE=${ENV_FILE:-${ENV_DEFAULT}}
+source ${ENV_FILE}
+
+HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp07
+INPUT=${INPUT:-${PBS_O_WORKDIR}/forward_exp07_surface.h5}
+OUTDIR=${OUTDIR:-${PBS_O_WORKDIR}/paraview}
+NP=${NP:-${PBS_NCPUS}}
+
+echo "job ${PBS_JOBID}, ${NP} ranks"
+echo "worktree ${MY_GADOPT} at $(cd ${MY_GADOPT} && git rev-parse --short HEAD 2>/dev/null)"
+echo "input ${INPUT}, output ${OUTDIR}, extra ${EXTRA:-}"
+date
+mpiexec -np ${NP} python3 ${HERE}/paraview_exp07.py \
+    --input ${INPUT} --output_path ${OUTDIR} ${EXTRA:-}
+status=$?
+date
+du -sh ${OUTDIR}
+echo "exit code ${status}"
+exit ${status}

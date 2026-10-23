@@ -1,0 +1,112 @@
+#!/bin/bash
+# GIAMIP Exp11: copy the records and the final state of a production on
+# Gadi from /scratch to /g/data, on the Gadi copy queue (copyq, project
+# xd2). This is the Gadi job of run_archive_forward.slurm.
+#
+# The forward run, its ParaView series and its images are written on gdata
+# from the start (run_forward.pbs, run_paraview.pbs, run_images.pbs), so
+# they need no copy. The run directories of the prepare, transfer and
+# inversion jobs are on /scratch, which NCI purges. This job copies from
+# RUN_ROOT (default /scratch/xd2/$USER/giamip/exp11/8re_r2-<n>nodes) to
+# DEST (default /g/data/xd2/sg8812/gia-mip/exp11/r2):
+#
+#   prepare/        the record and the log of the prepare job, and the job
+#                   outputs (no input file: invert/state.h5 holds it)
+#   transfer/       the record and the log of the bed transfer, the job
+#                   outputs
+#   invert-3steps/  everything except state.h5 (the 3-step test: logs,
+#                   records, controls.h5, node memory and jobfs files)
+#   invert/         everything: state.h5 (the input file with the bed of
+#                   every ROL iteration, the start of the forward run),
+#                   controls.h5, the logs, the summary, the job outputs,
+#                   the node memory and jobfs files
+#
+# The job then compares the size of every copied file on both sides, and
+# the MD5 of state.h5 and controls.h5 of invert/. It writes MANIFEST.txt in
+# DEST: every file below DEST (the forward run included) with its size. It
+# exits with 1 if a copy or a comparison failed.
+#
+# Submit after the image jobs, for example:
+#
+#   qsub -W depend=afterok:<image job 0>:<image job 1> \
+#       -v RUN_ROOT=/scratch/xd2/$USER/giamip/exp11/8re_r2-6nodes \
+#       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp11/run_archive.pbs
+#
+# Variables (pass them with -v NAME=value,...):
+#   RUN_ROOT  the run directory of the production on /scratch (required)
+#   DEST      the archive directory (default above)
+#
+#PBS -N exp11-arch
+#PBS -P xd2
+#PBS -q copyq
+#PBS -l ncpus=1
+#PBS -l mem=8GB
+#PBS -l walltime=06:00:00
+#PBS -l storage=scratch/xd2+gdata/xd2
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+RUN_ROOT=${RUN_ROOT:?set RUN_ROOT to the run directory of the production on /scratch}
+DEST=${DEST:-/g/data/xd2/sg8812/gia-mip/exp11/r2}
+status=0
+
+echo "job ${PBS_JOBID}: ${RUN_ROOT} -> ${DEST}"
+date
+mkdir -p ${DEST} || exit 1
+
+# One directory: rsync with the given excludes, then a comparison of the
+# sizes on both sides. The --exclude patterns are relative to
+# the source directory.
+copy_dir() {
+    local name=$1; shift
+    local src=${RUN_ROOT}/${name}
+    if [ ! -d "${src}" ]; then
+        echo "${name}: no directory ${src}, skipped"
+        return
+    fi
+    mkdir -p ${DEST}/${name}
+    echo "${name}: copying"
+    if ! rsync -a --stats "$@" ${src}/ ${DEST}/${name}/; then
+        echo "error: rsync of ${name} failed" >&2
+        status=1
+        return
+    fi
+    # A second rsync pass in dry-run mode that compares sizes only: it lists
+    # every file whose copy is missing or has another size. After a good
+    # copy the list is empty.
+    local diffs
+    diffs=$(rsync -a --dry-run --itemize-changes --size-only "$@" ${src}/ ${DEST}/${name}/ | grep '^[<>ch]f')
+    if [ -n "${diffs}" ]; then
+        echo "error: ${name}: these files differ from their source:" >&2
+        echo "${diffs}" >&2
+        status=1
+    else
+        echo "${name}: every file has the size of its source ($(find ${DEST}/${name} -type f | wc -l) files)"
+    fi
+}
+
+# The input files are 50-100 GB each on r2 and invert/state.h5 holds the
+# same mesh, fields and ice; the .bak file of a failed transfer is a copy.
+copy_dir prepare --exclude='*.h5' --exclude='*.bak'
+copy_dir transfer --exclude='*.h5' --exclude='*.bak'
+copy_dir invert-3steps --exclude='state.h5'
+copy_dir invert
+
+# The MD5 of the two files that a later step reads.
+for f in state.h5 controls.h5; do
+    if [ -e ${RUN_ROOT}/invert/${f} ]; then
+        a=$(md5sum ${RUN_ROOT}/invert/${f} | cut -d' ' -f1)
+        b=$(md5sum ${DEST}/invert/${f} 2>/dev/null | cut -d' ' -f1)
+        echo "invert/${f}: md5 source ${a}, copy ${b}"
+        [ "${a}" = "${b}" ] || { echo "error: invert/${f} md5 differs" >&2; status=1; }
+    fi
+done
+
+# The list of every file of the archive, with its size in bytes.
+( cd ${DEST} && find . -type f ! -name MANIFEST.txt -printf '%s %p\n' | sort -k2 ) > ${DEST}/MANIFEST.txt
+echo "manifest ${DEST}/MANIFEST.txt: $(wc -l < ${DEST}/MANIFEST.txt) files, $(awk '{s += $1} END {printf "%.1f", s / 1e9}' ${DEST}/MANIFEST.txt) GB"
+date
+echo "exit code ${status}"
+exit ${status}

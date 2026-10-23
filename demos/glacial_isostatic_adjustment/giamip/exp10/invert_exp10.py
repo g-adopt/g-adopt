@@ -82,9 +82,17 @@ CHECKPOINTING
     The time loop runs in `tape.timestepper` with
     `SingleDiskStorageSchedule`. The checkpoint data goes to one directory
     per node, one checkpoint communicator per node (`MPI.COMM_TYPE_SHARED`),
-    in `$TMPDIR` (or `--checkpoint_dir`). On a Setonix compute node `/tmp`
-    is a RAM file system, so the checkpoints there use node memory; put them
-    on `/scratch` when the node memory is short.
+    in `--checkpoint_dir`, else `$PBS_JOBFS` (Gadi), else `$TMPDIR`. On a
+    Setonix compute node `/tmp` is a RAM file system, so the checkpoints
+    there use node memory; put them on `/scratch` when the node memory is
+    short. On Gadi `$PBS_JOBFS` is the local disk of each node (up to
+    400 GB per node on `normalsr`, set with `#PBS -l jobfs`), which uses no
+    node memory. In a PBS job the script stops if `--checkpoint_dir` is
+    outside `$PBS_JOBFS`: the tape stays on the node disk. Firedrake also
+    makes one small shared directory (`firedrake_adjoint_checkpoint_*`) in
+    the working directory for the data of `checkpointable_mesh` and
+    `checkpoint_init_data`; this script uses neither, so that directory
+    holds one empty HDF5 file and no tape data.
 
 MEMORY
     The node memory grows with the number of taped steps. In the probes of
@@ -169,11 +177,22 @@ OUTPUT (in --output_path)
     state.h5                (invert mode) the copy of the input file with
                             the bed of every iteration appended; the file of
                             a restart
+
+    With --diagnostics (`exp10_diagnostics`, off by default):
+    diag_memory.jsonl       the memory of every rank at every stage
+    diag_solves.jsonl       the solver work of every solve
+    diag_stages.jsonl       the PETSc events of every PETSc log stage
+    petsc_log_view.txt      the PETSc log view with memory columns,
+                            rewritten at the end of every stage
 """
 
 import argparse
+import contextlib
+import faulthandler
 import os
+import resource
 import shutil
+import signal
 import sys
 import time
 
@@ -204,6 +223,28 @@ from gadopt.inverse import LinMoreOptimiser, minimisation_parameters  # noqa: E4
 from mpi4py import MPI  # noqa: E402
 from petsc4py import PETSc  # noqa: E402
 from pyadjoint import MinimizationProblem  # noqa: E402
+
+# Stack dumps on request. SIGUSR1 makes each rank write the Python stack of
+# every thread to stderr and then continue; the signal changes nothing else.
+# The watchdog of `run_invert.pbs` (WATCHDOG_MIN) sends it to every rank of a
+# job that makes no progress, before it stops the job, so that the record
+# shows where each rank waits. faulthandler writes the stack from its C
+# signal handler, so it also works on a rank that waits inside MPI or PETSc
+# C code. The handler is registered after the imports above: PETSc (through
+# petsc4py) installs its own signal handlers when it initialises, and its
+# handler for SIGUSR1 would abort the rank. Registering later replaces it
+# for this one signal only. Without the signal the handler is inert.
+faulthandler.register(signal.SIGUSR1, all_threads=True)
+
+# No core files. A job that the watchdog or a fatal signal stops can have a
+# thousand ranks, and their core files (345 GB from one job of 1040 ranks)
+# fill the project's scratch quota. `ulimit -c 0` in the job script reaches
+# only the ranks of the first node, because the ranks of the other nodes are
+# started by the MPI daemons with the limits of the PBS daemon; so every
+# rank sets its own limit here. EXP01_ALLOW_CORE_DUMPS=1 keeps the limit of
+# the environment, for a deliberate debugging run.
+if os.environ.get("EXP01_ALLOW_CORE_DUMPS") != "1":
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 pause_annotation()
 
@@ -239,10 +280,14 @@ class BedInversion:
     Args:
       args: the command line.
       say: the log function.
+      path: the input file (or the state file of an inversion).
+      restart: whether the run continues from the last bed of `path`.
+      diag: the `exp10_diagnostics.RunDiagnostics` of `--diagnostics`, or
+        None (the default: no diagnostics).
     """
 
-    def __init__(self, args, say, path, restart=False):
-        self.args, self.say = args, say
+    def __init__(self, args, say, path, restart=False, diag=None):
+        self.args, self.say, self.diag = args, say, diag
         tic = time.time()
         # The meshes, the fields and the record of the prepare run, from the
         # input file or from the state file of an inversion; on a restart,
@@ -251,6 +296,8 @@ class BedInversion:
         (self.parent, self.mantle, self.fields, self.ice,
          self.record) = loaded[:5]
         self.restart_bed = loaded[5] if restart else None
+        if diag is not None:
+            diag.memory("after the load")
         say(f"  inputs: {path}, experiment {self.record['experiment']}, "
             f"mesh {self.record['mesh']['md5']} refine "
             f"{self.record['mesh']['refine_levels']}, "
@@ -292,6 +339,11 @@ class BedInversion:
             f"{self.solver_record['real_rows']} Real rows, k_s {args.k_s}, "
             f"C - A {self.solver_record['C_minus_A_nondim']:.6g} "
             f"({time.time() - tic:.1f} s)")
+        if diag is not None:
+            # The owned cells and unknowns of each rank go into every memory
+            # record from here on.
+            diag.set_problem(self.parent, self.mantle, self.solver.solution)
+            diag.memory("after the solver build")
 
         # The surface mesh of the control (P1 geometry, see
         # `common.surface_mesh`) and the CG2 space of the control.
@@ -324,6 +376,13 @@ class BedInversion:
         self.years = np.asarray(self.record["march"]["years"], dtype=float)
         year0 = int(self.record["march"]["year0_step"])
         self.last = year0 if args.steps is None else min(year0, args.steps)
+        # A test input file can hold the ice of the first steps only
+        # (`prepare_exp10.py --ice_steps`).
+        ice_steps = int(self.record["march"]["ice_steps"])
+        if self.last > ice_steps - 1:
+            raise RuntimeError(f"{path} holds the ice of steps 0 .. "
+                               f"{ice_steps - 1}; run with --steps at most "
+                               f"{ice_steps - 1}, not to step {self.last}")
 
         # The surface measure and area of the misfit (the solver's own sea-
         # level measure, so the misfit integrates SL as the solver does).
@@ -382,7 +441,15 @@ class BedInversion:
             self.I.assign(self.ice[index])
 
             tic = time.time()
-            solver.solve()
+            # With `--diagnostics`, one solve record around the solve (the
+            # counters of the preconditioner hooks, the Newton and outer
+            # iterations); without it, nothing.
+            diag = self.diag
+            if diag is not None:
+                diag.label = f"tape step {index}"
+            with (diag.solve("forward", index, solver.solver.snes)
+                  if diag is not None else contextlib.nullcontext()):
+                solver.solve()
             wall = time.time() - tic
             with stop_annotating():
                 newton, outer = common.iteration_counts(solver)
@@ -397,6 +464,8 @@ class BedInversion:
                 f"{common.peak_memory_gb():.2f} GB")
             if args.log_memory:
                 common.memory_now(f"tape step {index}", say)
+            if diag is not None:
+                diag.memory(f"after tape step {index}")
             # The block of this solve knows its step, for the block log.
             block = getattr(solver, "adjoint_block", None)
             if block is not None:
@@ -624,7 +693,8 @@ def taylor_direction(gradient, problem, args):
 
 
 def first_order_taylor_test(rf, m, h, J0, gradient, say,
-                            epsilons=(1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125)):
+                            epsilons=(1.0, 0.5, 0.25, 0.125, 0.0625, 0.03125),
+                            diag=None):
     """The first-order Taylor test of `rf` at `m` in the direction `h`.
 
     For each `eps`:
@@ -644,6 +714,9 @@ def first_order_taylor_test(rf, m, h, J0, gradient, say,
       gradient: dJ/dm at `m`, a cofunction.
       say: the log function.
       epsilons: the step sizes, largest first.
+      diag: the `RunDiagnostics` of `--diagnostics`, or None. With it, the
+        solve records of each evaluation carry its `eps`, and the memory is
+        recorded after each evaluation.
 
     Returns:
       A dict with the step sizes, J values, residuals and rates.
@@ -658,7 +731,11 @@ def first_order_taylor_test(rf, m, h, J0, gradient, say,
         tic = time.time()
         with stop_annotating():
             perturbed = Function(m.function_space()).assign(m + eps * h)
+        if diag is not None:
+            diag.label = f"taylor eps {eps:g}"
         Jeps = float(rf(perturbed))
+        if diag is not None:
+            diag.memory(f"after Taylor evaluation eps {eps:g}")
         J_values.append(Jeps)
         R0.append(abs(Jeps - J0))
         R1.append(abs(Jeps - J0 - eps * dJdh))
@@ -702,6 +779,81 @@ def keep_previous(path):
 # --------------------------------------------------------------------------
 
 
+def free_taping_solver(problem, say, diag=None):
+    """Free the taping solver after the taped forward run (`--free_taping_solver`).
+
+    With cached solver blocks (Firedrake PR 4638) the replay and the adjoint
+    run through the cached forward and adjoint solvers that the taping solver
+    built at its first solve, and the taping solver is not solved again. It
+    still holds its whole preconditioner set (on the 4-round 8 Re mesh about
+    1.6 GB per rank). `gadopt.dtn_coupled_adjoint.release_taping_solver`
+    destroys its SNES, KSP and preconditioner tree. J, the replay and the
+    gradient are unchanged to the last bit
+    (`tests/unit/test_release_taping_solver.py`).
+
+    Must run after `pause_annotation()` and before the first replay or
+    adjoint. Then at most two preconditioner sets are alive at any time: in
+    taylor mode the replay builds its set first and the adjoint its own; in
+    invert mode the first ROL call is the gradient (the first J is the taped
+    one), so the adjoint set comes first. Collective.
+
+    Args:
+      problem: the `BedInversion`; `problem.solver` is the gadopt solver.
+      say: the log function.
+      diag: the `RunDiagnostics` of `--diagnostics`, or None. Its monitor
+        list holds the taping SNES and is told to drop it first.
+
+    Returns:
+      A record for `summary_invert.json`: the release record of rank 0, and
+      the rank mean and largest RSS before and after, GB.
+    """
+    from gadopt.dtn_coupled_adjoint import release_taping_solver
+
+    comm = problem.mantle.comm
+    if diag is not None:
+        # The diagnostics keep the SNES wrapper of every solver they
+        # monitor; the taping one must not stay in that list.
+        snes = getattr(problem.solver.solver, "snes", None)
+        if snes is not None:
+            diag.forget(snes)
+        del snes
+    tic = time.time()
+    info = release_taping_solver(problem.solver)
+    wall = time.time() - tic
+
+    def spread(value):
+        """Rank mean and largest of one per-rank number, or None."""
+        values = comm.allgather(value)
+        if any(v is None for v in values):
+            return None, None
+        return float(np.mean(values)), float(np.max(values))
+    before_mean, before_max = spread(info["rss_gb_before"])
+    after_mean, after_max = spread(info["rss_gb_after"])
+    record = {"released": info["released"], "reason": info["reason"],
+              "wall_s": wall,
+              "rss_gb_before_mean": before_mean, "rss_gb_before_max": before_max,
+              "rss_gb_after_mean": after_mean, "rss_gb_after_max": after_max,
+              "objects_before_rank0": info["objects_before"],
+              "objects_after_rank0": info["objects_after"],
+              "tree": info.get("tree"), "rounds": info.get("rounds"),
+              "heap_trimmed": info.get("heap_trimmed")}
+    if not info["released"]:
+        say(f"  free taping solver: nothing released ({info['reason']})")
+        return record
+    text = "" if before_mean is None else (
+        f", RSS rank mean {before_mean:.3f} -> {after_mean:.3f} GB, largest "
+        f"{before_max:.3f} -> {after_max:.3f} GB")
+    objects = ""
+    if info["objects_before"] is not None:
+        b, a = info["objects_before"], info["objects_after"]
+        objects = ("; rank 0 live objects before -> after: "
+                   + ", ".join(f"{k} {b[k]} -> {a[k]}" for k in b))
+    say(f"  free taping solver: released in {wall:.1f} s ({info.get('tree')} "
+        f"torn down, {info.get('rounds')} cleanup rounds, heap trimmed "
+        f"{info.get('heap_trimmed')}){text}{objects}")
+    return record
+
+
 def parse_args():
     """The command line."""
     p = argparse.ArgumentParser(
@@ -740,7 +892,8 @@ def parse_args():
     # Checkpointing.
     p.add_argument("--checkpoint_dir", default=None,
                    help="directory of the tape checkpoints, one per node "
-                        "(default $TMPDIR)")
+                        "(default $PBS_JOBFS on Gadi, else $TMPDIR; in a "
+                        "PBS job it must be inside $PBS_JOBFS)")
     # Debugging.
     p.add_argument("--log_memory", action="store_true",
                    help="log the memory after every taped step")
@@ -751,6 +904,17 @@ def parse_args():
     p.add_argument("--log_blocks", action="store_true",
                    help="log time and memory around every replay and "
                         "adjoint solve")
+    p.add_argument("--free_taping_solver", action="store_true",
+                   help="after the taped forward run, free the solver that "
+                        "recorded the tape and its preconditioner (the replay "
+                        "and the adjoint use the cached solvers of the tape); "
+                        "changes no number (see free_taping_solver)")
+    p.add_argument("--diagnostics", action="store_true",
+                   help="record the memory of every rank per stage, a PETSc "
+                        "profile per stage and the solver work of every solve "
+                        "into diag_*.jsonl and petsc_log_view.txt (see "
+                        "exp10_diagnostics); also removes the KSP converged-"
+                        "reason lines from stdout")
     # The solver options.
     p.add_argument("--k_s", type=float, default=0.9422,
                    help="the fluid Love number of the bulge")
@@ -781,8 +945,27 @@ def enable_node_checkpointing(args, mesh, say):
     Returns:
       The directory of this node.
     """
-    base = args.checkpoint_dir or os.environ.get("TMPDIR", "/tmp")
-    job = os.environ.get("SLURM_JOB_ID", str(os.getpid()))
+    base = (args.checkpoint_dir or os.environ.get("PBS_JOBFS")
+            or os.environ.get("TMPDIR", "/tmp"))
+    # On Gadi the tape goes to the local disk of each node, `$PBS_JOBFS`,
+    # and nowhere else (decision R11 of the r2 production): the tape of a
+    # full march is hundreds of GB per node, and on /scratch or /g/data it
+    # would load the shared Lustre file system and its quota. A
+    # `--checkpoint_dir` outside `$PBS_JOBFS` in a PBS job is therefore an
+    # error. Setonix has no `$PBS_JOBFS`, so the option keeps its meaning
+    # there.
+    jobfs = os.environ.get("PBS_JOBFS")
+    if jobfs:
+        inside = os.path.realpath(base) == os.path.realpath(jobfs) or \
+            os.path.realpath(base).startswith(os.path.realpath(jobfs) + os.sep)
+        if not inside:
+            raise SystemExit(f"--checkpoint_dir {base} is outside $PBS_JOBFS "
+                             f"({jobfs}); the tape must stay on the node disk")
+    # The job id of Slurm (Setonix) or PBS (Gadi), else the process id. The
+    # process id differs between ranks, so it is taken from rank 0.
+    job = os.environ.get("SLURM_JOB_ID") or os.environ.get("PBS_JOBID")
+    if not job:
+        job = COMM_WORLD.bcast(str(os.getpid()), root=0)
     node_comm = mesh.comm.Split_type(MPI.COMM_TYPE_SHARED)
     # The directory is per node, named after the first global rank of the
     # node: on a shared file system (`/scratch`) the nodes must not write
@@ -816,6 +999,20 @@ def main():
     say(f"  cached solver blocks (Firedrake PR 4638): {CACHED_SOLVER_BLOCKS}")
     say("=" * 78)
 
+    # `--diagnostics`: memory per stage, a PETSc profile per stage and the
+    # solver work of every solve (`exp10_diagnostics`). Without it `diag` is
+    # None and `stage` gives an empty context, so the run is unchanged.
+    diag = None
+    if args.diagnostics:
+        import exp10_diagnostics
+        diag = exp10_diagnostics.RunDiagnostics(args.output_path, say)
+
+    def stage(name):
+        """A PETSc log stage of the diagnostics, or nothing without them."""
+        return diag.stage(name) if diag is not None else contextlib.nullcontext()
+    setup_stage = stage("exp10_setup")
+    setup_stage.__enter__()
+
     # The state file of an inversion: a copy of the input file (cold start)
     # or of the state file of an earlier run (restart), into which every
     # iterate of the control is appended. A file of the same name from an
@@ -842,7 +1039,7 @@ def main():
         source, load_path = None, args.inputs
 
     # Everything that is not on the tape, with annotation paused.
-    problem = BedInversion(args, say, load_path, restart=restart)
+    problem = BedInversion(args, say, load_path, restart=restart, diag=diag)
     common.memory_now("after the setup", say)
     say(f"  march: steps 1..{problem.last}, years {problem.years[0]:.0f} .. "
         f"{problem.years[problem.last]:.0f}")
@@ -871,17 +1068,36 @@ def main():
         drop_block_adjoint_copies(say)
     if args.log_blocks:
         install_block_log(say)
+    if diag is not None:
+        # The hooks go on before the first solve, so the first
+        # preconditioner build is recorded.
+        diag.install()
+        diag.memory("after the setup")
+    setup_stage.__exit__(None, None, None)
 
     # The one taped forward run.
     continue_annotation()
     tic = time.time()
-    J = problem.tape_forward(bed)
+    with stage("exp10_taped_forward"):
+        J = problem.tape_forward(bed)
     pause_annotation()
     taped_s = time.time() - tic
     say(f"  taped forward: J {float(J):.10e} (RMS bed misfit "
         f"{problem.rms_misfit_m(J):.4f} m), {taped_s:.1f} s, "
         f"{len(tape.get_blocks())} blocks")
     common.memory_now("after the taped forward run", say)
+    if diag is not None:
+        diag.memory("after the taped forward")
+    # `--free_taping_solver`: the taping solver goes before the first replay
+    # or adjoint builds its preconditioner, so at most two sets are alive.
+    # Without the option this block does nothing.
+    freed_record = None
+    if args.free_taping_solver:
+        with stage("exp10_free_taping_solver"):
+            freed_record = free_taping_solver(problem, say, diag=diag)
+        common.memory_now("after freeing the taping solver", say)
+        if diag is not None:
+            diag.memory("after freeing the taping solver")
 
     # The control carries its L2 Riesz map, so the gradient representer of
     # every ROL iteration uses the same solver.
@@ -897,25 +1113,35 @@ def main():
               "restart_from": restart_from,
               "provenance": (common.provenance(HERE)
                              if COMM_WORLD.rank == 0 else None)}
+    if freed_record is not None:
+        record["free_taping_solver"] = freed_record
     summary_path = os.path.join(args.output_path, "summary_invert.json")
 
     if args.mode == "taylor":
         rf = ReducedFunctional(J, control)
         # The replay at the taped control must give the taped J.
         tic = time.time()
-        replayed = float(rf(bed))
+        with stage("exp10_replay"):
+            replayed = float(rf(bed))
         say(f"  replay at the taped control: J {replayed:.10e}, relative "
             f"difference {abs(replayed - float(J)) / abs(float(J)):.3e} "
             f"({time.time() - tic:.1f} s)")
+        if diag is not None:
+            diag.memory("after the replay")
         record["J_replay"] = replayed
         # One adjoint gives the gradient for the direction and for the test.
         tic = time.time()
-        gradient = rf.derivative()
+        with stage("exp10_adjoint"):
+            gradient = rf.derivative()
         say(f"  gradient ({time.time() - tic:.1f} s)")
         common.memory_now("after the adjoint", say)
+        if diag is not None:
+            diag.memory("after the adjoint")
         h = taylor_direction(gradient, problem, args)
-        record["taylor"] = first_order_taylor_test(rf, bed, h, float(J),
-                                                   gradient, say)
+        with stage("exp10_taylor"):
+            record["taylor"] = first_order_taylor_test(rf, bed, h, float(J),
+                                                       gradient, say,
+                                                       diag=diag)
     else:
         rf = FirstValueReducedFunctional(J, control)
         lower = Function(problem.V_bed, name="bed_lower_m").assign(-args.bed_bound_m)
@@ -965,6 +1191,9 @@ def main():
                                       first_index + index,
                                       {"J": J_value, "rms_misfit_m": rms})
             node_gb = common.memory_now(f"ROL iteration {index}", say)
+            if diag is not None:
+                diag.memory(f"after ROL iteration {index}")
+                diag.label = f"ROL iteration {index + 1}"
             iterations.append({"iteration": index,
                                "state_index": first_index + index,
                                "J": J_value,
@@ -983,7 +1212,10 @@ def main():
 
         optimiser.add_callback(after_iteration)
         tic = time.time()
-        optimiser.run()
+        if diag is not None:
+            diag.label = "ROL iteration 0"
+        with stage("exp10_rol"):
+            optimiser.run()
         reason = ("RMS misfit below the stop value" if optimiser.stopped_by_value
                   else "ROL status test (iteration limit or tolerance)")
         say(f"  optimisation: {len(iterations)} status checks, "
@@ -996,6 +1228,8 @@ def main():
     common.write_json(summary_path, {**record, "state": "finished"})
     say(f"  total {record['total_s']:.1f} s, peak memory "
         f"{record['peak_memory_gb']:.2f} GB")
+    if diag is not None:
+        diag.close()
 
 
 if __name__ == "__main__":
