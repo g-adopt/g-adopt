@@ -664,7 +664,8 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
         identified = dict.fromkeys([i[1] for i in boundary_cells])
         nvert = -1
         for cell, face_id in boundary_cells:
-            if identified[face_id] is None:
+            # -1 marks a boundary face that is not in "Face Sets"
+            if face_id != -1 and identified[face_id] is None:
                 face_coords = mesh.topology_dm.vecGetClosure(coord_sec, coords, cell)
                 if nvert == -1:
                     nvert = len(face_coords) // plex_dim
@@ -691,13 +692,11 @@ def get_boundary_ids(mesh) -> BoundaryIDNamespace:
             for face_id in set().union(*gathered_boundaries)  # all gathered face_ids
         }
         kwargs.pop(None, None)  # remove None entry
-        # An extruded mesh is identified by two labels inserted by Firedrake,
-        # exterior_facets_top and exterior_facets_bottom. If those exist, override
-        # 'bottom' and 'top' with the values directly as top/bottom boundary detection
-        # from a plex object does not represent the boundaries known to Firedrake
-        for surface in ("top", "bottom"):
-            if mesh.topology_dm.getStratumSize(f"exterior_facets_{surface}", 1) > 0:
-                kwargs[surface] = surface
+        # Firedrake names the top and bottom of an extruded mesh "top" and "bottom".
+        # Use mesh.extruded, not the local labels, so that all ranks agree.
+        if mesh.extruded:
+            kwargs["top"] = "top"
+            kwargs["bottom"] = "bottom"
         # Get remaining dimensions (if any)
         for idim in range(plex_dim, dim):
             for axis_label in axis_extremes_order[idim]:
