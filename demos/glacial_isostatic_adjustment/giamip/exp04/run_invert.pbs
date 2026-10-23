@@ -315,23 +315,30 @@ fi
 # The tape size per node (R11), from the files of the jobfs samplers of
 # this job (the lines after the start of this job; a file of an earlier job
 # in the same run directory has older lines). The projection to the full
-# march assumes the same tape per taped step: the steps of the march to
-# year 0 come from the record of the prepare job beside INPUTS
-# ("year0_step"). It is a line of text only and changes nothing.
+# march assumes the same tape per taped step: the tape of the busiest node
+# divided by STEPS, times the steps of the march to year 0 from the record
+# of the prepare job beside INPUTS ("year0_step"), plus the rest of jobfs
+# (the kernel caches) at the time of the largest total. It is a line of
+# text only and changes nothing.
 if [ "${JOBFS_SAMPLER}" != "0" ]; then
     STEPS_FULL=$(grep -o '"year0_step": *[0-9]*' "${INPUTS%.h5}.json" 2>/dev/null | head -1 | grep -o '[0-9]*$')
-    PEAK_ALL=0
+    TAPE_ALL=0
+    REST_ALL=0
     for i in "${!NODE_HOSTS[@]}"; do
         host=${NODE_HOSTS[$i]%%.*}
-        peak=$(awk -v t0=${START} '$1 >= t0 && $4 == "used_gb" {if ($5 > m) m = $5} END {printf "%.2f", m}' \
-            ${OUT}/node_jobfs_${host}.txt 2>/dev/null)
-        echo "jobfs peak ${host}: ${peak:-?} GB"
-        PEAK_ALL=$(awk -v a=${PEAK_ALL} -v b=${peak:-0} 'BEGIN {print (b > a) ? b : a}')
+        # Fields: $5 used_gb, $7 tape_gb. Largest total, the tape at that
+        # time, and the largest tape of the node.
+        read -r used tape_at tape_max < <(awk -v t0=${START} \
+            '$1 >= t0 && $4 == "used_gb" {if ($5 > u) {u = $5; ta = $7}; if ($7 > tm) tm = $7}
+             END {printf "%.2f %.2f %.2f\n", u, ta, tm}' ${OUT}/node_jobfs_${host}.txt 2>/dev/null)
+        echo "jobfs ${host}: largest total ${used:-?} GB (tape ${tape_at:-?} GB at that time), largest tape ${tape_max:-?} GB"
+        TAPE_ALL=$(awk -v a=${TAPE_ALL} -v b=${tape_max:-0} 'BEGIN {print (b > a) ? b : a}')
+        REST_ALL=$(awk -v a=${REST_ALL} -v u=${used:-0} -v t=${tape_at:-0} 'BEGIN {r = u - t; print (r > a) ? r : a}')
     done
-    echo "jobfs peak of the busiest node: ${PEAK_ALL} GB (the r2 jobs request jobfs=400 GB per node)"
+    echo "jobfs busiest node: tape ${TAPE_ALL} GB, other files ${REST_ALL} GB (the r2 jobs request jobfs=400 GB per node)"
     if [ -n "${STEPS:-}" ] && [ -n "${STEPS_FULL}" ]; then
-        awk -v p=${PEAK_ALL} -v s=${STEPS} -v n=${STEPS_FULL} 'BEGIN {
-            printf "jobfs per taped step %.3f GB on the busiest node; projected tape of the full march (%d steps): %.1f GB per node\n", p / s, n, p / s * n }'
+        awk -v p=${TAPE_ALL} -v r=${REST_ALL} -v s=${STEPS} -v n=${STEPS_FULL} 'BEGIN {
+            printf "jobfs tape per taped step %.3f GB on the busiest node; projected jobfs of the full march (%d steps): %.1f GB per node\n", p / s, n, p / s * n + r }'
     fi
 fi
 
