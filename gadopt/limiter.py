@@ -296,9 +296,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
             )
 
         if self.clip_min is not None:
-            self.min_field.assign(max_value(self.min_field, self.clip_min))
+            self.min_field.interpolate(max_value(self.min_field, self.clip_min))
         if self.clip_max is not None:
-            self.max_field.assign(min_value(self.max_field, self.clip_max))
+            self.max_field.interpolate(min_value(self.max_field, self.clip_max))
 
     def apply(self, field):
         """Applies the limiter on the given field (in place).

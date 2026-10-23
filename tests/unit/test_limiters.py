@@ -3,6 +3,7 @@ import numpy as np
 import gadopt
 import ufl
 import pytest
+from mpi4py import MPI
 
 
 @pytest.mark.parametrize(
@@ -105,3 +106,42 @@ def test_vector_limiter_matches_components(cell):
         u_i = fd.Function(V_scalar).interpolate(expr)
         scalar_limiter.apply(u_i)
         np.testing.assert_allclose(u.dat.data_ro[:, i], u_i.dat.data_ro, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "mesh",
+    [
+        fd.UnitSquareMesh(10, 10, quadrilateral=True),
+        fd.UnitSquareMesh(10, 10, quadrilateral=False),
+        fd.ExtrudedMesh(fd.UnitIntervalMesh(10), 10),
+    ],
+    ids=["quad-true", "quad-false", "extruded"],
+)
+def test_limiter_clip_bounds(mesh):
+    """Clipped bounds keep the limited field within [clip_min, clip_max]."""
+    x, _ = fd.SpatialCoordinate(mesh)
+    element = "DG" if mesh.ufl_cell() == ufl.triangle else "DQ"
+    P1DG = fd.FunctionSpace(mesh, fd.FiniteElement(element, mesh.ufl_cell(), 1, variant="equispaced"))
+
+    # Nodal values overshoot [0, 1] at x = 0 and x = 1, but all cell averages stay inside,
+    # which the limiter needs to bring every nodal value into the clipped bounds
+    u = fd.Function(P1DG).interpolate(0.5 + 1.05*(x - 0.5))
+
+    # Reduce over ranks so that every rank takes the same branch of each assertion
+    def global_min(f):
+        return mesh.comm.allreduce(f.dat.data_ro.min(initial=np.inf), MPI.MIN)
+
+    def global_max(f):
+        return mesh.comm.allreduce(f.dat.data_ro.max(initial=-np.inf), MPI.MAX)
+
+    assert global_min(u) < 0 and global_max(u) > 1
+    vol0 = fd.assemble(u*fd.dx)
+
+    limiter = gadopt.VertexBasedP1DGLimiter(P1DG, clip_min=0.0, clip_max=1.0)
+    limiter.apply(u)
+
+    assert global_min(limiter.min_field) >= 0.0
+    assert global_max(limiter.max_field) <= 1.0
+    assert global_min(u) >= -1e-12
+    assert global_max(u) <= 1.0 + 1e-12
+    np.testing.assert_allclose(fd.assemble(u*fd.dx), vol0)
