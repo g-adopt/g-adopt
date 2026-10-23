@@ -1,0 +1,1634 @@
+r"""Code shared by `prepare_exp08.py` and `invert_exp08.py`.
+
+This module holds everything that both scripts need and that does not read
+the GIAMIP data: the scales of the run, the mesh partition and the mesh
+cutting, the input file (write and read), the solver construction from
+fields that are already on the mesh, and a few helpers for logs and records.
+
+It must not import `giamip`, `gdrift`, `h5netcdf` or `netCDF4`. The
+inversion imports this module, and the inversion must not depend on the
+data readers: every field that comes from data is made once by the prepare
+script and written to the input file.
+
+The directory of this file is self-contained. It imports nothing from
+another experiment directory and nothing from `tests/`. Shared library code
+comes from `gadopt` and `giamsh` only.
+
+THE INPUT FILE
+    One Firedrake `CheckpointFile`, written by `write_inputs` and read by
+    `read_inputs`. It holds:
+
+    - the parent mesh (`giamip_parent`), refined and curved, saved with its
+      distribution (`mantle_balanced_<ranks>`);
+    - the earth fields and the forcing fields of the mantle (`MANTLE_FIELDS`)
+      as copies on the parent mesh;
+    - the ice of every step of the inversion march (`ice`, one entry per
+      step, `idx` = step index), as copies on the parent mesh;
+    - the JSON record of the prepare run (`/giamip_inputs/record`).
+
+    `CheckpointFile` stores one mesh per function and knows nothing of
+    `Submesh`, so a field on the mantle submesh goes into the file as its
+    copy on the parent mesh, in the broken (cell-wise discontinuous) version
+    of its element. The copy follows the submesh map cell by cell, so the
+    round trip mantle -> parent -> mantle returns the same nodal values. The
+    broken element matters for a continuous field: the parent nodes on the
+    CMB and on Re are shared with cells outside the mantle, and a continuous
+    parent space would take the value of whichever cell came last there.
+
+    The state file of an inversion is a copy of the input file. The
+    inversion appends the bed of each ROL iteration to it as a continuous
+    CG2 field on the parent (`append_control`), an exact copy of the mantle
+    nodes made with `Function.assign` (see there).
+
+    A mesh saved with a custom partition loads with that partition only on
+    the same number of ranks. The prepare job and the inversion job must
+    therefore run on the same number of ranks; `read_inputs` stops with an
+    error otherwise.
+"""
+
+import hashlib
+import json
+import os
+import resource
+import subprocess
+import sys
+import time
+
+import numpy as np
+
+# gadopt before firedrake: gadopt re-exports the Firedrake names.
+from gadopt import (COMM_WORLD, CheckpointFile,  # noqa: E402
+                    CompressibleInternalVariableApproximation, Constant,
+                    Cofunction, DirichletBC, Function, FunctionSpace, Mesh,
+                    SpatialCoordinate, SphericalDtN, Submesh,
+                    VectorFunctionSpace, assemble, ds, dx, interpolate, log)
+from gadopt.gia_gravity import (FluidCore, SeaLevel,  # noqa: E402
+                                SelfGravitatingGIASolver,
+                                rigid_rotation_nullspace,
+                                self_gravitating_gia_space,
+                                selfgrav_dtn_iterative_solver_parameters)
+from gadopt.sea_level_masks import (DEFAULT_ALPHA_MASK,  # noqa: E402
+                                    DEFAULT_GRAD_FLOOR)
+from finat.ufl import BrokenElement  # noqa: E402
+from firedrake.adjoint_utils.checkpointing import \
+    maybe_disk_checkpoint  # noqa: E402
+from mpi4py import MPI  # noqa: E402
+from petsc4py import PETSc  # noqa: E402
+from pyadjoint import Block  # noqa: E402
+from pyop2 import op2  # noqa: E402
+from pyadjoint.tape import (annotate_tape, get_working_tape,  # noqa: E402
+                            stop_annotating)
+from scipy.spatial import cKDTree  # noqa: E402
+
+from giamsh import refine as giamsh_refine  # noqa: E402
+
+# --------------------------------------------------------------------------
+# Constants that are not in the experiment definition
+# --------------------------------------------------------------------------
+
+#: Newton's constant of the PREM-stable gravity column
+#: (`prem-stable/build_prem_stable.py`, CODATA 2018), m^3 kg^-1 s^-2. The
+#: scales use it, so the scaled Poisson equation and the gravity of the file
+#: belong to the same mass.
+G_NEWTON = 6.6743e-11
+#: The length scale D, the mantle thickness of PREM-stable, m. The giamsh
+#: mesh is in this unit.
+D_SCALE = 2.891e6
+#: The stress scale, Pa.
+MU_BAR = 1.0e11
+#: The viscosity scale, Pa s.
+ETA_BAR = 1.0e21
+#: The time scale eta_bar / mu_bar = 1e10 s in Julian years.
+T_BAR_YR = ETA_BAR / MU_BAR / (365.25 * 86400.0)
+#: The viscosity that stands for an elastic layer ("inf" in the giamip
+#: model files), Pa s. 1e40 Pa s gives a Maxwell time of about 2e19 t_bar,
+#: far beyond any run.
+ETA_LID = 1.0e40
+#: The rotation rate of the Earth, rad/s (the value of the Spada benchmark
+#: and of lovejx).
+OMEGA = 7.292115e-5
+#: The observed polar moment of inertia over M Re^2, as lovejx uses it
+#: (`lovejx/sealevel/constants.py`).
+C_OVER_MRE2 = 0.3307007
+
+#: Facet tags of the giamsh layout that the solver needs: the surface Re, the
+#: CMB, and the two DtN spheres.
+SURF_RE, SURF_RC, SURF_OUTER, SURF_INNER = 2, 3, 4, 5
+#: The degree of `SphericalDtN` on the two truncation spheres.
+DTN_DEGREE = 5
+#: The representation of the DtN operators in the coupled solver.
+DTN_REPRESENTATION = "lowrank"
+#: The tolerances of the outer FGMRES and of block 0.
+OUTER_RTOL = 1.0e-6
+BLOCK0_RTOL = 1.0e-4
+
+#: The names of the meshes. They are the same in every experiment
+#: directory, so the input files of two experiments differ only in their
+#: data.
+PARENT_NAME = "giamip_parent"
+MANTLE_NAME = "giamip_mantle"
+SURFACE_NAME = "giamip_surface"
+
+#: The HDF5 group of the record of the prepare run in the input file.
+INPUT_GROUP = "/giamip_inputs"
+
+#: The fields of the mantle in the input file: name -> (family, degree) of
+#: the space on the mantle mesh, and the meaning of the field. All values
+#: are non-dimensional (see `Scales`).
+MANTLE_FIELDS = {
+    # Density of PREM-stable, DG1, in units of rho_bar.
+    "density": ("DG", 1),
+    # Shear modulus, DG1, in units of mu_bar.
+    "shear_modulus": ("DG", 1),
+    # Bulk modulus, DG1, in units of mu_bar.
+    "bulk_modulus": ("DG", 1),
+    # Viscosity at the cell centroid, DG0, in units of eta_bar.
+    "viscosity": ("DG", 0),
+    # Gravity of PREM-stable, CG2, in units of g_bar (continuous, because
+    # the prestress terms take its gradient).
+    "gravity": ("CG", 2),
+    # The observed sea level -bed_obs / D, CG2 (the mask width reads its
+    # slope). Only its values on Re are used.
+    "SL_obs": ("CG", 2),
+    # The frozen surface slope of the ocean mask, |grad_t SL_obs|, DG1
+    # (`gadopt.sea_level_masks.surface_slope`), dimensionless.
+    "slope": ("DG", 1),
+}
+#: The ice of each step: thickness in units of D, CG1 on the mantle. CG1,
+#: because a CG2 interpolant of a field that is zero next to a thick ice
+#: margin undershoots below zero between nodes, and a negative thickness is
+#: a negative load.
+ICE_NAME = "ice"
+ICE_SPACE = ("CG", 1)
+
+#: The optional fields of the mantle: name -> (family, degree, record key).
+#: A field is written and read only when the record of the input file has
+#: its key, so an input file of a Maxwell experiment (no key) holds and
+#: loads exactly `MANTLE_FIELDS`. The rheology of Exp09, Exp10 and Exp12
+#: (design handout of 2026-10-20, sections 12.4 and 12.5):
+#:
+#: - `n_elements` (an integer N): the Maxwell elements in parallel that
+#:   represent the Extended Burgers fit. `shear_moduli` is a DG1 vector
+#:   field of N components (units of mu_bar) and `viscosities` a DG0 vector
+#:   field of N components (units of eta_bar); component j is element j.
+#:   `shear_modulus` and `viscosity` stay in the file as the Maxwell
+#:   reference (the modulus of the Maxwell twin, mu_inf, and the long-term
+#:   viscosity eta_0).
+#: - `power_law` (a dict, see `power_law_settings`): the power-law exponent
+#:   n, a DG0 field that is exactly 1.0 or exactly the exponent of the
+#:   record in each cell, and the transition stress, a DG0 field in units
+#:   of mu_bar, positive in every cell (`power_law_factor` divides by it
+#:   also where n = 1).
+OPTIONAL_FIELDS = {
+    "shear_moduli": ("DG", 1, "n_elements"),
+    "viscosities": ("DG", 0, "n_elements"),
+    "exponent": ("DG", 0, "power_law"),
+    "transition_stress": ("DG", 0, "power_law"),
+}
+
+
+def field_names(record):
+    """The names of the mantle fields of an input file with this record.
+
+    `MANTLE_FIELDS`, then every name of `OPTIONAL_FIELDS` whose record key
+    is in `record`, in the order of `OPTIONAL_FIELDS`.
+    """
+    return list(MANTLE_FIELDS) + [name for name, (_, _, key)
+                                  in OPTIONAL_FIELDS.items() if key in record]
+
+
+def field_space(mantle, name, record):
+    """The space of the mantle field `name` of an input file with `record`.
+
+    A scalar space for the names of `MANTLE_FIELDS` and for the power-law
+    fields; a vector space of `record["n_elements"]` components for
+    `shear_moduli` and `viscosities`.
+    """
+    if name in MANTLE_FIELDS:
+        return FunctionSpace(mantle, *MANTLE_FIELDS[name])
+    family, degree, key = OPTIONAL_FIELDS[name]
+    if key == "n_elements":
+        return VectorFunctionSpace(mantle, family, degree,
+                                   dim=int(record["n_elements"]))
+    return FunctionSpace(mantle, family, degree)
+
+
+def power_law_settings(record):
+    """The power-law entry of a record, checked; None without a power law.
+
+    The entry is written by the prepare scripts of Exp10 and Exp12:
+    `{"exponent": 3.5, "background_stress": 0.0, ...}`, with the exponent
+    of the power-law cells (the other cells have exactly 1.0) and the
+    background stress in units of mu_bar. Further keys (the rule, the
+    transition stress in MPa) are a record for the reader and are not used
+    here.
+
+    Raises:
+      ValueError: if the exponent is missing or not above 1, or the
+        background stress is negative.
+    """
+    settings = record.get("power_law")
+    if settings is None:
+        return None
+    exponent = float(settings["exponent"])
+    background = float(settings.get("background_stress", 0.0))
+    if not exponent > 1.0 or background < 0.0:
+        raise ValueError(f"power_law record {settings}: the exponent must be "
+                         "above 1 and the background stress not negative")
+    return {"exponent": exponent, "background_stress": background}
+
+
+# --------------------------------------------------------------------------
+# Scales
+# --------------------------------------------------------------------------
+
+
+class Scales:
+    """The non-dimensional scales of the run.
+
+    length       D = 2891 km, the mantle thickness of PREM-stable (also the
+                 unit of the giamsh mesh)
+    gravity      g_bar = g(Re) of PREM-stable, so g_s = 1 in the scaled
+                 equations
+    density      rho_bar = 3 g_bar / (4 pi G Re), the mean density that
+                 gives that surface gravity
+    stress       mu_bar = 1e11 Pa
+    viscosity    eta_bar = 1e21 Pa s, time t_bar = eta_bar / mu_bar = 1e10 s
+
+    Lambda = 4 pi G rho_bar D / g_bar = 3 D / Re, so the scaled Poisson
+    equation and the scaled gravity of the file describe the same mass.
+
+    The prepare script builds the scales from the elastic structure of the
+    experiment (`from_elastic`) and writes `as_dict` into the record. The
+    inversion builds them again from the record (`from_dict`), so it does
+    not read the earth model.
+
+    Args:
+      g_bar: gravity just below the surface, m/s^2.
+      Re_m: the surface radius, m.
+      Rc_m: the core-mantle boundary radius, m.
+
+    Attributes:
+      g_bar: g at the surface, m/s^2.
+      rho_bar: the mean density that gives `g_bar`, kg/m^3.
+      Re, Rc: the surface and CMB radii, non-dimensional.
+      B_mu: rho_bar g_bar D / mu_bar.
+      Lambda: 4 pi G rho_bar D / g_bar.
+      Omega_sq: Omega^2 D / g_bar.
+      earth_mass_kg: the mass that gives `g_bar`, kg.
+    """
+
+    def __init__(self, g_bar, Re_m, Rc_m):
+        self.Re_m = float(Re_m)
+        self.Rc_m = float(Rc_m)
+        self.g_bar = float(g_bar)
+        # The mass inside Re that gives g_bar at Re, and its mean density.
+        self.earth_mass_kg = self.g_bar * self.Re_m**2 / G_NEWTON
+        self.rho_bar = self.earth_mass_kg / (4.0 / 3.0 * np.pi * self.Re_m**3)
+        self.Re = self.Re_m / D_SCALE
+        self.Rc = self.Rc_m / D_SCALE
+        # The buoyancy number and the self-gravity number of the scaled
+        # equations.
+        self.B_mu = self.rho_bar * self.g_bar * D_SCALE / MU_BAR
+        self.Lambda = 4 * np.pi * G_NEWTON * self.rho_bar * D_SCALE / self.g_bar
+        # The centrifugal number of the rotational potential.
+        self.Omega_sq = OMEGA**2 * D_SCALE / self.g_bar
+
+    @classmethod
+    def from_elastic(cls, elastic):
+        """The scales of a `giamip.earth.ElasticProfile`.
+
+        Gravity is taken just below the surface; the surface is the last
+        node of the profile.
+        """
+        Re_m = elastic.surface_radius_m
+        g_bar = float(elastic(Re_m, "below")["g_m_s2"])
+        return cls(g_bar, Re_m, elastic.core_mantle_boundary_m)
+
+    @classmethod
+    def from_dict(cls, record):
+        """The scales of the record written by `as_dict`."""
+        return cls(record["g_bar"], record["Re_m"], record["Rc_m"])
+
+    def as_dict(self):
+        """The scales as plain numbers, for the record."""
+        return {"D_m": D_SCALE, "g_bar": self.g_bar, "rho_bar": self.rho_bar,
+                "mu_bar": MU_BAR, "eta_bar": ETA_BAR, "t_bar_yr": T_BAR_YR,
+                "G": G_NEWTON, "Re_m": self.Re_m, "Rc_m": self.Rc_m,
+                "Re": self.Re, "Rc": self.Rc, "B_mu": self.B_mu,
+                "Lambda": self.Lambda, "Omega_sq": self.Omega_sq,
+                "earth_mass_kg": self.earth_mass_kg}
+
+
+# --------------------------------------------------------------------------
+# The mesh
+# --------------------------------------------------------------------------
+
+#: The bits per axis of the Hilbert curve that orders the cell directions in
+#: `mantle_balanced_partition`. 2^10 = 1024 steps across the unit cube give
+#: a step of 2 / 1023 in each component of the direction, 12 km at Re, well
+#: below the size of the coarse cells.
+HILBERT_BITS = 10
+
+
+def hilbert_keys(ijk, bits):
+    """The index of integer points along a 3-D Hilbert curve.
+
+    The algorithm is the transpose form of Skilling (2004), "Programming the
+    Hilbert curve", AIP Conf. Proc. 707, 381, applied to all points at once.
+    It undoes the excess work, Gray-codes the result, and interleaves the
+    bits of the three axes into one key. Points that are close along the
+    curve are close in space, so an equal split of the sorted keys gives
+    compact pieces.
+
+    Args:
+      ijk: an integer array of shape `(n, 3)` with values in `[0, 2**bits)`.
+      bits: the bits per axis. The key has `3 * bits` bits and must fit in
+        int64, so `bits` is at most 21.
+
+    Returns:
+      An int64 array of `n` keys.
+    """
+    X = np.array(ijk, dtype=np.int64)
+    M = np.int64(1) << (bits - 1)
+    # Inverse undo of the excess work, from the top bit down.
+    Q = M
+    while Q > 1:
+        P = Q - 1
+        for i in range(3):
+            high = (X[:, i] & Q) != 0
+            # Where the bit is set, invert the low bits of the first axis.
+            X[high, 0] ^= P
+            # Elsewhere, exchange the low bits of the first axis and axis i.
+            low = ~high
+            t = (X[low, 0] ^ X[low, i]) & P
+            X[low, 0] ^= t
+            X[low, i] ^= t
+        Q >>= 1
+    # Gray encode.
+    for i in range(1, 3):
+        X[:, i] ^= X[:, i - 1]
+    t = np.zeros(len(X), dtype=np.int64)
+    Q = M
+    while Q > 1:
+        t[(X[:, 2] & Q) != 0] ^= Q - 1
+        Q >>= 1
+    X ^= t[:, None]
+    # Interleave: the top bit of each axis first, axis 0 before axis 1.
+    key = np.zeros(len(X), dtype=np.int64)
+    for b in range(bits - 1, -1, -1):
+        for i in range(3):
+            key = (key << 1) | ((X[:, i] >> b) & 1)
+    return key
+
+
+def mantle_balanced_partition(plex, nparts, mantle_tags):
+    """A partition that gives every rank the same number of mantle cells.
+
+    The mantle of the giamsh mesh is several cell tags (one per layer). Each
+    cell is ordered by the Hilbert key of the direction of its centroid. The
+    mantle cells, in that order, are split into `nparts` pieces of equal
+    count, and every other cell goes to the rank whose mantle piece covers
+    its key. Every rank then owns a solid-angle sector through all shells,
+    and the mantle cell counts differ by at most one. The mantle carries
+    most of the work (displacement, internal variables and potential), so
+    this balances the solver.
+
+    Collective. Only rank 0 holds cells, because the gmsh reader loads the
+    whole file there.
+
+    Args:
+      plex: the serial `DMPlex` of the gmsh file, on `COMM_WORLD`.
+      nparts: the number of ranks.
+      mantle_tags: the cell tags of the mantle region.
+
+    Returns:
+      `(sizes, points)` for `distribution_parameters["partition"]`.
+    """
+    cstart, cend = plex.getHeightStratum(0)
+    if cend == cstart:
+        return (np.zeros(nparts, dtype=PETSc.IntType),
+                np.zeros(0, dtype=PETSc.IntType))
+    # The direction of the centroid of every cell, from its vertices.
+    section = plex.getCoordinateSection()
+    coordinates = plex.getCoordinatesLocal()
+    centroid = np.array([plex.vecGetClosure(section, coordinates, c)
+                         .reshape(-1, 3).mean(axis=0)
+                         for c in range(cstart, cend)])
+    direction = centroid / np.linalg.norm(centroid, axis=1)[:, None]
+    # Directions in [-1, 1]^3 mapped onto the integer grid of the curve.
+    scale = (1 << HILBERT_BITS) - 1
+    key = hilbert_keys(np.rint((direction + 1.0) * 0.5 * scale), HILBERT_BITS)
+    mantle = np.zeros(cend - cstart, dtype=bool)
+    for tag in mantle_tags:
+        points = plex.getStratumIS("Cell Sets", tag).getIndices()
+        mantle[np.asarray(points) - cstart] = True
+    part = np.empty(cend - cstart, dtype=np.int64)
+    # Equal counts of mantle cells along the curve.
+    mantle_index = np.flatnonzero(mantle)
+    order = mantle_index[np.argsort(key[mantle_index], kind="stable")]
+    part[order] = (np.arange(len(order)) * nparts) // len(order)
+    # Every other cell goes to the rank whose key range covers its key.
+    first = np.searchsorted(part[order], np.arange(nparts), side="left")
+    starts = key[order][first]
+    other = np.flatnonzero(~mantle)
+    part[other] = np.clip(
+        np.searchsorted(starts, key[other], side="right") - 1, 0, nparts - 1)
+    sizes = np.bincount(part, minlength=nparts).astype(PETSc.IntType)
+    points = (np.argsort(part, kind="stable") + cstart).astype(PETSc.IntType)
+    return sizes, points
+
+
+def distribution_name():
+    """The name of the mesh distribution on this number of ranks.
+
+    `CheckpointFile.save_mesh` hangs in `DMPlex.topologyView` for a mesh
+    built with a custom partition and no distribution name, so the name is
+    always set. It names the rank count, because the partition belongs to it.
+    """
+    return f"mantle_balanced_{COMM_WORLD.size}"
+
+
+def build_meshes(msh, radial, n_levels):
+    """Read, partition, refine and curve the parent mesh; cut the mantle.
+
+    Args:
+      msh: the coarse gmsh file.
+      radial: the `giamsh.radial.RadialStructure` of its sidecar.
+      n_levels: uniform refinement levels (0 for L0).
+
+    Returns:
+      `(parent, mantle, counts)`, with `counts` from `mesh_counts`.
+    """
+    mantle_tags = list(radial.region_tags("mantle"))
+    plex = PETSc.DMPlex().createFromFile(msh, comm=COMM_WORLD)
+    plex.setName("giamip_topology")
+    sizes, points = mantle_balanced_partition(plex, COMM_WORLD.size,
+                                              mantle_tags)
+    linear = Mesh(plex, distribution_parameters={"partition": (sizes, points)},
+                  distribution_name=distribution_name(), name="giamip_linear")
+    # The sag check of giamsh raises on this coarse mesh (cmb, buffer_2 and
+    # outer), and the refinement of the mesh campaign ran without it.
+    linear = giamsh_refine.refine_uniform(linear, radial, n_levels,
+                                          curve=False, check=False)
+    parent = giamsh_refine.curve_mesh(linear, name=PARENT_NAME)
+    # `refine_uniform` refines with Firedrake's `MeshHierarchy`, which marks
+    # the refined topology with multigrid level information. The mantle
+    # submesh has none, and a mixed space over the parent and the mantle then
+    # fails with "Found inconsistent component meshes". The solver uses
+    # GAMG, not geometric multigrid, so the level information is removed.
+    # It also holds the coarser meshes of the hierarchy, whose memory is then
+    # released.
+    for mesh in (linear, parent):
+        if hasattr(mesh.topological, "__level_info__"):
+            delattr(mesh.topological, "__level_info__")
+    mantle = mantle_mesh(parent, mantle_tags)
+    counts = mesh_counts(parent, mantle)
+    counts["folded_cells_parent"] = giamsh_refine.folded_cells(parent)
+    counts["folded_cells_mantle"] = giamsh_refine.folded_cells(mantle)
+    if counts["folded_cells_parent"] or counts["folded_cells_mantle"]:
+        raise RuntimeError(f"folded cells after the curving: {counts}")
+    return parent, mantle, counts
+
+
+#: The DMPlex label that marks every mantle cell with the value 1.
+MANTLE_LABEL = "giamip_mantle_cells"
+
+
+def mantle_mesh(parent, mantle_tags):
+    """The curved mantle submesh of the parent mesh.
+
+    The mantle is several cell tags, one per layer. `Submesh(parent, 3,
+    tags)` with a list merges the cells of each tag with `IS.union`, and on
+    a rank that holds cells of one tag and none of a later tag that merge
+    works on an empty index set without a communicator and stops with
+    "Invalid communicator" in `ISSorted` (Firedrake `dmcommon.submesh_create`).
+    All mantle cells therefore go into one label of their own, and `Submesh`
+    takes that one value: a single value needs no merge. Halo cells are
+    labelled too, as `Cell Sets` labels them.
+
+    The submesh has straight-sided cells; `giamsh.refine.curve_mesh` curves
+    it with the rule that curved the parent, so the two geometries agree at
+    every node.
+
+    Args:
+      parent: the parent mesh, built by `build_meshes` or loaded from the
+        input file.
+      mantle_tags: the cell tags of the mantle region.
+
+    Returns:
+      The mantle mesh (P2 coordinates), named `MANTLE_NAME`.
+    """
+    dm = parent.topology_dm
+    if not dm.hasLabel(MANTLE_LABEL):
+        dm.createLabel(MANTLE_LABEL)
+    label = dm.getLabel(MANTLE_LABEL)
+    for tag in mantle_tags:
+        if dm.getStratumSize("Cell Sets", tag) > 0:
+            for point in dm.getStratumIS("Cell Sets", tag).getIndices():
+                label.setValue(point, 1)
+    submesh = Submesh(parent, 3, 1, label_name=MANTLE_LABEL)
+    return giamsh_refine.curve_mesh(submesh, name=MANTLE_NAME)
+
+
+def mesh_counts(parent, mantle):
+    """Global cell counts and the spread of the mantle cells over the ranks."""
+    local_mantle = mantle.cell_set.size
+    counts = COMM_WORLD.allgather(local_mantle)
+    return {"cells_parent": COMM_WORLD.allreduce(parent.cell_set.size,
+                                                 op=MPI.SUM),
+            "cells_mantle": int(sum(counts)),
+            "mantle_cells_per_rank_min": int(min(counts)),
+            "mantle_cells_per_rank_max": int(max(counts)),
+            "ranks": COMM_WORLD.size}
+
+
+def surface_mesh(mantle):
+    """The surface Re as a codim-1 `Submesh` of the mantle.
+
+    The submesh takes its coordinates from the DMPlex of the mantle, which
+    holds the vertex positions only. Its geometry is therefore P1 (flat
+    triangles), not the P2 geometry of the curved mantle: the vertices are
+    the vertices of the mantle, but the edge midpoints of the surface lie on
+    the chords, below the curved midpoint nodes of the mantle on Re. The
+    control and its Riesz map live on this P1 surface. Fields move between
+    the surface and the mantle only through `SurfaceNodeMap`, which matches
+    the nodes and never evaluates a field at a point.
+    """
+    return Submesh(mantle, 2, SURF_RE, name=SURFACE_NAME)
+
+
+# --------------------------------------------------------------------------
+# The exact node map between the surface and the mantle
+# --------------------------------------------------------------------------
+
+
+class SurfaceNodeMap:
+    r"""The exact map between CG2 on the surface submesh and CG2 on the mantle.
+
+    WHY THIS EXISTS
+        Firedrake interpolates between a mesh and its submesh across the
+        submesh map only when both have the same topological dimension. The
+        surface is a codim-1 submesh of the mantle, so `interpolate` between
+        the two falls back to the cross-mesh interpolator: it locates every
+        target node in the source mesh by a point search and evaluates the
+        source field there. The surface has P1 geometry and the mantle P2
+        geometry (see `surface_mesh`), so the curved midpoint nodes of the
+        mantle lie outside the flat surface triangles, and the flat midpoint
+        nodes of the surface lie inside the mantle cells. Both directions
+        then return values that are not the nodal values (an extrapolation
+        of the surface field, or a blend with the interior nodes of the
+        mantle), and a point near a sharp turn of the surface can land in a
+        wrong cell. The round trip mantle -> surface -> mantle is then not
+        the identity, and the solver does not see the bed of the control.
+
+    WHAT IT DOES
+        The CG2 nodes of the surface are the CG2 nodes of the mantle on Re.
+        This class pairs them once, by position, and stores the pairing as a
+        sparse matrix `R` of zeros and ones in the global numbering of the
+        two spaces: one row per surface node, with a single 1 in the column
+        of its mantle node. Then
+
+            restrict:  b = R m       (mantle -> surface, a copy of the
+                                      values at the nodes on Re)
+            extend:    m = R^T b     (surface -> mantle, a copy onto the
+                                      nodes on Re, zero at every other node)
+
+        Both are exact: the product of a value with 1.0 and a sum with zeros
+        are exact in floating point, so `restrict(extend(b)) == b` bit for
+        bit. `extend` is linear, so its adjoint is `R` applied to the
+        coefficients of the adjoint cofunction (`SurfaceExtendBlock`).
+
+    THE PAIRING
+        The two meshes share the vertex positions, so the nodes are matched
+        in the P1 geometry of both: the surface nodes from the surface
+        coordinates, which are P1, and the mantle nodes from the P1
+        interpolant of the mantle coordinates (the curving of
+        `giamsh.refine.curve_mesh` does not move the vertices). The match
+        is a nearest-neighbour search per rank among the mantle nodes on Re.
+        Every local surface node must find a mantle node within a round-off
+        distance, and no two surface nodes may share one; otherwise the
+        constructor raises. A local surface facet is always a local mantle
+        facet, so every surface node of a rank, owned or halo, is a node of
+        the mantle on that rank. Each rank inserts the rows of the surface
+        nodes it owns; the column may be a mantle node of another rank,
+        which the global numbering handles.
+
+    Args:
+      V_surface: CG2 on the surface submesh.
+      V_mantle: CG2 on the mantle mesh, the parent of the surface submesh.
+      boundary: the facet tag of the surface in the mantle mesh.
+
+    Raises:
+      RuntimeError: if a surface node has no mantle node at its position,
+        if two surface nodes share a mantle node, or if a mantle node on Re
+        has no surface node.
+    """
+
+    def __init__(self, V_surface, V_mantle, boundary=SURF_RE):
+        self.V_surface = V_surface
+        self.V_mantle = V_mantle
+        surface = V_surface.mesh()
+        mantle = V_mantle.mesh()
+        comm = mantle.comm
+
+        # The P1 positions of the CG2 nodes of the surface: the surface
+        # coordinates are P1, so the CG2 interpolant of the coordinates
+        # holds the vertices and the chord midpoints.
+        x_surface = Function(VectorFunctionSpace(surface, "CG", 2)).interpolate(
+            SpatialCoordinate(surface)).dat.data_ro_with_halos
+        # The P1 positions of the CG2 nodes of the mantle: the curved
+        # coordinates evaluated at the vertices (CG1, exact at the vertices),
+        # then the CG2 interpolant of that P1 field (vertices and chord
+        # midpoints, as on the surface).
+        vertices = Function(VectorFunctionSpace(mantle, "CG", 1)).interpolate(
+            mantle.coordinates)
+        x_mantle = Function(VectorFunctionSpace(mantle, "CG", 2)).interpolate(
+            vertices).dat.data_ro_with_halos
+        # The local mantle nodes on Re, owned and halo.
+        on_boundary = np.asarray(DirichletBC(V_mantle, 0.0, boundary).nodes)
+
+        n_surface = len(x_surface)
+        bad = 0
+        if n_surface:
+            tree = cKDTree(x_mantle[on_boundary])
+            distance, nearest = tree.query(x_surface)
+            # Round-off distance: the coordinates are O(1) in units of D,
+            # and the node spacing is many orders of magnitude larger.
+            tolerance = 1e-9 * max(1.0, float(np.abs(x_surface).max()))
+            bad += int(np.sum(distance > tolerance))
+            bad += n_surface - len(np.unique(nearest))
+            mantle_node = on_boundary[nearest]
+        else:
+            mantle_node = np.zeros(0, dtype=np.int64)
+        bad = comm.allreduce(bad, op=MPI.SUM)
+        if bad:
+            raise RuntimeError(
+                f"SurfaceNodeMap: {bad} surface nodes have no unique mantle "
+                "node at their position")
+
+        # The matrix R, rows = surface nodes, columns = mantle nodes, in
+        # the global numbering of the PETSc vectors of the two spaces. A
+        # scalar CG2 space has block size 1, so the local-to-global map of
+        # the node set is the map of the vector entries. Firedrake numbers
+        # the owned nodes of a rank before its halo nodes.
+        n_owned = V_surface.dof_dset.size
+        rows = V_surface.dof_dset.lgmap.apply(
+            np.arange(n_owned, dtype=PETSc.IntType))
+        cols = V_mantle.dof_dset.lgmap.apply(
+            mantle_node[:n_owned].astype(PETSc.IntType))
+        R = PETSc.Mat().createAIJ(
+            size=((n_owned, PETSc.DETERMINE),
+                  (V_mantle.dof_dset.size, PETSc.DETERMINE)),
+            nnz=(1, 1), comm=comm)
+        for row, col in zip(rows, cols):
+            R.setValue(row, col, 1.0)
+        R.assemble()
+        self.R = R
+
+        # Coverage: R^T 1 must be 1 at every mantle node on Re and 0
+        # elsewhere. A value above 1 would mean two surface nodes on one
+        # mantle node; a 0 on Re would mean a mantle node that no surface
+        # node reaches (the solver would read a zero bed there).
+        ones = Function(V_surface).assign(1.0)
+        hits = Function(V_mantle)
+        self._apply_transpose(ones, hits)
+        # The indicator of the mantle nodes on Re. A rank finds the nodes on
+        # Re through its local facets, and an owned node of a rank can lie
+        # on Re facets that only another rank holds. Each rank therefore
+        # marks every local node on Re, owned or halo, and the halo entries
+        # are sent to the owners with a MAX reduction.
+        expected = Function(V_mantle)
+        expected.dat.data_wo_with_halos[on_boundary] = 1.0
+        expected.dat.local_to_global_begin(op2.MAX)
+        expected.dat.local_to_global_end(op2.MAX)
+        with hits.dat.vec_ro as h, expected.dat.vec_ro as e:
+            mismatch = (h - e).norm(PETSc.NormType.INFINITY)
+        if mismatch != 0.0:
+            raise RuntimeError(
+                "SurfaceNodeMap: the surface nodes do not cover the mantle "
+                f"nodes on Re one to one (largest mismatch {mismatch})")
+
+    def _apply(self, source, out, scale=1.0):
+        """`out = scale R source` on the coefficient vectors (no annotation).
+
+        `source` lives on the mantle side (a Function in `V_mantle`, or a
+        Cofunction on its dual), `out` on the surface side. The work is done
+        on the PETSc vectors of the owned entries; Firedrake marks the halo
+        of `out` as out of date and updates it when it is next read. The
+        scaling is done on the PETSc vector too, so no halo value is touched
+        before that update.
+        """
+        with source.dat.vec_ro as x, out.dat.vec_wo as y:
+            self.R.mult(x, y)
+            if scale != 1.0:
+                y.scale(scale)
+        return out
+
+    def _apply_transpose(self, source, out, scale=1.0):
+        """`out = scale R^T source` on the coefficient vectors (no annotation).
+
+        `source` is a Function in `V_surface`, `out` a Function in
+        `V_mantle`. See `_apply` for the halo.
+        """
+        with source.dat.vec_ro as x, out.dat.vec_wo as y:
+            self.R.multTranspose(x, y)
+            if scale != 1.0:
+                y.scale(scale)
+        return out
+
+    def restrict(self, f_mantle, out=None):
+        """The values of a mantle CG2 field at the surface nodes, exactly.
+
+        Not annotated: the inversion uses it only with annotation paused
+        (the observed bed and the restart bed).
+
+        Args:
+          f_mantle: a Function in `V_mantle`.
+          out: a Function in `V_surface` to write into, or None for a new one.
+
+        Returns:
+          The Function in `V_surface`.
+        """
+        out = Function(self.V_surface) if out is None else out
+        return self._apply(f_mantle, out)
+
+    def extend(self, f_surface, out, scale=1.0):
+        """Write `scale * f_surface` onto the mantle nodes on Re, exactly.
+
+        Every other node of `out` becomes zero. The solver reads `out` only
+        on the facets of Re, where only the nodes on Re matter. When the
+        tape is annotating, one `SurfaceExtendBlock` goes on it, with
+        `f_surface` as its dependency and `out` as its output.
+
+        Args:
+          f_surface: a Function in `V_surface`.
+          out: a Function in `V_mantle`; it is overwritten.
+          scale: a float factor (for example `-1 / D` from a bed in metres
+            to a non-dimensional sea level). A float, not a `Constant`, so
+            it is not a control of the tape.
+
+        Returns:
+          `out`.
+        """
+        scale = float(scale)
+        annotate = annotate_tape()
+        if annotate:
+            block = SurfaceExtendBlock(self, f_surface, scale)
+            get_working_tape().add_block(block)
+        with stop_annotating():
+            self._apply_transpose(f_surface, out, scale)
+        if annotate:
+            block.add_output(out.create_block_variable())
+        return out
+
+
+class SurfaceExtendBlock(Block):
+    """The tape block of `SurfaceNodeMap.extend`: `m = scale R^T b`.
+
+    The map is linear in `b` and does not depend on anything else, so
+
+        tangent linear:  dm = scale R^T db
+        adjoint:         b* = scale R m*    (on the coefficient vectors)
+        Hessian:         the adjoint applied to the second-order input,
+                         with no second-derivative term.
+
+    The adjoint input `m*` is a Cofunction on the dual of the mantle space;
+    `R` maps its coefficients to the coefficients of a Cofunction on the
+    dual of the surface space. That is the transpose of the forward map on
+    the coefficient vectors, which is the adjoint of a linear map between
+    coefficient spaces.
+
+    Args:
+      node_map: the `SurfaceNodeMap`.
+      f_surface: the Function in the surface space that the block reads.
+      scale: the float factor of the map.
+    """
+
+    def __init__(self, node_map, f_surface, scale):
+        super().__init__()
+        self.node_map = node_map
+        self.scale = float(scale)
+        self.add_dependency(f_surface)
+
+    def __str__(self):
+        return f"surface_to_mantle_nodes(scale={self.scale:g})"
+
+    def _adjoint(self, cofunction):
+        """`scale R cofunction` as a Cofunction on the surface dual space."""
+        if cofunction is None:
+            return None
+        out = Cofunction(self.node_map.V_surface.dual())
+        return self.node_map._apply(cofunction, out, self.scale)
+
+    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx,
+                               prepared=None):
+        return self._adjoint(adj_inputs[0])
+
+    def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable, idx,
+                               prepared=None):
+        if tlm_inputs[0] is None:
+            return None
+        out = Function(self.node_map.V_mantle)
+        return self.node_map._apply_transpose(tlm_inputs[0], out, self.scale)
+
+    def evaluate_hessian_component(self, inputs, hessian_inputs, adj_inputs,
+                                   block_variable, idx, relevant_dependencies,
+                                   prepared=None):
+        # Linear map: no second-derivative term.
+        return self._adjoint(hessian_inputs[0])
+
+    def recompute_component(self, inputs, block_variable, idx, prepared=None):
+        # A new Function per replay; with disk checkpointing on it goes to
+        # disk like the outputs of Firedrake's own blocks.
+        out = Function(self.node_map.V_mantle)
+        self.node_map._apply_transpose(inputs[0], out, self.scale)
+        return maybe_disk_checkpoint(out)
+
+
+# --------------------------------------------------------------------------
+# The input file
+# --------------------------------------------------------------------------
+
+
+class ParentCopy:
+    """Copies of mantle fields on the parent mesh, for `CheckpointFile`.
+
+    A field on the mantle submesh is interpolated into the broken version
+    of its element on the mantle, which is exact because the broken space
+    contains the original one. That broken field then goes to the parent
+    across the submesh map. `allow_missing_dofs` leaves the parent cells
+    outside the mantle at zero; nothing reads them.
+
+    One pair of work functions is kept per name, so a field that is written
+    at many steps (the ice) reuses them.
+
+    Args:
+      parent: the parent mesh.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._copies = {}
+
+    def __call__(self, name, f):
+        """The copy of the mantle function `f` on the parent, named `name`."""
+        space = f.function_space()
+        if name not in self._copies:
+            broken = BrokenElement(space.ufl_element())
+            self._copies[name] = (
+                Function(FunctionSpace(space.mesh(), broken)),
+                Function(FunctionSpace(self.parent, broken), name=name))
+        local, copy = self._copies[name]
+        local.interpolate(f)
+        copy.assign(assemble(interpolate(local, copy.function_space(),
+                                         allow_missing_dofs=True)))
+        return copy
+
+
+def write_json_dataset(chk, path, data):
+    """Write `data` as JSON text into the `uint8` dataset `path` of `chk`.
+
+    Every rank must write the same bytes, because the parallel HDF5 file is
+    written by all ranks. The text is made on rank 0 and broadcast. The text
+    is a dataset, not an attribute, because an HDF5 attribute cannot hold
+    more than 64 KiB.
+    """
+    text = json.dumps(plain_json(data)) if COMM_WORLD.rank == 0 else None
+    text = COMM_WORLD.bcast(text, root=0)
+    raw = np.frombuffer(text.encode(), dtype=np.uint8)
+    group, name = os.path.split(path)
+    grp = chk.require_group(group)
+    if name in grp:
+        del grp[name]
+    grp.create_dataset(name, data=raw)
+
+
+def read_json_dataset(chk, path):
+    """Read the JSON text that `write_json_dataset` wrote at `path`."""
+    return json.loads(bytes(chk.h5pyfile[path][...]).decode())
+
+
+def write_inputs(path, parent, fields, ice, record):
+    """Write the input file of the inversion.
+
+    Collective.
+
+    Args:
+      path: the `.h5` file; an existing file is replaced.
+      parent: the parent mesh.
+      fields: `{name: Function on the mantle}` for every name of
+        `field_names(record)`: `MANTLE_FIELDS` and the optional fields that
+        the record asks for (`OPTIONAL_FIELDS`).
+      ice: a callable `ice(index)` that returns the ice of step `index` as a
+        Function on the mantle, and `record["march"]["ice_steps"]` steps.
+      record: the record of the prepare run; it goes into the file as JSON.
+    """
+    names = field_names(record)
+    missing = set(names) - set(fields)
+    if missing:
+        raise ValueError(f"write_inputs: no field for {sorted(missing)}")
+    # The element fields must have one component per element of the record.
+    for name in ("shear_moduli", "viscosities"):
+        if name in names:
+            size = fields[name].function_space().value_size
+            if size != int(record["n_elements"]):
+                raise ValueError(f"write_inputs: {name} has {size} "
+                                 f"components, the record n_elements "
+                                 f"{record['n_elements']}")
+    copies = ParentCopy(parent)
+    with CheckpointFile(path, "w") as chk:
+        chk.save_mesh(parent)
+        # A vector field goes through the broken copy like a scalar one
+        # (`BrokenElement` of the vector element), which is exact.
+        for name in names:
+            chk.save_function(copies(name, fields[name]))
+        # One entry per step of the march, `idx` = step index. The year is
+        # stored with every entry, so the file can be read without the
+        # record.
+        years = record["march"]["years"]
+        for index in range(record["march"]["ice_steps"]):
+            chk.save_function(copies(ICE_NAME, ice(index)), idx=index,
+                              timestepping_info={"year": float(years[index])})
+        write_json_dataset(chk, f"{INPUT_GROUP}/record", record)
+
+
+#: The name of the control (the bed at the start of the run, m): the
+#: surface field of the inversion and of `controls.h5`, and the mantle field
+#: that carries it on the nodes of Re.
+CONTROL_NAME = "bed_start_m"
+#: The space of the bed on the mantle and of its copy in the state file.
+CONTROL_SPACE = ("CG", 2)
+#: The name of the bed in the state file: a CG2 field on the parent mesh,
+#: an exact copy of the mantle nodes (`append_control`).
+STATE_CONTROL_NAME = "bed_start_parent_cg2_m"
+#: The name under which earlier versions of the inversion stored the bed in
+#: the state file: the broken CG2 copy of `ParentCopy`. `read_inputs` still
+#: reads it, so a run of an earlier version can continue (see there).
+LEGACY_STATE_CONTROL_NAME = CONTROL_NAME
+
+
+def append_control(path, parent, bed_mantle, index, info):
+    """Append one iterate of the control to the state file of an inversion.
+
+    The state file is a copy of the input file, and the parent mesh in
+    memory was loaded from it. A function on that mesh can be saved into
+    the same file and loaded back onto a parent mesh loaded from it, without
+    any interpolation between meshes. The bed lives on the surface submesh,
+    which `CheckpointFile` cannot store, so the caller passes it as a CG2
+    field on the mantle (the nodes on Re carry the bed; see
+    `SurfaceNodeMap.extend`).
+
+    The bed goes into the file as a CG2 field on the parent, written with
+    `Function.assign` across the submesh map: an exact copy of the nodal
+    values, no evaluation of basis functions. The input fields use the
+    broken copy of `ParentCopy` instead, whose interpolations change the
+    values by round-off (about 1e-14 relative); for the bed that round-off
+    would make the J of a restart differ from the J of the earlier run. A
+    continuous parent space is exact here because `assign` writes every
+    parent node of a mantle cell with the value of the mantle node, so the
+    nodes on Re, which the parent shares with the cells outside the mantle,
+    take the mantle value; the parent nodes outside the mantle stay zero.
+
+    Collective.
+
+    Args:
+      path: the state file.
+      parent: the parent mesh, loaded from `path`.
+      bed_mantle: the bed on the mantle, CG2, m.
+      index: the ROL iteration, used as `idx`.
+      info: plain numbers stored with the entry (J, RMS misfit).
+    """
+    copy = Function(FunctionSpace(parent, *CONTROL_SPACE),
+                    name=STATE_CONTROL_NAME)
+    copy.assign(bed_mantle, allow_missing_dofs=True)
+    with CheckpointFile(path, "a") as chk:
+        chk.save_function(copy, idx=int(index),
+                          timestepping_info={k: float(v)
+                                             for k, v in info.items()})
+
+
+def read_inputs(path, last_control=False):
+    """Load the meshes, the fields and the ice of an input file.
+
+    Collective. The parent mesh comes from the file with its stored
+    distribution; the mantle submesh is cut from it and curved as
+    `build_meshes` does. Each field is interpolated from its copy on the
+    parent into its space on the mantle (`MANTLE_FIELDS`), across the
+    submesh map.
+
+    Args:
+      path: the input file of `write_inputs`, or the state file of an
+        inversion (a copy of the input file with the iterates of the
+        control appended).
+      last_control: also load the last iterate of the control that
+        `append_control` wrote (or that an earlier version of the inversion
+        wrote as a broken copy, `LEGACY_STATE_CONTROL_NAME`).
+
+    Returns:
+      `(parent, mantle, fields, ice, record)`: `fields` maps each name of
+      `field_names(record)` to a Function on the mantle (`MANTLE_FIELDS`
+      and the optional fields the record names), `ice` is a list with one
+      new Function on the mantle per step. With `last_control`, a sixth
+      item `(bed_mantle, index)`: the bed on the mantle (CG2, m; only the
+      nodes on Re carry it) and the ROL iteration it comes from.
+
+    Raises:
+      RuntimeError: if the file was written on another number of ranks, or
+        if `last_control` is asked for and the file holds no control.
+    """
+    with CheckpointFile(path, "r") as chk:
+        record = read_json_dataset(chk, f"{INPUT_GROUP}/record")
+        ranks = record["mesh"]["ranks"]
+        if ranks != COMM_WORLD.size:
+            raise RuntimeError(
+                f"{path} was written on {ranks} ranks; run on the same "
+                f"number, not {COMM_WORLD.size}. On another number Firedrake "
+                "partitions the mesh again with its default partitioner, "
+                "which can leave ranks without a mantle cell.")
+        parent = chk.load_mesh(PARENT_NAME)
+        names = field_names(record)
+        stored = {name: chk.load_function(parent, name) for name in names}
+        stored_ice = [chk.load_function(parent, ICE_NAME, idx=index)
+                      for index in range(record["march"]["ice_steps"])]
+        stored_control = None
+        if last_control:
+            # The exact copy of `append_control`, or else the broken copy of
+            # an earlier version of the inversion.
+            for control_name in (STATE_CONTROL_NAME,
+                                 LEGACY_STATE_CONTROL_NAME):
+                try:
+                    history = chk.get_timestepping_history(parent,
+                                                           control_name)
+                except Exception:  # noqa: BLE001  (no entry of this name)
+                    continue
+                control_index = int(max(history["index"]))
+                stored_control = chk.load_function(parent, control_name,
+                                                   idx=control_index)
+                break
+            else:
+                raise RuntimeError(f"{path} holds no {STATE_CONTROL_NAME} "
+                                   f"and no {LEGACY_STATE_CONTROL_NAME}")
+    parent.cartesian = False
+    mantle = mantle_mesh(parent, record["mesh"]["mantle_tags"])
+
+    def on_mantle(source, space, name):
+        # The interpolation from the broken parent copy into the mantle space
+        # copies nodal values cell by cell. At a node shared by several
+        # mantle cells every cell holds the same value, because the stored
+        # field was continuous there.
+        target = Function(space, name=name)
+        target.interpolate(source)
+        return target
+
+    fields = {name: on_mantle(stored[name], field_space(mantle, name, record),
+                              name)
+              for name in names}
+    if "exponent" in fields:
+        snap_exponent(fields["exponent"], power_law_settings(record))
+        # `power_law_factor` divides by the transition stress in every cell,
+        # also where n = 1, so it must be positive everywhere.
+        low = COMM_WORLD.allreduce(
+            float(fields["transition_stress"].dat.data_ro.min(initial=np.inf)),
+            op=MPI.MIN)
+        if not low > 0.0:
+            raise RuntimeError(f"{path}: the transition stress is not "
+                               f"positive everywhere (min {low})")
+    ice_space = FunctionSpace(mantle, *ICE_SPACE)
+    ice = [on_mantle(f, ice_space, f"{ICE_NAME}_{index}")
+           for index, f in enumerate(stored_ice)]
+    if last_control:
+        bed = Function(FunctionSpace(mantle, *CONTROL_SPACE),
+                       name=CONTROL_NAME)
+        if stored_control.name() == STATE_CONTROL_NAME:
+            # The exact copy: parent nodes to mantle nodes across the
+            # submesh map, with no evaluation of basis functions.
+            bed.assign(stored_control)
+        else:
+            # The broken copy of an earlier version: the interpolation of
+            # the input fields (exact to round-off). Its nodes on Re hold
+            # the values that the earlier version wrote into `SL_init` (its
+            # cross-mesh interpolation of the control onto the mantle), so
+            # the exact restriction of this field is the bed that the solver
+            # of that run used, and the restart continues from it.
+            bed = on_mantle(stored_control,
+                            FunctionSpace(mantle, *CONTROL_SPACE),
+                            CONTROL_NAME)
+        return parent, mantle, fields, ice, record, (bed, control_index)
+    return parent, mantle, fields, ice, record
+
+
+def snap_exponent(exponent, settings):
+    """Make every value of the DG0 exponent exactly 1.0 or exactly n.
+
+    `power_law_factor` tests `ufl.eq(n - 1, 0)` to choose the Newtonian
+    branch, so a cell with n = 1 must hold 1.0 bit for bit. The prepare
+    script writes the two values exactly; the copy through the parent mesh
+    is an interpolation, which for DG0 multiplies by a basis value of 1 and
+    is exact in practice. This makes it exact by construction: each value
+    within 1e-12 of 1 or of n is set to that number, and any other value
+    stops the run (the file does not hold the rule of its record).
+
+    Collective (the count of bad values is reduced over the ranks).
+
+    Args:
+      exponent: the DG0 exponent on the mantle; changed in place.
+      settings: `power_law_settings(record)`.
+
+    Raises:
+      RuntimeError: if a value is near neither 1 nor n.
+    """
+    n = settings["exponent"]
+    # Read with the halos up to date (a read-only access exchanges them),
+    # check the owned values only (each value is counted once), then write
+    # the snapped values everywhere: every rank snaps a halo value as its
+    # owner does, so the halos stay consistent.
+    values = np.array(exponent.dat.data_ro_with_halos)
+    owned = exponent.dat.data_ro.shape[0]
+    near_one = np.abs(values - 1.0) < 1e-12
+    near_n = np.abs(values - n) < 1e-12
+    bad = COMM_WORLD.allreduce(
+        int(np.sum(~(near_one | near_n)[:owned])), op=MPI.SUM)
+    if bad:
+        sample = values[:owned][~(near_one | near_n)[:owned]][:5]
+        raise RuntimeError(f"{bad} exponent values are neither 1 nor {n} "
+                           f"(on rank {COMM_WORLD.rank}: {sample})")
+    values[near_one] = 1.0
+    values[near_n] = n
+    exponent.dat.data_wo_with_halos[:] = values
+
+
+def element_fields(fields):
+    """The shear moduli and viscosities of the Maxwell elements, as lists.
+
+    With `shear_moduli` and `viscosities` in `fields` (an input file with
+    `n_elements`), element j has the scalar fields of component j, copied
+    from the vector data column by column (the vector and the scalar space
+    of one element share the node numbering, so the copy is exact and
+    needs no interpolation). Without them, the one Maxwell element of
+    `shear_modulus` and `viscosity`.
+
+    Returns:
+      `(shear_moduli, viscosities)`, two lists of N Functions on the mantle.
+    """
+    if "shear_moduli" not in fields:
+        return [fields["shear_modulus"]], [fields["viscosity"]]
+    lists = []
+    for name in ("shear_moduli", "viscosities"):
+        vector = fields[name]
+        space = FunctionSpace(vector.function_space().mesh(),
+                              vector.function_space().ufl_element().sub_elements[0])
+        n = vector.function_space().value_size
+        columns = []
+        for j in range(n):
+            column = Function(space, name=f"{name}_{j}")
+            column.dat.data_wo_with_halos[:] = \
+                vector.dat.data_ro_with_halos[:, j]
+            columns.append(column)
+        lists.append(columns)
+    if len(lists[0]) != len(lists[1]):
+        raise ValueError("shear_moduli and viscosities have different "
+                         "numbers of elements")
+    return lists[0], lists[1]
+
+
+# --------------------------------------------------------------------------
+# Field statistics
+# --------------------------------------------------------------------------
+
+
+def field_statistics(f, measure):
+    """Min, max and integral of a field over all ranks.
+
+    The min and max are over the nodal values that this rank owns. The
+    integral is over `measure` (`dx` of the mantle, or `ds` of Re for a
+    surface field). The prepare script records these numbers and the
+    inversion computes them again after it loads the file: a difference
+    means the file did not come back as it was written.
+
+    A vector field (the element fields of `OPTIONAL_FIELDS`) gives the min
+    and max over all components and the integral of the sum of its
+    components.
+
+    Returns:
+      `{"min": .., "max": .., "integral": ..}`.
+    """
+    data = f.dat.data_ro
+    shape = f.ufl_shape
+    integrand = f if not shape else sum(f[i] for i in range(shape[0]))
+    lo = data.min() if data.size else np.inf
+    hi = data.max() if data.size else -np.inf
+    return {"min": COMM_WORLD.allreduce(float(lo), op=MPI.MIN),
+            "max": COMM_WORLD.allreduce(float(hi), op=MPI.MAX),
+            "integral": float(assemble(integrand * measure))}
+
+
+def input_statistics(mantle, fields, ice):
+    """The `field_statistics` of every field and of the ice of every step.
+
+    The earth fields and the observed sea level are integrated over the
+    mantle volume, the ice over Re (its volume in units of D^3).
+    """
+    volume = dx(domain=mantle)
+    surface = ds(SURF_RE, domain=mantle)
+    stats = {name: field_statistics(f, volume) for name, f in fields.items()}
+    stats[ICE_NAME] = [field_statistics(f, surface) for f in ice]
+    return stats
+
+
+def compare_statistics(expected, found, rtol=1e-10):
+    """The entries of two `input_statistics` results that differ.
+
+    Two numbers of one field agree when they differ by at most `rtol` times
+    the size of that field, the largest magnitude of its min, max and
+    integral. The tolerance is relative to the field and not to each number,
+    because a min of exactly zero (the ice outside the ice sheets) comes
+    back as a round-off value near 1e-19: the interpolation from the stored
+    copy into the mantle space evaluates the basis functions at the nodes,
+    and that evaluation is exact only to round-off. The loaded mesh can also
+    number its cells in another order than the written one, so the
+    integrals can differ in the last bits.
+
+    Returns:
+      A list of `(key, expected, found)` for every entry that differs.
+    """
+    bad = []
+
+    def compare_field(key, a, b):
+        # The size of the field, from the expected numbers.
+        size = max(abs(value) for value in a.values())
+        for name in a:
+            if abs(a[name] - b[name]) > rtol * size:
+                bad.append((f"{key}.{name}", a[name], b[name]))
+
+    def walk(key, a, b):
+        if isinstance(a, list):
+            if len(a) != len(b):
+                bad.append((f"{key} length", len(a), len(b)))
+            for i, (x, y) in enumerate(zip(a, b)):
+                walk(f"{key}[{i}]", x, y)
+        else:
+            compare_field(key, a, b)
+
+    for key in expected:
+        walk(key, expected[key], found[key])
+    return bad
+
+
+# --------------------------------------------------------------------------
+# The solver
+# --------------------------------------------------------------------------
+
+
+def time_step(mantle, value=1.0):
+    """The time step of the solver: a `Function` on the Real space of the mantle.
+
+    A Real `Function` and not a `Constant` (decision S28 of the design
+    handout of 2026-10-20). An assignment to it is a block on the tape, and
+    the coupled solve block lists it as a dependency, so a taped march can
+    change the time step (for example from 500 yr to 100 yr at 26 ka), the
+    replay reads the value of each step from the tape, and the rebuild rule
+    of the preconditioner sees the time step of the step being solved in the
+    replay and in the adjoint (`gadopt.dtn_coupled_adjoint`, `gia_dt`). It
+    lives on the mantle mesh, the mesh of the internal-variable equation,
+    which is the only place the time step enters.
+
+    Args:
+      mantle: the mantle mesh.
+      value: the initial value, units of t_bar. The scripts assign the value
+        of each step before its solve.
+
+    Returns:
+      The Function, named `dt`.
+    """
+    return Function(FunctionSpace(mantle, "R", 0), name="dt").assign(value)
+
+
+def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
+                 options, record=None):
+    """The coupled self-gravitating sea-level solver of the experiment.
+
+    One monolithic system per time step: the compressible viscoelastic
+    mantle (P2 displacement, DG1 internal variables, one Maxwell element),
+    the perturbed gravitational potential on the whole mesh (P2), the fluid
+    core on the CMB, the polar motion and the rotation-rate change (three
+    `Real` rows), the centre-of-mass frame (three `Real` rows), and the
+    sea-level equation with a moving coastline (`Shift`, one `Real` row).
+    The time stepping is backward Euler. The coastline moves, so each step
+    runs Newton.
+
+    The sea level is
+
+        SL    = SL_init + (N - N_init) - (u_r - ur_init) + Shift
+        sigma = rho_w B C (SL - SL_init) + rho_i (1 - B) I - rho_i (1 - B0) I_init
+
+    in the form that `gadopt.SeaLevel` documents, with `N = (psi + psi_rot) /
+    g_s` the geoid with the rotational potential. The run starts from the
+    undeformed state with the ice of the first step on it, so the load is
+    zero at the start and there is no elastic step.
+
+    Args:
+      parent: the parent mesh.
+      mantle: the mantle mesh.
+      fields: the mantle fields of `read_inputs` (`density`,
+        `shear_modulus`, `bulk_modulus`, `viscosity`, `gravity`, `slope`).
+      scales: the `Scales`.
+      constants: the solver constants of the record
+        (`record["solver_constants"]`): core density and gravity at the CMB,
+        ice and water density, polar moment.
+      forcing: `{"SL_init": .., "I": .., "I_init": ..}`, the Functions that
+        the sea-level equation reads (the caller keeps them and changes them).
+      dt: the time step in units of t_bar, the Real `Function` of
+        `time_step`.
+      options: the command line of the caller (`k_s`, `block0_max_it`,
+        `outer_atol`, `outer_max_it`, `gia_rebuild`, `gia_rebuild_every`,
+        `gia_rebuild_max_outer`).
+      record: the record of the input file. Required when `fields` holds
+        the power-law fields: its `power_law` entry gives the background
+        stress (`power_law_settings`).
+
+    Returns:
+      `(solver, layout, record)`.
+    """
+    gravity_bcs = {SURF_OUTER: {"dtn": SphericalDtN(L=DTN_DEGREE)},
+                   SURF_INNER: {"dtn": SphericalDtN(L=DTN_DEGREE)}}
+    # The Maxwell elements in parallel: one (the Maxwell experiments) or N
+    # (the Extended Burgers fit of Exp09 and Exp12, `n_elements` in the
+    # record). The internal variables are one DG1 field of shape (N, 3, 3).
+    shear_moduli, viscosities = element_fields(fields)
+    n_elements = len(shear_moduli)
+    # The record states the rheology of the input file (handout 12.5); the
+    # fields must agree with it, so that a mismatch stops here and does not
+    # build a Maxwell solver for an EB or power-law input file.
+    if record is not None:
+        if int(record.get("n_elements", 1)) != n_elements:
+            raise ValueError(
+                f"build_solver: the record has n_elements "
+                f"{record.get('n_elements', 1)}, the fields {n_elements}")
+        if ("power_law" in record) != ("exponent" in fields):
+            raise ValueError("build_solver: the record and the fields "
+                             "disagree on the power law")
+    Z, layout = self_gravitating_gia_space(
+        mantle, parent, gravity_bcs=gravity_bcs, rotation=True,
+        fluid_core=True, self_gravity_number=scales.Lambda,
+        n_internal_variables=n_elements,
+        displacement_degree=2, internal_variable_degree=1,
+        potential_degree=2, centre_of_mass=True, sea_level=True,
+        dtn_representation=DTN_REPRESENTATION)
+    z = Function(Z)
+    z.subfunctions[layout.displacement].rename("displacement")
+    z.subfunctions[layout.potential].rename("potential")
+
+    # The power law of Exp10 and Exp12 (`power_law` in the record): the DG0
+    # exponent (exactly 1.0 where the rheology is linear) and the DG0
+    # transition stress. `gadopt` treats a `Function` exponent as a power
+    # law, so Newton stays on and block 0 runs GMRES (the power-law operator
+    # is not symmetric); the layout stays uncondensed, which is the layout
+    # that supports a power law. Without the record entry the approximation
+    # gets no power-law argument and the Maxwell experiments build the
+    # solver they always built.
+    power_law = {}
+    if "exponent" in fields:
+        settings = power_law_settings(record or {})
+        if settings is None:
+            raise ValueError("build_solver: the fields hold a power law, but "
+                             "no record with a power_law entry was given")
+        power_law = dict(exponent=fields["exponent"],
+                         transition_stress=fields["transition_stress"],
+                         background_stress=settings["background_stress"])
+    approximation = CompressibleInternalVariableApproximation(
+        bulk_modulus=fields["bulk_modulus"], density=fields["density"],
+        shear_modulus=shear_moduli, viscosity=viscosities,
+        bulk_shear_ratio=1, g=fields["gravity"], B_mu=scales.B_mu,
+        self_gravity_number=scales.Lambda, **power_law)
+
+    # The core: inviscid, homogeneous and incompressible, with one density.
+    fluid_core = FluidCore(boundary=SURF_RC,
+                           rho_core=constants["rho_core_nondim"],
+                           g=Constant(constants["g_cmb_nondim"]))
+
+    # g_s = g_bar by the choice of the gravity scale.
+    sea_level = SeaLevel(
+        boundary=SURF_RE, rho_w=constants["rho_w_nondim"],
+        rho_i=constants["rho_i_nondim"], g_surface=1.0,
+        SL_init=forcing["SL_init"], I=forcing["I"], I_init=forcing["I_init"],
+        N_init=Constant(0.0), ur_init=Constant(0.0),
+        alpha_mask=DEFAULT_ALPHA_MASK, slope=fields["slope"],
+        grad_floor=DEFAULT_GRAD_FLOOR, fixed_ocean=False)
+
+    parameters = selfgrav_dtn_iterative_solver_parameters(
+        condensed=layout.condensed, outer_rtol=OUTER_RTOL,
+        block0_rtol=BLOCK0_RTOL, block0_max_it=options.block0_max_it,
+        # The stopping rule of the outer FGMRES: an optional absolute floor
+        # (`--outer_atol`, off by default) and a capped solve counted as
+        # converged so Newton finishes the step. See the preset's docstring.
+        outer_atol=options.outer_atol, outer_max_it=options.outer_max_it,
+        outer_accept_capped=True,
+        snes_type="newtonls",
+        dtn_representation=DTN_REPRESENTATION,
+        n_real=len(layout.real_fields))
+    # The one rebuild rule of the preconditioner (block 0 and the Real-block
+    # complement together). Without the options the library default holds:
+    # `lagged`, every 5 nonlinear solves, at once when dt changes.
+    if options.gia_rebuild is not None:
+        parameters["gia_rebuild"] = options.gia_rebuild
+    if options.gia_rebuild_every is not None:
+        parameters["gia_rebuild_every"] = options.gia_rebuild_every
+    if options.gia_rebuild_max_outer is not None:
+        parameters["gia_rebuild_max_outer"] = options.gia_rebuild_max_outer
+
+    # A rigid rotation of the mantle moves no water and has no mass moment
+    # for a spherically symmetric density, so it stays in the kernel with sea
+    # level and the frame rows on. Declared as nullspace and transpose
+    # nullspace: the low-rank operator then removes it from its action.
+    nullspace = rigid_rotation_nullspace(Z, layout)
+    solver = SelfGravitatingGIASolver(
+        z, approximation, layout=layout, dt=dt, bcs={},
+        fluid_core=fluid_core, sea_level=sea_level,
+        dtn_representation=DTN_REPRESENTATION,
+        rotation_moments={"C": constants["C_nondim"], "k_s": options.k_s},
+        Omega_sq=scales.Omega_sq, surface_radius=scales.Re,
+        nullspace=nullspace, transpose_nullspace=nullspace,
+        solver_parameters=parameters)
+    record = {
+        "n_elements": n_elements,
+        "power_law_active": bool(power_law),
+        "k_s": options.k_s,
+        "C_minus_A_nondim": float(
+            solver.rotation_moments.get("C_minus_A", np.nan)),
+        "gia_rebuild": parameters.get("gia_rebuild", "lagged (default)"),
+        "gia_rebuild_every": parameters.get("gia_rebuild_every", "default"),
+        "gia_rebuild_max_outer": parameters.get("gia_rebuild_max_outer", 0.0),
+        "block0_max_it": options.block0_max_it,
+        "outer_atol": options.outer_atol,
+        "outer_max_it": options.outer_max_it,
+        "unknowns": solver.solution.function_space().dim(),
+        "real_rows": len(layout.real_fields),
+        "solver_parameters": {k: str(v) for k, v in parameters.items()},
+    }
+    return solver, layout, record
+
+
+def iteration_counts(solver):
+    """The Newton and outer Krylov iteration counts of the last solve."""
+    snes = solver.solver.snes
+    return int(snes.getIterationNumber()), int(snes.ksp.getIterationNumber())
+
+
+# --------------------------------------------------------------------------
+# Logs and records
+# --------------------------------------------------------------------------
+
+
+class RunLog:
+    """Log lines to stdout and to a file, on rank 0.
+
+    The file keeps the record of the run next to its output, so a run can be
+    read later without the Slurm output file. The file is opened in append
+    mode, so the legs of a restarted run go into one log.
+    """
+
+    def __init__(self, path):
+        self.handle = open(path, "a") if COMM_WORLD.rank == 0 else None
+
+    def __call__(self, text):
+        log(text)
+        if self.handle is not None:
+            self.handle.write(text + "\n")
+            self.handle.flush()
+
+
+def plain_json(value):
+    """`value` with NumPy scalars and arrays replaced by Python numbers and lists.
+
+    `json` cannot write a NumPy type, and the records collect NumPy floats
+    from `assemble` and from the grids.
+    """
+    if isinstance(value, dict):
+        return {str(k): plain_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return [plain_json(v) for v in value]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def write_json(path, data):
+    """Write `data` as indented JSON on rank 0."""
+    if COMM_WORLD.rank == 0:
+        with open(path, "w") as handle:
+            json.dump(plain_json(data), handle, indent=1)
+
+
+def sha256sum(filename):
+    """The SHA-256 of a file, as a hexadecimal string."""
+    digest = hashlib.sha256()
+    with open(filename, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def md5sum(filename):
+    """The MD5 of a file, as a hexadecimal string (the mesh records use it)."""
+    digest = hashlib.md5()
+    with open(filename, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def provenance(directory):
+    """Software versions and the state of the source tree (rank 0 only).
+
+    The record holds the git commit of the G-ADOPT tree, the list of changed
+    files with the SHA-256 of each (the text of `git diff` depends on the
+    git version), and the SHA-256 of every Python file of the experiment
+    directory.
+
+    Args:
+      directory: the experiment directory.
+    """
+    info = {"python": sys.version.split()[0],
+            "petsc": ".".join(map(str, PETSc.Sys.getVersion())),
+            "petsc_int_bytes": int(np.dtype(PETSc.IntType).itemsize)}
+    try:
+        import importlib.metadata as md
+        info["firedrake"] = md.version("firedrake")
+    except Exception:  # noqa: BLE001  (a version is a record, not a need)
+        info["firedrake"] = None
+    try:
+        root = subprocess.run(["git", "-C", directory, "rev-parse",
+                               "--show-toplevel"], capture_output=True,
+                              text=True, timeout=30).stdout.strip()
+        head = subprocess.run(["git", "-C", root, "rev-parse", "HEAD"],
+                              capture_output=True, text=True, timeout=30)
+        status = subprocess.run(["git", "-C", root, "status", "--porcelain"],
+                                capture_output=True, text=True, timeout=60)
+        info["git_head"] = head.stdout.strip()
+        info["git_status"] = status.stdout.splitlines()
+        changed = {}
+        for line in info["git_status"]:
+            path = os.path.join(root, line[3:].strip())
+            files = ([os.path.join(d, f) for d, _, fs in os.walk(path)
+                      for f in fs] if os.path.isdir(path) else [path])
+            for name in sorted(files):
+                if os.path.isfile(name) and "__pycache__" not in name:
+                    changed[os.path.relpath(name, root)] = sha256sum(name)
+        info["changed_files_sha256"] = changed
+    except Exception as exc:  # noqa: BLE001
+        info["git_error"] = repr(exc)
+    info["scripts_sha256"] = {
+        name: sha256sum(os.path.join(directory, name))
+        for name in sorted(os.listdir(directory)) if name.endswith(".py")}
+    return info
+
+
+#: The ranks of one node, for the memory total that the node limit applies to.
+_NODE_COMM = None
+
+
+def memory_now(label, say=log):
+    """Log the resident memory now: mean and largest per rank, largest node.
+
+    Collective. The resident size comes from `/proc/self/statm` (Linux), so
+    it is the memory in use at this moment, not the peak. The node total is
+    the sum over the ranks of one node, which is what the Slurm memory limit
+    of a node applies to. On a system without `/proc` it logs nothing.
+
+    Args:
+      label: the point of the run, for the log line.
+      say: the log function.
+
+    Returns:
+      The largest node total in GB, or None without `/proc`.
+    """
+    global _NODE_COMM
+    try:
+        with open("/proc/self/statm") as handle:
+            pages = int(handle.read().split()[1])
+        rss = pages * os.sysconf("SC_PAGE_SIZE") / 1e9
+    except OSError:
+        return None
+    if _NODE_COMM is None:
+        _NODE_COMM = COMM_WORLD.Split_type(MPI.COMM_TYPE_SHARED)
+    node = _NODE_COMM.allreduce(rss, op=MPI.SUM)
+    mean = COMM_WORLD.allreduce(rss, op=MPI.SUM) / COMM_WORLD.size
+    largest = COMM_WORLD.allreduce((rss, COMM_WORLD.rank), op=MPI.MAXLOC)
+    node_max = COMM_WORLD.allreduce(node, op=MPI.MAX)
+    say(f"  memory {label}: rank mean {mean:.2f} GB, largest {largest[0]:.2f} "
+        f"GB (rank {largest[1]}), largest node {node_max:.0f} GB")
+    return node_max
+
+
+def peak_memory_gb():
+    """The largest peak resident memory over the ranks, GB."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports kB, macOS bytes.
+    gb = rss / 1e6 if sys.platform.startswith("linux") else rss / 1e9
+    return COMM_WORLD.allreduce(gb, op=MPI.MAX)
+
+
+def elapsed(tic):
+    """Seconds since `tic`, on rank 0, broadcast so every rank agrees."""
+    return COMM_WORLD.bcast(time.time() - tic, root=0)

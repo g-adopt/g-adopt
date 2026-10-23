@@ -1,0 +1,141 @@
+{
+ "model": "Extended Burgers (Lau 2023; Ivins et al. 2022), normalised: moduli in units of mu_inf, times in units of tau_M = eta_0 / mu_inf",
+ "parameters": {
+  "alpha": 0.274,
+  "Delta": 1.9,
+  "tau_H_over_tau_M": 1.0,
+  "tau_L_over_tau_M": 0.0
+ },
+ "fit": {
+  "method": "Lau (2024) Eqs 27-29, 33: fixed log-spaced element times, linear least squares on the real and imaginary parts, absolute misfit, constraint sum mu_bar tau_bar = 1 (KKT)",
+  "tau_bar_min": 0.01,
+  "tau_bar_max": 2.9,
+  "n_frequencies": 1000,
+  "omega_tau_M_min": 0.1,
+  "omega_tau_M_max": 100.0,
+  "mu_floor": 1e-06,
+  "error_measures": {
+   "max_rel_error": "max over the fit frequencies of |mu_N - mu_EB| / |mu_EB|",
+   "l2_rel_error": "||mu_N - mu_EB|| / ||mu_EB|| over the fit frequencies",
+   "max_rel_error_imag": "max over the fit frequencies of |Im mu_N - Im mu_EB| / |Im mu_EB|"
+  }
+ },
+ "dimensionalise": "mu_j = mu_inf * mu_bar_j, eta_j = eta_0 * mu_bar_j * tau_bar_j",
+ "selected": {
+  "n": 3,
+  "tau_bar": [
+   0.01,
+   0.17029386365926402,
+   2.9
+  ],
+  "mu_bar": [
+   0.21754499307473119,
+   0.19092353677922885,
+   0.33286601494056056
+  ],
+  "tau_bar_max": 2.9,
+  "sum_mu_bar": 0.7413345447945205,
+  "sum_mu_tau": 0.9999999999999994,
+  "max_rel_error": 0.03155151917059331,
+  "max_rel_error_omega": 9.727203192450542,
+  "l2_rel_error": 0.025634457307028395,
+  "max_rel_error_imag": 0.1681637419199032,
+  "dropped": []
+ },
+ "fits": {
+  "3": {
+   "n": 3,
+   "tau_bar": [
+    0.01,
+    0.17029386365926402,
+    2.9
+   ],
+   "mu_bar": [
+    0.21754499307473119,
+    0.19092353677922885,
+    0.33286601494056056
+   ],
+   "tau_bar_max": 2.9,
+   "sum_mu_bar": 0.7413345447945205,
+   "sum_mu_tau": 0.9999999999999994,
+   "max_rel_error": 0.03155151917059331,
+   "max_rel_error_omega": 9.727203192450542,
+   "l2_rel_error": 0.025634457307028395,
+   "max_rel_error_imag": 0.1681637419199032,
+   "dropped": []
+  },
+  "4": {
+   "n": 4,
+   "tau_bar": [
+    0.01,
+    0.06619105948026227,
+    0.438125635511962,
+    2.9
+   ],
+   "mu_bar": [
+    0.14774271127362928,
+    0.15011974117368931,
+    0.08485068017714315,
+    0.32807266551511766
+   ],
+   "tau_bar_max": 2.9,
+   "sum_mu_bar": 0.7107857981395793,
+   "sum_mu_tau": 0.9999999999999998,
+   "max_rel_error": 0.033877918963228525,
+   "max_rel_error_omega": 0.7077010661181887,
+   "l2_rel_error": 0.017947137888903782,
+   "max_rel_error_imag": 0.08566881738652758,
+   "dropped": []
+  }
+ },
+ "free_time_fits": {
+  "3": {
+   "n": 3,
+   "tau_bar": [
+    0.014879275171944248,
+    0.18948217301409842,
+    2.9326634702748096
+   ],
+   "mu_bar": [
+    0.1934822283561523,
+    0.177303665385698,
+    0.3285495423013786
+   ],
+   "tau_bar_max": null,
+   "sum_mu_bar": 0.6993354360432289,
+   "sum_mu_tau": 1.0000000000000002,
+   "max_rel_error": 0.02082832546864256,
+   "max_rel_error_omega": 17.148819698705392,
+   "l2_rel_error": 0.018225183226979007,
+   "max_rel_error_imag": 0.09533389837554129,
+   "dropped": [],
+   "free_times": true
+  },
+  "4": {
+   "n": 4,
+   "tau_bar": [
+    0.006676404176135484,
+    0.05182414257624822,
+    0.32608017726338423,
+    3.0115911844827647
+   ],
+   "mu_bar": [
+    0.16609377896518152,
+    0.1393517926410159,
+    0.12475756898348854,
+    0.31577603836845125
+   ],
+   "tau_bar_max": null,
+   "sum_mu_bar": 0.7459791789581373,
+   "sum_mu_tau": 1.0000000000000009,
+   "max_rel_error": 0.005982589467117711,
+   "max_rel_error_omega": 3.7720424934169974,
+   "l2_rel_error": 0.004925134395013909,
+   "max_rel_error_imag": 0.03660244452864563,
+   "dropped": [],
+   "free_times": true
+  }
+ },
+ "plot": "eb_fit.png",
+ "script_sha256": "28f2ac1e1175fc1007d7abb48a448e4d7c985a8ea157a92f3c47a023720d650d"
+}

@@ -1,0 +1,79 @@
+#!/bin/bash
+# GIAMIP Exp01: the input file of the bed inversion (prepare_exp01.py), on
+# Gadi (NCI), queue normalsr (104 cores and 500 GB per node).
+#
+# The input file holds a mesh partitioned for the number of ranks of this
+# job. Run the inversion on the same number of nodes and ranks.
+#
+# Submit from the run directory. The resources in the #PBS lines are for one
+# node. For n nodes, give ncpus = 104 n, mem = 500 n GB and jobfs = 400 n GB
+# on the qsub line, for example for 10 nodes and the 8 Re mesh:
+#
+#   mkdir -p /scratch/xd2/$USER/giamip/exp01/8re-10nodes/prepare
+#   cd /scratch/xd2/$USER/giamip/exp01/8re-10nodes/prepare
+#   qsub -l ncpus=1040,mem=5000GB,jobfs=4000GB \
+#       -v MESH=/g/data/xd2/sg8812/giamip-software/meshes/giamip_8re_r4/giamip_8re_r4_linear.h5,EXTRA="--mesh_name giamip_8re_r4_linear --sidecar /g/data/xd2/sg8812/giamip-software/meshes/giamip_8re_r4/giamip_8re_r4.json --mesh_md5 695bc06213731fcc9a4bfb3c7f08dd56 --step_years 100 --ice_steps 2 --no_vtk" \
+#       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp01/run_prepare.pbs
+#
+# Variables (pass them with -v NAME=value,...):
+#   MESH    the mesh: a coarse .msh file (default: the shared L0 mesh
+#           n2_giamip_all_o1) or a refined P1 mesh in a .h5 CheckpointFile
+#   REFINE  uniform refinement levels (default 0, L0; 0 for a .h5 mesh)
+#   NP      the MPI ranks (default: all cores of the job, PBS_NCPUS)
+#   EXTRA   further arguments of prepare_exp01.py
+#   ENV_FILE the environment file (default ENV_DEFAULT below)
+#
+#PBS -N exp01-prep
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=104
+#PBS -l mem=500GB
+#PBS -l jobfs=400GB
+#PBS -l walltime=02:00:00
+#PBS -l storage=scratch/xd2+gdata/xd2+gdata/fp50
+#PBS -l wd
+#PBS -W umask=0022
+#PBS -j oe
+
+set -u
+# No core files from the processes of the first node (a stopped job of many
+# ranks can fill the scratch quota with them).
+ulimit -c 0
+PERSIST=/g/data/xd2/sg8812/giamip-software
+# The environment of the inversion, so both jobs run the same code: the same
+# default as in run_invert.pbs (ENV_DEFAULT there explains the files).
+# ENV_FILE selects another environment file, for example one whose
+# MY_GADOPT is another clone of the branch.
+ENV_DEFAULT=${PERSIST}/env-giamip-pr4638-pr5544-pyop2fixes.sh
+ENV_FILE=${ENV_FILE:-${ENV_DEFAULT}}
+source ${ENV_FILE}
+
+HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp01
+MESH=${MESH:-${PERSIST}/meshes/n2_giamip_all_o1/n2_giamip_all_o1.msh}
+OUT=${OUT:-${PBS_O_WORKDIR}}
+
+ARGS="--mesh ${MESH} --refine ${REFINE:-0} --output_path ${OUT} ${EXTRA:-}"
+
+# Fewer ranks than cores (NP) reproduce a run of another machine, for
+# example the 384 ranks of the Setonix L0 runs on 4 nodes of 104 cores.
+NP=${NP:-${PBS_NCPUS}}
+NODES=$(( PBS_NCPUS / 104 ))
+# The same number of ranks on every node; one rank per core by default.
+MAP=""
+if [ "${NP}" -lt "${PBS_NCPUS}" ]; then
+    MAP="--map-by ppr:$(( (NP + NODES - 1) / NODES )):node"
+fi
+echo "job ${PBS_JOBID} on ${NODES} nodes, ${NP} ranks"
+echo "worktree ${MY_GADOPT} at $(cd ${MY_GADOPT} && git rev-parse --short HEAD 2>/dev/null)"
+echo "firedrake overlay ${FIREDRAKE_PR4638_OVERLAY}: $(head -1 ${FIREDRAKE_PR4638_OVERLAY}/../BRANCH_COMMIT)"
+echo "environment ${ENV_FILE}"
+echo "pyop2 copy ${PYOP2_FIXES_OVERLAY:-${PYOP2_MIXED_DATASET_FIX}}"
+echo "arguments: ${ARGS}"
+date
+
+mpiexec -np ${NP} ${MAP} python3 ${HERE}/prepare_exp01.py ${ARGS}
+status=$?
+
+date
+echo "exit code ${status}"
+exit ${status}

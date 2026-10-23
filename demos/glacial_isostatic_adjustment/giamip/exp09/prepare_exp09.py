@@ -1,0 +1,1195 @@
+r"""GIAMIP Exp09: make the input file of the bed inversion.
+
+WHAT THIS SCRIPT DOES
+    It makes every field of the inversion that comes from data, once, and
+    writes them to one Firedrake `CheckpointFile` (`inputs_exp09.h5`). The
+    inversion (`invert_exp09.py`) loads that file and reads no data file, so
+    its tape holds only the operations from the control to the misfit.
+
+    1. Read the coarse giamsh mesh, partition it so that every rank holds
+       the same number of mantle cells, refine it `--refine` times, curve it
+       to P2 and cut the mantle submesh (`exp09_common.build_meshes`).
+    2. Make the earth fields on the mantle from the earth model of the
+       experiment (`giamip.earth`): density, shear and bulk modulus (DG1),
+       viscosity (DG0) and gravity (CG2), all non-dimensional.
+    2a. Make the N Maxwell elements of the Extended Burgers fit
+       (`burgers_elements`): the moduli `shear_moduli` (DG1, N components)
+       and the viscosities `viscosities` (DG0, N components), from the
+       normalised fit of `eb_fit/eb_fit.json` and the local Maxwell time
+       eta_0 / mu_inf of each cell. See THE EXTENDED BURGERS ELEMENTS.
+    3. Make the forcing on the mantle from the GIAMIP files: the observed sea
+       level `SL_obs = -bed_obs / D` (CG2), the frozen surface slope of the
+       ocean mask (`surface_slope(SL_obs)`, DG1), and the ice of every step
+       of the march from the start to year 0 (CG1, one entry per step).
+    4. Write the input file with its JSON record, the same record as a JSON
+       file next to it, and ParaView files of the earth fields and of the ice
+       at three steps for the reviewer.
+
+    The script tapes nothing: `firedrake.adjoint` is not imported.
+
+THE EXPERIMENT
+    GIAMIP protocol v4.0, experiment Exp09, as `giamip` defines it
+    (`giamip.mip.inputs.GiamipExperiment("Exp09")`, case file
+    `giamip/resources/cases/giamip/exp09.json`):
+
+        ice          GLAC3c profile 1 (`iceHistory-GLAC3c_profile1.nc`)
+        topography   Bedmap3 + BedMachine Greenland 5 + GEBCO
+                     (`bedtopo_Bedmap3ANT_BedMach5GRL_GEBCO_GLQ256.nc`), the
+                     G-ADOPT choice `bedmap3`. The case file leaves the
+                     topography open, so `GiamipExperiment.topography` is
+                     None; the file comes from
+                     `giamip.cases.with_gadopt_choices` (as in Exp11). The
+                     file is the observed present-day bed (year 0); the
+                     inversion finds the bed at the start of the run.
+        earth        PREM-stable (elastic structure and density) with the
+                     viscosity at the midpoint of the GIAMIP suggested
+                     range (`giamip-open-range-midpoint`: elastic lid to
+                     90 km, 10^20.5 Pa s to 670 km, 1e22 Pa s below),
+                     Extended Burgers rheology (`burgers`), compressible.
+                     The protocol leaves all of these open; each is the
+                     G-ADOPT choice of the `gadopt` block of the case file.
+                     Exp09 is Exp03 with the Extended Burgers rheology: same
+                     ice, topography, viscosity, elastic structure and mesh.
+        period       122 ka to year 0, in steps of `--step_years` (2000 yr:
+                     61 steps), or with `--schedule windows` the steps of
+                     schedule C (protocol steps plus the fast melt windows
+                     of `exp09_common.SCHEDULE_C_WINDOWS`, design handout
+                     8.3; S33, S34), with the ice of every year of the
+                     march: the protocol slice at a protocol year, the
+                     linear combination of the two neighbouring slices
+                     between them (`exp09_common.linear_ice_into`)
+        constants    ice 917, ocean water 1025 kg/m^3
+
+    Every number of the experiment comes from `giamip`, never from this file.
+    The numbers of the Extended Burgers rheology come from the fit file
+    `eb_fit.json` (design handout of 2026-10-20, S22 and S31), whose
+    SHA-256 the record holds.
+
+THE EXTENDED BURGERS ELEMENTS
+    G-ADOPT represents a linear rheology as N Maxwell elements in parallel.
+    The Extended Burgers model (EB; Lau 2023, Ivins et al. 2022) enters as a
+    fit of N = 3 such elements (decision S31: the fit with free element
+    times, `eb_fit.py --select_free`, the entry `free_time_fits["3"]` of the
+    fit file; largest modulus error 2.1 % over the band). The fit is
+    normalised: the moduli mu_bar_j in units of the unrelaxed modulus
+    mu_inf, the element times tau_bar_j in units of the local Maxwell time
+    tau_M = eta_0 / mu_inf, with sum_j mu_bar_j tau_bar_j = 1, so the
+    long-term viscosity of the elements is eta_0. EB parameters: alpha
+    0.274, Delta 1.9, tau_H / tau_M 1, tau_L 0 (S22, P2-P4).
+
+    Below 90 km (S2, S10, S22: one EB set in the whole mantle below the
+    elastic lid), each DG1 node of element j has the modulus
+    mu_j = mu_inf mu_bar_j, and each cell the viscosity
+    eta_j = eta_0 mu_bar_j tau_bar_j, with mu_inf the PREM-stable shear
+    modulus (`shear_modulus`) and eta_0 the midpoint viscosity
+    (`viscosity`). The Maxwell time of element j is then
+    eta_j / mu_j = tau_bar_j tau_M at every node. The instant modulus of the
+    run is sum_j mu_j = 0.70 mu_inf (the sum of the mu_bar_j): under a new
+    load increment the elastic response is about 1.4 times that of Exp03.
+    This is the intended effect of EB at a 10 yr step (design handout 6.3,
+    13).
+
+    In the elastic lid (0-90 km, no transient part, S10) the N elements are
+    one elastic element split in N parts: mu_j = mu_inf w_j and
+    eta_j = ETA_LID w_j, with w_j = mu_bar_j / sum_k mu_bar_k. The sum of
+    the moduli is mu_inf, and every element has the Maxwell time of the lid
+    of Exp03 (ETA_LID / mu_inf, about 1e19 t_bar), so the lid is the lid of
+    Exp03.
+
+    The lid is the set of cells whose centroid depth is less than 90 km
+    (`LID_DEPTH_M`), the rule of the viscosity (centroid). The 90 km sphere
+    is a mesh sphere, so no cell crosses it. The script checks that this set
+    is exactly the set of cells with the lid viscosity ETA_LID: the EB lid
+    and the elastic lid of the viscosity model are the same cells.
+
+    `shear_modulus` and `viscosity` stay in the file as the Maxwell
+    reference (mu_inf and eta_0, `exp09_common.OPTIONAL_FIELDS`). The
+    solver reads only the element fields (`n_elements` in the record).
+
+THE EARTH MODEL ON THE MESH
+    `giamip.earth` gives every property of the earth model at any radius,
+    linear in radius between the nodes of the model file. Each DG1 node takes
+    the value at its own radius. Gravity is a CG2 field. The viscosity is
+    DG0, the value at the cell centroid; an elastic layer ("inf" in the model
+    file) takes `ETA_LID` = 1e40 Pa s.
+
+    The mesh `n2_giamip_all_o1` has spheres at 60, 90, 120, 400, 670, 980,
+    1260, 1470, 1950 and 2400 km depth, the CMB and the surface. No cell
+    crosses a sphere, so a jump of the earth model at a sphere is exact. For
+    the midpoint profile the base of the elastic lid at 90 km and the jump
+    at 670 km are spheres, so every viscosity boundary is exact and each
+    shell holds one viscosity value. The record gives the volume fraction
+    of each viscosity value in each shell (`viscosity_by_layer`), which
+    shows this.
+    PREM-stable has jumps at 400 and 670 km (spheres) and at 15, 24.4, 80,
+    220, 600, 771 and 2741 km (not spheres); a cell across one of the
+    latter carries the linear interpolant of its nodal values.
+
+THE FORCING ON THE MESH
+    The GIAMIP grid is a Gauss-Legendre grid (257 x 513). Every node of the
+    mantle mesh takes the bilinear interpolant of the grid at its direction
+    (`BilinearTransfer`, the rule of the mesh script). The shared mesh was
+    refined for the coastline of Exp01 (ICE-6G_D at 122 ka on Bedmap2); an
+    experiment with another bed or ice uses the same mesh. The fields are
+    defined in the whole mantle and are read only on Re. The record holds,
+    for every step, the ice volume on the mesh against the Gauss-Legendre
+    volume of the grid.
+
+RUN
+    srun python3 prepare_exp09.py --mesh <file.msh> --output_path <dir>
+    The number of ranks must be the one of the inversion job.
+
+OUTPUT (in --output_path)
+    inputs_exp09.h5          the input file of the inversion
+    inputs_exp09.json        its record (the same JSON as inside the file)
+    inputs_exp09_earth.pvd   ParaView: the earth fields in SI units, the
+                             instant modulus ratio sum_j mu_j / mu_inf and
+                             log10 of the Maxwell time of each element (yr)
+    inputs_exp09_ice.pvd     ParaView: the ice at the first, middle and last
+                             step of the march, m
+    prepare_exp09.log        the log
+"""
+
+import argparse
+import json
+import os
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+# `gadopt` imports `firedrake.pyplot`, which imports matplotlib's font
+# manager. Without a font cache every rank scans the fonts; the job
+# environment names a cache built once on a login node.
+if os.environ.get("EXP01_MPLCONFIGDIR"):
+    os.environ["MPLCONFIGDIR"] = os.environ["EXP01_MPLCONFIGDIR"]
+sys.path.insert(0, HERE)
+
+import numpy as np  # noqa: E402
+
+# The shared module imports gadopt before firedrake.
+import exp09_common as common  # noqa: E402
+from gadopt import (COMM_WORLD, Function, FunctionSpace,  # noqa: E402
+                    SpatialCoordinate, VectorFunctionSpace, VTKFile, assemble,
+                    conditional, dot, ds, dx, ln, lt, sqrt)
+from gadopt.sea_level_masks import surface_slope  # noqa: E402
+from mpi4py import MPI  # noqa: E402
+
+import giamip  # noqa: E402
+from giamip import cases, grids  # noqa: E402
+from giamip.mip.inputs import GiamipExperiment, Topography  # noqa: E402
+from giamsh.radial import RadialStructure  # noqa: E402
+
+#: The experiment of this directory.
+EXPERIMENT = "Exp09"
+#: The file stem of the outputs.
+STEM = "inputs_exp09"
+#: The MD5 of the shared coarse mesh `n2_giamip_all_o1.msh` (handout section
+#: 3). The run stops if the mesh file differs.
+MESH_MD5 = "a4da84206dc82f5b458be66e4fd33844"
+
+D_SCALE = common.D_SCALE
+
+#: The rheology of the case file that this script builds (`gadopt` block of
+#: `exp09.json`). The script stops for any other value.
+RHEOLOGY = "burgers"
+#: The fit file of the Extended Burgers elements (`../eb_fit/eb_fit.py`).
+EB_FIT_FILE = os.path.join(HERE, os.pardir, "eb_fit", "eb_fit.json")
+#: The fit of decision S31: N = 3 with free element times
+#: (`eb_fit.py --select_free`). The `selected` entry of the fit file is the
+#: fixed-grid fit, so the key is named explicitly: `<group>/<N>`.
+EB_FIT_KEY = "free_time_fits/3"
+#: The EB parameters that the fit must have been made with (S22, P2, design
+#: handout 6.2). The script stops if the fit file says otherwise, so that a
+#: new fit file cannot change the run without an error.
+EB_PARAMETERS = {"alpha": 0.274, "Delta": 1.9, "tau_H_over_tau_M": 1.0,
+                 "tau_L_over_tau_M": 0.0}
+#: The smallest normalised modulus of an element (design handout 6.3): a
+#: zero modulus gives the Maxwell time 0/0 in the solver.
+EB_MU_FLOOR = 1.0e-6
+#: The tolerance of the constraint sum_j mu_bar_j tau_bar_j = 1 of the fit.
+EB_SUM_TOLERANCE = 1.0e-10
+#: The base of the elastic lid, m below Re (S10: no transient part above).
+#: The 90 km sphere is a mesh sphere, so no cell crosses it.
+LID_DEPTH_M = 90.0e3
+#: The step lengths (yr) against which the record gives the volume fraction
+#: of each element whose Maxwell time is shorter: the shortest step of the
+#: fine schedule (10 yr), its step before 26 ka (50 yr) and the inversion
+#: step (2000 yr). An element much faster than the step relaxes within it.
+EB_STEP_CHECK_YR = (10.0, 50.0, 2000.0)
+
+
+# --------------------------------------------------------------------------
+# The earth model on the mesh
+# --------------------------------------------------------------------------
+
+
+def node_radius_m(space):
+    """The radius of every node of a scalar space, in metres, with halos."""
+    mesh = space.mesh()
+    X = SpatialCoordinate(mesh)
+    r = Function(space).interpolate(sqrt(dot(X, X)))
+    return np.array(r.dat.data_ro_with_halos) * D_SCALE
+
+
+def earth_fields(mantle, earth, scales):
+    """The density, the moduli, the viscosity and gravity on the mantle mesh.
+
+    Each DG1 node takes the value of the elastic structure at its own
+    radius. The DG1 element of Firedrake on a tetrahedron has its four
+    nodes at interior Gauss-Legendre points (`finat.spectral.GaussLegendre`),
+    not at the vertices, so the field is the linear interpolant through four
+    interior values, and no node lies on a mesh sphere. The side rule below
+    is kept for an element with nodes on the cell boundary: a node on a
+    sphere where a property jumps takes the value of the side where its cell
+    lies, "above" when the node is below the cell centroid and "below" when
+    it is above it. A DG node belongs to one cell only, so this is defined
+    for every node.
+
+    Args:
+      mantle: the mantle mesh (P2 coordinates).
+      earth: the `giamip.earth.RadialEarth` of the experiment.
+      scales: the `exp09_common.Scales`.
+
+    Returns:
+      A dictionary with `density`, `shear_modulus`, `bulk_modulus` (DG1),
+      `viscosity` (DG0) and `gravity` (CG2), all non-dimensional.
+    """
+    dg1 = FunctionSpace(mantle, "DG", 1)
+    dg0 = FunctionSpace(mantle, "DG", 0)
+    X = SpatialCoordinate(mantle)
+    r_expr = sqrt(dot(X, X))
+    # The radius of each DG1 node and of the centroid of its cell. The DG0
+    # value is the value at the centroid, and its interpolation into DG1
+    # copies it to the four nodes of the cell.
+    r_node = node_radius_m(dg1)
+    centroid = Function(dg0).interpolate(r_expr)
+    r_cell = np.array(Function(dg1).interpolate(centroid)
+                      .dat.data_ro_with_halos) * D_SCALE
+    # A node can lie a rounding distance above the surface or below the CMB.
+    # The earth model refuses radii outside [0, Re].
+    r_node = np.clip(r_node, scales.Rc_m, scales.Re_m)
+    above = earth.elastic(r_node, "above")
+    below = earth.elastic(r_node, "below")
+    use_above = r_node <= r_cell
+
+    def dg1_field(column, scale, name):
+        field = Function(dg1, name=name)
+        field.dat.data_with_halos[:] = np.where(
+            use_above, above[column], below[column]) / scale
+        return field
+
+    rho = dg1_field("rho_kg_m3", scales.rho_bar, "density")
+    mu = dg1_field("mu_Pa", common.MU_BAR, "shear_modulus")
+    kappa = dg1_field("kappa_Pa", common.MU_BAR, "bulk_modulus")
+
+    # Viscosity at the centroid. A layer boundary of the viscosity model that
+    # is a mesh sphere is exact; one that is not moves to the nearest cell
+    # faces (see the module docstring).
+    r_centroid = np.clip(np.array(centroid.dat.data_ro_with_halos) * D_SCALE,
+                         scales.Rc_m, scales.Re_m)
+    eta_pa_s = earth.viscosity(r_centroid)
+    eta_pa_s = np.where(np.isinf(eta_pa_s), common.ETA_LID, eta_pa_s)
+    if np.isnan(eta_pa_s).any():
+        raise RuntimeError("a mantle cell has no viscosity")
+    eta = Function(dg0, name="viscosity")
+    eta.dat.data_with_halos[:] = eta_pa_s / common.ETA_BAR
+
+    # Gravity is continuous; the side does not matter.
+    cg2 = FunctionSpace(mantle, "CG", 2)
+    r_cg2 = np.clip(node_radius_m(cg2), scales.Rc_m, scales.Re_m)
+    g = Function(cg2, name="gravity")
+    g.dat.data_with_halos[:] = earth.elastic(r_cg2)["g_m_s2"] / scales.g_bar
+    return {"density": rho, "shear_modulus": mu, "bulk_modulus": kappa,
+            "viscosity": eta, "gravity": g}
+
+
+def core_density(elastic, scales, rule):
+    """The density of the homogeneous fluid core, kg/m^3.
+
+    Args:
+      elastic: the `giamip.earth.ElasticProfile`.
+      scales: the `exp09_common.Scales`.
+      rule: `"mean"`, the mean density of the core from its mass
+        g(Rc) Rc^2 / G, which gives the core its mass, or `"cmb"`, the
+        density just below the CMB, which makes the core too light.
+    """
+    if rule == "cmb":
+        return float(elastic(scales.Rc_m, "below")["rho_kg_m3"])
+    g_cmb = float(elastic(scales.Rc_m, "below")["g_m_s2"])
+    mass = g_cmb * scales.Rc_m**2 / common.G_NEWTON
+    return mass / (4.0 / 3.0 * np.pi * scales.Rc_m**3)
+
+
+def solver_constants(experiment, earth, scales, rule):
+    """The constants of the solver that come from the experiment.
+
+    The inversion reads these numbers from the record and does not read the
+    earth model or the case file.
+
+    Args:
+      experiment: the `GiamipExperiment`.
+      earth: its `giamip.earth.RadialEarth`.
+      scales: the `exp09_common.Scales`.
+      rule: the core density rule (`--core_density`).
+
+    Returns:
+      A dict of plain numbers, SI and non-dimensional.
+    """
+    rho_core = core_density(earth.elastic, scales, rule)
+    g_cmb = float(earth.elastic(scales.Rc_m, "below")["g_m_s2"])
+    rho_w = float(experiment.constants["ocean_water_density_kg_m3"])
+    rho_i = float(experiment.constants["ice_density_kg_m3"])
+    # The observed polar moment, kg m^2, and in units of rho_bar D^5.
+    C_kg_m2 = common.C_OVER_MRE2 * scales.earth_mass_kg * scales.Re_m**2
+    return {"core_density_rule": rule, "rho_core_kg_m3": rho_core,
+            "rho_core_nondim": rho_core / scales.rho_bar,
+            "g_cmb_m_s2": g_cmb, "g_cmb_nondim": g_cmb / scales.g_bar,
+            "rho_w_kg_m3": rho_w, "rho_w_nondim": rho_w / scales.rho_bar,
+            "rho_i_kg_m3": rho_i, "rho_i_nondim": rho_i / scales.rho_bar,
+            "C_over_MRe2": common.C_OVER_MRE2, "C_kg_m2": C_kg_m2,
+            "C_nondim": C_kg_m2 / (scales.rho_bar * D_SCALE**5)}
+
+
+def experiment_topography(experiment):
+    """The topography file of the experiment.
+
+    The case file of Exp09 leaves the topography open, so
+    `GiamipExperiment.topography` is None. `giamip.cases.with_gadopt_choices`
+    fills in the file of the G-ADOPT choice (`bedmap3`), taken from a case
+    that the protocol gives that topography (the rule of `prepare_exp11.py`).
+    For a case that prescribes a file this is the prescribed file.
+
+    Returns:
+      A `giamip.mip.inputs.Topography` of the file.
+    """
+    relative_path = cases.with_gadopt_choices(experiment.id)["topography"]["file"]
+    return Topography(relative_path)
+
+
+# --------------------------------------------------------------------------
+# The Extended Burgers elements
+# --------------------------------------------------------------------------
+
+
+def load_eb_fit(path, key):
+    """The normalised Extended Burgers fit of `key` in the fit file `path`.
+
+    The fit gives N pairs (mu_bar_j, tau_bar_j): the moduli in units of
+    mu_inf and the element times in units of the local Maxwell time
+    tau_M = eta_0 / mu_inf (design handout section 5). The function checks
+    what the run depends on and stops otherwise:
+
+    - the EB parameters of the file are those of `EB_PARAMETERS` (S22);
+    - every mu_bar_j is at least `EB_MU_FLOOR` and every tau_bar_j is
+      positive, so no element has the Maxwell time 0/0;
+    - sum_j mu_bar_j tau_bar_j = 1 to `EB_SUM_TOLERANCE`, so the long-term
+      viscosity of the elements is eta_0 (the Maxwell twin, Exp03);
+    - the two lists have the same length.
+
+    Args:
+      path: the fit file (`eb_fit.json`).
+      key: `<group>/<N>`, for example `free_time_fits/3`.
+
+    Returns:
+      `(mu_bar, tau_bar, record)`: two numpy arrays of N values and the part
+      of the record of the run that describes the fit (file, SHA-256, key,
+      parameters, the fit entry).
+    """
+    with open(path) as handle:
+        fit_file = json.load(handle)
+    group, n_text = key.split("/")
+    fit = fit_file[group][n_text]
+    parameters = fit_file["parameters"]
+    for name, value in EB_PARAMETERS.items():
+        if abs(float(parameters[name]) - value) > 1e-12:
+            raise RuntimeError(f"{path}: the fit has {name} = "
+                               f"{parameters[name]}, the run needs {value} "
+                               "(design handout S22)")
+    mu_bar = np.asarray(fit["mu_bar"], dtype=float)
+    tau_bar = np.asarray(fit["tau_bar"], dtype=float)
+    if mu_bar.shape != tau_bar.shape or mu_bar.size != int(n_text):
+        raise RuntimeError(f"{path} {key}: {mu_bar.size} moduli and "
+                           f"{tau_bar.size} times, expected {n_text} each")
+    if mu_bar.min() < EB_MU_FLOOR or tau_bar.min() <= 0.0:
+        raise RuntimeError(f"{path} {key}: a modulus below {EB_MU_FLOOR} or "
+                           f"a time not positive: {mu_bar}, {tau_bar}")
+    long_term = float(np.sum(mu_bar * tau_bar))
+    if abs(long_term - 1.0) > EB_SUM_TOLERANCE:
+        raise RuntimeError(f"{path} {key}: sum mu_bar tau_bar = {long_term}, "
+                           "not 1; the long-term viscosity would not be eta_0")
+    record = {"fit_file": os.path.abspath(path),
+              "fit_file_sha256": common.sha256sum(path),
+              "fit_script_sha256": fit_file.get("script_sha256"),
+              "fit_key": key, "parameters": parameters,
+              "dimensionalise": fit_file.get("dimensionalise"),
+              "fit": fit, "mu_bar": mu_bar, "tau_bar": tau_bar,
+              "sum_mu_bar": float(mu_bar.sum()),
+              "sum_mu_bar_tau_bar": long_term,
+              "lid_depth_m": LID_DEPTH_M,
+              "lid_rule": "centroid depth < lid_depth_m: N elastic parts "
+                          "mu_inf w_j, ETA_LID w_j, w_j = mu_bar_j / "
+                          "sum mu_bar; below: mu_inf mu_bar_j, "
+                          "eta_0 mu_bar_j tau_bar_j"}
+    return mu_bar, tau_bar, record
+
+
+def burgers_elements(mantle, fields, scales, mu_bar, tau_bar):
+    """The moduli and viscosities of the N Maxwell elements of the EB fit.
+
+    Below `LID_DEPTH_M` (centroid depth), element j has the modulus
+    mu_j = mu_inf mu_bar_j at each DG1 node and the viscosity
+    eta_j = eta_0 mu_bar_j tau_bar_j in each cell, so its Maxwell time is
+    tau_bar_j times the local Maxwell time eta_0 / mu_inf at every node. In
+    the lid the elements are one elastic element in N parts:
+    mu_j = mu_inf w_j, eta_j = ETA_LID w_j, w_j = mu_bar_j / sum mu_bar.
+    See THE EXTENDED BURGERS ELEMENTS in the module docstring.
+
+    The DG1 vector space and the DG1 scalar space of `shear_modulus` share
+    the node numbering, and so do the DG0 spaces, so each component is a
+    nodal product and needs no interpolation. The lid flag of a DG1 node is
+    the flag of its cell (the centroid copied into DG1).
+
+    Args:
+      mantle: the mantle mesh.
+      fields: the fields of `earth_fields` (`shear_modulus` = mu_inf, DG1;
+        `viscosity` = eta_0, DG0; non-dimensional).
+      scales: the `exp09_common.Scales`.
+      mu_bar, tau_bar: the normalised fit (`load_eb_fit`).
+
+    Returns:
+      `(shear_moduli, viscosities, lid_cells, errors)`: the DG1 and DG0
+      vector fields of N components (units of mu_bar and eta_bar), the
+      number of lid cells over all ranks, and the largest relative errors
+      of the four sum checks (all below 1e-12).
+
+    Raises:
+      RuntimeError: if the lid of the depth rule and the cells with the lid
+        viscosity ETA_LID are not the same cells, or a check of the sums
+        fails.
+    """
+    n = mu_bar.size
+    weights = mu_bar / mu_bar.sum()
+    dg0 = FunctionSpace(mantle, "DG", 0)
+    dg1 = FunctionSpace(mantle, "DG", 1)
+    X = SpatialCoordinate(mantle)
+    # The centroid radius of each cell (DG0) and its copy at the four DG1
+    # nodes of the cell, as in `earth_fields`; depths in m below Re.
+    centroid = Function(dg0).interpolate(sqrt(dot(X, X)))
+    depth_cell = (scales.Re - np.array(centroid.dat.data_ro_with_halos)) * D_SCALE
+    depth_node = (scales.Re - np.array(Function(dg1).interpolate(centroid)
+                                         .dat.data_ro_with_halos)) * D_SCALE
+    lid_cell = depth_cell < LID_DEPTH_M
+    lid_node = depth_node < LID_DEPTH_M
+
+    eta0 = np.array(fields["viscosity"].dat.data_ro_with_halos)
+    mu_inf = np.array(fields["shear_modulus"].dat.data_ro_with_halos)
+    # The EB lid must be the elastic lid of the viscosity model, cell for
+    # cell, over the owned cells (the halo cells are owned by another rank,
+    # which counts them).
+    n_owned = mantle.cell_set.size
+    owned = dg0.cell_node_list[:n_owned, 0]
+    elastic = eta0[owned] == common.ETA_LID / common.ETA_BAR
+    mismatch = COMM_WORLD.allreduce(int(np.sum(lid_cell[owned] != elastic)),
+                                    op=MPI.SUM)
+    if mismatch:
+        raise RuntimeError(f"{mismatch} cells differ between the lid of the "
+                           f"depth rule ({LID_DEPTH_M} m) and the cells with "
+                           "the lid viscosity ETA_LID")
+    lid_cells = COMM_WORLD.allreduce(int(np.sum(lid_cell[owned])), op=MPI.SUM)
+
+    moduli = Function(VectorFunctionSpace(mantle, "DG", 1, dim=n),
+                      name="shear_moduli")
+    moduli.dat.data_with_halos[:] = np.where(
+        lid_node[:, None], mu_inf[:, None] * weights[None, :],
+        mu_inf[:, None] * mu_bar[None, :])
+    viscosities = Function(VectorFunctionSpace(mantle, "DG", 0, dim=n),
+                           name="viscosities")
+    viscosities.dat.data_with_halos[:] = np.where(
+        lid_cell[:, None], eta0[:, None] * weights[None, :],
+        eta0[:, None] * (mu_bar * tau_bar)[None, :])
+
+    # Checks of the sums on the nodes: the elements give eta_0 as the
+    # long-term viscosity below the lid and mu_inf as the modulus in the
+    # lid; the instant modulus below the lid is sum mu_bar times mu_inf.
+    def worst(a, b):
+        local = np.max(np.abs(a - b) / np.abs(b)) if a.size else 0.0
+        return COMM_WORLD.allreduce(float(local), op=MPI.MAX)
+
+    m = moduli.dat.data_ro_with_halos
+    v = viscosities.dat.data_ro_with_halos
+    errors = {
+        "lid_modulus_sum": worst(m[lid_node].sum(axis=1), mu_inf[lid_node]),
+        "lid_viscosity_sum": worst(v[lid_cell].sum(axis=1), eta0[lid_cell]),
+        "eb_long_term_viscosity": worst(v[~lid_cell].sum(axis=1),
+                                        eta0[~lid_cell]),
+        "eb_instant_modulus": worst(m[~lid_node].sum(axis=1),
+                                    mu_bar.sum() * mu_inf[~lid_node]),
+    }
+    bad = {k: e for k, e in errors.items() if not e < 1e-12}
+    if bad:
+        raise RuntimeError(f"the element fields fail the sum checks: {bad}")
+    return moduli, viscosities, lid_cells, errors
+
+
+def element_columns(vector):
+    """The scalar Functions of the components of a DG vector field.
+
+    The same nodal copy as `exp09_common.element_fields`, for the record and
+    the ParaView file of this script.
+    """
+    space = FunctionSpace(vector.function_space().mesh(),
+                          vector.function_space().ufl_element().sub_elements[0])
+    columns = []
+    for j in range(vector.function_space().value_size):
+        column = Function(space, name=f"{vector.name()}_{j}")
+        column.dat.data_wo_with_halos[:] = vector.dat.data_ro_with_halos[:, j]
+        columns.append(column)
+    return columns
+
+
+def burgers_by_layer(cells, layers, fields, moduli, viscosities):
+    """The record of the EB elements per mantle layer.
+
+    For each layer: the instant modulus ratio sum_j mu_j / mu_inf (min, max,
+    volume mean), and for each element j its Maxwell time eta_j / mu_j in
+    years (min, max, volume mean over the nodal values, as
+    `LayerCells.statistics`) and the volume fraction of the layer where it
+    is shorter than each step of `EB_STEP_CHECK_YR`. The fraction is the
+    integral of an indicator at the quadrature points of each cell, so it
+    resolves the radial change of mu_inf inside a cell.
+
+    Returns:
+      `{layer: {"instant_modulus_ratio": .., "elements": [..]}}`.
+    """
+    mu_j = element_columns(moduli)
+    eta_j = element_columns(viscosities)
+    mu_inf = fields["shear_modulus"]
+    ratio = cells.statistics(sum(mu_j) / mu_inf, 1.0)
+    times = [cells.statistics(eta / mu, common.T_BAR_YR)
+             for mu, eta in zip(mu_j, eta_j)]
+    out = {}
+    for name, _, _ in layers:
+        elements = []
+        for j, (mu, eta) in enumerate(zip(mu_j, eta_j)):
+            tau_yr = eta / mu * common.T_BAR_YR
+            fractions = {}
+            for step in EB_STEP_CHECK_YR:
+                below = float(assemble(cells.indicators[name]
+                                       * conditional(lt(tau_yr, step), 1.0, 0.0)
+                                       * dx(domain=cells.mantle)))
+                fractions[f"below_{step:g}_yr"] = below / cells.volume[name]
+            elements.append({"element": j,
+                             "maxwell_time_yr": times[j][name],
+                             "volume_fraction": fractions})
+        out[name] = {"instant_modulus_ratio": ratio[name],
+                     "elements": elements}
+    return out
+
+
+# --------------------------------------------------------------------------
+# Statistics per mantle layer
+# --------------------------------------------------------------------------
+
+
+def mantle_layers(radial):
+    """The mantle layers of the mesh: `(name, r_bottom, r_top)`, nondim."""
+    spheres = radial.to_dict()["spheres"]
+    layers = radial.to_dict()["layers"]
+    out = []
+    for name in radial.to_dict()["regions"]["mantle"]:
+        lower, upper = layers[name]
+        out.append((name, spheres[lower], spheres[upper]))
+    return sorted(out, key=lambda item: -item[2])
+
+
+class LayerCells:
+    """The owned mantle cells of each layer, by the radius of the centroid.
+
+    A cell lies in one layer, because no cell crosses a sphere, so its
+    centroid radius tells the layer.
+
+    Args:
+      mantle: the mantle mesh.
+      layers: the list of `mantle_layers`.
+    """
+
+    def __init__(self, mantle, layers):
+        self.mantle = mantle
+        self.layers = layers
+        self.dg0 = FunctionSpace(mantle, "DG", 0)
+        X = SpatialCoordinate(mantle)
+        r = Function(self.dg0).interpolate(sqrt(dot(X, X)))
+        n_owned = mantle.cell_set.size
+        # The DG0 node of each owned cell (DG0 has one node per cell).
+        self.cell_nodes = self.dg0.cell_node_list[:n_owned, 0]
+        r_cell = r.dat.data_ro_with_halos[self.cell_nodes]
+        self.masks = {name: (r_cell > lo) & (r_cell < hi)
+                      for name, lo, hi in layers}
+        unassigned = n_owned - sum(int(m.sum()) for m in self.masks.values())
+        if COMM_WORLD.allreduce(unassigned, op=MPI.SUM):
+            raise RuntimeError("a mantle cell lies in no layer")
+        # The indicator of each layer, for volume integrals.
+        self.indicators = {}
+        for name, mask in self.masks.items():
+            indicator = Function(self.dg0)
+            indicator.dat.data_with_halos[self.cell_nodes] = mask.astype(float)
+            self.indicators[name] = indicator
+        self.volume = {name: float(assemble(ind * dx(domain=mantle)))
+                       for name, ind in self.indicators.items()}
+
+    def statistics(self, f, scale):
+        """Min, max and volume mean of `f` (times `scale`) in each layer.
+
+        The min and max are over the nodal values of the owned cells of the
+        layer, after an exact interpolation into DG2 with equispaced nodes
+        (DG2 contains DG0, DG1 and CG2 on every cell, so the nodal values are
+        values of the field). The equispaced nodes include the four vertices
+        of each cell, where a linear field takes its extreme values; the
+        default DG2 nodes are interior points and would miss them.
+        """
+        dg2 = FunctionSpace(self.mantle, "DG", 2, variant="equispaced")
+        values = Function(dg2).interpolate(f).dat.data_ro_with_halos
+        nodes = dg2.cell_node_list[:self.mantle.cell_set.size]
+        out = {}
+        for name, _, _ in self.layers:
+            local = values[nodes[self.masks[name]]]
+            lo = local.min() if local.size else np.inf
+            hi = local.max() if local.size else -np.inf
+            mean = float(assemble(self.indicators[name] * f
+                                  * dx(domain=self.mantle))) / self.volume[name]
+            out[name] = {"min": COMM_WORLD.allreduce(float(lo), op=MPI.MIN) * scale,
+                         "max": COMM_WORLD.allreduce(float(hi), op=MPI.MAX) * scale,
+                         "mean": mean * scale}
+        return out
+
+    def distinct_values(self, f, scale, limit=10):
+        """The distinct DG0 values of `f` in each layer, with volume fractions.
+
+        For a piecewise constant viscosity model this shows where a layer
+        boundary that is not a mesh sphere ended up: a shell with two values
+        and their volume fractions. A layer with more than `limit` distinct
+        values (a 3-D model) is reported as `"continuous"`.
+        """
+        values = f.dat.data_ro_with_halos[self.cell_nodes]
+        out = {}
+        for name, _, _ in self.layers:
+            local = np.unique(values[self.masks[name]])
+            every = np.unique(np.concatenate(COMM_WORLD.allgather(local)))
+            if every.size > limit:
+                out[name] = "continuous"
+                continue
+            rows = []
+            for value in every:
+                # The volume of the cells of this layer that carry the value.
+                pick = Function(self.dg0)
+                pick.dat.data_with_halos[self.cell_nodes] = (
+                    self.masks[name] & (values == value)).astype(float)
+                fraction = float(assemble(pick * dx(domain=self.mantle))) \
+                    / self.volume[name]
+                rows.append({"value": float(value) * scale,
+                             "volume_fraction": fraction})
+            out[name] = rows
+        return out
+
+
+# --------------------------------------------------------------------------
+# The grid and the forcing
+# --------------------------------------------------------------------------
+
+
+def lat_lon_of_points(xyz):
+    """Latitude and longitude in degrees of Cartesian points (n, 3)."""
+    r = np.linalg.norm(xyz, axis=1)
+    lat = np.degrees(np.arcsin(np.clip(xyz[:, 2] / r, -1.0, 1.0)))
+    lon = np.mod(np.degrees(np.arctan2(xyz[:, 1], xyz[:, 0])), 360.0)
+    return lat, lon
+
+
+class BilinearTransfer:
+    """Bilinear interpolation from the Gauss-Legendre grid to scattered points.
+
+    The same rule as `bilinear_to_fine` of the mesh script
+    (`meshing-gia/NOTES/feasibility/giamip/n2_giamip.py`), with which the
+    shared mesh was refined for the Exp01 coastline: linear in
+    longitude with the periodic wrap from 359.3 to 0 degrees, then linear in
+    latitude between the real Gauss-Legendre node latitudes. North and south
+    of the outermost rows (|lat| > 89.465 degrees) the value of the outermost
+    row is held. The weights are computed once.
+    """
+
+    def __init__(self, lat_nodes, lon_nodes, lat, lon):
+        nlon = lon_nodes.size
+        dlon = 360.0 / nlon
+        s = (np.mod(lon, 360.0) - lon_nodes[0]) / dlon
+        self.j0 = np.floor(s).astype(int) % nlon
+        self.j1 = (self.j0 + 1) % nlon
+        self.wj = s - np.floor(s)
+        lat_c = np.clip(lat, lat_nodes[0], lat_nodes[-1])
+        self.i1 = np.clip(np.searchsorted(lat_nodes, lat_c, side="right"), 1,
+                          lat_nodes.size - 1)
+        self.i0 = self.i1 - 1
+        self.wi = ((lat_c - lat_nodes[self.i0])
+                   / (lat_nodes[self.i1] - lat_nodes[self.i0]))
+
+    def __call__(self, field):
+        """The field (nlat, nlon, south first) at the points."""
+        f = np.asarray(field, dtype=float)
+        lower = (1 - self.wj) * f[self.i0, self.j0] + self.wj * f[self.i0, self.j1]
+        upper = (1 - self.wj) * f[self.i1, self.j0] + self.wj * f[self.i1, self.j1]
+        return (1 - self.wi) * lower + self.wi * upper
+
+
+def coarse_step_indices(years, step_years):
+    """The indices of the model years that a uniform coarser step keeps.
+
+    Keeps every year whose distance from the first year is a whole multiple
+    of `step_years`, and the last year. With the Exp09 years (500 yr steps
+    to 26 ka, then 100 yr steps) and `step_years = 2000` this keeps -122000,
+    -120000, ..., 0 and 1000. The ice history is then read at its own time
+    slices and never interpolated in time.
+
+    Args:
+      years: the model years of the protocol, ascending, in years.
+      step_years: the uniform step, in years.
+
+    Returns:
+      A numpy array of indices into `years`.
+    """
+    start = int(round(years[0]))
+    keep = [i for i, year in enumerate(years)
+            if (int(round(year)) - start) % int(step_years) == 0]
+    if keep[-1] != len(years) - 1:
+        keep.append(len(years) - 1)
+    return np.array(keep, dtype=int)
+
+
+class SurfaceForcing:
+    """The observed bed and the ice on the mantle mesh, from the GIAMIP files.
+
+    `SL_obs = -bed / D` is CG2, because the mask width reads its slope. The
+    ice is CG1 (see `exp09_common.ICE_SPACE`). Every node of the mantle mesh
+    takes the value of its direction, so the fields are defined in the whole
+    mantle and are read only on Re.
+
+    Args:
+      mantle: the mantle mesh.
+      experiment: the `GiamipExperiment`.
+      step_years: the uniform step of the march, years.
+    """
+
+    def __init__(self, mantle, experiment, step_years):
+        self.experiment = experiment
+        self.ice_history = experiment.ice_history
+        # The case file leaves the topography open; the file is the one of
+        # the G-ADOPT choice (`experiment_topography`).
+        self.topography = experiment_topography(experiment)
+        lat_nodes = self.topography.latitudes()
+        lon_nodes = grids.longitudes()
+        # Both files must be on the GIAMIP Gauss-Legendre grid.
+        grids.check(lat_nodes, np.asarray(self.topography._ds["lon"][:],
+                                          dtype=float), name="topography")
+        grids.check(self.ice_history.latitudes(),
+                    np.asarray(self.ice_history._ds["lon"][:], dtype=float),
+                    name="ice history")
+        self.lat_nodes, self.lon_nodes = lat_nodes, lon_nodes
+
+        cg2 = FunctionSpace(mantle, "CG", 2)
+        cg1 = FunctionSpace(mantle, *common.ICE_SPACE)
+        self._cg2_transfer = self._transfer(cg2)
+        self._cg1_transfer = self._transfer(cg1)
+        self.cg1 = cg1
+
+        bed = self.topography.elevation()
+        self.SL_obs = Function(cg2, name="SL_obs")
+        self.SL_obs.dat.data_with_halos[:] = -self._cg2_transfer(bed) / D_SCALE
+
+        # The steps of the march: a subset of the protocol years at a uniform
+        # step, read at their own time slices.
+        steps = experiment.forcing_steps()
+        years = experiment.model_years()
+        keep = coarse_step_indices(years, step_years)
+        self.steps, self.years = steps[keep], years[keep]
+
+    def _transfer(self, space):
+        mesh = space.mesh()
+        X = Function(VectorFunctionSpace(mesh, space.ufl_element().family(),
+                                         space.ufl_element().degree()))
+        X.interpolate(SpatialCoordinate(mesh))
+        lat, lon = lat_lon_of_points(np.array(X.dat.data_ro_with_halos))
+        return BilinearTransfer(self.lat_nodes, self.lon_nodes, lat, lon)
+
+    def thickness_m(self, index):
+        """The ice thickness of march step `index` on the grid, m."""
+        return self.ice_history.thickness(int(self.steps[index]))
+
+    def ice(self, index):
+        """The ice of march step `index` as a new CG1 Function, units of D."""
+        values = self._cg1_transfer(self.thickness_m(index)) / D_SCALE
+        target = Function(self.cg1, name=common.ICE_NAME)
+        # The bilinear interpolant of non-negative data is non-negative; the
+        # clip only removes rounding.
+        target.dat.data_with_halos[:] = np.maximum(values, 0.0)
+        return target
+
+    def grid_ice_volume_m3(self, index, radius_m):
+        """The ice volume of step `index` on the grid (Gauss-Legendre), m^3."""
+        return grids.integrate(self.thickness_m(index), radius_m)
+
+
+def data_file_record(f):
+    """The record of one GIAMIP data file: path, SHA-256, corrections."""
+    return {"relative_path": f.relative_path, "sha256": f.sha256,
+            "is_current_version": bool(f.is_current_version),
+            "corrections": [c.get("id") for c in f.corrections]}
+
+
+# --------------------------------------------------------------------------
+# Main
+# --------------------------------------------------------------------------
+
+
+def parse_args():
+    """The command line."""
+    p = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--mesh", required=True,
+                   help="the coarse giamsh .msh file; its .json sidecar must "
+                        "be beside it")
+    p.add_argument("--mesh_md5", default=MESH_MD5,
+                   help="the expected MD5 of the mesh file ('' to skip)")
+    p.add_argument("--refine", type=int, default=0,
+                   help="uniform refinement levels (0 for L0)")
+    p.add_argument("--output_path", default="./")
+    p.add_argument("--step_years", type=int, default=2000,
+                   help="the uniform step of the march, years")
+    p.add_argument("--schedule", choices=["uniform", "windows"],
+                   default="uniform",
+                   help="the march of the input file: uniform steps of "
+                        "--step_years (default), or schedule C (windows: "
+                        "the protocol steps plus the 25 yr and 10 yr steps "
+                        "of the fast melt windows, decisions S33 and S34), "
+                        "with the ice of every year of schedule C, linear in "
+                        "time between the protocol years; --step_years is "
+                        "then not used")
+    p.add_argument("--core_density", choices=["mean", "cmb"], default="mean")
+    p.add_argument("--eb_fit", default=EB_FIT_FILE,
+                   help="the fit file of the Extended Burgers elements")
+    p.add_argument("--eb_fit_key", default=EB_FIT_KEY,
+                   help="the fit in the fit file, <group>/<N> (S31: "
+                        "free_time_fits/3)")
+    p.add_argument("--no_vtk", action="store_true",
+                   help="do not write the ParaView files")
+    return p.parse_args()
+
+
+def main():
+    """Make and write the input file."""
+    args = parse_args()
+    tic_run = time.time()
+    if COMM_WORLD.rank == 0:
+        os.makedirs(args.output_path, exist_ok=True)
+    COMM_WORLD.barrier()
+    say = common.RunLog(os.path.join(args.output_path, "prepare_exp09.log"))
+    say("=" * 78)
+    say(f"GIAMIP {EXPERIMENT}: input file of the bed inversion, "
+        f"{COMM_WORLD.size} ranks")
+    say("=" * 78)
+    timings = {}
+
+    # The experiment and its earth model, with the G-ADOPT choices for the
+    # fields that the protocol leaves open.
+    experiment = GiamipExperiment(EXPERIMENT)
+    earth = experiment.earth()
+    # This script builds the N Maxwell elements of the Extended Burgers fit.
+    # Stop for any other rheology, so that the case file and the input file
+    # cannot disagree.
+    if earth.rheology != RHEOLOGY:
+        raise RuntimeError(f"{EXPERIMENT} has rheology {earth.rheology!r}; "
+                           f"this script builds {RHEOLOGY!r} only")
+    mu_bar, tau_bar, burgers_record = load_eb_fit(args.eb_fit, args.eb_fit_key)
+    say(f"  EB fit {args.eb_fit_key} of {args.eb_fit} (SHA-256 "
+        f"{burgers_record['fit_file_sha256'][:16]}): mu_bar {mu_bar}, "
+        f"tau_bar {tau_bar}, sum mu_bar {mu_bar.sum():.6f}, sum mu_bar "
+        f"tau_bar {burgers_record['sum_mu_bar_tau_bar']:.15f}")
+    scales = common.Scales.from_elastic(earth.elastic)
+    say(f"  scales: {scales.as_dict()}")
+
+    # The mesh, with a check that it is the shared mesh of the handout and
+    # that its surface is the surface of the earth model.
+    md5 = common.md5sum(args.mesh) if COMM_WORLD.rank == 0 else None
+    md5 = COMM_WORLD.bcast(md5, root=0)
+    if args.mesh_md5 and md5 != args.mesh_md5:
+        raise RuntimeError(f"{args.mesh} has MD5 {md5}, not {args.mesh_md5}")
+    sidecar = os.path.splitext(args.mesh)[0] + ".json"
+    with open(sidecar) as handle:
+        sidecar_record = json.load(handle)
+    radial = RadialStructure.from_dict(sidecar_record["radial"])
+    if abs(radial.radius("surface") - scales.Re) > 1e-9 * scales.Re:
+        raise RuntimeError(f"mesh surface radius {radial.radius('surface')} "
+                           f"against the earth model {scales.Re}")
+    tic = time.time()
+    parent, mantle, counts = common.build_meshes(args.mesh, radial,
+                                                 args.refine)
+    timings["mesh_s"] = time.time() - tic
+    mesh_record = {"file": os.path.abspath(args.mesh), "md5": md5,
+                   "sidecar_inputs": sidecar_record.get("inputs"),
+                   "refine_levels": args.refine,
+                   "distribution_name": common.distribution_name(),
+                   "mantle_tags": list(radial.region_tags("mantle")),
+                   **counts}
+    say(f"  mesh: {mesh_record} ({timings['mesh_s']:.1f} s)")
+    common.memory_now("after the mesh", say)
+
+    # The earth fields.
+    tic = time.time()
+    fields = earth_fields(mantle, earth, scales)
+    # The N Maxwell elements of the EB fit, from mu_inf and eta_0.
+    (fields["shear_moduli"], fields["viscosities"], lid_cells,
+     sum_errors) = burgers_elements(mantle, fields, scales, mu_bar, tau_bar)
+    burgers_record["lid_cells"] = lid_cells
+    burgers_record["sum_check_relative_errors"] = sum_errors
+    say(f"  EB elements: N = {mu_bar.size}, {lid_cells} lid cells, sum "
+        f"checks {sum_errors}")
+    timings["earth_s"] = time.time() - tic
+
+    # The forcing: observed sea level, its frozen slope, and the ice.
+    tic = time.time()
+    # Schedule C reads every protocol year: `step_years = 1` keeps them all
+    # in `coarse_step_indices` (every distance from the start is a whole
+    # number of years), as in the forward script.
+    windows_march = args.schedule == "windows"
+    forcing = SurfaceForcing(mantle, experiment,
+                             1 if windows_march else args.step_years)
+    fields["SL_obs"] = forcing.SL_obs
+    # The surface slope of the ocean mask, from the observed bed. It stays
+    # fixed in the inversion: the mask width does not depend on the control.
+    fields["slope"] = surface_slope(forcing.SL_obs)
+    fields["slope"].rename("slope")
+    # The years of the forcing slices: the march years of a uniform march,
+    # every protocol year for schedule C.
+    slice_years = np.asarray(forcing.years, dtype=float)
+    schedule_c = None
+    if windows_march:
+        # Schedule C (design handout 8.3, S33, S34): the years of
+        # `common.schedule_c_years`, the function of the forward script of
+        # schedule C, so the inversion on this file and the forward run
+        # march the same years. The ice of a year between two protocol
+        # years is linear in time between the two slices
+        # (`common.ice_bracket`, `common.linear_ice_into`).
+        ice_file = os.path.basename(str(forcing.ice_history.path))
+        windows = common.schedule_c_windows(ice_file)
+        all_years = common.schedule_c_years(int(slice_years[0]), slice_years,
+                                            windows)
+        expected = (common.SCHEDULE_C_STEPS_122KA.get(ice_file)
+                    if int(slice_years[0]) == -122000 else None)
+        if expected is not None and len(all_years) - 1 != expected:
+            raise RuntimeError(f"schedule C has {len(all_years) - 1} steps "
+                               f"for {ice_file}, expected {expected}")
+        years = all_years.astype(float)
+        brackets = [common.ice_bracket(slice_years, y) for y in years]
+        schedule_c = {"ice_history": ice_file, "windows": windows,
+                      "steps_to_last_year": int(len(all_years) - 1)}
+    else:
+        years = slice_years
+        # Every year of a uniform march is a slice: slice k, weight 0.
+        brackets = [(index, 0.0) for index in range(len(years))]
+    year0 = int(np.flatnonzero(np.isclose(years, 0.0))[0])
+    # The march of the inversion runs from the first year to year 0; the
+    # file holds the ice of steps 0 .. year0.
+    n_ice = year0 + 1
+    if windows_march:
+        dts = np.diff(years[:n_ice])
+        say(f"  march: schedule C, {n_ice - 1} steps to year 0 "
+            f"({schedule_c['steps_to_last_year']} to +1000 yr), steps of "
+            f"{sorted(set(dts.tolist()))} yr, windows {windows}, years "
+            f"{years[0]:.0f} .. {years[year0]:.0f}")
+    else:
+        say(f"  march: {n_ice - 1} steps of {args.step_years} yr, years "
+            f"{years[0]:.0f} .. {years[year0]:.0f}")
+
+    # The ice of every step, made once and kept: the writer and the volume
+    # check use it. At L0 one CG1 field is small (schedule C: about 750
+    # fields, a few tens of MB per rank). A uniform march reads slice k for
+    # step k. Schedule C reads each protocol slice once, keeps the two
+    # slices around the current year, and writes the combination of
+    # `common.linear_ice_into` (a copy of the slice at a protocol year).
+    if windows_march:
+        ice = common.march_ice(forcing.ice, brackets[:n_ice], forcing.cg1)
+        # The check of the forward script, here before the write: every
+        # year between two protocol years holds the combination of the two
+        # protocol slices of the march, bit for bit.
+        schedule_c["linear_ice_check"] = common.check_linear_ice(
+            years[:n_ice], ice, slice_years, Function(forcing.cg1))
+        say(f"  ice of schedule C: "
+            f"{schedule_c['linear_ice_check']['years_checked']} years "
+            f"between protocol years, largest difference to the linear "
+            f"combination {schedule_c['linear_ice_check']['max_abs_diff']:.3e}"
+            f" (must be 0)")
+        if schedule_c["linear_ice_check"]["max_abs_diff"] != 0.0:
+            raise RuntimeError("the ice of schedule C is not linear between "
+                               "its protocol slices")
+    else:
+        ice = [forcing.ice(index) for index in range(n_ice)]
+    # The protocol step of each year (the ice-history slice), -1 for a year
+    # between two protocol years.
+    march_steps = [int(forcing.steps[k]) if w == 0.0 else -1
+                   for k, w in brackets[:n_ice]]
+    surface = ds(common.SURF_RE, domain=mantle)
+    ice_check = []
+    grid_volumes = {}
+
+    def grid_volume(k):
+        """The grid ice volume of slice k, m^3, computed once."""
+        if k not in grid_volumes:
+            grid_volumes[k] = forcing.grid_ice_volume_m3(k, scales.Re_m)
+        return grid_volumes[k]
+
+    for index, f in enumerate(ice):
+        mesh_m3 = float(assemble(f * surface)) * D_SCALE**3
+        # The volume is linear in the thickness, so the grid volume of the
+        # linear ice is the linear combination of the two grid volumes.
+        k, w = brackets[index]
+        grid_m3 = (grid_volume(k) if w == 0.0
+                   else (1.0 - w) * grid_volume(k) + w * grid_volume(k + 1))
+        ice_check.append({"step": index, "year": float(years[index]),
+                          "protocol_step": march_steps[index],
+                          "mesh_volume_m3": mesh_m3,
+                          "grid_volume_m3": grid_m3,
+                          "relative_error": ((mesh_m3 - grid_m3) / grid_m3
+                                             if grid_m3 else 0.0)})
+    worst = max(abs(row["relative_error"]) for row in ice_check)
+    say(f"  ice: {n_ice} steps, largest relative error of the volume on the "
+        f"mesh against the grid {worst:.3e}")
+    timings["forcing_s"] = time.time() - tic
+
+    # The statistics of the earth fields per mantle layer, in SI units.
+    tic = time.time()
+    layers = mantle_layers(radial)
+    cells = LayerCells(mantle, layers)
+    # name -> (unit, scale to SI, name in the ParaView file).
+    si = {"density": ("kg/m^3", scales.rho_bar, "density_kg_m3"),
+          "shear_modulus": ("Pa", common.MU_BAR, "shear_modulus_pa"),
+          "bulk_modulus": ("Pa", common.MU_BAR, "bulk_modulus_pa"),
+          "viscosity": ("Pa s", common.ETA_BAR, "viscosity_pa_s"),
+          "gravity": ("m/s^2", scales.g_bar, "gravity_m_s2")}
+    layer_stats = {name: {"unit": unit,
+                          "layers": cells.statistics(fields[name], scale)}
+                   for name, (unit, scale, _) in si.items()}
+    viscosity_by_layer = cells.distinct_values(fields["viscosity"],
+                                               common.ETA_BAR)
+    for name, _, _ in layers:
+        rows = viscosity_by_layer[name]
+        text = rows if isinstance(rows, str) else ", ".join(
+            f"{row['value']:.3g} Pa s ({100 * row['volume_fraction']:.1f} %)"
+            for row in rows)
+        say(f"    viscosity {name}: {text}")
+    # The EB elements per layer: instant modulus and element Maxwell times.
+    burgers_record["by_layer"] = burgers_by_layer(
+        cells, layers, fields, fields["shear_moduli"], fields["viscosities"])
+    for name, _, _ in layers:
+        row = burgers_record["by_layer"][name]
+        times = ", ".join(
+            f"{e['maxwell_time_yr']['min']:.3g}-{e['maxwell_time_yr']['max']:.3g}"
+            for e in row["elements"])
+        say(f"    EB {name}: instant modulus ratio "
+            f"{row['instant_modulus_ratio']['mean']:.4f}, element Maxwell "
+            f"times {times} yr")
+    timings["statistics_s"] = time.time() - tic
+
+    record = {
+        "experiment": EXPERIMENT,
+        "case": experiment.definition,
+        # The rheology and compressibility after the G-ADOPT choices and the
+        # references between cases ("same as Exp02") are resolved.
+        "rheology": earth.rheology,
+        "compressibility": earth.compressibility,
+        "case_gadopt": cases.with_gadopt_choices(experiment.id),
+        # The N Maxwell elements of the EB fit: `shear_moduli` and
+        # `viscosities` are in the file (`exp09_common.OPTIONAL_FIELDS`).
+        "n_elements": int(mu_bar.size),
+        "burgers": burgers_record,
+        "giamip_version": giamip.__version__,
+        "inputs": {"ice_history": data_file_record(forcing.ice_history),
+                   "topography": data_file_record(forcing.topography)},
+        "mesh": mesh_record,
+        "march": ({"step_years": args.step_years, "years": years[:n_ice],
+                   "protocol_steps": forcing.steps[:n_ice],
+                   "ice_steps": n_ice, "year0_step": year0}
+                  if not windows_march else
+                  # Schedule C: `protocol_steps` is -1 at a year between two
+                  # protocol years; `ice_brackets` holds (slice, weight of the
+                  # next slice) of every year.
+                  {"schedule": "windows", "step_years": None,
+                   "years": years[:n_ice], "protocol_steps": march_steps,
+                   "ice_steps": n_ice, "year0_step": year0,
+                   "ice_brackets": [[int(k), float(w)]
+                                    for k, w in brackets[:n_ice]],
+                   **schedule_c}),
+        "scales": scales.as_dict(),
+        "solver_constants": solver_constants(experiment, earth, scales,
+                                             args.core_density),
+        "earth_by_layer": layer_stats,
+        "viscosity_by_layer": viscosity_by_layer,
+        "ice_volume_check": ice_check,
+        # The numbers that the inversion computes again after it loads the
+        # file (`exp09_common.compare_statistics`).
+        "statistics": common.input_statistics(mantle, fields, ice),
+        "fields": None,
+        "timings": timings,
+        "provenance": common.provenance(HERE) if COMM_WORLD.rank == 0 else None,
+    }
+    record["provenance"] = COMM_WORLD.bcast(record["provenance"], root=0)
+    # The fields of the file: `MANTLE_FIELDS` and the element fields that
+    # `n_elements` asks for, with their spaces.
+    record["fields"] = {
+        name: (list(common.MANTLE_FIELDS[name]) if name in common.MANTLE_FIELDS
+               else list(common.OPTIONAL_FIELDS[name][:2])
+               + [f"vector of {record['n_elements']}"])
+        for name in common.field_names(record)}
+
+    # The input file and its record.
+    tic = time.time()
+    path = os.path.join(args.output_path, f"{STEM}.h5")
+    common.write_inputs(path, parent, fields, lambda index: ice[index],
+                        record)
+    timings["write_s"] = time.time() - tic
+    common.write_json(os.path.join(args.output_path, f"{STEM}.json"), record)
+    say(f"  wrote {path} ({timings['write_s']:.1f} s)")
+
+    # ParaView files for the reviewer: the earth fields in SI units, and the
+    # ice at the first, middle and last step of the march.
+    if not args.no_vtk:
+        tic = time.time()
+        dg1 = FunctionSpace(mantle, "DG", 1)
+        si_fields = [Function(dg1, name=vtk_name)
+                     .interpolate(fields[name] * scale)
+                     for name, (_, scale, vtk_name) in si.items()]
+        # The EB elements: the instant modulus ratio and log10 of the
+        # Maxwell time of each element in years.
+        mu_j = element_columns(fields["shear_moduli"])
+        eta_j = element_columns(fields["viscosities"])
+        si_fields.append(Function(dg1, name="instant_modulus_ratio")
+                         .interpolate(sum(mu_j) / fields["shear_modulus"]))
+        for j, (mu, eta) in enumerate(zip(mu_j, eta_j)):
+            si_fields.append(Function(dg1, name=f"log10_maxwell_time_yr_{j}")
+                             .interpolate(ln(eta / mu * common.T_BAR_YR)
+                                          / np.log(10.0)))
+        VTKFile(os.path.join(args.output_path, f"{STEM}_earth.pvd")).write(
+            *si_fields)
+        ice_file = VTKFile(os.path.join(args.output_path, f"{STEM}_ice.pvd"))
+        ice_m = Function(forcing.cg1, name="ice_m")
+        for index in sorted({0, n_ice // 2, n_ice - 1}):
+            ice_m.assign(ice[index] * D_SCALE)
+            ice_file.write(ice_m, time=float(years[index]))
+        timings["vtk_s"] = time.time() - tic
+
+    record["timings"]["total_s"] = time.time() - tic_run
+    record["timings"]["peak_memory_gb"] = common.peak_memory_gb()
+    common.write_json(os.path.join(args.output_path, f"{STEM}.json"), record)
+    say(f"  total {record['timings']['total_s']:.1f} s, peak memory "
+        f"{record['timings']['peak_memory_gb']:.2f} GB")
+
+
+if __name__ == "__main__":
+    main()
