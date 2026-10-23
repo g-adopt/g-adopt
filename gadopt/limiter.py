@@ -314,6 +314,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         return loops
 
+    @PETSc.Log.EventDecorator("gadopt.VertexBasedP1DGLimiter.apply")
     def apply(self, field):
         """Applies the limiter on the given field (in place).
 
@@ -323,18 +324,16 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         """
         if annotate_tape():
             raise RuntimeError('Limiting is currently not compatible for adjoint modelling.')
-        with PETSc.Log.Stage("limiter"):
-
-            if self.is_vector:
-                tmp_func = self.P1DG.get_work_function()
-                fs = field.function_space()
-                try:
-                    for i in range(fs.value_size):
-                        tmp_func.dat.data_wo_with_halos[:] = field.dat.data_ro_with_halos[:, i]
-                        super(VertexBasedP1DGLimiter, self).apply(tmp_func)
-                        # Writes one component only, so the other entries must stay valid: use rw.
-                        field.dat.data_rw_with_halos[:, i] = tmp_func.dat.data_ro_with_halos[:]
-                finally:
-                    self.P1DG.restore_work_function(tmp_func)
-            else:
-                super(VertexBasedP1DGLimiter, self).apply(field)
+        if self.is_vector:
+            tmp_func = self.P1DG.get_work_function()
+            fs = field.function_space()
+            try:
+                for i in range(fs.value_size):
+                    tmp_func.dat.data_wo_with_halos[:] = field.dat.data_ro_with_halos[:, i]
+                    super(VertexBasedP1DGLimiter, self).apply(tmp_func)
+                    # Writes one component only, so the other entries must stay valid: use rw.
+                    field.dat.data_rw_with_halos[:, i] = tmp_func.dat.data_ro_with_halos[:]
+            finally:
+                self.P1DG.restore_work_function(tmp_func)
+        else:
+            super(VertexBasedP1DGLimiter, self).apply(field)
