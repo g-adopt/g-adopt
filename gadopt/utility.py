@@ -504,7 +504,10 @@ class InteriorBC(DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
     @cached_property
     def _nodes(self):
-        return np.setdiff1d(np.arange(self._function_space.node_count), super()._nodes)
+        # `node_count` includes the block size for vector and tensor spaces,
+        # so take the local size (with ghosts) of the node axis.
+        num_nodes = self._function_space.nodes.local_size
+        return np.setdiff1d(np.arange(num_nodes), super()._nodes)
 
 
 def absv(u):
