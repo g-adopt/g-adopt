@@ -151,6 +151,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         self.clip_min = clip_min
         self.clip_max = clip_max
+        # Boundary loops of compute_bounds are built on first use on this placeholder
+        self._bound_field = Function(self.P1DG, name="gadopt_limiter_bound_field")
+        self._bound_loops = None
 
     def _construct_centroid_solver(self) -> LinearSolver:
         """Constructs a linear problem to compute centroids.
@@ -190,9 +193,35 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
           field: Firedrake function onto which the limiter is applied
 
         """
+        assert field.function_space() == self.P1DG, "Given field does not belong to this objects function space"
+
         # Call general-purpose bound computation.
         super(VertexBasedP1DGLimiter, self).compute_bounds(field)
 
+        # Building a pyop3 loop is far more expensive than running it, so build the
+        # loops once on a placeholder field. Each call passes the current field's Dat
+        # in place of the placeholder, by the placeholder's Dat name (pyop3 makes
+        # Dat names unique, so it can differ from the Function name).
+        if self._bound_loops is None:
+            self._bound_loops = self._build_bound_loops(self._bound_field)
+        for loop in self._bound_loops:
+            loop(**{self._bound_field.dat.name: field.dat})
+
+        if self.clip_min is not None:
+            self.min_field.interpolate(max_value(self.min_field, self.clip_min))
+        if self.clip_max is not None:
+            self.max_field.interpolate(min_value(self.max_field, self.clip_max))
+
+    def _build_bound_loops(self, field: Function) -> list[op3.Loop]:
+        """Builds the loops that add boundary facet means to the min/max fields.
+
+        Arguments:
+          field: Function that the loops read as the limited field
+
+        Returns:
+          The lateral facet loop and, on extruded meshes, the bottom and top loops.
+
+        """
         # Add the average of lateral boundary facets to min/max fields
         # NOTE this just computes the arithmetic mean of nodal values on the facet,
         # which in general is not equivalent to the mean of the field over the bnd facet.
@@ -234,7 +263,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 ("local_facet_idx", local_facet_idx.dtype, op3.READ),
             ],
         )
-        op3.loop(
+        loops = [op3.loop(
             f := self.mesh.iter("exterior_facet_vert" if self.extruded else "exterior_facet"),
             bnd_kernel(
                 pack(self.max_field, f),
@@ -243,8 +272,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 facet_number[f],
                 local_facet_idx,
             ),
-            eager=True,
-        )
+        )]
         if self.extruded:
             # Add nodal values from surface/bottom boundaries
             # NOTE calling firedrake par_loop with measure=ds_t raises an error
@@ -273,32 +301,18 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 ],
             )
 
-            op3.loop(
-                f := self.mesh.iter("exterior_facet_bottom"),
-                kernel(
-                    pack(self.max_field, f),
-                    pack(self.min_field, f),
-                    pack(field, f),
-                    bottom_idx,
-                ),
-                eager=True,
-            )
+            for name, idx in [("exterior_facet_bottom", bottom_idx), ("exterior_facet_top", top_idx)]:
+                loops.append(op3.loop(
+                    f := self.mesh.iter(name),
+                    kernel(
+                        pack(self.max_field, f),
+                        pack(self.min_field, f),
+                        pack(field, f),
+                        idx,
+                    ),
+                ))
 
-            op3.loop(
-                f := self.mesh.iter("exterior_facet_top"),
-                kernel(
-                    pack(self.max_field, f),
-                    pack(self.min_field, f),
-                    pack(field, f),
-                    top_idx,
-                ),
-                eager=True,
-            )
-
-        if self.clip_min is not None:
-            self.min_field.interpolate(max_value(self.min_field, self.clip_min))
-        if self.clip_max is not None:
-            self.max_field.interpolate(min_value(self.max_field, self.clip_max))
+        return loops
 
     def apply(self, field):
         """Applies the limiter on the given field (in place).
