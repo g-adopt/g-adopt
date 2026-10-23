@@ -86,8 +86,8 @@
 #   ENV_FILE          the environment file (default ENV_DEFAULT below)
 #   GDRIFT_DATA_DIR   the g-drift data cache (Exp08, Exp11, Exp12 only:
 #                     forward_expXX.py imports prepare_expXX.py)
-#   EXTRA_PYTHONPATH  a directory first on PYTHONPATH (Exp08, Exp11,
-#                     Exp12: the giamip of python-extra-3d, as in
+#   EXTRA_PYTHONPATH  a directory first on PYTHONPATH (default for Exp08,
+#                     Exp11, Exp12: the giamip of python-extra-3d, as in
 #                     run_prepare.pbs)
 #
 #PBS -N exp06-fwd
@@ -124,9 +124,15 @@ export GDRIFT_DATA_DIR=${GDRIFT_DATA_DIR:-${PERSIST}/gdrift-data}
 # on Setonix), which carries the model files of their 3-D earth
 # (prem-glad-m25.json, lloyd2024.json); the giamip 0.2.0 of python-extra
 # in the environment file has not got them, and the prepare script stops
-# with "names the fields None". ../submit_r2.sh sets the variable for these
-# three experiments only: the other nine ran at L0 with the giamip of the
-# environment, and their ice and topography must stay the same.
+# with "names the fields None". The default below sets it for these three
+# experiments only (the case word is the name of this directory, which the
+# copy of this script changes): the other nine ran at L0 with the giamip of
+# the environment, and their ice and topography must stay the same. An
+# empty EXTRA_PYTHONPATH= on the qsub line turns it off.
+case exp06 in
+    exp08|exp11|exp12)
+        EXTRA_PYTHONPATH=${EXTRA_PYTHONPATH-${PERSIST}/python-extra-3d} ;;
+esac
 if [ -n "${EXTRA_PYTHONPATH:-}" ]; then
     if [ ! -d "${EXTRA_PYTHONPATH}" ]; then
         echo "error: EXTRA_PYTHONPATH=${EXTRA_PYTHONPATH} is not a directory" >&2
