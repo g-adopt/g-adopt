@@ -8,7 +8,6 @@ from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSo
 from firedrake import max_value, min_value, Function, pack
 from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement
 from firedrake.functionspaceimpl import WithGeometry
-from ufl import triangle
 import numpy as np
 from firedrake.petsc import PETSc
 import pyop3 as op3
@@ -137,10 +136,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
-            mesh = p1dg_space.mesh()
-            mesh_cell = mesh.ufl_cell()
-            element = "DG" if mesh_cell == triangle else "DQ"
-            p1dg_scalar_space = FunctionSpace(mesh, element, 1)
+            # Component values are copied dof by dof, so the scalar space must share the node layout
+            p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), p1dg_space.ufl_element().sub_elements[0])
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_scalar_space)
         else:
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
