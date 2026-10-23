@@ -37,6 +37,10 @@
 #       -v TARGET=$R/prepare/inputs_exp01.h5,SOURCE=/g/data/xd2/sg8812/gia-mip/exp01/L0/invert-protocol/state.h5 \
 #       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp01/run_transfer.pbs
 #
+# The final L0 bed of Exp09, Exp10 and Exp12 (schedule C) is in
+# .../L0/invert-c/state.h5 instead of .../L0/invert-protocol/state.h5.
+# ../submit_r2.sh chooses the source of each experiment.
+#
 # Read the record <target stem>_transfer_bed.json (or the log) after the
 # job: the coverage (target_nodes_on_re against
 # target_nodes_on_re_indicator), the RMS of the bed change

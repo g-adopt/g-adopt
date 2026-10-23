@@ -31,6 +31,9 @@
 #       -v STATE=/scratch/xd2/$USER/giamip/exp01/8re_r2-6nodes/invert/state.h5 \
 #       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp01/run_forward.pbs
 #
+# Exp09, Exp10 and Exp12 add SCHEDULE=windows and use the directory
+# forward-windows; ../submit_r2.sh sets both for each experiment.
+#
 # THE RESTART. The run copies STATE into the run directory
 # (forward_state.h5), loads its meshes and fields from that copy and writes
 # its checkpoints into it. The copy has the size of the state file (the

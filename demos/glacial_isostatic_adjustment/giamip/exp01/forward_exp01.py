@@ -740,8 +740,8 @@ class SurfaceOutput:
             # and the nodal CG2 field (a check of the surface field).
             "S_check": (sea_surface - (self.N_m + self.shift_const)) ** 2 * dss,
             # The misfit of `invert_exp01.BedInversion.misfit`.
-            "misfit": Constant(0.5 * D_SCALE ** 2)
-                      * (SL - self.SL_obs) ** 2 * dss,
+            "misfit": (Constant(0.5 * D_SCALE ** 2)
+                       * (SL - self.SL_obs) ** 2 * dss),
         }
         self.area = float(assemble(self.forms["area"]))
 
