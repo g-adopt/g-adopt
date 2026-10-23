@@ -30,6 +30,15 @@ __all__ = [
 ]
 
 
+def _is_zero_number(value) -> bool:
+    """True when `value` is the plain number zero (a Python or NumPy scalar).
+
+    A `Function` or `Constant` is never treated as zero, because its value
+    can change after the forms are built.
+    """
+    return isinstance(value, Number) and value == 0
+
+
 @dataclass(frozen=True)
 class Gravity:
     """The gravitational acceleration, split into the parts a diagnostic asks for.
@@ -1124,8 +1133,26 @@ class InternalVariableApproximation(BaseGIAApproximation):
         # raised to a positive power correctly evaluates to 0. Conditioning
         # on the exponent rather than the base avoids incorrectly setting
         # a^(n-1) = 1 for n>1 when background_stress = 0.
-        a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), a ** (n - 1))
         b_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), b ** (n - 1))
+        # With no background stress (a plain number 0, the GIAMIP case) the
+        # background term is 1 where n = 1 and 0 where n > 1, written without
+        # `a ** (n - 1)`. The values are the same; the reason is the
+        # derivative. When the exponent is a `Function` it is a coefficient of
+        # the residual, and a solve block that differentiates the residual with
+        # respect to every dependency (the cached solver blocks of Firedrake
+        # PR 4638) forms d(a ** (n - 1)) / dn = a ** (n - 1) ln(a). UFL folds
+        # a = 0 / sigma* to the literal 0 and evaluates ln(0) at form
+        # construction, which raises "math domain error".
+        # A background stress given as a `Function` or `Constant` keeps the
+        # general form; where it is 0 and n > 1, the derivatives in n and in
+        # sigma* (for n < 2) of `a ** (n - 1)` are NaN, which matters only if
+        # the adjoint of the exponent or the transition stress is evaluated.
+        if _is_zero_number(self.background_stress):
+            a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1),
+                                    ufl.as_ufl(0))
+        else:
+            a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1),
+                                    a ** (n - 1))
         return (1 + a_pow) / (1 + b_pow)
 
 
