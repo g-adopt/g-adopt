@@ -56,6 +56,8 @@
 #   FORCE=1            submit even if the stage directory holds the outputs
 #                      of an earlier submission
 #   SOURCE=<file>      another L0 state file for the transfer
+#   XPP=<dir>          Exp08, Exp11, Exp12: the directory of their giamip
+#                      (default giamip-software/python-extra-3d)
 #   FORWARD_RESTART=1  forward stage: continue the forward run from its last
 #                      checkpoint (RESTART=1), then ParaView, images and
 #                      archive as before
@@ -104,6 +106,18 @@ case ${EXP} in
         L0_SOURCE=${ARCHIVE}/exp${EXP}/L0/invert-protocol/state.h5 ;;
 esac
 SOURCE=${SOURCE:-${L0_SOURCE}}
+# The giamip of the experiments with a 3-D earth (run_prepare.pbs,
+# EXTRA_PYTHONPATH): Exp08, Exp11 and Exp12 ran at L0 with the giamip of
+# python-extra-3d on Setonix. Its copy on Gadi has the same MD5 sums.
+case ${EXP} in
+    08|11|12) XPP=${XPP:-/g/data/xd2/sg8812/giamip-software/python-extra-3d}
+              if [ "${DRY_RUN:-0}" != "1" ] && [ ! -d "${XPP}" ]; then
+                  echo "error: ${XPP} does not exist" >&2
+                  exit 1
+              fi
+              XPP_V=",EXTRA_PYTHONPATH=${XPP}" ;;
+    *) XPP_V="" ;;
+esac
 FWD=${ARCHIVE}/exp${EXP}/r2/forward-${SCHEDULE}
 
 # The resources of one solver job, and the wall time of the long jobs.
@@ -145,7 +159,7 @@ refuse_if() {
 prepare_job() {
     refuse_if ${INPUTS}
     submit ${R}/prepare -N x${EXP}-prep -l ${RES},walltime=05:00:00 \
-        -v "MESH=${MESH},EXTRA=${PREP_EXTRA}" ${G}/run_prepare.pbs
+        -v "MESH=${MESH}${XPP_V},EXTRA=${PREP_EXTRA}" ${G}/run_prepare.pbs
 }
 transfer_job() {
     local after=$1
@@ -199,14 +213,14 @@ case ${STAGE} in
     forward)
         if [ "${FORWARD_RESTART:-0}" = "1" ]; then
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${RES},walltime=${LONG} \
-                -v "RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+                -v "RESTART=1,SCHEDULE=${SCHEDULE}${XPP_V}" ${G}/run_forward.pbs)
         else
             refuse_if ${FWD}/forward_exp${EXP}_surface.h5
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5" >&2; exit 1; }
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/summary_invert.json" ] || \
                 echo "warning: ${R}/invert has no summary_invert.json; is the inversion finished?" >&2
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${RES},walltime=${LONG} \
-                -v "STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+                -v "STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}${XPP_V}" ${G}/run_forward.pbs)
         fi
         pv=$(submit ${FWD} -N x${EXP}-pv -W depend=afterok:${fwd} ${G}/run_paraview.pbs)
         img0=$(submit ${FWD} -N x${EXP}-img0 -W depend=afterok:${pv} -v HALF=0 ${G}/run_images.pbs)

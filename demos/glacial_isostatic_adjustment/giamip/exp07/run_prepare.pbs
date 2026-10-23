@@ -24,6 +24,8 @@
 #   ENV_FILE the environment file (default ENV_DEFAULT below)
 #   GDRIFT_DATA_DIR the g-drift data cache (default gdrift-data in the
 #           software directory; read by Exp08, Exp11 and Exp12 only)
+#   EXTRA_PYTHONPATH a directory first on PYTHONPATH (Exp08, Exp11, Exp12:
+#           the giamip of python-extra-3d; see below)
 #
 #PBS -N exp07-prep
 #PBS -P xd2
@@ -56,6 +58,22 @@ source ${ENV_FILE}
 # PYTHONPATH of the environment file (decision R7). The other experiments do
 # not import g-drift, and the variable changes nothing for them.
 export GDRIFT_DATA_DIR=${GDRIFT_DATA_DIR:-${PERSIST}/gdrift-data}
+# EXTRA_PYTHONPATH: a directory that goes first on PYTHONPATH. Exp08,
+# Exp11 and Exp12 need the giamip of python-extra-3d (gia-mip 0cf5f39, as
+# on Setonix), which carries the model files of their 3-D earth
+# (prem-glad-m25.json, lloyd2024.json); the giamip 0.2.0 of python-extra
+# in the environment file has not got them, and the prepare script stops
+# with "names the fields None". ../submit_r2.sh sets the variable for these
+# three experiments only: the other nine ran at L0 with the giamip of the
+# environment, and their ice and topography must stay the same.
+if [ -n "${EXTRA_PYTHONPATH:-}" ]; then
+    if [ ! -d "${EXTRA_PYTHONPATH}" ]; then
+        echo "error: EXTRA_PYTHONPATH=${EXTRA_PYTHONPATH} is not a directory" >&2
+        exit 1
+    fi
+    export PYTHONPATH=${EXTRA_PYTHONPATH}:${PYTHONPATH}
+    echo "PYTHONPATH starts with ${EXTRA_PYTHONPATH}"
+fi
 
 HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp07
 MESH=${MESH:-${PERSIST}/meshes/n2_giamip_all_o1/n2_giamip_all_o1.msh}
