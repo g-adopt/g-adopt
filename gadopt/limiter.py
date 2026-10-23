@@ -315,9 +315,10 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 tmp_func = self.P1DG.get_work_function()
                 fs = field.function_space()
                 for i in range(fs.value_size):
-                    tmp_func.dat.data_with_halos[:] = field.dat.data_with_halos[:, i]
+                    tmp_func.dat.data_wo_with_halos[:] = field.dat.data_ro_with_halos[:, i]
                     super(VertexBasedP1DGLimiter, self).apply(tmp_func)
-                    field.dat.data_with_halos[:, i] = tmp_func.dat.data_with_halos[:]
+                    # Writes one component only, so the other entries must stay valid: use rw.
+                    field.dat.data_rw_with_halos[:, i] = tmp_func.dat.data_ro_with_halos[:]
                 self.P1DG.restore_work_function(tmp_func)
             else:
                 super(VertexBasedP1DGLimiter, self).apply(field)
