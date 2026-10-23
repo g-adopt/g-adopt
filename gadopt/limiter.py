@@ -210,6 +210,10 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         local_facet_nodes = np.array([boundary_dofs[e] for e in sorted(boundary_dofs.keys())])
         n_bnd_nodes = local_facet_nodes.shape[1]
         local_facet_idx = op3.Dat.from_array(local_facet_nodes.ravel(), name='local_facet_idx', constant=True, rank_equal=True)
+        if self.extruded:
+            facet_number = self.mesh.exterior_facet_vert_local_facet_indices
+        else:
+            facet_number = self.mesh.exterior_facet_local_facet_indices
         code = """
                 double face_mean = 0.0;
                 for (int i = 0; i < %(nnodes)d; i++) {
@@ -229,17 +233,17 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 ("qmax", op3.ScalarType, op3.MAX_RW),
                 ("qmin", op3.ScalarType, op3.MIN_RW),
                 ("field", op3.ScalarType, op3.READ),
-                ("facet", field.dat.dtype, op3.READ),
+                ("facet", facet_number.dtype, op3.READ),
                 ("local_facet_idx", local_facet_idx.dtype, op3.READ),
             ],
         )
         op3.loop(
-            f := self.P1DG.mesh().iter("exterior_facet_vert" if self.extruded else "exterior_facet"),
+            f := self.mesh.iter("exterior_facet_vert" if self.extruded else "exterior_facet"),
             bnd_kernel(
                 pack(self.max_field, f),
                 pack(self.min_field, f),
                 pack(field, f),
-                self.P1DG.mesh().exterior_facet_vert_local_facet_indices[f] if self.extruded else self.P1DG.mesh().exterior_facet_local_facet_indices[f],
+                facet_number[f],
                 local_facet_idx,
             ),
             eager=True,
@@ -247,8 +251,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         if self.extruded:
             # Add nodal values from surface/bottom boundaries
             # NOTE calling firedrake par_loop with measure=ds_t raises an error
-            bottom_nodes = get_facet_mask(self.P1CG, 'bottom')
-            top_nodes = get_facet_mask(self.P1CG, 'top')
+            bottom_nodes = get_facet_mask(self.P1CG, 'bottom').astype(op3.dtypes.IntType)
+            top_nodes = get_facet_mask(self.P1CG, 'top').astype(op3.dtypes.IntType)
             bottom_idx = op3.Dat.from_array(bottom_nodes, name='node_idx', constant=True, rank_equal=True)
             top_idx = op3.Dat.from_array(top_nodes, name='node_idx', constant=True, rank_equal=True)
             code = """
@@ -268,7 +272,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                     ("qmax", op3.ScalarType, op3.MAX_RW),
                     ("qmin", op3.ScalarType, op3.MIN_RW),
                     ("field", op3.ScalarType, op3.READ),
-                    ("idx", "int", op3.READ),
+                    ("idx", bottom_idx.dtype, op3.READ),
                 ],
             )
 
