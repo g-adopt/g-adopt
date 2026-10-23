@@ -350,7 +350,6 @@ class ExtrudedFunction(Function):
     def __init__(self, *args, mesh_3d=None, **kwargs):
         # create the 2d function
         super().__init__(*args, **kwargs)
-        print(*args)
         if mesh_3d is not None:
             self.view_3d = extend_function_to_3d(self, mesh_3d)
 
@@ -359,7 +358,6 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
                       vector=False, hdiv=False, variant=None, v_variant=None,
                       **kwargs):
     cell_dim = mesh.cell_dimension()
-    print(cell_dim)
     assert cell_dim in [2, (2, 1), (1, 1)], 'Unsupported cell dimension'
     hdiv_families = [
         'RT', 'RTF', 'RTCF', 'RAVIART-THOMAS',
@@ -372,7 +370,6 @@ def get_functionspace(mesh, h_family, h_degree, v_family=None, v_degree=None,
             else:
                 variant = 'integral'
         else:
-            print("var = equi")
             variant = 'equispaced'
     if v_variant is None:
         v_variant = 'equispaced'
