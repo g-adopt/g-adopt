@@ -318,11 +318,11 @@ for timestep in range(1, max_timesteps+1):
     displacement_max = gd.uv_max(boundary.top)
     log("Greatest (+ve) displacement", displacement_max*D)
     displacement_min_array.append(
-        [float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds),
+        [characteristic_maxwell_time*float(time)/year_in_seconds,
             displacement_min])
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {float(time)} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
                  f"{displacement_min*D} {displacement_max*D}")
 
