@@ -15,7 +15,9 @@
 #   transfer/       the record and the log of the bed transfer, the job
 #                   outputs
 #   invert-3steps/  everything except state.h5 (the 3-step test: logs,
-#                   records, controls.h5, node memory and jobfs files)
+#                   records, controls.h5, node memory and jobfs files);
+#                   the copy has the name of TEST_DIR, for example
+#                   invert-test6/ for the short test of schedule D
 #   invert/         everything: state.h5 (the input file with the bed of
 #                   every ROL iteration, the start of the forward run),
 #                   controls.h5, the logs, the summary, the job outputs,
@@ -37,15 +39,15 @@
 #   DEST      the archive directory (default above)
 #   PREP_DIR  the directory of the prepare job (default RUN_ROOT/prepare)
 #   XFER_DIR  the directory of the bed transfer (default RUN_ROOT/transfer)
-#   TEST_DIR  the directory of the 3-step test (default
-#             RUN_ROOT/invert-3steps)
+#   TEST_DIR  the directory of the test of the inversion (default
+#             RUN_ROOT/invert-3steps); copied to DEST under its own name
 #
 # PREP_DIR, XFER_DIR and TEST_DIR exist because the readiness jobs can run
 # in another run directory than the inversion: the partition of the
 # input file belongs to the rank count, so a 624-rank input file written by
 # a 6-node prepare job (8re_r2-6nodes/) is inverted on 16 nodes with 39
-# ranks per node (8re_r2-16nodes-624ranks/). The copies keep the names
-# prepare/, transfer/ and invert-3steps/ in DEST.
+# ranks per node (8re_r2-16nodes-624ranks/). The copies get the names
+# prepare/ and transfer/ in DEST, and the test the name of its directory.
 #
 #PBS -N exp05-arch
 #PBS -P xd2
@@ -67,7 +69,7 @@ TEST_DIR=${TEST_DIR:-${RUN_ROOT}/invert-3steps}
 status=0
 
 echo "job ${PBS_JOBID}: ${RUN_ROOT} -> ${DEST}"
-echo "prepare from ${PREP_DIR}, transfer from ${XFER_DIR}, 3-step test from ${TEST_DIR}"
+echo "prepare from ${PREP_DIR}, transfer from ${XFER_DIR}, test from ${TEST_DIR}"
 date
 mkdir -p ${DEST} || exit 1
 
@@ -106,7 +108,10 @@ copy_dir() {
 # same mesh, fields and ice; the .bak file of a failed transfer is a copy.
 copy_dir prepare ${PREP_DIR} --exclude='*.h5' --exclude='*.bak'
 copy_dir transfer ${XFER_DIR} --exclude='*.h5' --exclude='*.bak'
-copy_dir invert-3steps ${TEST_DIR} --exclude='state.h5'
+# The test keeps the name of its directory: invert-3steps/ for the 3-step
+# test, invert-test6/ for the 6-step test of schedule D (submit_r2.sh), so
+# the archive says which test it holds.
+copy_dir $(basename ${TEST_DIR}) ${TEST_DIR} --exclude='state.h5'
 copy_dir invert ${RUN_ROOT}/invert
 
 # The MD5 of the two files that a later step reads.

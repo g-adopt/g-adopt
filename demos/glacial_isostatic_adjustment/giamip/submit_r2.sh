@@ -48,8 +48,11 @@
 #
 # Resources of every solver job: ncpus = 104 NODES, mem = 500 NODES GB,
 # jobfs = 400 NODES GB (the tape goes to $PBS_JOBFS, decision R11). Wall
-# time of the inversion and the forward run: 48 h up to 10 nodes, 24 h
-# above (the limit of normalsr above 10 nodes).
+# time of the inversion, its restarts and the forward run: the longest
+# that normalsr gives for the node count of the job (NCI queue limits,
+# by cores): 48 h up to 10 nodes (1040 cores), 24 h up to 20 nodes (2080
+# cores), 10 h up to 40 nodes (4160 cores), 5 h up to 100 nodes (10400
+# cores, the largest normalsr job). WALLTIME=HH:MM:SS replaces it.
 #
 # The solver options of the inversion (decision of 2026-10-24): default
 # solver options, --gia_rebuild_every 100 --log_memory
@@ -82,14 +85,15 @@
 #   FORWARD_RESTART=1  forward stage: continue the forward run from its last
 #                      checkpoint (RESTART=1), then ParaView, images and
 #                      archive as before
-#   FORWARD_NODES=<n>  forward stage: the nodes of the forward run (default
-#                      NODES). The forward run is not taped, so it needs no
-#                      node disk per rank and can put the NP ranks of the
-#                      partition on fewer, full nodes, for example
-#                      RANKS_PER_NODE=39 FORWARD_NODES=6 bash submit_r2.sh
-#                      01 16 forward for an inversion on 16 nodes with 39
-#                      ranks per node (624 ranks, one per core of 6 nodes).
-#                      NP must divide by FORWARD_NODES and fit its cores.
+#   FORWARD_NODES=<n>  forward stage: the nodes of the forward run. The
+#                      forward run is not taped, so it needs no node disk
+#                      per rank and puts the NP ranks of the partition on
+#                      full nodes: the default is NP / 104 if NP divides by
+#                      104, else NODES. For example RANKS_PER_NODE=39
+#                      bash submit_r2.sh 01 16 forward for an inversion on
+#                      16 nodes with 39 ranks per node runs the forward run
+#                      on 6 nodes (624 ranks, one per core). NP must divide
+#                      by FORWARD_NODES and fit its cores.
 #   IMAGE_PARTS=<k>    forward stage: the number of image jobs (default 2,
 #                      run_images.pbs NPARTS; 1.9 h each for 926 images)
 #   ROOT               the root of the run directories. Default for the
@@ -105,6 +109,39 @@
 #                      schedule D) or windows (schedule C). It sets the march
 #                      of the prepare job and the schedule of the forward
 #                      run. The other nine experiments do not read it.
+#   WALLTIME=HH:MM:SS  the wall time of the inversion, restart or forward
+#                      job instead of the queue limit of its node count. It
+#                      must not be above that limit.
+#   XFER_DIR=<dir>     forward stage: the bed transfer directory that the
+#                      archive job copies (default: transfer/ beside PREP,
+#                      transfer-d/ for schedule D)
+#   TEST_DIR=<dir>     forward stage: the test directory that the archive job
+#                      copies, under its own name (default below)
+#
+# Schedule D (Exp09, Exp10, Exp12 with WINDOW_SCHEDULE=windows-coarse), the
+# restart and forward stages. The readiness jobs of these three ran at the
+# rank count NP on NP / 104 full nodes (T8, 2026-10-24), and the inversion
+# runs on gdata with fewer ranks per node, with a layout that can change at
+# a restart (Exp09: first job 26 x 72, restarts 36 x 52, all in
+# 8re_r2-26nodes-1872ranks/). So for these stages:
+#   run directory   the one directory under /scratch/xd2/$USER/giamip/expXX
+#                   and /g/data/xd2/sg8812/giamip-runs/expXX (only ROOT if
+#                   set) that is named 8re_r2-<n>nodes-<NP>ranks for any n,
+#                   or 8re_r2-<NP/104>nodes, and holds invert/state.h5. The
+#                   script stops if there is not exactly one. NODES and
+#                   RANKS_PER_NODE set NP and the resources of a restart
+#                   job, not the directory name.
+#   PREP            /scratch/xd2/$USER/giamip/expXX/8re_r2-<NP/104>nodes/prepare-d
+#   XFER_DIR        transfer-d/ beside PREP
+#   TEST_DIR        invert-test6/ of the run directory, else the one
+#                   invert-test6/ of another run directory of NP ranks (the
+#                   short test of Exp12 ran at 26 x 72, its inversion at
+#                   36 x 52)
+# Examples (the forward run on NP / 104 full nodes, 24 h):
+#   RANKS_PER_NODE=78 bash submit_r2.sh 10 16 restart     (16 x 78, 24 h)
+#   RANKS_PER_NODE=52 bash submit_r2.sh 09 36 restart     (36 x 52, 10 h)
+#   bash submit_r2.sh 10 12 forward                       (1248 ranks)
+#   bash submit_r2.sh 09 18 forward                       (1872 ranks)
 set -euo pipefail
 
 EXP=${1:?usage: submit_r2.sh EXP NODES STAGE}
@@ -144,46 +181,6 @@ else
     # The first entry of every -v list of a solver job.
     NPV="NP=${NP},"
 fi
-# The root of the run directories. New runs go to /scratch. The restart
-# and the forward run continue an existing inversion, and those of
-# Exp02-08 and Exp11 run on gdata (giamip-runs), so for these two stages
-# the root is the one whose run directory holds invert/state.h5. A wrong
-# root would give the forward run a missing state file, and the archive
-# job a run directory without invert/ (it would skip it and exit 0), so
-# the script stops if the state file is under both roots or under none.
-SCRATCH_ROOT=/scratch/xd2/${USER}/giamip
-GDATA_ROOT=/g/data/xd2/sg8812/giamip-runs
-if [ -z "${ROOT:-}" ]; then
-    case ${STAGE} in
-        restart|forward)
-            found=""
-            for root in ${SCRATCH_ROOT} ${GDATA_ROOT}; do
-                if [ -e "${root}/exp${EXP}/${RUN_NAME}/invert/state.h5" ]; then
-                    found="${found} ${root}"
-                fi
-            done
-            # One word: exactly one root holds the state file.
-            if [ $(echo ${found} | wc -w) -ne 1 ]; then
-                echo "error: exp${EXP}/${RUN_NAME}/invert/state.h5 is under ${found:-none} of ${SCRATCH_ROOT} and ${GDATA_ROOT}; set ROOT" >&2
-                exit 1
-            fi
-            ROOT=${found# } ;;
-        *)
-            ROOT=${SCRATCH_ROOT} ;;
-    esac
-fi
-R=${ROOT}/exp${EXP}/${RUN_NAME}
-echo "run directory ${R}" >&2
-# The prepare directory: prepare/ by default, PREP for another one (Exp01
-# has its r2 input file in prepare-full/; prepare/ there holds an older
-# 3-ice-step test file).
-PREP=${PREP:-${R}/prepare}
-INPUTS=${PREP}/inputs_exp${EXP}.h5
-
-# The mesh of the r2 production (NOTES decision of 2026-10-24).
-M=/g/data/xd2/sg8812/giamip-software/meshes/giamip_8re_r2
-MESH=${M}/giamip_8re_r2_linear.h5
-MESH_EXTRA="--mesh_name giamip_8re_r2_linear --sidecar ${M}/giamip_8re_r2.json --mesh_md5 7bad5e7e3ca14fe4bc5c5e965d5b57eb"
 
 # The schedule of the experiment, and with it the march of the input file,
 # the L0 bed and the forward run.
@@ -196,32 +193,162 @@ case ${EXP} in
             windows|windows-coarse) ;;
             *) echo "error: WINDOW_SCHEDULE=${SCHEDULE}; use windows-coarse or windows" >&2; exit 1 ;;
         esac
-        PREP_EXTRA="${MESH_EXTRA} --schedule ${SCHEDULE}"
         L0_SOURCE=${ARCHIVE}/exp${EXP}/L0/invert-c/state.h5 ;;
     *)
         SCHEDULE=protocol
-        PREP_EXTRA="${MESH_EXTRA} --step_years 100"
         L0_SOURCE=${ARCHIVE}/exp${EXP}/L0/invert-protocol/state.h5 ;;
+esac
+
+# The schedule D production of the restart and forward stages (the header
+# explains the layout of T8). D_RUN=1 selects its search for the run
+# directory and its defaults of PREP, XFER_DIR and TEST_DIR. The other
+# stages, schedule C and the nine Maxwell experiments keep the rules below
+# unchanged.
+D_RUN=0
+if [ "${SCHEDULE}" = "windows-coarse" ]; then
+    case ${STAGE} in restart|forward) D_RUN=1 ;; esac
+fi
+# The node count of NP ranks at one rank per core: the readiness jobs of
+# schedule D ran in 8re_r2-<FULL_NODES>nodes/. Empty if NP does not fill
+# whole nodes.
+if [ $(( NP % 104 )) -eq 0 ]; then FULL_NODES=$(( NP / 104 )); else FULL_NODES=""; fi
+
+# The root of the run directories. New runs go to /scratch. The restart
+# and the forward run continue an existing inversion, and those of
+# Exp02-08 and Exp11 run on gdata (giamip-runs), so for these two stages
+# the root is the one whose run directory holds invert/state.h5. A wrong
+# root would give the forward run a missing state file, and the archive
+# job a run directory without invert/ (it would skip it and exit 0), so
+# the script stops if the state file is under both roots or under none.
+SCRATCH_ROOT=/scratch/xd2/${USER}/giamip
+GDATA_ROOT=/g/data/xd2/sg8812/giamip-runs
+if [ "${D_RUN}" = "1" ]; then
+    # Schedule D: the run directory of NP ranks with any node count in its
+    # name, because the job layout of a restart can differ from the layout
+    # in the name of the directory. The partition of the input file is the
+    # same for every layout of NP ranks, so any of them is a valid run
+    # directory, but there must be exactly one, or the forward run could
+    # start from the bed of another run.
+    found=""
+    for root in ${ROOT:-${SCRATCH_ROOT} ${GDATA_ROOT}}; do
+        for dir in ${root}/exp${EXP}/8re_r2-*nodes-${NP}ranks ${FULL_NODES:+${root}/exp${EXP}/8re_r2-${FULL_NODES}nodes}; do
+            # A pattern without a match stays as it is and fails this test.
+            if [ -e "${dir}/invert/state.h5" ]; then
+                found="${found} ${dir}"
+            fi
+        done
+    done
+    if [ $(echo ${found} | wc -w) -ne 1 ]; then
+        echo "error: schedule D, ${NP} ranks: invert/state.h5 is in ${found:-none} of the run directories 8re_r2-*nodes-${NP}ranks${FULL_NODES:+ and 8re_r2-${FULL_NODES}nodes} of exp${EXP} under ${ROOT:-${SCRATCH_ROOT} and ${GDATA_ROOT}}; need exactly one" >&2
+        exit 1
+    fi
+    R=${found# }
+else
+    if [ -z "${ROOT:-}" ]; then
+        case ${STAGE} in
+            restart|forward)
+                found=""
+                for root in ${SCRATCH_ROOT} ${GDATA_ROOT}; do
+                    if [ -e "${root}/exp${EXP}/${RUN_NAME}/invert/state.h5" ]; then
+                        found="${found} ${root}"
+                    fi
+                done
+                # One word: exactly one root holds the state file.
+                if [ $(echo ${found} | wc -w) -ne 1 ]; then
+                    echo "error: exp${EXP}/${RUN_NAME}/invert/state.h5 is under ${found:-none} of ${SCRATCH_ROOT} and ${GDATA_ROOT}; set ROOT" >&2
+                    exit 1
+                fi
+                ROOT=${found# } ;;
+            *)
+                ROOT=${SCRATCH_ROOT} ;;
+        esac
+    fi
+    R=${ROOT}/exp${EXP}/${RUN_NAME}
+fi
+echo "run directory ${R}" >&2
+# The prepare directory: prepare/ by default, PREP for another one (Exp01
+# has its r2 input file in prepare-full/; prepare/ there holds an older
+# 3-ice-step test file). Schedule D: prepare-d/ of the full-node directory
+# on /scratch, where T8 wrote the input file of the production.
+if [ "${D_RUN}" = "1" ] && [ -n "${FULL_NODES}" ]; then
+    PREP=${PREP:-${SCRATCH_ROOT}/exp${EXP}/8re_r2-${FULL_NODES}nodes/prepare-d}
+else
+    PREP=${PREP:-${R}/prepare}
+fi
+INPUTS=${PREP}/inputs_exp${EXP}.h5
+
+# The mesh of the r2 production (NOTES decision of 2026-10-24).
+M=/g/data/xd2/sg8812/giamip-software/meshes/giamip_8re_r2
+MESH=${M}/giamip_8re_r2_linear.h5
+MESH_EXTRA="--mesh_name giamip_8re_r2_linear --sidecar ${M}/giamip_8re_r2.json --mesh_md5 7bad5e7e3ca14fe4bc5c5e965d5b57eb"
+
+# The options of the prepare job for the march of the schedule.
+case ${SCHEDULE} in
+    protocol) PREP_EXTRA="${MESH_EXTRA} --step_years 100" ;;
+    *)        PREP_EXTRA="${MESH_EXTRA} --schedule ${SCHEDULE}" ;;
 esac
 SOURCE=${SOURCE:-${L0_SOURCE}}
 FWD=${ARCHIVE}/exp${EXP}/r2/forward-${SCHEDULE}
 
+# The longest wall time of a normalsr job on n nodes (NCI queue limits,
+# which go by cores: 1-1040 cores 48 h, 1144-2080 24 h, 2184-4160 10 h,
+# 4264-10400 5 h; 104 cores per node). Prints nothing above 100 nodes,
+# where normalsr has no job.
+max_walltime() {
+    local n=$1
+    if [ ${n} -le 10 ]; then echo 48:00:00
+    elif [ ${n} -le 20 ]; then echo 24:00:00
+    elif [ ${n} -le 40 ]; then echo 10:00:00
+    elif [ ${n} -le 100 ]; then echo 05:00:00
+    fi
+}
+# The wall time of a long job on n nodes: WALLTIME if given, else the
+# limit. Stops the script if WALLTIME is not HH:MM:SS or above the limit,
+# so qsub does not refuse the first job of a chain after the others are
+# planned.
+long_walltime() {
+    local n=$1 limit
+    limit=$(max_walltime ${n})
+    if [ -z "${limit}" ]; then
+        echo "error: ${n} nodes is above the 100 nodes of a normalsr job" >&2
+        return 1
+    fi
+    if [ -z "${WALLTIME:-}" ]; then
+        echo ${limit}
+        return
+    fi
+    if ! [[ ${WALLTIME} =~ ^[0-9]+:[0-5][0-9]:[0-5][0-9]$ ]]; then
+        echo "error: WALLTIME=${WALLTIME} is not HH:MM:SS" >&2
+        return 1
+    fi
+    # Both in seconds.
+    local w l
+    w=$(echo ${WALLTIME} | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')
+    l=$(echo ${limit} | awk -F: '{print $1 * 3600 + $2 * 60 + $3}')
+    if [ ${w} -gt ${l} ]; then
+        echo "error: WALLTIME=${WALLTIME} is above the normalsr limit ${limit} of ${n} nodes" >&2
+        return 1
+    fi
+    echo ${WALLTIME}
+}
+
 # The resources of one solver job, and the wall time of the long jobs.
 RES="ncpus=$(( 104 * NODES )),mem=$(( 500 * NODES ))GB,jobfs=$(( 400 * NODES ))GB"
-if [ ${NODES} -le 10 ]; then LONG=48:00:00; else LONG=24:00:00; fi
+LONG=$(long_walltime ${NODES})
 INV_EXTRA="--gia_rebuild_every 100 --log_memory --free_taping_solver"
 
 # The forward run: FORWARD_NODES nodes with the NP ranks of the partition.
-# Its jobfs holds only the kernel caches of the Firedrake modules (no tape),
-# so it asks for 100 GB per node.
-FORWARD_NODES=${FORWARD_NODES:-${NODES}}
+# It is not taped, so the default is the fewest full nodes that hold NP
+# ranks (one rank per core). Its jobfs holds only the kernel caches of the
+# Firedrake modules (no tape), so it asks for 100 GB per node.
+FORWARD_NODES=${FORWARD_NODES:-${FULL_NODES:-${NODES}}}
 if ! [[ ${FORWARD_NODES} =~ ^[1-9][0-9]*$ ]] || [ $(( NP % FORWARD_NODES )) -ne 0 ] \
         || [ ${NP} -gt $(( 104 * FORWARD_NODES )) ]; then
     echo "error: FORWARD_NODES=${FORWARD_NODES} does not fit NP=${NP} ranks" >&2
     exit 1
 fi
 FRES="ncpus=$(( 104 * FORWARD_NODES )),mem=$(( 500 * FORWARD_NODES ))GB,jobfs=$(( 100 * FORWARD_NODES ))GB"
-if [ ${FORWARD_NODES} -le 10 ]; then FLONG=48:00:00; else FLONG=24:00:00; fi
+FLONG=$(long_walltime ${FORWARD_NODES})
 # NP goes on the -v list only if it is not one rank per core.
 if [ ${NP} -eq $(( 104 * FORWARD_NODES )) ]; then FNPV=""; else FNPV="NP=${NP},"; fi
 IMAGE_PARTS=${IMAGE_PARTS:-2}
@@ -229,14 +356,42 @@ if ! [[ ${IMAGE_PARTS} =~ ^[1-9][0-9]*$ ]]; then
     echo "error: IMAGE_PARTS=${IMAGE_PARTS} is not a positive integer" >&2
     exit 1
 fi
-# The prepare, transfer and 3-step test directories of the archive. The
-# readiness jobs can run in the run directory of another node count than
-# NODES (the 6-node prepare of a 16-node inversion): the transfer job writes
-# into transfer/ beside the prepare directory, and the 3-step test is in
+# The prepare, transfer and test directories of the archive. The readiness
+# jobs can run in the run directory of another node count than NODES (the
+# 6-node prepare of a 16-node inversion): the transfer job writes into
+# transfer/ beside the prepare directory, and the 3-step test is in
 # invert-3steps/ of this run directory or beside the prepare directory.
-XFER_DIR=$(dirname "${PREP}")/transfer
-TEST_DIR=${R}/invert-3steps
-[ -d "${TEST_DIR}" ] || TEST_DIR=$(dirname "${PREP}")/invert-3steps
+# Schedule D: T8 wrote the transfer into transfer-d/ beside prepare-d/ (the
+# schedule C transfer stays in transfer/), and the short test (6 taped
+# steps) into invert-test6/ of a run directory of NP ranks on gdata.
+if [ "${D_RUN}" = "1" ]; then
+    XFER_DIR=${XFER_DIR:-$(dirname "${PREP}")/transfer-d}
+    if [ -z "${TEST_DIR:-}" ]; then
+        if [ -d "${R}/invert-test6" ]; then
+            TEST_DIR=${R}/invert-test6
+        else
+            # The short test of another layout of the same NP ranks.
+            found=""
+            for dir in $(dirname "${R}")/8re_r2-*nodes-${NP}ranks/invert-test6; do
+                if [ -d "${dir}" ]; then found="${found} ${dir}"; fi
+            done
+            if [ $(echo ${found} | wc -w) -gt 1 ]; then
+                echo "error: more than one short test of ${NP} ranks:${found}; set TEST_DIR" >&2
+                exit 1
+            fi
+            # None found: the archive job reports the missing directory
+            # and skips it.
+            TEST_DIR=${found# }
+            TEST_DIR=${TEST_DIR:-${R}/invert-test6}
+        fi
+    fi
+else
+    XFER_DIR=${XFER_DIR:-$(dirname "${PREP}")/transfer}
+    if [ -z "${TEST_DIR:-}" ]; then
+        TEST_DIR=${R}/invert-3steps
+        [ -d "${TEST_DIR}" ] || TEST_DIR=$(dirname "${PREP}")/invert-3steps
+    fi
+fi
 
 DRY_RUN=${DRY_RUN:-0}
 FORCE=${FORCE:-0}
