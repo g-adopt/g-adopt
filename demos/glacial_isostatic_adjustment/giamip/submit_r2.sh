@@ -56,6 +56,18 @@
 #   FORCE=1            submit even if the stage directory holds the outputs
 #                      of an earlier submission
 #   SOURCE=<file>      another L0 state file for the transfer
+#   RANKS_PER_NODE=<k> MPI ranks per node of every solver job (default
+#                      104, one per core). With k < 104 the jobs run
+#                      NP = k NODES ranks on full nodes (the same ncpus,
+#                      mem and jobfs per node), spread evenly over the
+#                      cores of each node (the rank file of run_invert.pbs
+#                      and run_forward.pbs). The run directory is then
+#                      8re_r2-<NODES>nodes-<NP>ranks. Sia's decision of
+#                      2026-10-24: the 624-rank partition of the 6-node
+#                      input file on 16 nodes with 39 ranks per node, for
+#                      more node disk per rank for the tape, for example
+#                      RANKS_PER_NODE=39 PREP=<6-node prepare dir>
+#                      bash submit_r2.sh 01 16 invert
 #   PREP=<dir>         the prepare directory (default <run dir>/prepare); the
 #                      transfer, the test and the inversion read
 #                      <PREP>/inputs_expXX.h5
@@ -84,9 +96,27 @@ fi
 G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/exp${EXP}
 [ -d "${G}" ] || { echo "error: no directory ${G}" >&2; exit 1; }
 
+# The ranks per node and the ranks of every solver job. The partition of
+# the input file belongs to the rank count NP, not to the node count, so a
+# run with fewer ranks per node gets its own run directory named after both.
+RANKS_PER_NODE=${RANKS_PER_NODE:-104}
+if ! [[ ${RANKS_PER_NODE} =~ ^[1-9][0-9]*$ ]] || [ ${RANKS_PER_NODE} -gt 104 ]; then
+    echo "error: RANKS_PER_NODE=${RANKS_PER_NODE}; use 1 .. 104" >&2
+    exit 1
+fi
+NP=$(( RANKS_PER_NODE * NODES ))
+
 ROOT=${ROOT:-/scratch/xd2/${USER}/giamip}
 ARCHIVE=${ARCHIVE:-/g/data/xd2/sg8812/gia-mip}
-R=${ROOT}/exp${EXP}/8re_r2-${NODES}nodes
+if [ ${RANKS_PER_NODE} -eq 104 ]; then
+    R=${ROOT}/exp${EXP}/8re_r2-${NODES}nodes
+    # One rank per core: the jobs take NP from the cores of the job.
+    NPV=""
+else
+    R=${ROOT}/exp${EXP}/8re_r2-${NODES}nodes-${NP}ranks
+    # The first entry of every -v list of a solver job.
+    NPV="NP=${NP},"
+fi
 # The prepare directory: prepare/ by default, PREP for another one (Exp01
 # has its r2 input file in prepare-full/; prepare/ there holds an older
 # 3-ice-step test file).
@@ -152,7 +182,7 @@ refuse_if() {
 prepare_job() {
     refuse_if ${INPUTS}
     submit ${PREP} -N x${EXP}-prep -l ${RES},walltime=05:00:00 \
-        -v "MESH=${MESH},EXTRA=${PREP_EXTRA}" ${G}/run_prepare.pbs
+        -v "${NPV}MESH=${MESH},EXTRA=${PREP_EXTRA}" ${G}/run_prepare.pbs
 }
 transfer_job() {
     local after=$1
@@ -162,13 +192,13 @@ transfer_job() {
         exit 1
     fi
     submit ${R}/transfer -N x${EXP}-xfer -l ${RES},walltime=02:00:00 ${after} \
-        -v "TARGET=${INPUTS},SOURCE=${SOURCE},START=change" ${G}/run_transfer.pbs
+        -v "${NPV}TARGET=${INPUTS},SOURCE=${SOURCE},START=change" ${G}/run_transfer.pbs
 }
 test_job() {
     local after=$1
     refuse_if ${R}/invert-3steps/state.h5
     submit ${R}/invert-3steps -N x${EXP}-inv3 -l ${RES},walltime=03:00:00 ${after} \
-        -v "INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=1,STEPS=3,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
+        -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=1,STEPS=3,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
         ${G}/run_invert.pbs
 }
 
@@ -192,28 +222,28 @@ case ${STAGE} in
     invert)
         refuse_if ${R}/invert/state.h5
         inv=$(submit ${R}/invert -N x${EXP}-inv -l ${RES},walltime=${LONG} \
-            -v "INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
+            -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
             ${G}/run_invert.pbs)
         echo "exp${EXP} ${NODES} nodes: inversion ${inv}"
         ;;
     restart)
         [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5 to continue from" >&2; exit 1; }
         inv=$(submit ${R}/invert -N x${EXP}-inv -l ${RES},walltime=${LONG} \
-            -v "INPUTS=${INPUTS},RESTART=state.h5,MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
+            -v "${NPV}INPUTS=${INPUTS},RESTART=state.h5,MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
             ${G}/run_invert.pbs)
         echo "exp${EXP} ${NODES} nodes: inversion restart ${inv}"
         ;;
     forward)
         if [ "${FORWARD_RESTART:-0}" = "1" ]; then
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${RES},walltime=${LONG} \
-                -v "RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+                -v "${NPV}RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
         else
             refuse_if ${FWD}/forward_exp${EXP}_surface.h5
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5" >&2; exit 1; }
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/summary_invert.json" ] || \
                 echo "warning: ${R}/invert has no summary_invert.json; is the inversion finished?" >&2
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${RES},walltime=${LONG} \
-                -v "STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+                -v "${NPV}STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
         fi
         pv=$(submit ${FWD} -N x${EXP}-pv -W depend=afterok:${fwd} ${G}/run_paraview.pbs)
         img0=$(submit ${FWD} -N x${EXP}-img0 -W depend=afterok:${pv} -v HALF=0 ${G}/run_images.pbs)

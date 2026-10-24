@@ -31,6 +31,9 @@
 #   ITERATIONS      ROL iterations (default 10)
 #   RESTART         a state.h5 to continue from (empty: cold start)
 #   NP              the MPI ranks (default: all cores of the job, PBS_NCPUS)
+#                   With fewer ranks than cores and NP a multiple of the
+#                   nodes, the ranks are spread evenly over the cores of
+#                   each node (a rank file, see the placement below).
 #   EXTRA           further arguments of invert_exp08.py (for example
 #                   "--log_memory --diagnostics")
 #   MEMORY_SAMPLER  the interval in seconds of the node memory sampler (empty:
@@ -148,10 +151,42 @@ fi
 # example the 384 ranks of the Setonix L0 runs on 4 nodes of 104 cores.
 NP=${NP:-${PBS_NCPUS}}
 NODES=$(( PBS_NCPUS / 104 ))
-# The same number of ranks on every node; one rank per core by default.
+# The placement of the ranks. With one rank per core (NP = PBS_NCPUS, the
+# default) Open MPI maps and binds by core, as the Gadi configuration file
+# of Open MPI (openmpi-mca-params.conf) sets. With fewer ranks than cores,
+# every node gets the same number K of ranks, and a rank file binds local
+# rank i of a node to the logical core floor(104 i / K) of the node: one
+# rank per core, spaced evenly over the two sockets and the NUMA domains.
+# An example is the 624-rank partition of a 6-node prepare job run on 16
+# nodes with 39 ranks per node, which gives each rank more node disk
+# ($PBS_JOBFS) for the tape. "--map-by ppr:K:node" alone binds the ranks
+# to the logical cores 0 to K-1, which for K <= 52 are all on socket 0
+# (--report-bindings on a Gadi login node), so half of the memory
+# bandwidth of the node stays unused. hwloc numbers the logical cores
+# socket by socket, so an even spacing of the logical numbers is an even
+# spacing over the sockets. Open MPI refuses a rank file while the
+# configuration file sets a mapping policy ("Conflicting directives for
+# mapping policy"), so the job clears that policy. If NP does not divide
+# by the nodes, the job uses --map-by ppr with the rounded-up count.
 MAP=""
+RANKFILE=""
 if [ "${NP}" -lt "${PBS_NCPUS}" ]; then
-    MAP="--map-by ppr:$(( (NP + NODES - 1) / NODES )):node"
+    if [ $(( NP % NODES )) -eq 0 ]; then
+        RPN=$(( NP / NODES ))
+        RANKFILE=${OUT}/rankfile_${PBS_JOBID}.txt
+        # One block of RPN lines per node, in the order of $PBS_NODEFILE,
+        # so the ranks of a node are consecutive. Open MPI names the nodes
+        # by the short host name.
+        awk -v rpn=${RPN} '!seen[$1]++ {
+                host = $1; sub(/\..*/, "", host)
+                for (i = 0; i < rpn; i++)
+                    printf "rank %d=%s slot=%d\n", n * rpn + i, host, int(i * 104 / rpn)
+                n++ }' ${PBS_NODEFILE} > ${RANKFILE}
+        export OMPI_MCA_rmaps_base_mapping_policy=
+        MAP="--rankfile ${RANKFILE}"
+    else
+        MAP="--map-by ppr:$(( (NP + NODES - 1) / NODES )):node"
+    fi
 fi
 echo "job ${PBS_JOBID} on ${NODES} nodes, ${NP} ranks"
 echo "worktree ${MY_GADOPT} at $(cd ${MY_GADOPT} && git rev-parse --short HEAD 2>/dev/null)"
@@ -182,6 +217,34 @@ done < ${PBS_NODEFILE}
 mpiexec -np ${NODES} --map-by ppr:1:node /bin/bash -c \
     'echo "env check $(hostname -s): OMPI_MCA_coll_hcoll_enable=${OMPI_MCA_coll_hcoll_enable:-unset} PYTHONFAULTHANDLER=${PYTHONFAULTHANDLER:-unset} core limit of the launcher $(ulimit -c)"' \
     || echo "env check failed (exit $?); the run continues"
+
+# The check of the rank file: every rank starts /bin/true with the same
+# placement and reports its binding (--report-bindings, all lines in
+# rankfile_<job id>_bindings.txt). The job prints the binding of the first
+# rank of each node, and per node the ranks on each socket and the number
+# of distinct cores. It stops if Open MPI refuses the rank file.
+if [ -n "${RANKFILE}" ]; then
+    BINDINGS=${RANKFILE%.txt}_bindings.txt
+    echo "rank placement: ${RPN} ranks per node from ${RANKFILE}"
+    lscpu | grep -E '^(Socket|NUMA node)' | sed 's/^/  /'
+    mpiexec -np ${NP} ${MAP} --report-bindings /bin/true > ${BINDINGS} 2>&1
+    bind_status=$?
+    # A line of --report-bindings: "[host:pid] MCW rank R bound to socket
+    # S[core C[hwt 0]]: [B/./...][./...]".
+    awk -v rpn=${RPN} '/ MCW rank / {
+            h = $1; sub(/^\[/, "", h); sub(/[.:].*/, "", h)
+            s = $8; sub(/\[.*/, "", s); c = $9; sub(/\[.*/, "", c)
+            if ($4 % rpn == 0) { line = $0; sub(/: \[.*/, "", line); print "  " line }
+            n[h]++; per[h, s]++; sockets[s] = 1
+            if (!((h, c) in core)) { core[h, c] = 1; nc[h]++ } }
+        END { for (h in n) { msg = "  " h ": " n[h] " ranks"
+                  for (s in sockets) msg = msg ", socket " s " " per[h, s] + 0
+                  print msg ", " nc[h] " distinct cores" } }' ${BINDINGS}
+    if [ ${bind_status} -ne 0 ]; then
+        echo "error: mpiexec with ${RANKFILE} failed (exit ${bind_status}), see ${BINDINGS}" >&2
+        exit 1
+    fi
+fi
 
 # The node samplers: one per node and kind, started with pbsdsh on the
 # first task of each node in $PBS_NODEFILE (one line per core, the lines of
