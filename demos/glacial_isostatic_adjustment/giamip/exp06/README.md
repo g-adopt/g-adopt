@@ -292,7 +292,10 @@ The steps, on a Gadi login node in a login shell, from this directory:
    `RANKS_PER_NODE` and `PREP`, and `FORWARD_NODES` for full nodes: the
    forward run has no tape, so for example the 624 ranks of a 16-node
    inversion with 39 ranks per node run on 6 full nodes
-   (`RANKS_PER_NODE=39 FORWARD_NODES=6`).
+   (`RANKS_PER_NODE=39 FORWARD_NODES=6`). The restart and forward stages
+   find the run directory of the inversion under `/scratch/xd2/$USER/giamip`
+   or `/g/data/xd2/sg8812/giamip-runs` (the one that holds
+   `invert/state.h5`; `ROOT` overrides it), so their dry run needs Gadi.
 
 | item | path |
 |---|---|

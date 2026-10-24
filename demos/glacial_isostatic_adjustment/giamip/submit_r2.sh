@@ -23,7 +23,10 @@
 #
 # The run directory of the experiment is
 # /scratch/xd2/$USER/giamip/expXX/8re_r2-<NODES>nodes/ with prepare/,
-# transfer/, invert-3steps/ and invert/. The forward run, its ParaView
+# transfer/, invert-3steps/ and invert/. The inversions of Exp02-08 and
+# Exp11 run in /g/data/xd2/sg8812/giamip-runs/ instead (8re_r2-16nodes-624ranks/
+# there); the restart and forward stages find the root themselves (ROOT
+# below). The forward run, its ParaView
 # series and its images go to /g/data/xd2/sg8812/gia-mip/expXX/r2/forward-<schedule>/,
 # and the archive job copies the records and the final state of the run
 # directory to /g/data/xd2/sg8812/gia-mip/expXX/r2/. Every submitted job id
@@ -86,9 +89,15 @@
 #                      NP must divide by FORWARD_NODES and fit its cores.
 #   IMAGE_PARTS=<k>    forward stage: the number of image jobs (default 2,
 #                      run_images.pbs NPARTS; 1.9 h each for 926 images)
-#   ROOT, ARCHIVE      the roots of the run directories
-#                      (/scratch/xd2/$USER/giamip) and of the archive
-#                      (/g/data/xd2/sg8812/gia-mip)
+#   ROOT               the root of the run directories. Default for the
+#                      stages ready, transfer, test and invert:
+#                      /scratch/xd2/$USER/giamip. Default for restart and
+#                      forward: the one of /scratch/xd2/$USER/giamip and
+#                      /g/data/xd2/sg8812/giamip-runs whose run directory
+#                      holds invert/state.h5; the script stops if both or
+#                      neither do. These two stages therefore need Gadi,
+#                      also with DRY_RUN=1.
+#   ARCHIVE            the root of the archive (/g/data/xd2/sg8812/gia-mip)
 set -euo pipefail
 
 EXP=${1:?usage: submit_r2.sh EXP NODES STAGE}
@@ -118,17 +127,46 @@ if ! [[ ${RANKS_PER_NODE} =~ ^[1-9][0-9]*$ ]] || [ ${RANKS_PER_NODE} -gt 104 ]; 
 fi
 NP=$(( RANKS_PER_NODE * NODES ))
 
-ROOT=${ROOT:-/scratch/xd2/${USER}/giamip}
 ARCHIVE=${ARCHIVE:-/g/data/xd2/sg8812/gia-mip}
 if [ ${RANKS_PER_NODE} -eq 104 ]; then
-    R=${ROOT}/exp${EXP}/8re_r2-${NODES}nodes
+    RUN_NAME=8re_r2-${NODES}nodes
     # One rank per core: the jobs take NP from the cores of the job.
     NPV=""
 else
-    R=${ROOT}/exp${EXP}/8re_r2-${NODES}nodes-${NP}ranks
+    RUN_NAME=8re_r2-${NODES}nodes-${NP}ranks
     # The first entry of every -v list of a solver job.
     NPV="NP=${NP},"
 fi
+# The root of the run directories. New runs go to /scratch. The restart
+# and the forward run continue an existing inversion, and those of
+# Exp02-08 and Exp11 run on gdata (giamip-runs), so for these two stages
+# the root is the one whose run directory holds invert/state.h5. A wrong
+# root would give the forward run a missing state file, and the archive
+# job a run directory without invert/ (it would skip it and exit 0), so
+# the script stops if the state file is under both roots or under none.
+SCRATCH_ROOT=/scratch/xd2/${USER}/giamip
+GDATA_ROOT=/g/data/xd2/sg8812/giamip-runs
+if [ -z "${ROOT:-}" ]; then
+    case ${STAGE} in
+        restart|forward)
+            found=""
+            for root in ${SCRATCH_ROOT} ${GDATA_ROOT}; do
+                if [ -e "${root}/exp${EXP}/${RUN_NAME}/invert/state.h5" ]; then
+                    found="${found} ${root}"
+                fi
+            done
+            # One word: exactly one root holds the state file.
+            if [ $(echo ${found} | wc -w) -ne 1 ]; then
+                echo "error: exp${EXP}/${RUN_NAME}/invert/state.h5 is under ${found:-none} of ${SCRATCH_ROOT} and ${GDATA_ROOT}; set ROOT" >&2
+                exit 1
+            fi
+            ROOT=${found# } ;;
+        *)
+            ROOT=${SCRATCH_ROOT} ;;
+    esac
+fi
+R=${ROOT}/exp${EXP}/${RUN_NAME}
+echo "run directory ${R}" >&2
 # The prepare directory: prepare/ by default, PREP for another one (Exp01
 # has its r2 input file in prepare-full/; prepare/ there holds an older
 # 3-ice-step test file).
@@ -273,12 +311,17 @@ case ${STAGE} in
         echo "exp${EXP} ${NODES} nodes: inversion restart ${inv}"
         ;;
     forward)
+        # Both paths need the inversion: a first run reads its state file,
+        # and the archive job of both copies its run directory.
+        [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5" >&2; exit 1; }
+        # The archive job copies the prepare and transfer records from PREP
+        # and beside it; a missing PREP would leave them out without an error.
+        [ -d "${PREP}" ] || { echo "error: no prepare directory ${PREP}; set PREP" >&2; exit 1; }
         if [ "${FORWARD_RESTART:-0}" = "1" ]; then
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
                 -v "${FNPV}RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
         else
             refuse_if ${FWD}/forward_exp${EXP}_surface.h5
-            [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5" >&2; exit 1; }
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/summary_invert.json" ] || \
                 echo "warning: ${R}/invert has no summary_invert.json; is the inversion finished?" >&2
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
