@@ -33,9 +33,12 @@
 # is appended to jobs_r2.txt in the run directory.
 #
 # Settings per experiment:
-#   Exp09, Exp10, Exp12   schedule C (prepare --schedule windows, forward
-#                         SCHEDULE=windows); the L0 bed is
-#                         expXX/L0/invert-c/state.h5 on gdata
+#   Exp09, Exp10, Exp12   schedule D (prepare --schedule windows-coarse,
+#                         forward SCHEDULE=windows-coarse; decision R12 of
+#                         2026-10-24), or schedule C with
+#                         WINDOW_SCHEDULE=windows; the L0 bed is
+#                         expXX/L0/invert-c/state.h5 on gdata (schedule C at
+#                         L0) for both
 #   the other nine        the protocol steps (prepare --step_years 100,
 #                         forward SCHEDULE=protocol); the L0 bed is
 #                         expXX/L0/invert-protocol/state.h5 on gdata
@@ -98,6 +101,10 @@
 #                      neither do. These two stages therefore need Gadi,
 #                      also with DRY_RUN=1.
 #   ARCHIVE            the root of the archive (/g/data/xd2/sg8812/gia-mip)
+#   WINDOW_SCHEDULE    Exp09, Exp10, Exp12 only: windows-coarse (default,
+#                      schedule D) or windows (schedule C). It sets the march
+#                      of the prepare job and the schedule of the forward
+#                      run. The other nine experiments do not read it.
 set -euo pipefail
 
 EXP=${1:?usage: submit_r2.sh EXP NODES STAGE}
@@ -182,8 +189,14 @@ MESH_EXTRA="--mesh_name giamip_8re_r2_linear --sidecar ${M}/giamip_8re_r2.json -
 # the L0 bed and the forward run.
 case ${EXP} in
     09|10|12)
-        SCHEDULE=windows
-        PREP_EXTRA="${MESH_EXTRA} --schedule windows"
+        # Schedule D on r2 (R12): schedule C needs more node disk for the
+        # tape and more wall time per restart than a Gadi job has.
+        SCHEDULE=${WINDOW_SCHEDULE:-windows-coarse}
+        case ${SCHEDULE} in
+            windows|windows-coarse) ;;
+            *) echo "error: WINDOW_SCHEDULE=${SCHEDULE}; use windows-coarse or windows" >&2; exit 1 ;;
+        esac
+        PREP_EXTRA="${MESH_EXTRA} --schedule ${SCHEDULE}"
         L0_SOURCE=${ARCHIVE}/exp${EXP}/L0/invert-c/state.h5 ;;
     *)
         SCHEDULE=protocol

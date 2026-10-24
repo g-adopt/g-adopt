@@ -15,8 +15,14 @@
 #                       steps in the fast melt windows (Exp09, Exp10,
 #                       Exp12). With a schedule-C state file the ice to year
 #                       0 comes from the file, as in the inversion.
-# The surface fields and the scalars are written at the protocol years in
-# both cases, so paraview_exp10.py reads the same series.
+#   windows-coarse      schedule D, 1 kyr steps plus 50 yr and 20 yr steps
+#                       in the same windows (Exp09, Exp10, Exp12 on r2,
+#                       decision R12). A state file of schedule D gives the
+#                       ice to year 0, as for schedule C.
+# The surface fields and the scalars are written at the protocol years that
+# the march reaches, so paraview_exp10.py reads the same kind of series.
+# Schedule D reaches only the whole kyr outside the windows, so its series
+# has fewer years (forward_exp10.py, SCHEDULE D).
 #
 # The job must have the nodes and ranks of the prepare job that wrote the
 # input file of the inversion; the script stops with an error otherwise.
@@ -31,8 +37,9 @@
 #       -v STATE=/scratch/xd2/$USER/giamip/exp10/8re_r2-6nodes/invert/state.h5 \
 #       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp10/run_forward.pbs
 #
-# Exp09, Exp10 and Exp12 add SCHEDULE=windows and use the directory
-# forward-windows; ../submit_r2.sh sets both for each experiment.
+# Exp09, Exp10 and Exp12 add SCHEDULE=windows-coarse (schedule D) and use
+# the directory forward-windows-coarse; ../submit_r2.sh sets both for each
+# experiment (WINDOW_SCHEDULE=windows there for schedule C).
 #
 # THE RESTART. The run copies STATE into the run directory
 # (forward_state.h5), loads its meshes and fields from that copy and writes
@@ -63,7 +70,8 @@
 # Variables (pass them with -v NAME=value,...):
 #   STATE             the state.h5 of the inversion (required on the first
 #                     leg; a restart reads forward_state.h5)
-#   SCHEDULE          protocol (default) or windows (see above)
+#   SCHEDULE          protocol (default), windows or windows-coarse (see
+#                     above)
 #   REBUILD_EVERY     solves between preconditioner rebuilds (default 100,
 #                     the setting of the r2 inversions; the rule also
 #                     rebuilds at every change of dt)
@@ -151,8 +159,8 @@ SCHEDULE=${SCHEDULE:-protocol}
 REBUILD_EVERY=${REBUILD_EVERY:-100}
 RESTART=${RESTART:-0}
 case ${SCHEDULE} in
-    protocol|windows) ;;
-    *) echo "error: SCHEDULE=${SCHEDULE}; use protocol or windows" >&2; exit 1 ;;
+    protocol|windows|windows-coarse) ;;
+    *) echo "error: SCHEDULE=${SCHEDULE}; use protocol, windows or windows-coarse" >&2; exit 1 ;;
 esac
 
 # The wall time of this job from the PBS server (Resource_List.walltime,

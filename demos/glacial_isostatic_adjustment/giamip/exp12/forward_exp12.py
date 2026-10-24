@@ -122,6 +122,29 @@ SCHEDULE C (`--schedule windows`; Exp09, Exp10, Exp12; S33, S34)
     state file of another march (for example the 2 kyr inversion), every
     step takes the ice of `LinearIce`, as in the fine schedules.
 
+SCHEDULE D (`--schedule windows-coarse`; R12 of the r2 production)
+    1 kyr steps from the start to the first window, from the last window to
+    year 0 and from year 0 to +1000 yr, and the fast melt windows of
+    schedule C at twice the schedule-C step (50 yr and 20 yr): 278 steps
+    from 122 ka for ICE-6G_D, 297 for GLAC3c profile 1, 316 for profile 2.
+    The years come from `exp12_common.schedule_d_years` through
+    `exp12_common.window_schedule`, the function of the prepare script
+    (`prepare_expXX.py --schedule windows-coarse`), so the inversion on
+    schedule D and this run march the same years. A state file of schedule
+    D gives the ice of the steps up to year 0, as for schedule C. The
+    preconditioner rule, the checkpoints and the restart are those of the
+    fine schedules.
+
+    The output. The surface fields and the row of the parameter log are
+    written at the protocol years that the schedule reaches, with the
+    protocol position as the output index, as in the other fine schedules.
+    Schedule D does not reach every protocol year: outside the windows it
+    reaches only the whole kyr, so the output indices have gaps there (for
+    example 0, 2, 4, ... before year -26000 and every tenth index from
+    year -26000 to the first window). Inside the windows every protocol
+    year is reached. `paraview_exp12.py` reads the indices of the file, so
+    the gaps need no change there.
+
 THE RESTART
     With checkpoints (the fine schedules by default, or `--checkpoint_every`
     or `--wall_limit_hours`) the run copies the state file into the output
@@ -1362,7 +1385,7 @@ def parse_args():
     p.add_argument("--output_path", default="./")
     p.add_argument("--schedule",
                    choices=["inversion", "protocol", "fine", "fine_b",
-                            "windows"],
+                            *common.WINDOW_SCHEDULES],
                    default="inversion",
                    help="the steps of the march: those of the input file "
                         "(2 kyr, then +1000 yr), every model year of the "
@@ -1375,7 +1398,10 @@ def parse_args():
                         "years only, or schedule C (windows: the protocol "
                         "steps plus 25 yr and 10 yr steps in the fast melt "
                         "windows, the march of the inversion on schedule "
-                        "C)")
+                        "C), or schedule D (windows-coarse: 1 kyr steps "
+                        "plus 50 yr and 20 yr steps in the same windows, "
+                        "the march of the inversion on schedule D; output "
+                        "at the protocol years it reaches)")
     p.add_argument("--steps", type=int, default=None,
                    help="stop the march after this many steps")
     p.add_argument("--plus_step", choices=["auto", "always", "never"],
@@ -1475,9 +1501,11 @@ def main():
     """Run the forward march and write the outputs."""
     args = parse_args()
     protocol = args.schedule == "protocol"
-    # Schedule C (`windows`) is a fine schedule: output at the protocol
-    # years, the same preconditioner rule, checkpoints and restart.
-    fine = args.schedule in ("fine", "fine_b", "windows")
+    # Schedules C (`windows`) and D (`windows-coarse`) are fine schedules:
+    # output at the protocol years they reach, the same preconditioner rule,
+    # checkpoints and restart.
+    window = args.schedule in common.WINDOW_SCHEDULES
+    fine = args.schedule in ("fine", "fine_b") or window
     # The protocol schedule rebuilds the preconditioner every 20 solves
     # unless the command line says otherwise; the inversion schedule keeps
     # the solver default, so that it repeats the inversion's own march. The
@@ -1635,8 +1663,18 @@ def main():
     protocol_years = np.asarray(experiment.model_years(), dtype=float)
     protocol_steps = np.asarray(experiment.forcing_steps())
     # The steps whose ice comes from the input file in a fine schedule
-    # (schedule C with a schedule-C state file); empty otherwise.
+    # (schedule C or D with a state file of the same schedule); empty
+    # otherwise.
     file_steps = set()
+    # The window schedule of the state file (`windows`, `windows-coarse`),
+    # or None for a uniform march. Such a file holds the ice of years
+    # between protocol years, so it must run with its own schedule.
+    file_schedule = record["march"].get("schedule")
+    if file_schedule in common.WINDOW_SCHEDULES:
+        if args.schedule != file_schedule:
+            raise SystemExit(f"the state file holds the march of "
+                             f"--schedule {file_schedule}; run it with "
+                             f"--schedule {file_schedule}")
     # Each entry of `schedule` is (step, year, dt_yr, ice): `ice` is a
     # callable that returns the ice of the end of the step (backward Euler)
     # as a CG1 Function on the mantle, so the protocol schedule reads one
@@ -1652,13 +1690,13 @@ def main():
         n_forcing = len(f_years)
         is_protocol = (np.array_equal(f_years, protocol_years)
                        and np.array_equal(f_steps, protocol_steps))
-        # A state file of the schedule-C march (S34): its years between two
-        # protocol years hold the linear ice of `exp12_common.linear_ice_into`
-        # and have no protocol slice of their own (protocol step -1 in the
-        # record). With `--schedule windows` its steps up to year 0 take
-        # their ice from the file (SCHEDULE C in the module docstring).
-        c_file = (args.schedule == "windows"
-                  and record["march"].get("schedule") == "windows")
+        # A state file of the schedule-C or schedule-D march (S34, R12): its
+        # years between two protocol years hold the linear ice of
+        # `exp12_common.linear_ice_into` and have no protocol slice of their
+        # own (protocol step -1 in the record). With the same `--schedule`
+        # its steps up to year 0 take their ice from the file (SCHEDULE C
+        # and SCHEDULE D in the module docstring).
+        c_file = window and file_schedule == args.schedule
         # The years of the input file that are protocol years: every year
         # of a 2 kyr march, the protocol years of a schedule-C march.
         f_year_set = set(f_years.tolist())
@@ -1684,10 +1722,6 @@ def main():
             f"years with the same ice slices: {shared}; steps of "
             f"{sorted(set(dts.tolist()))} yr; year 0 is step "
             f"{int(zero[0]) if zero.size else None}")
-        if (record["march"].get("schedule") == "windows"
-                and args.schedule != "windows"):
-            raise SystemExit("the state file holds the march of schedule C; "
-                             "run it with --schedule windows")
         if not (is_protocol and shared and zero.size == 1):
             raise RuntimeError("the forcing steps of giamip are not the "
                                "protocol years, or do not contain the march "
@@ -1795,13 +1829,14 @@ def main():
         # (`LinearIce`), and an output at the protocol years only, with the
         # protocol position as the output index, so the surface file holds
         # a contiguous series 0, 1, 2, ... like the protocol schedule.
+        # Schedule D reaches only the whole kyr outside its windows, so its
+        # series has gaps there (SCHEDULE D in the module docstring).
         ice_file = os.path.basename(str(forcing.ice_history.path))
-        if args.schedule == "windows":
-            # Schedule C: the years of `exp12_common.schedule_c_years`, the
-            # function of the prepare script of schedule C.
-            windows = common.schedule_c_windows(ice_file)
-            fine_y = common.schedule_c_years(int(f_years[0]), f_years,
-                                             windows, LAST_YEAR)
+        if window:
+            # Schedule C or D: the years of `exp12_common.window_schedule`,
+            # the function of the prepare script of both schedules.
+            windows, fine_y = common.window_schedule(
+                args.schedule, ice_file, int(f_years[0]), f_years, LAST_YEAR)
         else:
             windows = FINE_B_WINDOWS.get(ice_file)
             if args.schedule == "fine_b" and windows is None:
@@ -1820,8 +1855,9 @@ def main():
             if not (np.array_equal(years, fine_y[:n_ice].astype(float))
                     and float(fine_y[year0]) == 0.0
                     and year0 == n_ice - 1):
-                raise RuntimeError("the march of the schedule-C input file "
-                                   "is not schedule C of this run to year 0")
+                raise RuntimeError(f"the march of the input file of "
+                                   f"--schedule {args.schedule} is not the "
+                                   f"schedule of this run to year 0")
             # The steps 1 .. year 0 take the ice of the file, as the
             # inversion does (`I.assign(ice[step])`).
             file_steps = set(range(1, n_ice))
@@ -1852,19 +1888,16 @@ def main():
                               "dt_values_yr": sorted(set(fine_dts.tolist())),
                               "dt_change_after_year": dt_change,
                               # The 10 yr windows of schedule B, or the
-                              # (first, end, step) windows of schedule C.
-                              "windows_10yr": (windows if args.schedule
-                                               != "windows" else None),
-                              "windows": (windows if args.schedule
-                                          == "windows" else None),
+                              # (first, end, step) windows of schedule C
+                              # or D.
+                              "windows_10yr": (windows if not window
+                                               else None),
+                              "windows": windows if window else None,
                               "ice_history": ice_file,
                               "ice_from_input_file_steps": (
                                   [min(file_steps), max(file_steps)]
                                   if file_steps else None)}
     else:
-        if record["march"].get("schedule") == "windows":
-            raise SystemExit("the state file holds the march of schedule C; "
-                             "run it with --schedule windows")
         last = year0 if args.steps is None else min(year0, args.steps)
         plus = (args.plus_step == "always"
                 or (args.plus_step == "auto" and last == year0))

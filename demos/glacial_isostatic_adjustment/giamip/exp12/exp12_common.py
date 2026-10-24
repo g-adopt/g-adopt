@@ -1602,6 +1602,48 @@ def schedule_c_windows(ice_file):
     return SCHEDULE_C_WINDOWS[ice_file]
 
 
+def _check_windows(protocol_years, windows):
+    """Check the windows of schedule C or D against the protocol years.
+
+    The rules that both schedules need, so that a step inside a window
+    never jumps over a protocol year or over the end of the window: each
+    window starts and ends at a protocol year, its step divides it, its step
+    reaches every protocol year inside it, and the windows are in order and
+    do not overlap.
+
+    Args:
+      protocol_years: the protocol years of giamip, ascending.
+      windows: `(first year, end year, step)` triples.
+
+    Returns:
+      The protocol years as a list of Python integers.
+
+    Raises:
+      ValueError: if the protocol years are not whole years, or if a window
+        breaks one of the rules.
+    """
+    protocol = [int(round(y)) for y in protocol_years]
+    if any(float(y) != float(p) for y, p in zip(protocol_years, protocol)):
+        raise ValueError("the protocol years are not whole years")
+    pset = set(protocol)
+    for first, end, step in windows:
+        if (first not in pset or end not in pset or step <= 0
+                or (end - first) % step != 0):
+            raise ValueError(f"window {(first, end, step)}: its ends must be "
+                             f"protocol years and its step must divide it")
+        # A protocol year inside the window must be a year of the window.
+        inside = [p for p in protocol if first < p < end]
+        if any((p - first) % step != 0 for p in inside):
+            raise ValueError(f"window {(first, end, step)}: its step does "
+                             f"not reach every protocol year inside it")
+    # The windows must be in order and must not overlap: a year belongs to
+    # one window at most.
+    for (_, end, _), (first, _, _) in zip(windows[:-1], windows[1:]):
+        if end > first:
+            raise ValueError(f"windows {windows}: not in order or overlapping")
+    return protocol
+
+
 def schedule_c_years(start, protocol_years, windows, last=SCHEDULE_LAST_YEAR):
     """Every year of schedule C, from `start` to `last`.
 
@@ -1624,25 +1666,8 @@ def schedule_c_years(start, protocol_years, windows, last=SCHEDULE_LAST_YEAR):
     Raises:
       ValueError: if a window or the schedule breaks one of these rules.
     """
-    protocol = [int(round(y)) for y in protocol_years]
-    if any(float(y) != float(p) for y, p in zip(protocol_years, protocol)):
-        raise ValueError("the protocol years are not whole years")
+    protocol = _check_windows(protocol_years, windows)
     pset = set(protocol)
-    for first, end, step in windows:
-        if (first not in pset or end not in pset or step <= 0
-                or (end - first) % step != 0):
-            raise ValueError(f"window {(first, end, step)}: its ends must be "
-                             f"protocol years and its step must divide it")
-        # A protocol year inside the window must be a year of the window.
-        inside = [p for p in protocol if first < p < end]
-        if any((p - first) % step != 0 for p in inside):
-            raise ValueError(f"window {(first, end, step)}: its step does "
-                             f"not reach every protocol year inside it")
-    # The windows must be in order and must not overlap: a year belongs to
-    # one window at most.
-    for (_, end, _), (first, _, _) in zip(windows[:-1], windows[1:]):
-        if end > first:
-            raise ValueError(f"windows {windows}: not in order or overlapping")
     if int(start) not in pset or last not in pset:
         raise ValueError(f"start {start} or last {last} is not a protocol "
                          f"year")
@@ -1664,6 +1689,202 @@ def schedule_c_years(start, protocol_years, windows, last=SCHEDULE_LAST_YEAR):
         raise ValueError(f"schedule C from {start} ends at {years[-1]} or "
                          f"misses protocol years {missing[:5]}")
     return years
+
+
+# --------------------------------------------------------------------------
+# Schedule D: 1 kyr steps plus the fast melt windows at twice the C step
+# --------------------------------------------------------------------------
+
+#: The `--schedule` value of schedule C in the prepare and forward scripts,
+#: and the `march.schedule` entry of its input file.
+SCHEDULE_C = "windows"
+#: The `--schedule` value of schedule D, and the `march.schedule` entry of
+#: its input file.
+SCHEDULE_D = "windows-coarse"
+#: The two schedules with fast melt windows. Their input files hold the ice
+#: of every year of the march, linear in time between protocol slices.
+WINDOW_SCHEDULES = (SCHEDULE_C, SCHEDULE_D)
+
+#: The step (yr) of schedule D outside the windows (Sia, 2026-10-24,
+#: decision R12 of the r2 production): from the start to the first window,
+#: from the last window to year 0, and from year 0 to the end of the
+#: protocol. Schedule C on the r2 mesh needs more node disk for the tape
+#: and more wall time per restart than a Gadi job has; the tape and the
+#: time of a sweep scale with the number of steps.
+SCHEDULE_D_STEP_YR = 1000
+#: The factor between the window step of schedule D and that of schedule C
+#: (R12: 25 yr becomes 50 yr, 10 yr becomes 20 yr). This is the reading of
+#: "twice that" of the decision; Sia is to confirm it.
+SCHEDULE_D_WINDOW_FACTOR = 2
+
+#: The number of steps of schedule D from 122 ka to +1000 yr. Outside the
+#: windows: one step per kyr, (122 - window span in kyr) to year 0 and one
+#: after it. In the windows: a kyr at 50 yr adds 20 steps, a kyr at 20 yr
+#: adds 50. ICE-6G_D: 117 + 1 + 20 + 100 + 40 = 278; GLAC3c profile 1:
+#: 116 + 1 + 20 + 50 + 40 + 50 + 20 = 297; GLAC3c profile 2:
+#: 115 + 1 + 20 + 50 + 60 + 50 + 20 = 316.
+SCHEDULE_D_STEPS_122KA = {"iceHistory-ICE-6G_D.nc": 278,
+                          "iceHistory-GLAC3c_profile1.nc": 297,
+                          "iceHistory-GLAC3c_profile2.nc": 316}
+
+
+def schedule_d_windows(ice_file):
+    """The windows of schedule D for the ice history `ice_file` (a basename).
+
+    The windows of schedule C (`SCHEDULE_C_WINDOWS`), same first and end
+    years, with `SCHEDULE_D_WINDOW_FACTOR` times the step.
+
+    Raises:
+      KeyError: if schedule C has no windows for that history.
+    """
+    return tuple((first, end, SCHEDULE_D_WINDOW_FACTOR * step)
+                 for first, end, step in schedule_c_windows(ice_file))
+
+
+def schedule_d_years(start, protocol_years, windows, last=SCHEDULE_LAST_YEAR,
+                     step=SCHEDULE_D_STEP_YR):
+    """Every year of schedule D, from `start` to `last`.
+
+    Each step either has the length of the window it starts in, or is
+    `step` years long (1 kyr). The years are integers, built by adding whole
+    step lengths, so no rounding error accumulates.
+
+    Window edges and the 1 kyr steps must line up: the edges of every
+    window, year 0 and `last` must be a whole number of `step` from
+    `start`. The function refuses a window edge off that grid
+    (`ValueError`); it never shortens a step to reach the edge. So the
+    schedule has no fractional step, and the dt of the march takes only the
+    values `step` and the window steps. The windows of all three histories
+    have their edges on whole kyr and every experiment starts at a whole
+    kyr, so the rule holds for them.
+
+    Every year outside the windows must be a protocol year, so the ice of
+    such a year is the protocol slice itself (weight 0 in `ice_bracket`).
+    The years inside a window reach every protocol year there
+    (`_check_windows`), so each of their bracketing protocol years is a
+    year of the march, as `check_linear_ice` needs. Between two 1 kyr years
+    the load is not sampled: the protocol slices in between (every 500 yr
+    before year -26000, every 100 yr after) do not enter the march, and
+    their years are not years of the schedule.
+
+    Args:
+      start: the first year (the start of the experiment), a protocol year.
+      protocol_years: the protocol years of giamip, ascending.
+      windows: `(first year, end year, step)` triples (`schedule_d_windows`).
+      last: the last year of the schedule.
+      step: the step outside the windows, years.
+
+    Returns:
+      A NumPy integer array of the years, `start` first, `last` last; year 0
+      is one of them.
+
+    Raises:
+      ValueError: if a window or the schedule breaks one of these rules.
+    """
+    protocol = _check_windows(protocol_years, windows)
+    pset = set(protocol)
+    start = int(start)
+    if start not in pset or last not in pset:
+        raise ValueError(f"start {start} or last {last} is not a protocol "
+                         f"year")
+    # The grid of the 1 kyr steps: every window edge, year 0 and the last
+    # year must be on it, else a 1 kyr step would end inside a window or
+    # jump over year 0.
+    edges = sorted({e for first, end, _ in windows for e in (first, end)}
+                   | {0, int(last)})
+    off_grid = [e for e in edges if (e - start) % step != 0]
+    if off_grid:
+        raise ValueError(f"schedule D from {start}: the years {off_grid} are "
+                         f"not a whole number of {step} yr steps from the "
+                         f"start")
+    years = [start]
+    while years[-1] < last:
+        year = years[-1]
+        dt = next((s for first, end, s in windows if first <= year < end),
+                  step)
+        years.append(year + dt)
+    years = np.asarray(years, dtype=np.int64)
+    # A year outside every window must carry a protocol slice of its own.
+    outside = [int(y) for y in years
+               if not any(first <= y < end for first, end, _ in windows)
+               and int(y) not in pset]
+    if years[-1] != last or 0 not in set(years.tolist()) or outside:
+        raise ValueError(f"schedule D from {start} ends at {years[-1]}, "
+                         f"misses year 0, or has years without a protocol "
+                         f"slice {outside[:5]}")
+    return years
+
+
+def window_schedule(name, ice_file, start, protocol_years,
+                    last=SCHEDULE_LAST_YEAR):
+    """The windows and the years of schedule C or D.
+
+    The one call of the prepare script and of the forward script, so the
+    input file and the forward run of a schedule march the same years.
+
+    Args:
+      name: `SCHEDULE_C` or `SCHEDULE_D`.
+      ice_file: the basename of the ice history.
+      start: the first year (a protocol year).
+      protocol_years: the protocol years of giamip, ascending.
+      last: the last year of the schedule.
+
+    Returns:
+      `(windows, years)`: the `(first, end, step)` windows and the NumPy
+      integer array of the years from `start` to `last`.
+
+    Raises:
+      ValueError: if `name` is not one of the two schedules, or if the
+        schedule breaks one of its rules.
+      RuntimeError: if a march from 122 ka does not have the step count of
+        `SCHEDULE_C_STEPS_122KA` or `SCHEDULE_D_STEPS_122KA`.
+    """
+    if name == SCHEDULE_C:
+        windows = schedule_c_windows(ice_file)
+        years = schedule_c_years(int(start), protocol_years, windows, last)
+        expected = SCHEDULE_C_STEPS_122KA.get(ice_file)
+    elif name == SCHEDULE_D:
+        windows = schedule_d_windows(ice_file)
+        years = schedule_d_years(int(start), protocol_years, windows, last)
+        expected = SCHEDULE_D_STEPS_122KA.get(ice_file)
+    else:
+        raise ValueError(f"unknown window schedule {name!r}")
+    # The counts are for the full march of a 122 ka experiment.
+    if (int(start) == -122000 and last == SCHEDULE_LAST_YEAR
+            and expected is not None and len(years) - 1 != expected):
+        raise RuntimeError(f"{name} has {len(years) - 1} steps for "
+                           f"{ice_file}, expected {expected}")
+    return windows, years
+
+
+def window_march_record(name, years, protocol_steps, ice_steps, year0_step,
+                        brackets, **extra):
+    """The `march` entry of the record of an input file of schedule C or D.
+
+    The inversion reads `years` (the step lengths and dt come from their
+    differences), `ice_steps` and `year0_step`; the forward script also
+    reads `schedule` and compares `years` with its own schedule. The record
+    goes into the input file as JSON (`write_json_dataset`).
+
+    Args:
+      name: `SCHEDULE_C` or `SCHEDULE_D`.
+      years: the years of the steps in the file (step 0 first).
+      protocol_steps: the ice-history slice of each year, -1 at a year
+        between two protocol years.
+      ice_steps: the number of ice fields in the file.
+      year0_step: the step of year 0.
+      brackets: `(k, w)` of every year in the file (`ice_bracket`).
+      **extra: further entries (the ice history, the windows, the step
+        count to the last year, the linear ice check).
+
+    Returns:
+      A dict of plain values.
+    """
+    return {"schedule": name, "step_years": None, "years": years,
+            "protocol_steps": protocol_steps, "ice_steps": ice_steps,
+            "year0_step": year0_step,
+            "ice_brackets": [[int(k), float(w)] for k, w in brackets],
+            **extra}
 
 
 def ice_bracket(protocol_years, year):

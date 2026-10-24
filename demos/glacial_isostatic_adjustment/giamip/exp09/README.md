@@ -269,10 +269,22 @@ copies of the Exp01 files with `exp01`, `Exp01` and `EXP01` changed to
 `views_exp01_L1.json` and the Exp01 measurements in the comments. Do not
 edit them here: a change goes into the Exp01 file and is copied out.
 
-The march is schedule C, as in the final L0 run: the prepare job gets
-`--schedule windows`, and the forward run `SCHEDULE=windows`. The transfer
-writes the r2 observed bed plus the change of the final L0 inversion
-(`START=change`); the source is
+The march on r2 is schedule D (decision R12 of 2026-10-24): 1 kyr steps
+everywhere, and the fast melt windows of schedule C at twice their step
+(50 yr for 25 yr, 20 yr for 10 yr). Schedule C on r2 needs more node disk
+for the tape and more wall time per restart than a Gadi job has. The
+prepare job gets `--schedule windows-coarse`, and the forward run
+`SCHEDULE=windows-coarse` (`../submit_r2.sh` sets both;
+`WINDOW_SCHEDULE=windows` there gives schedule C). The forward run of
+schedule D writes its output only at the protocol years it reaches: every
+protocol year inside the windows, and the whole kyr outside them. The
+schedule-D code (`window_schedule`, `schedule_d_years` and
+`window_march_record` in `exp09_common.py`, the option in
+`prepare_exp09.py` and `forward_exp09.py`) exists only in the
+directories of Exp09, Exp10 and Exp12, so these files are no longer copies
+of the Exp01 files there. `../test_schedule_d.py` tests the schedule. The transfer writes the r2
+observed bed plus the change of the final L0 inversion (`START=change`);
+the source is
 `/g/data/xd2/sg8812/gia-mip/exp09/L0/invert-c/state.h5`. The tape of the
 inversion goes to `$PBS_JOBFS` of each node and nowhere else.
 

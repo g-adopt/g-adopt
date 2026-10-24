@@ -53,7 +53,11 @@ THE EXPERIMENT
                      61 steps), or with `--schedule windows` the steps of
                      schedule C (protocol steps plus the fast melt windows
                      of `exp10_common.SCHEDULE_C_WINDOWS`, design handout
-                     8.3; S33, S34), with the ice of every year of the
+                     8.3; S33, S34), or with `--schedule windows-coarse`
+                     the steps of schedule D (1 kyr steps plus the windows
+                     of schedule C at twice their step,
+                     `exp10_common.schedule_d_years`; R12 of the r2
+                     production), with the ice of every year of the
                      march: the protocol slice at a protocol year, the
                      linear combination of the two neighbouring slices
                      between them (`exp10_common.linear_ice_into`)
@@ -671,15 +675,18 @@ def parse_args():
                         "with --steps at most this value)")
     p.add_argument("--step_years", type=int, default=2000,
                    help="the uniform step of the march, years")
-    p.add_argument("--schedule", choices=["uniform", "windows"],
+    p.add_argument("--schedule",
+                   choices=["uniform", *common.WINDOW_SCHEDULES],
                    default="uniform",
                    help="the march of the input file: uniform steps of "
-                        "--step_years (default), or schedule C (windows: "
+                        "--step_years (default), schedule C (windows: "
                         "the protocol steps plus the 25 yr and 10 yr steps "
                         "of the fast melt windows, decisions S33 and S34), "
-                        "with the ice of every year of schedule C, linear in "
-                        "time between the protocol years; --step_years is "
-                        "then not used")
+                        "or schedule D (windows-coarse: 1 kyr steps plus "
+                        "50 yr and 20 yr steps in the same windows, "
+                        "decision R12), with the ice of every year of the "
+                        "schedule, linear in time between the protocol "
+                        "years; --step_years is then not used")
     p.add_argument("--core_density", choices=["mean", "cmb"], default="mean")
     p.add_argument("--no_vtk", action="store_true",
                    help="do not write the ParaView files")
@@ -773,10 +780,13 @@ def main():
 
     # The forcing: observed sea level, its frozen slope, and the ice.
     tic = time.time()
-    # Schedule C reads every protocol year: `step_years = 1` keeps them all
-    # in `coarse_step_indices` (every distance from the start is a whole
-    # number of years), as in the forward script.
-    windows_march = args.schedule == "windows"
+    # Schedules C and D read every protocol year: `step_years = 1` keeps
+    # them all in `coarse_step_indices` (every distance from the start is a
+    # whole number of years), as in the forward script.
+    windows_march = args.schedule in common.WINDOW_SCHEDULES
+    # The name of the schedule in the log lines.
+    label = {common.SCHEDULE_C: "schedule C",
+             common.SCHEDULE_D: "schedule D"}.get(args.schedule)
     forcing = SurfaceForcing(mantle, experiment,
                              1 if windows_march else args.step_years)
     fields["SL_obs"] = forcing.SL_obs
@@ -785,29 +795,24 @@ def main():
     fields["slope"] = surface_slope(forcing.SL_obs)
     fields["slope"].rename("slope")
     # The years of the forcing slices: the march years of a uniform march,
-    # every protocol year for schedule C.
+    # every protocol year for schedules C and D.
     slice_years = np.asarray(forcing.years, dtype=float)
-    schedule_c = None
+    window_info = None
     if windows_march:
-        # Schedule C (design handout 8.3, S33, S34): the years of
-        # `common.schedule_c_years`, the function of the forward script of
-        # schedule C, so the inversion on this file and the forward run
-        # march the same years. The ice of a year between two protocol
-        # years is linear in time between the two slices
-        # (`common.ice_bracket`, `common.linear_ice_into`).
+        # Schedule C (design handout 8.3, S33, S34) or D (R12): the years
+        # of `common.window_schedule`, the function of the forward script,
+        # so the inversion on this file and the forward run march the same
+        # years. `window_schedule` also checks the step count of a march
+        # from 122 ka. The ice of a year between two protocol years is
+        # linear in time between the two slices (`common.ice_bracket`,
+        # `common.linear_ice_into`).
         ice_file = os.path.basename(str(forcing.ice_history.path))
-        windows = common.schedule_c_windows(ice_file)
-        all_years = common.schedule_c_years(int(slice_years[0]), slice_years,
-                                            windows)
-        expected = (common.SCHEDULE_C_STEPS_122KA.get(ice_file)
-                    if int(slice_years[0]) == -122000 else None)
-        if expected is not None and len(all_years) - 1 != expected:
-            raise RuntimeError(f"schedule C has {len(all_years) - 1} steps "
-                               f"for {ice_file}, expected {expected}")
+        windows, all_years = common.window_schedule(
+            args.schedule, ice_file, int(slice_years[0]), slice_years)
         years = all_years.astype(float)
         brackets = [common.ice_bracket(slice_years, y) for y in years]
-        schedule_c = {"ice_history": ice_file, "windows": windows,
-                      "steps_to_last_year": int(len(all_years) - 1)}
+        window_info = {"ice_history": ice_file, "windows": windows,
+                       "steps_to_last_year": int(len(all_years) - 1)}
     else:
         years = slice_years
         # Every year of a uniform march is a slice: slice k, weight 0.
@@ -821,8 +826,8 @@ def main():
         n_ice = min(n_ice, args.ice_steps + 1)
     if windows_march:
         dts = np.diff(years[:year0 + 1])
-        say(f"  march: schedule C, {year0} steps to year 0 "
-            f"({schedule_c['steps_to_last_year']} to +1000 yr), steps of "
+        say(f"  march: {label}, {year0} steps to year 0 "
+            f"({window_info['steps_to_last_year']} to +1000 yr), steps of "
             f"{sorted(set(dts.tolist()))} yr, windows {windows}, years "
             f"{years[0]:.0f} .. {years[year0]:.0f}; ice of steps 0 .. "
             f"{n_ice - 1} in the file")
@@ -834,24 +839,25 @@ def main():
     # The ice of every step, made once and kept: the writer and the volume
     # check use it. At L0 one CG1 field is small (schedule C: about 750
     # fields, a few tens of MB per rank). A uniform march reads slice k for
-    # step k. Schedule C reads each protocol slice once, keeps the two
-    # slices around the current year, and writes the combination of
-    # `common.linear_ice_into` (a copy of the slice at a protocol year).
+    # step k. Schedules C and D read each protocol slice they need once,
+    # keep the two slices around the current year, and write the
+    # combination of `common.linear_ice_into` (a copy of the slice at a
+    # protocol year).
     if windows_march:
         ice = common.march_ice(forcing.ice, brackets[:n_ice], forcing.cg1)
         # The check of the forward script, here before the write: every
         # year between two protocol years holds the combination of the two
         # protocol slices of the march, bit for bit.
-        schedule_c["linear_ice_check"] = common.check_linear_ice(
+        window_info["linear_ice_check"] = common.check_linear_ice(
             years[:n_ice], ice, slice_years, Function(forcing.cg1))
-        say(f"  ice of schedule C: "
-            f"{schedule_c['linear_ice_check']['years_checked']} years "
+        say(f"  ice of {label}: "
+            f"{window_info['linear_ice_check']['years_checked']} years "
             f"between protocol years, largest difference to the linear "
-            f"combination {schedule_c['linear_ice_check']['max_abs_diff']:.3e}"
+            f"combination {window_info['linear_ice_check']['max_abs_diff']:.3e}"
             f" (must be 0)")
-        if schedule_c["linear_ice_check"]["max_abs_diff"] != 0.0:
-            raise RuntimeError("the ice of schedule C is not linear between "
-                               "its protocol slices")
+        if window_info["linear_ice_check"]["max_abs_diff"] != 0.0:
+            raise RuntimeError(f"the ice of {label} is not linear between "
+                               f"its protocol slices")
     else:
         ice = [forcing.ice(index) for index in range(n_ice)]
     # The protocol step of each year (the ice-history slice), -1 for a year
@@ -940,15 +946,9 @@ def main():
                    "protocol_steps": forcing.steps[:n_ice],
                    "ice_steps": n_ice, "year0_step": year0}
                   if not windows_march else
-                  # Schedule C: `protocol_steps` is -1 at a year between two
-                  # protocol years; `ice_brackets` holds (slice, weight of the
-                  # next slice) of every year.
-                  {"schedule": "windows", "step_years": None,
-                   "years": years[:n_ice], "protocol_steps": march_steps,
-                   "ice_steps": n_ice, "year0_step": year0,
-                   "ice_brackets": [[int(k), float(w)]
-                                    for k, w in brackets[:n_ice]],
-                   **schedule_c}),
+                  common.window_march_record(
+                      args.schedule, years[:n_ice], march_steps, n_ice,
+                      year0, brackets[:n_ice], **window_info)),
         "scales": scales.as_dict(),
         "solver_constants": solver_constants(experiment, earth, scales,
                                              args.core_density),
