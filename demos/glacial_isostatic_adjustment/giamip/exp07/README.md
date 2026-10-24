@@ -245,7 +245,7 @@ job of the experiment uses it.
 | `run_invert.pbs` | the inversion, with the watchdog and the node memory and jobfs samplers |
 | `run_forward.pbs` | the forward run from the final bed, with checkpoints and a restart |
 | `run_paraview.pbs` | the ParaView series of the forward run (1 rank) |
-| `run_images.pbs` | the 4K images of the forward run, one half of the steps per job (project vo05) |
+| `run_images.pbs` | the 4K images of the forward run, one part of the steps per job (project vo05) |
 | `run_archive.pbs` | the records and the final state from /scratch to /g/data |
 | `node_memory_sampler.sh`, `node_jobfs_sampler.sh`, `signal_ranks.sh` | the helpers of `run_invert.pbs` |
 | `probe_partition.py` | what each part of the mantle-balanced partition of a mesh holds |
@@ -287,10 +287,16 @@ The steps, on a Gadi login node in a login shell, from this directory:
    6 restart` continues it with `RESTART=state.h5` in the same
    directory.
 5. `bash ../submit_r2.sh 07 6 forward` submits the forward run, the
-   ParaView job, the two image jobs and the archive job, each after the
-   one before. If the forward run stops at the wall time (exit code 3),
-   PBS deletes the jobs after it; `FORWARD_RESTART=1 bash ../submit_r2.sh
-   07 6 forward` continues the run and submits them again.
+   ParaView job, the image jobs (`IMAGE_PARTS`, default 2) and the archive
+   job, each after the one before. If the forward run stops at the wall
+   time (exit code 3), PBS deletes the jobs after it;
+   `FORWARD_RESTART=1 bash ../submit_r2.sh 07 6 forward` continues
+   the run and submits them again. If the inversion ran with fewer ranks
+   per node (`RANKS_PER_NODE`), give the forward stage the same
+   `RANKS_PER_NODE` and `PREP`, and `FORWARD_NODES` for full nodes: the
+   forward run has no tape, so for example the 624 ranks of a 16-node
+   inversion with 39 ranks per node run on 6 full nodes
+   (`RANKS_PER_NODE=39 FORWARD_NODES=6`).
 
 | item | path |
 |---|---|

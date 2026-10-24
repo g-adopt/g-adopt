@@ -19,7 +19,7 @@
 #     invert    the production inversion from the transferred bed
 #     restart   the next job of the production inversion after a stop at
 #               the wall time (RESTART=state.h5 in the same directory)
-#     forward   forward -> ParaView -> images (two halves) -> archive
+#     forward   forward -> ParaView -> images (IMAGE_PARTS jobs) -> archive
 #
 # The run directory of the experiment is
 # /scratch/xd2/$USER/giamip/expXX/8re_r2-<NODES>nodes/ with prepare/,
@@ -48,7 +48,9 @@
 # The solver options of the inversion (decision of 2026-10-24): default
 # solver options, --gia_rebuild_every 100 --log_memory
 # --free_taping_solver, the watchdog at 30 min, the node memory sampler
-# every 20 s. The stop rule is the default of invert_expXX.py: RMS misfit
+# every 20 s, the node jobfs sampler every 30 s (the watcher agents read
+# its tape column, and the 3-step test projects the tape from it). The
+# stop rule is the default of invert_expXX.py: RMS misfit
 # below 1 mm or 10 ROL iterations.
 #
 # Variables of this script (in its environment):
@@ -74,6 +76,16 @@
 #   FORWARD_RESTART=1  forward stage: continue the forward run from its last
 #                      checkpoint (RESTART=1), then ParaView, images and
 #                      archive as before
+#   FORWARD_NODES=<n>  forward stage: the nodes of the forward run (default
+#                      NODES). The forward run is not taped, so it needs no
+#                      node disk per rank and can put the NP ranks of the
+#                      partition on fewer, full nodes, for example
+#                      RANKS_PER_NODE=39 FORWARD_NODES=6 bash submit_r2.sh
+#                      01 16 forward for an inversion on 16 nodes with 39
+#                      ranks per node (624 ranks, one per core of 6 nodes).
+#                      NP must divide by FORWARD_NODES and fit its cores.
+#   IMAGE_PARTS=<k>    forward stage: the number of image jobs (default 2,
+#                      run_images.pbs NPARTS; 1.9 h each for 926 images)
 #   ROOT, ARCHIVE      the roots of the run directories
 #                      (/scratch/xd2/$USER/giamip) and of the archive
 #                      (/g/data/xd2/sg8812/gia-mip)
@@ -148,6 +160,33 @@ RES="ncpus=$(( 104 * NODES )),mem=$(( 500 * NODES ))GB,jobfs=$(( 400 * NODES ))G
 if [ ${NODES} -le 10 ]; then LONG=48:00:00; else LONG=24:00:00; fi
 INV_EXTRA="--gia_rebuild_every 100 --log_memory --free_taping_solver"
 
+# The forward run: FORWARD_NODES nodes with the NP ranks of the partition.
+# Its jobfs holds only the kernel caches of the Firedrake modules (no tape),
+# so it asks for 100 GB per node.
+FORWARD_NODES=${FORWARD_NODES:-${NODES}}
+if ! [[ ${FORWARD_NODES} =~ ^[1-9][0-9]*$ ]] || [ $(( NP % FORWARD_NODES )) -ne 0 ] \
+        || [ ${NP} -gt $(( 104 * FORWARD_NODES )) ]; then
+    echo "error: FORWARD_NODES=${FORWARD_NODES} does not fit NP=${NP} ranks" >&2
+    exit 1
+fi
+FRES="ncpus=$(( 104 * FORWARD_NODES )),mem=$(( 500 * FORWARD_NODES ))GB,jobfs=$(( 100 * FORWARD_NODES ))GB"
+if [ ${FORWARD_NODES} -le 10 ]; then FLONG=48:00:00; else FLONG=24:00:00; fi
+# NP goes on the -v list only if it is not one rank per core.
+if [ ${NP} -eq $(( 104 * FORWARD_NODES )) ]; then FNPV=""; else FNPV="NP=${NP},"; fi
+IMAGE_PARTS=${IMAGE_PARTS:-2}
+if ! [[ ${IMAGE_PARTS} =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: IMAGE_PARTS=${IMAGE_PARTS} is not a positive integer" >&2
+    exit 1
+fi
+# The prepare, transfer and 3-step test directories of the archive. The
+# readiness jobs can run in the run directory of another node count than
+# NODES (the 6-node prepare of a 16-node inversion): the transfer job writes
+# into transfer/ beside the prepare directory, and the 3-step test is in
+# invert-3steps/ of this run directory or beside the prepare directory.
+XFER_DIR=$(dirname "${PREP}")/transfer
+TEST_DIR=${R}/invert-3steps
+[ -d "${TEST_DIR}" ] || TEST_DIR=$(dirname "${PREP}")/invert-3steps
+
 DRY_RUN=${DRY_RUN:-0}
 FORCE=${FORCE:-0}
 
@@ -160,7 +199,7 @@ submit() {
         echo "DRYRUN-$(( RANDOM ))"
         return
     fi
-    mkdir -p "${dir}"
+    mkdir -p "${dir}" "${R}"
     local id
     # A failed qsub stops the whole script: the caller assigns the output
     # of this function, and set -e stops at a failed assignment, so no job
@@ -198,7 +237,7 @@ test_job() {
     local after=$1
     refuse_if ${R}/invert-3steps/state.h5
     submit ${R}/invert-3steps -N x${EXP}-inv3 -l ${RES},walltime=03:00:00 ${after} \
-        -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=1,STEPS=3,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
+        -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=1,STEPS=3,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
         ${G}/run_invert.pbs
 }
 
@@ -222,37 +261,41 @@ case ${STAGE} in
     invert)
         refuse_if ${R}/invert/state.h5
         inv=$(submit ${R}/invert -N x${EXP}-inv -l ${RES},walltime=${LONG} \
-            -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
+            -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
             ${G}/run_invert.pbs)
         echo "exp${EXP} ${NODES} nodes: inversion ${inv}"
         ;;
     restart)
         [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5 to continue from" >&2; exit 1; }
         inv=$(submit ${R}/invert -N x${EXP}-inv -l ${RES},walltime=${LONG} \
-            -v "${NPV}INPUTS=${INPUTS},RESTART=state.h5,MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,EXTRA=${INV_EXTRA}" \
+            -v "${NPV}INPUTS=${INPUTS},RESTART=state.h5,MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
             ${G}/run_invert.pbs)
         echo "exp${EXP} ${NODES} nodes: inversion restart ${inv}"
         ;;
     forward)
         if [ "${FORWARD_RESTART:-0}" = "1" ]; then
-            fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${RES},walltime=${LONG} \
-                -v "${NPV}RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+            fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
+                -v "${FNPV}RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
         else
             refuse_if ${FWD}/forward_exp${EXP}_surface.h5
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5" >&2; exit 1; }
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/summary_invert.json" ] || \
                 echo "warning: ${R}/invert has no summary_invert.json; is the inversion finished?" >&2
-            fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${RES},walltime=${LONG} \
-                -v "${NPV}STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+            fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
+                -v "${FNPV}STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
         fi
         pv=$(submit ${FWD} -N x${EXP}-pv -W depend=afterok:${fwd} ${G}/run_paraview.pbs)
-        img0=$(submit ${FWD} -N x${EXP}-img0 -W depend=afterok:${pv} -v HALF=0 ${G}/run_images.pbs)
-        img1=$(submit ${FWD} -N x${EXP}-img1 -W depend=afterok:${pv} -v HALF=1 ${G}/run_images.pbs)
-        arch=$(submit ${ARCHIVE}/exp${EXP}/r2 -N x${EXP}-arch -W depend=afterok:${img0}:${img1} \
-            -v "RUN_ROOT=${R},DEST=${ARCHIVE}/exp${EXP}/r2" ${G}/run_archive.pbs)
-        echo "exp${EXP} ${NODES} nodes: forward ${fwd} paraview ${pv} images ${img0} ${img1} archive ${arch}"
+        imgs=""
+        for (( p = 0; p < IMAGE_PARTS; p++ )); do
+            img=$(submit ${FWD} -N x${EXP}-img${p} -W depend=afterok:${pv} \
+                -v PART=${p},NPARTS=${IMAGE_PARTS} ${G}/run_images.pbs)
+            imgs="${imgs}:${img}"
+        done
+        arch=$(submit ${ARCHIVE}/exp${EXP}/r2 -N x${EXP}-arch -W depend=afterok${imgs} \
+            -v "RUN_ROOT=${R},PREP_DIR=${PREP},XFER_DIR=${XFER_DIR},TEST_DIR=${TEST_DIR},DEST=${ARCHIVE}/exp${EXP}/r2" ${G}/run_archive.pbs)
+        echo "exp${EXP} forward on ${FORWARD_NODES} nodes: forward ${fwd} paraview ${pv} images ${imgs#:} archive ${arch}"
         echo "  a forward run that stops at the wall time exits with 3; the jobs after it are then deleted by PBS."
-        echo "  Continue with FORWARD_RESTART=1 bash submit_r2.sh ${EXP} ${NODES} forward"
+        echo "  Continue with the same variables and FORWARD_RESTART=1 bash submit_r2.sh ${EXP} ${NODES} forward"
         ;;
     *)
         echo "error: STAGE=${STAGE}; use ready, transfer, test, invert, restart or forward" >&2

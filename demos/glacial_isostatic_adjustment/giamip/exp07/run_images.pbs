@@ -1,7 +1,7 @@
 #!/bin/bash
 # GIAMIP Exp07: the 4K images of a forward run (render_views.py of the
-# GIAMIP viz directory on Gadi, ParaView 6.1.1 with OSPRay), one half of the
-# steps per job, on Gadi queue normal, project vo05. This is the job of
+# GIAMIP viz directory on Gadi, ParaView 6.1.1 with OSPRay), one part of
+# the steps per job, on Gadi queue normal, project vo05. This is the job of
 # /g/data/xd2/sg8812/gia-mip/viz/render_exp.pbs, made for any run
 # directory.
 #
@@ -19,25 +19,35 @@
 # image of each view with the L0 image of the same year before both halves
 # of all runs are made.
 #
-# The steps are split into 16 chunks (render_views.py --chunk/--nchunks);
-# this job runs chunks 8*HALF .. 8*HALF+7 as 8 pvbatch processes with 6
-# OSPRay threads each (8 x 6 = 48 cores, the fastest of 1x48, 4x12, 8x6 in
-# the test job 181725392). render_views.py skips images that exist, so a
-# job that stopped renders only the missing images when it runs again.
+# The steps are split into 8 NPARTS chunks (render_views.py
+# --chunk/--nchunks, chunk c renders the steps c, c + 8 NPARTS, ...); this
+# job runs chunks 8*PART .. 8*PART+7 as 8 pvbatch processes with 6 OSPRay
+# threads each (8 x 6 = 48 cores, the fastest of 1x48, 4x12, 8x6 in the
+# test job 181725392). render_views.py skips images that exist, so a job
+# that stopped renders only the missing images when it runs again with the
+# same PART and NPARTS.
 #
-# Submit from the run directory of the forward run, one job per half, after
-# the ParaView job:
+# Submit from the run directory of the forward run, one job per part, after
+# the ParaView job (../submit_r2.sh submits all parts):
 #
 #   cd /g/data/xd2/sg8812/gia-mip/exp07/r2/forward-protocol
-#   qsub -W depend=afterok:<paraview job> -v HALF=0 $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp07/run_images.pbs
-#   qsub -W depend=afterok:<paraview job> -v HALF=1 $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp07/run_images.pbs
+#   for p in 0 1; do
+#       qsub -W depend=afterok:<paraview job> -v PART=$p,NPARTS=2 $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp07/run_images.pbs
+#   done
 #
-# Time: an L1 chunk (926 images in 16 chunks) took 1 h 52 min. The wall
-# time of 5 h leaves room for the larger r2 surface; a job that stops at the
-# wall time continues with the same qsub line.
+# Time: on r2 one image takes 104-124 s (mean 119 s) per pvbatch process
+# with 8 processes on the 48 cores (Gadi test job 182171392, 16 images of
+# a forward test run). The L1 images took 113-124 s, so the time depends
+# on the image size and the samples per pixel, not on the mesh. A full run
+# has at most 463 output steps and 2 views, 926 images: 926 x 119 s / 8
+# processes = 3.8 h in one job, 1.9 h per job with NPARTS=2. The wall time
+# of 4 h is twice that. With NPARTS=4 each job needs about 1 h. A job that
+# stops at the wall time continues with the same qsub line.
 #
 # Variables (pass them with -v NAME=value,...):
-#   HALF         0 or 1, the half of the chunks (required)
+#   PART         the part of the chunks, 0 .. NPARTS-1 (required)
+#   NPARTS       the number of image jobs of the run (default 2)
+#   HALF         HALF=h is PART=h with NPARTS=2
 #   RUN          the run directory (default: the submit directory)
 #   VIZ          the viz directory (default /g/data/xd2/sg8812/gia-mip/viz)
 #   TEMPLATE     the template views file (default $VIZ/views_exp01_L1.json)
@@ -52,7 +62,7 @@
 #PBS -l ncpus=48
 #PBS -l mem=190GB
 #PBS -l jobfs=10GB
-#PBS -l walltime=05:00:00
+#PBS -l walltime=04:00:00
 #PBS -l storage=gdata/xd2+scratch/xd2
 #PBS -l wd
 #PBS -W umask=0022
@@ -60,11 +70,20 @@
 
 set -u
 module load paraview/6.1.1
-HALF=${HALF:?set HALF=0 or HALF=1}
-case ${HALF} in
-    0|1) ;;
-    *) echo "error: HALF=${HALF}; use 0 or 1" >&2; exit 1 ;;
-esac
+if [ -n "${HALF:-}" ] && [ -z "${PART:-}" ]; then
+    PART=${HALF}
+    NPARTS=2
+fi
+NPARTS=${NPARTS:-2}
+PART=${PART:?set PART to 0 .. NPARTS-1}
+if ! [[ ${NPARTS} =~ ^[1-9][0-9]*$ ]] || ! [[ ${PART} =~ ^[0-9]+$ ]] \
+        || [ ${PART} -ge ${NPARTS} ]; then
+    echo "error: PART=${PART}, NPARTS=${NPARTS}; use 0 <= PART < NPARTS" >&2
+    exit 1
+fi
+# Every job of the run must use the same NPARTS: the chunk of a step
+# depends on the number of chunks.
+NCHUNKS=$(( 8 * NPARTS ))
 RUN=${RUN:-${PBS_O_WORKDIR}}
 VIZ=${VIZ:-/g/data/xd2/sg8812/gia-mip/viz}
 TEMPLATE=${TEMPLATE:-${VIZ}/views_exp01_L1.json}
@@ -102,7 +121,7 @@ EOF
 mv -f "${TMP_VIEWS}" "${VIEWS}" || exit 1
 echo "views file ${VIEWS} (template ${TEMPLATE}, subdivision ${SUBDIVISION:-of the template})"
 
-LOG=${RUN}/frames-logs/half${HALF}_${PBS_JOBID%%.*}
+LOG=${RUN}/frames-logs/part${PART}of${NPARTS}_${PBS_JOBID%%.*}
 mkdir -p ${LOG}
 # pvbatch on a compute node has no X server; VTK falls back to an
 # off-screen context, which OSPRay does not need anyway.
@@ -110,9 +129,9 @@ unset DISPLAY
 date
 pids=()
 for k in 0 1 2 3 4 5 6 7; do
-    c=$(( 8 * HALF + k ))
+    c=$(( 8 * PART + k ))
     OSPRAY_NUM_THREADS=6 /usr/bin/time -v pvbatch ${VIZ}/render_views.py \
-        --config ${VIEWS} --chunk ${c} --nchunks 16 > ${LOG}/chunk${c}.out 2> ${LOG}/chunk${c}.err &
+        --config ${VIEWS} --chunk ${c} --nchunks ${NCHUNKS} > ${LOG}/chunk${c}.out 2> ${LOG}/chunk${c}.err &
     pids+=($!)
 done
 status=0

@@ -35,6 +35,17 @@
 # Variables (pass them with -v NAME=value,...):
 #   RUN_ROOT  the run directory of the production on /scratch (required)
 #   DEST      the archive directory (default above)
+#   PREP_DIR  the directory of the prepare job (default RUN_ROOT/prepare)
+#   XFER_DIR  the directory of the bed transfer (default RUN_ROOT/transfer)
+#   TEST_DIR  the directory of the 3-step test (default
+#             RUN_ROOT/invert-3steps)
+#
+# PREP_DIR, XFER_DIR and TEST_DIR exist because the readiness jobs can run
+# in another run directory than the inversion: the partition of the
+# input file belongs to the rank count, so a 624-rank input file written by
+# a 6-node prepare job (8re_r2-6nodes/) is inverted on 16 nodes with 39
+# ranks per node (8re_r2-16nodes-624ranks/). The copies keep the names
+# prepare/, transfer/ and invert-3steps/ in DEST.
 #
 #PBS -N exp08-arch
 #PBS -P xd2
@@ -50,18 +61,22 @@
 set -u
 RUN_ROOT=${RUN_ROOT:?set RUN_ROOT to the run directory of the production on /scratch}
 DEST=${DEST:-/g/data/xd2/sg8812/gia-mip/exp08/r2}
+PREP_DIR=${PREP_DIR:-${RUN_ROOT}/prepare}
+XFER_DIR=${XFER_DIR:-${RUN_ROOT}/transfer}
+TEST_DIR=${TEST_DIR:-${RUN_ROOT}/invert-3steps}
 status=0
 
 echo "job ${PBS_JOBID}: ${RUN_ROOT} -> ${DEST}"
+echo "prepare from ${PREP_DIR}, transfer from ${XFER_DIR}, 3-step test from ${TEST_DIR}"
 date
 mkdir -p ${DEST} || exit 1
 
-# One directory: rsync with the given excludes, then a comparison of the
-# sizes on both sides. The --exclude patterns are relative to
-# the source directory.
+# One directory: rsync of the source directory SRC into DEST/NAME with the
+# given excludes, then a comparison of the sizes on both sides. The
+# --exclude patterns are relative to the source directory.
+# Usage: copy_dir NAME SRC [rsync options]
 copy_dir() {
-    local name=$1; shift
-    local src=${RUN_ROOT}/${name}
+    local name=$1 src=$2; shift 2
     if [ ! -d "${src}" ]; then
         echo "${name}: no directory ${src}, skipped"
         return
@@ -89,10 +104,10 @@ copy_dir() {
 
 # The input files are 50-100 GB each on r2 and invert/state.h5 holds the
 # same mesh, fields and ice; the .bak file of a failed transfer is a copy.
-copy_dir prepare --exclude='*.h5' --exclude='*.bak'
-copy_dir transfer --exclude='*.h5' --exclude='*.bak'
-copy_dir invert-3steps --exclude='state.h5'
-copy_dir invert
+copy_dir prepare ${PREP_DIR} --exclude='*.h5' --exclude='*.bak'
+copy_dir transfer ${XFER_DIR} --exclude='*.h5' --exclude='*.bak'
+copy_dir invert-3steps ${TEST_DIR} --exclude='state.h5'
+copy_dir invert ${RUN_ROOT}/invert
 
 # The MD5 of the two files that a later step reads.
 for f in state.h5 controls.h5; do
