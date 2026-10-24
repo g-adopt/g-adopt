@@ -18,7 +18,9 @@ def profile_geometry(case, load_centre_deg, *, longitudes=None, bearings=None,
         raise ValueError("profile spacing must be in (0, 180] degrees")
     if longitudes is not None and (bearings is not None or centre is not None):
         raise ValueError("profile longitudes cannot be combined with bearings or a centre")
-    meridians = longitudes is not None or (case == "cap" and bearings is None and centre is None)
+    meridians = longitudes is not None or (
+        case == "cap" and np.isclose(load_centre_deg[0], 0.)
+        and bearings is None and centre is None)
     if meridians:
         longitudes = np.asarray([0., 90., 180.] if longitudes is None else longitudes,
                                 dtype=float).copy()

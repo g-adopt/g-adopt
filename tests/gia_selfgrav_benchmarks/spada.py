@@ -93,6 +93,10 @@ DISCRETISATION
     Time      Backward Euler: 10 yr steps to 0.1 kyr, 50 yr to 1 kyr, 100 yr
               to 10 kyr and 500 yr to 20 kyr. The t = 0 state is the elastic
               response, solved on its own.
+              --timestep_scale multiplies this ladder (coarse check: 2).
+              --mesh_h_km sets the bulk mesh size (coarse check: 500);
+              --litho_layers sets lithosphere subdivisions (coarse check: 1).
+              These options are recorded and checked on restart.
     Elastic   K / mu = 1000 by default (`--bulk_shear_ratio`). TABOO is
               incompressible, which is one source of the remaining
               difference.
@@ -123,9 +127,31 @@ OUTPUT (in --output_path)
     checkpoint_<case>.h5   The checkpoints of the run (Firedrake
                            `CheckpointFile`), for `--restart`.
     spada_<case>.msh       The mesh of the run.
-    spada_<case>_*.pvd     VTK files, with `--write_output` only. The
+    spada_<case>_mechanics.pvd, spada_<case>_potential.pvd
+                           Volume VTK files, with --write_output. The
                            displacement and the potential live on different
-                           meshes, so they go to two files.
+                           meshes, so they go to two files (nondimensional).
+    spada_<case>_surface.h5
+                           With --write_surface_output: surface-only HDF5
+                           displacement, gravitational/rotational/total geoid
+                           and adjacent-step rates, in m and m/yr. Geometry
+                           is in metres, times in kyr. Uses the actual
+                           curved boundary facets; no point sampling.
+                           Independent of --write_output and --write_profiles.
+                           Convert offline with convert_spada_surface.py.
+                           --surface_output_format vtk writes PVD/VTU directly.
+    profiles_<case>_*.npz  With --write_profiles: displacement/geoid and
+                           adjacent-step rates (m/yr). Rates at t=0 are
+                           undefined, saved as NaN with rate_valid=False.
+
+    --load_centre COLAT LON overrides the load location independently of
+    rotation: --case cap --load_centre 25 75 gives the nonrotating control
+    for the default polar-motion load. Its harmonic diagnostics use angular
+    distance and horizontal displacement away from the load centre.
+    Off-axis cases default to the same load-centred great circles.
+    Rotating summaries and step logs include m3 = delta(Omega)/Omega and
+    lod_ms = -86400e3*m3, positive for a longer day. This uses the nominal
+    86400 s day of the paper, not 2*pi/Omega.
 
 RESULTS OF AN EARLIER RUN
     The cap case on the coarser 500 km mesh with one 70 km lithosphere
@@ -170,7 +196,6 @@ from gadopt import (
     SpatialCoordinate,
     SphericalDtN,
     VTKFile,
-    as_vector,
     assemble,
     avg,
     conditional,
@@ -306,17 +331,41 @@ class TabooReference:
         c = 3.0 / common.RHO_BAR * sigma_n[self.nmin:nmax + 1] / (2 * n + 1)
         return c * hbar, c * lbar, c * kbar
 
-    def polar_motion(self, t_kyr, load_shape="cap"):
+    def polar_motion(self, t_kyr, load_shape="cap", load_centre=None):
         """The T02-03 polar motion (m_x, m_y) at `t_kyr`, in degrees.
 
         The series is tabulated at 35 epochs between 0 and 20 kyr, including
         every output epoch of this driver. Other epochs are interpolated
         linearly. Disc results scale the cap series by sigma_2, as in eq. (31).
+        A custom centre changes sin(2*colatitude) and the longitude phase.
         """
         t = self.data["pm_cap_t_kyr"]
         scale = polar_motion_scale(load_shape)
-        return (float(scale * np.interp(t_kyr, t, self.data["pm_cap_mx_deg"])),
-                float(scale * np.interp(t_kyr, t, self.data["pm_cap_my_deg"])))
+        m = complex(np.interp(t_kyr, t, self.data["pm_cap_mx_deg"]),
+                    np.interp(t_kyr, t, self.data["pm_cap_my_deg"]))
+        if load_centre is not None:
+            colat, lon = np.deg2rad(load_centre)
+            tc, pc = np.deg2rad(LOAD_CENTRE_DEG["polar-motion"])
+            scale *= np.sin(2 * colat) / np.sin(2 * tc)
+            m *= np.exp(1j * (lon - pc))
+        return float(scale * m.real), float(scale * m.imag)
+
+    def length_of_day_eq33(self, t_kyr, load_shape="cap", load_centre=None):
+        """Published Eq. (33) LOD reference in ms, preserving its sign.
+
+        This is reconstructed from independent TABOO loading k_2(t).
+        Keep it distinct from the physical -LOD*m3 solver diagnostic: for
+        the degree-0-free load the inertia integral has the opposite sign
+        to the geometrical factor printed in Eq. (33).
+        """
+        centre = LOAD_CENTRE_DEG["polar-motion"] if load_centre is None else load_centre
+        cosine = np.cos(np.deg2rad(centre[0]))
+        sigma2 = load_coefficients(2, load_shape)[2]
+        polar_moment = common.C_NONDIM * common.RHO_BAR * common.D_SCALE**5
+        factor = (4*np.pi * common.A_EARTH**4 * sigma2 / (15*polar_moment)
+                  * (3*cosine**2 - 1))
+        kbar = self.love_time(t_kyr, 2)[2][0]
+        return float(86400e3 * factor * kbar)
 
 
 # --------------------------------------------------------------------------
@@ -344,9 +393,9 @@ def dlegendre_ufl(nmax, x, P):
         -n * (P[n - 1] - x * P[n]) / s for n in range(1, nmax + 1)]
 
 
-def load_axis(case):
+def load_axis(case, load_centre=None):
     """The unit vector from the centre of the Earth to the load centre."""
-    colat, lon = np.deg2rad(LOAD_CENTRE_DEG[case])
+    colat, lon = np.deg2rad(LOAD_CENTRE_DEG[case] if load_centre is None else load_centre)
     return np.array([np.sin(colat) * np.cos(lon),
                      np.sin(colat) * np.sin(lon), np.cos(colat)])
 
@@ -400,11 +449,13 @@ def load_field(mesh, sigma_n, axis, *, representation="spatial", load_shape="cap
                     name="sigma_load").interpolate(expr)
 
 
-def project_surface(field_expr, mesh, measure, interior, basis="P", *, nmax=NMAX):
+def project_surface(field_expr, mesh, measure, interior, basis="P", *, nmax=NMAX,
+                    axis=None):
     """Legendre coefficients f_n = int f B_n dS / int B_n^2 dS on Re.
 
     B_n is P_n(cos theta) for `basis="P"` and dP_n/dtheta for `basis="dP"`,
-    with theta the colatitude. The denominator is assembled and not taken
+    with theta measured from `axis` (north pole by default).
+    The denominator is assembled and not taken
     from the closed form 4 pi R^2 / (2n + 1), so that the discretisation
     error of the surface cancels between numerator and denominator.
 
@@ -421,7 +472,8 @@ def project_surface(field_expr, mesh, measure, interior, basis="P", *, nmax=NMAX
       A NumPy array of the coefficients for degrees 0..nmax.
     """
     X = SpatialCoordinate(mesh)
-    x = X[2] / sqrt(dot(X, X))
+    axis = np.array([0., 0., 1.]) if axis is None else axis
+    x = dot(X, Constant(axis)) / sqrt(dot(X, X))
     P = legendre_ufl(nmax, x)
     if basis == "dP":
         P = dlegendre_ufl(nmax, x, P)
@@ -438,11 +490,11 @@ def project_surface(field_expr, mesh, measure, interior, basis="P", *, nmax=NMAX
     return out
 
 
-def surface_spectra(solver, parent, mantle, nmax=NMAX):
+def surface_spectra(solver, parent, mantle, nmax=NMAX, *, load_centre=None):
     """U_n, V_n and N_n in metres from a solved state of the cap case.
 
-    U is the radial displacement, V the colatitudinal (southward)
-    displacement expanded in dP_n/dtheta, and N the geoid psi / g_0 on Re.
+    U is radial, V points away from the load centre and is expanded in
+    dP_n/dgamma, and N is the gravitational geoid psi / g_0 on Re.
     The geoid is built from parent coordinates, because psi lives on the
     parent, and a quotient with a g_0 built on the mantle would mix two
     meshes in one expression.
@@ -456,30 +508,28 @@ def surface_spectra(solver, parent, mantle, nmax=NMAX):
       `(U_n, V_n, N_n)`, NumPy arrays for degrees 0..nmax, in metres.
     """
     ds_mantle = ds(common.SURF_RE, domain=mantle)
+    axis = load_axis("cap", load_centre)
     u = solver.displacement
     # The mantle mesh is marked non-Cartesian, so `vertical_component` is the
     # radial component u . X / |X|.
     U_n = project_surface(vertical_component(u), mantle, ds_mantle,
-                          interior=False, nmax=nmax)
+                          interior=False, nmax=nmax, axis=axis)
 
-    # e_theta |X| sin(theta) = (z x, z y, -(x^2 + y^2)): the colatitude
-    # direction without its normalisation, divided by r and by the distance
-    # from the axis. That distance is bounded below to keep the expression
-    # finite on the axis.
+    # Tangential direction away from the load centre, with a bounded
+    # denominator at its axis and antipode. At the north pole this is south.
     Xm = SpatialCoordinate(mantle)
-    e_theta = as_vector((Xm[2] * Xm[0], Xm[2] * Xm[1],
-                         -(Xm[0]**2 + Xm[1]**2)))
-    rho_axis = sqrt(Xm[0]**2 + Xm[1]**2)
-    u_theta = dot(u, e_theta) / (
-        sqrt(dot(Xm, Xm)) * conditional(rho_axis > 1e-12, rho_axis,
-                                        Constant(1e-12)))
+    radial = Xm / sqrt(dot(Xm, Xm))
+    cos_gamma = dot(radial, Constant(axis))
+    sin_gamma = sqrt(conditional(1 - cos_gamma**2 > 1e-24,
+                                 1 - cos_gamma**2, 1e-24))
+    u_theta = dot(u, cos_gamma * radial - Constant(axis)) / sin_gamma
     V_n = project_surface(u_theta, mantle, ds_mantle, interior=False,
-                          basis="dP", nmax=nmax)
+                          basis="dP", nmax=nmax, axis=axis)
 
     Xp = SpatialCoordinate(parent)
     geoid = solver.potential / common.gravity_exact_ufl(sqrt(dot(Xp, Xp)))
     N_n = project_surface(geoid, parent, solver.form.dS(common.SURF_RE),
-                          interior=True, nmax=nmax)
+                          interior=True, nmax=nmax, axis=axis)
     # Non-dimensional lengths to metres.
     return U_n * common.D_SCALE, V_n * common.D_SCALE, N_n * common.D_SCALE
 
@@ -513,7 +563,7 @@ def series(coeffs, theta, kind="P"):
 def build_solver(case, parent, mantle, dt, bulk_shear_ratio, *,
                  load_nmax=NMAX, load_representation="spatial", load_shape="cap",
                  dtn_degree=common.DTN_DEGREE, outer_rtol=common.OUTER_RTOL,
-                 block0_rtol=common.BLOCK0_RTOL):
+                 block0_rtol=common.BLOCK0_RTOL, load_centre=None):
     """The coupled self-gravitating solver of one Spada case.
 
     Args:
@@ -531,7 +581,7 @@ def build_solver(case, parent, mantle, dt, bulk_shear_ratio, *,
       `(solver, layout)`.
     """
     rotation = case == "polar-motion"
-    axis = load_axis(case)
+    axis = load_axis(case, load_centre)
     # The load coefficients, scaled by rho_bar D.
     sigma_n = load_coefficients(
         load_nmax if load_representation == "spectral" else 1, load_shape)
@@ -610,8 +660,54 @@ def build_profile_samplers(parent, mantle, depth_fraction, geometry=None):
     return geometry, depth_fraction, samplers
 
 
-def write_profiles(path, solver, mantle, profiles, t_kyr):
-    """Save direct vector displacement components and geoid height, in metres."""
+class ProfileRateHistory:
+    """Previous solved fields for profile/surface rates, including restart.
+
+    The solver overwrites its own old state during solve(). Keep independent
+    copies, and preserve the elastic diagnostic across march()'s reset to rest.
+    No derivative of the instantaneous load jump is reported at t=0.
+    """
+
+    def __init__(self, solver, initial_time=None):
+        self.displacement = Function(solver.displacement.function_space())
+        self.potential = Function(solver.potential.function_space())
+        self.last_time = initial_time
+        self.previous_time = initial_time
+        self.keep_elastic = False
+        self.dt_yr = 0.0
+        self.rotation = {}
+
+    def capture(self, solver):
+        self.displacement.assign(solver.displacement)
+        self.potential.assign(solver.potential)
+        self.rotation = dict(getattr(solver, "rotation_values", dict)())
+        self.previous_time = self.last_time
+
+    def before_step(self, solver, t_kyr):
+        if t_kyr == 0:
+            return
+        if self.keep_elastic:
+            self.keep_elastic = False
+        else:
+            self.capture(solver)
+
+    def after_step(self, solver, t_kyr):
+        self.last_time = t_kyr
+        if t_kyr == 0:
+            self.capture(solver)
+            self.keep_elastic = True
+        self.dt_yr = (t_kyr - self.previous_time) * 1000.0
+
+    def metadata(self):
+        return {"rate_method": "adjacent-step backward difference",
+                "rate_valid": self.dt_yr > 0,
+                "rate_interval_start_kyr": self.previous_time,
+                "rate_interval_end_kyr": self.last_time,
+                "rate_dt_yr": self.dt_yr}
+
+
+def write_profiles(path, solver, mantle, profiles, t_kyr, *, rates=None):
+    """Save displacement/geoid in m, and optional adjacent-step rates in m/yr."""
     geometry, depth_fraction, samplers = profiles
     gravity = common.gravity_exact_ufl(Constant(common.RE))
     geoid = solver.potential / gravity
@@ -619,6 +715,8 @@ def write_profiles(path, solver, mantle, profiles, t_kyr):
                   "W_m": "east_vectors", "along_m": "tangent_vectors",
                   "across_m": "right_vectors"}
     values = {name: [] for name in components}
+    rate_values = {name.replace("_m", "_m_per_yr"): [] for name in components}
+    rate_values["N_m_per_yr"] = []
     N, found = [], []
     for i, (mechanics, potential) in enumerate(samplers):
         displacement = np.column_stack([mechanics(solver.displacement[j])
@@ -627,9 +725,27 @@ def write_profiles(path, solver, mantle, profiles, t_kyr):
             values[name].append(np.sum(displacement * geometry[basis][i], axis=1))
         N.append(potential(geoid) * common.D_SCALE)
         found.append(mechanics.found & potential.found)
+        if rates is not None:
+            if rates.dt_yr > 0:
+                velocity = np.column_stack([
+                    mechanics((solver.displacement[j] - rates.displacement[j]) / rates.dt_yr)
+                    for j in range(3)]) * common.D_SCALE
+                for name, basis in components.items():
+                    rate_values[name.replace("_m", "_m_per_yr")].append(
+                        np.sum(velocity * geometry[basis][i], axis=1))
+                rate_values["N_m_per_yr"].append(
+                    potential((solver.potential - rates.potential) / gravity / rates.dt_yr)
+                    * common.D_SCALE)
+            else:
+                for data in rate_values.values():
+                    data.append(np.full(displacement.shape[0], np.nan))
     arrays = {**geometry, "t_kyr": t_kyr, "depth_fraction": depth_fraction,
+              "geoid_definition": "gravitational potential / g0; excludes centrifugal potential",
               **{name: np.array(data) for name, data in values.items()}, "N_m": np.array(N),
               "found": np.array(found)}
+    if rates is not None:
+        arrays.update(rates.metadata())
+        arrays.update({name: np.array(data) for name, data in rate_values.items()})
     if common.COMM_WORLD.rank == 0:
         np.savez(path, **arrays)
     missing = np.count_nonzero(~arrays["found"])
@@ -652,7 +768,7 @@ def diagnostic_load_coefficients(nmax, *, load_nmax=NMAX,
 
 def compare_cap(t_kyr, solver, parent, mantle, reference, *,
                 diagnostic_nmax=NMAX, load_nmax=NMAX,
-                load_representation="spatial", load_shape="cap"):
+                load_representation="spatial", load_shape="cap", load_centre=None):
     """The cap-case comparison at one epoch: printed, and returned as a row.
 
     Args:
@@ -667,7 +783,8 @@ def compare_cap(t_kyr, solver, parent, mantle, reference, *,
       A dictionary of the model and reference values at the epoch, in
       metres and degrees.
     """
-    U_n, V_n, N_n = surface_spectra(solver, parent, mantle, diagnostic_nmax)
+    U_n, V_n, N_n = surface_spectra(solver, parent, mantle, diagnostic_nmax,
+                                  load_centre=load_centre)
     sigma_n = diagnostic_load_coefficients(
         diagnostic_nmax, load_nmax=load_nmax,
         load_representation=load_representation, load_shape=load_shape)
@@ -751,7 +868,17 @@ def polar_motion_deg(solver):
     return float(np.rad2deg(values["m1"])), float(np.rad2deg(values["m2"]))
 
 
-def compare_polar_motion(t_kyr, solver, reference, *, load_shape="cap"):
+def rotation_diagnostics(solver):
+    """Rotation-rate change and physical Delta LOD, positive for a longer day.
+
+    m3 = delta(Omega)/Omega = -delta(I33)/C. Use the paper's nominal
+    LOD of 86400 s, and its linearized conversion Delta LOD = -LOD * m3.
+    """
+    m3 = float(solver.rotation_values()["m3"])
+    return {"m3": m3, "lod_ms": -86400.0 * 1000.0 * m3}
+
+
+def compare_polar_motion(t_kyr, solver, reference, *, load_shape="cap", load_centre=None):
     """The polar-motion comparison at one epoch: printed, and returned as a row.
 
     Args:
@@ -764,17 +891,24 @@ def compare_polar_motion(t_kyr, solver, reference, *, load_shape="cap"):
       A dictionary of the model and reference values, in degrees.
     """
     mx, my = polar_motion_deg(solver)
-    mxr, myr = reference.polar_motion(t_kyr, load_shape)
+    mxr, myr = reference.polar_motion(t_kyr, load_shape, load_centre)
+    reference_size = np.hypot(mxr, myr)
+    phase_ref = float(np.degrees(np.arctan2(myr, mxr))) if reference_size > 1e-15 else None
     row = {"t_kyr": t_kyr, "mx": mx, "my": my, "absm": np.hypot(mx, my),
            "phase": np.degrees(np.arctan2(my, mx)),
            "mx_ref": mxr, "my_ref": myr, "absm_ref": np.hypot(mxr, myr),
-           "phase_ref": REFERENCE_PHASE_DEG}
+           "phase_ref": phase_ref, **rotation_diagnostics(solver),
+           "lod_eq33_ref_ms": reference.length_of_day_eq33(t_kyr, load_shape, load_centre)}
     log(f"\n  t = {t_kyr:g} kyr   polar motion (degrees)")
     log(f"    {'quantity':<12}{'model':>14}{'TABOO':>14}{'ratio':>11}")
     for name, key in (("m_x", "mx"), ("m_y", "my"), ("|m|", "absm")):
-        log(f"    {name:<12}{row[key]:>14.7f}{row[key + '_ref']:>14.7f}"
-            f"{row[key] / row[key + '_ref']:>11.6f}")
-    log(f"    {'phase':<12}{row['phase']:>14.4f}{REFERENCE_PHASE_DEG:>14.4f}")
+        expected = row[key + "_ref"]
+        ratio = f"{row[key] / expected:>11.6f}" if abs(expected) > 1e-15 else "         --"
+        log(f"    {name:<12}{row[key]:>14.7f}{expected:>14.7f}{ratio}")
+    log(f"    phase model {row['phase']:.4f} deg; reference {phase_ref}")
+    log(f"    m3 {row['m3']:.9e}; Delta LOD {row['lod_ms']:.9e} ms")
+    log(f"    published Eq.33 LOD reference {row['lod_eq33_ref_ms']:.9e} ms "
+        "(separate sign convention; no relative error scored)")
     return row
 
 
@@ -802,15 +936,18 @@ def relative_tolerance(value):
 def run_settings(args):
     """Settings recorded in checkpoints, including the load and diagnostics."""
     return {"case": args.case, "bulk_shear_ratio": args.bulk_shear_ratio,
+            "load_centre_deg": list(args.load_centre),
             "load_shape": args.load_shape,
             "smoke": args.smoke, "load_representation": args.load_representation,
             "load_nmax": (args.load_nmax if args.load_representation == "spectral"
                           else None),
             "diagnostic_nmax": args.diagnostic_nmax, "dtn_degree": args.dtn_degree,
-            "outer_rtol": args.outer_rtol, "block0_rtol": args.block0_rtol}
+            "outer_rtol": args.outer_rtol, "block0_rtol": args.block0_rtol,
+            "timestep_scale": args.timestep_scale,
+            "mesh_h_km": args.mesh_h_km, "litho_layers": args.litho_layers}
 
 
-def checkpoint_run_settings(record):
+def checkpoint_run_settings(record, mesh_info=None):
     """Upgrade the old checkpoint record, whose one cutoff was shared.
 
     Cap records contain their diagnostic degrees, hence also the old load
@@ -818,11 +955,16 @@ def checkpoint_run_settings(record):
     interpreted as the original default degree-10 configuration.
     """
     written = dict(record["run"])
+    written.setdefault("load_centre_deg", list(LOAD_CENTRE_DEG[written["case"]]))
     written.setdefault("load_shape", "cap")
     # Before the CLI option, both boundary maps always used degree 5.
     written.setdefault("dtn_degree", 5)
     written.setdefault("outer_rtol", 1.0e-6)
     written.setdefault("block0_rtol", 1.0e-4)
+    mesh = mesh_info or common.MESHES["smoke" if written["smoke"] else "spada"]
+    written.setdefault("timestep_scale", 1.0)
+    written.setdefault("mesh_h_km", mesh["h_km"])
+    written.setdefault("litho_layers", mesh["litho_layers"])
     if "load_representation" not in written:
         rows = record["rows"]
         nmax = int(rows[-1]["degrees"][-1]) if (
@@ -830,6 +972,26 @@ def checkpoint_run_settings(record):
         written.update(load_representation="spectral", load_nmax=nmax,
                        diagnostic_nmax=nmax)
     return written
+
+
+def positive_float(value):
+    number = float(value)
+    if not np.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be positive and finite")
+    return number
+
+
+def positive_integer(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return number
+
+
+def time_segments(args, epochs):
+    """Scale the step ladder, retaining exact solved states at output epochs."""
+    ladder = tuple((end, dt * args.timestep_scale) for end, dt in common.STEP_LOAD_LADDER_YR)
+    return common.time_segments(epochs, common.truncated_ladder(ladder, max(epochs) * 1000.))
 
 
 def parse_args(argv=None):
@@ -844,9 +1006,18 @@ def parse_args(argv=None):
     p.add_argument("--load_shape", choices=LOAD_SHAPES, default="cap",
                    help="Table 4 geometry: 1500 m parabolic cap (default) or "
                         "1000 m uniform disc; both have a 10 degree radius")
+    p.add_argument("--load_centre", nargs=2, type=float, metavar=("COLAT", "LON"),
+                   help="load location in degrees, independent of rotation; "
+                        "defaults: cap 0 0, polar-motion 25 75")
     p.add_argument("--bulk_shear_ratio", type=float, default=1000.0,
                    help="K / mu in every layer (default 1000; use 100 for "
                         "the coarser compressibility approximation)")
+    p.add_argument("--timestep_scale", type=positive_float, default=1.0,
+                   help="multiply the graded timestep ladder (default 1; coarse check 2)")
+    p.add_argument("--mesh_h_km", type=positive_float,
+                   help="bulk mesh size in km (default 250, or 1000 for --smoke)")
+    p.add_argument("--litho_layers", type=positive_integer,
+                   help="subdivisions of the 70 km lithosphere (default 2, or 1 for --smoke)")
     p.add_argument("--load_representation", choices=["spectral", "spatial"],
                    default="spatial",
                    help="spatial (default): evaluate the load and subtract only "
@@ -869,6 +1040,12 @@ def parse_args(argv=None):
                         "the code runs; the numbers are not results")
     p.add_argument("--write_output", action="store_true",
                    help="write Paraview VTK files at every epoch")
+    p.add_argument("--write_surface_output", action="store_true",
+                   help="write surface-only displacement, geoid and rates "
+                        "in physical units; independent of volume --write_output")
+    p.add_argument("--surface_output_format", choices=("hdf5", "vtk"), default="hdf5",
+                   help="surface storage format (default hdf5); vtk writes parallel "
+                        "VTU pieces directly, useful for small debugging runs")
     p.add_argument("--write_profiles", action="store_true",
                    help="write direct near-surface displacement and geoid profiles "
                         "for either case and load shape")
@@ -896,7 +1073,15 @@ def parse_args(argv=None):
     p.add_argument("--restart", default=None, metavar="FILE",
                    help="continue the run after the last checkpoint in FILE, "
                         "on the same number of ranks")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    centre = LOAD_CENTRE_DEG[args.case] if args.load_centre is None else args.load_centre
+    if not np.all(np.isfinite(centre)) or not 0 <= centre[0] <= 180:
+        p.error("--load_centre requires finite angles and colatitude in [0, 180]")
+    args.load_centre = [float(centre[0]), float(centre[1] % 360)]
+    mesh = common.MESHES["smoke" if args.smoke else "spada"]
+    args.mesh_h_km = mesh["h_km"] if args.mesh_h_km is None else args.mesh_h_km
+    args.litho_layers = mesh["litho_layers"] if args.litho_layers is None else args.litho_layers
+    return args
 
 
 def main():
@@ -905,12 +1090,14 @@ def main():
     if args.write_profiles and not 0 < args.profile_depth_fraction < 0.01:
         raise ValueError("--profile_depth_fraction must be in (0, 0.01)")
     geometry = (profile_geometry(
-        args.case, LOAD_CENTRE_DEG[args.case], longitudes=args.profile_longitudes,
+        args.case, args.load_centre, longitudes=args.profile_longitudes,
         bearings=args.profile_bearings, centre=args.profile_centre,
         extent_deg=args.profile_extent_deg, spacing_deg=args.profile_spacing_deg)
         if args.write_profiles else None)
     sampling_settings = (profile_settings(geometry, args.profile_depth_fraction)
                          if geometry is not None else None)
+    if sampling_settings is not None:
+        sampling_settings["rates"] = "adjacent-step backward difference, m/yr; t=0 undefined"
     reference = TabooReference()
     if args.case == "cap" and args.diagnostic_nmax > reference.nmax:
         raise ValueError(f"--diagnostic_nmax must not exceed the TABOO "
@@ -928,7 +1115,7 @@ def main():
     load_description = (f"spectral degrees 2..{args.load_nmax}"
                         if args.load_representation == "spectral" else
                         "spatial load minus degrees 0 and 1 (no load cutoff)")
-    log(f"  {args.load_shape} load, centre (colatitude, longitude) {LOAD_CENTRE_DEG[args.case]}, "
+    log(f"  {args.load_shape} load, centre (colatitude, longitude) {args.load_centre}, "
         f"{load_description}, SphericalDtN(L={args.dtn_degree}), K/mu "
         f"{args.bulk_shear_ratio:g}")
     if args.case == "cap":
@@ -941,20 +1128,21 @@ def main():
     restart = None
     if args.restart is None:
         parent, mantle, mesh_info = common.build_meshes(
-            mesh_kind, args.output_path, f"spada_{args.case}")
+            mesh_kind, args.output_path, f"spada_{args.case}",
+            mesh_overrides={"h_km": args.mesh_h_km, "litho_layers": args.litho_layers})
     else:
         parent, mantle, mesh_info, restart = common.load_checkpoint(
             args.restart, mesh_kind)
         # The record says what run wrote the file. A restart with another
         # case or another K / mu would continue a different problem from
         # this state without any error.
-        written = checkpoint_run_settings(restart.record)
+        written = checkpoint_run_settings(restart.record, mesh_info)
         if written != settings:
             raise RuntimeError(f"{args.restart} was written by the run "
                                f"{written}; this run is {settings}")
-    segments = common.time_segments(
-        epochs, common.truncated_ladder(common.STEP_LOAD_LADDER_YR,
-                                        max(epochs) * 1000.0))
+    segments = time_segments(args, epochs)
+    log(f"  mesh size {args.mesh_h_km:g} km, lithosphere subdivisions {args.litho_layers}, "
+        f"timestep scale {args.timestep_scale:g}")
     log(f"  epochs (kyr) {list(epochs)}, "
         f"{sum(s[3] for s in segments)} steps after the elastic solve")
 
@@ -965,7 +1153,8 @@ def main():
                                   load_nmax=args.load_nmax,
                                   load_representation=args.load_representation,
                                   load_shape=args.load_shape, dtn_degree=args.dtn_degree,
-                                  outer_rtol=args.outer_rtol, block0_rtol=args.block0_rtol)
+                                  outer_rtol=args.outer_rtol, block0_rtol=args.block0_rtol,
+                                  load_centre=args.load_centre)
     log(f"  solver built ({time.time() - tic:.1f} s): "
         f"{solver.solution.function_space().dim()} unknowns, "
         f"{len(layout.real_fields)} Real rows")
@@ -979,6 +1168,14 @@ def main():
                VTKFile(os.path.join(args.output_path,
                                     f"spada_{args.case}_potential.pvd")))
 
+    surface_output = None
+    if args.write_surface_output:
+        from spada_surface_output import SurfaceOutput
+
+        surface_output = SurfaceOutput(args.output_path, args.case, parent, mantle,
+                                       output_format=args.surface_output_format,
+                                       restart_time=None if restart is None else restart.t_kyr)
+
     # One line per time step. The columns are the same for both cases apart
     # from the last ones: the rms radial displacement on Re (m) for the cap,
     # the polar motion (degrees) for the other case.
@@ -987,6 +1184,11 @@ def main():
     # because `ParameterLog` opens its file for writing and the log of the
     # stopped run can hold steps after the checkpoint.
     log_lines = [] if restart is None else restart.record["log_lines"]
+    if args.case == "polar-motion":
+        # Old logs predate m3/LOD export. Keep their missing values explicit
+        # while preserving a rectangular table under the expanded header.
+        log_lines = [line + " nan nan" if len(line.split()) == 8 else line
+                     for line in log_lines]
     rows = [] if restart is None else restart.record["rows"]
     wall_before_s = 0.0 if restart is None else restart.record["wall_s"]
     # Every restart of the case so far, this one last, for the summary.
@@ -994,13 +1196,18 @@ def main():
                 + [{"file": args.restart, "step": restart.step}])
     plog = ParameterLog(os.path.join(args.output_path,
                                      f"params_{args.case}.log"), parent)
-    state_columns = ("urms_Re_m" if args.case == "cap" else "mx_deg my_deg")
+    state_columns = ("urms_Re_m" if args.case == "cap" else "mx_deg my_deg m3 lod_ms")
     plog.log_str(f"step t_kyr dt_yr wall_s newton outer {state_columns}")
     for line in log_lines:
         plog.log_str(line)
     area_Re = assemble(Constant(1.0) * ds(common.SURF_RE, domain=mantle))
+    rate_history = (ProfileRateHistory(
+        solver, initial_time=None if restart is None else restart.t_kyr)
+        if args.write_profiles or args.write_surface_output else None)
 
     def on_step(t_kyr, dt_yr, step, wall_s):
+        if rate_history is not None:
+            rate_history.after_step(solver, t_kyr)
         newton, outer = common.iteration_counts(solver)
         if args.case == "cap":
             u_r = vertical_component(solver.displacement)
@@ -1008,7 +1215,8 @@ def main():
                                                   domain=mantle)) / area_Re)
                      * common.D_SCALE]
         else:
-            state = list(polar_motion_deg(solver))
+            rotation = rotation_diagnostics(solver)
+            state = [*polar_motion_deg(solver), rotation["m3"], rotation["lod_ms"]]
         line = " ".join(str(v) for v in
                         [step, t_kyr, dt_yr, wall_s, newton, outer, *state])
         log_lines.append(line)
@@ -1024,21 +1232,26 @@ def main():
             rows.append(compare_cap(
                 t_kyr, solver, parent, mantle, reference,
                 diagnostic_nmax=args.diagnostic_nmax, load_nmax=args.load_nmax,
-                load_representation=args.load_representation, load_shape=args.load_shape))
+                load_representation=args.load_representation, load_shape=args.load_shape,
+                load_centre=args.load_centre))
         else:
             rows.append(compare_polar_motion(t_kyr, solver, reference,
-                                              load_shape=args.load_shape))
+                                              load_shape=args.load_shape,
+                                              load_centre=args.load_centre))
         if profiles is not None:
             write_profiles(os.path.join(args.output_path,
                                         f"profiles_{args.case}_{t_kyr:g}kyr.npz"),
-                           solver, mantle, profiles, t_kyr)
+                           solver, mantle, profiles, t_kyr, rates=rate_history)
         if vtk is not None:
             vtk[0].write(solver.displacement, time=t_kyr)
             vtk[1].write(solver.potential, time=t_kyr)
+        if surface_output is not None:
+            surface_output.write(solver, rate_history, t_kyr)
 
     def record():
         """The driver's part of a checkpoint: enough to continue the outputs."""
         return {"run": settings, "profile_sampling": sampling_settings,
+                "surface_output": None if surface_output is None else surface_output.metadata(),
                 "log_lines": log_lines, "rows": rows, "restarts": restarts,
                 "wall_s": wall_before_s + time.time() - tic_run}
 
@@ -1055,13 +1268,18 @@ def main():
 
     common.march(solver, dt, segments, elastic=True, on_step=on_step,
                  on_epoch=on_epoch, checkpoint=checkpoint,
-                 start_step=start_step)
+                 start_step=start_step,
+                 before_step=(None if rate_history is None else
+                              lambda t: rate_history.before_step(solver, t)))
     plog.close()
 
     common.write_json(
         os.path.join(args.output_path, f"summary_{args.case}.json"),
         {"benchmark": "Spada et al. (2011)", **settings,
+         "rotation": args.case == "polar-motion",
+         "diagnostic_axis": "load-centred" if args.case == "cap" else None,
          "profile_sampling": sampling_settings,
+         "surface_output": None if surface_output is None else surface_output.metadata(),
          # Keep the old key for readers of the diagnostic coefficient arrays.
          "nmax": args.diagnostic_nmax,
          "ranks": parent.comm.size, "mesh": mesh_info,

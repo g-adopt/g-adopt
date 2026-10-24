@@ -13,6 +13,7 @@ from firedrake import (
     UnitCubeMesh,
     UnitOctahedralSphereMesh,
     VectorFunctionSpace,
+    as_vector,
 )
 
 
@@ -72,7 +73,7 @@ def test_comparison_uses_diagnostic_cutoff(monkeypatch, load_nmax, diagnostic_nm
     expected = reference.coefficients(0., sigma, diagnostic_nmax)
     calls = []
 
-    def spectra(solver, parent, mantle, nmax):
+    def spectra(solver, parent, mantle, nmax, **kwargs):
         calls.append(nmax)
         # A model equal to the reference, including unloaded diagnostic modes.
         return tuple(np.concatenate(([0., 0.], values)) for values in expected)
@@ -146,6 +147,44 @@ def test_coarse_solver_tolerances():
     assert spada.checkpoint_run_settings({"run": legacy}) != coarse
 
 
+def test_study_options_and_restart_compatibility():
+    from spada_study import run_matrix
+
+    for run in run_matrix():
+        args = spada.parse_args(run["arguments"])
+        settings = spada.run_settings(args)
+        for key, value in run["settings"].items():
+            assert settings[key] == value
+        assert args.write_surface_output == run["surface_output"]
+        assert args.smoke == run["smoke"]
+        assert settings["load_centre_deg"] == run["load_centre_deg"]
+    baseline = spada.run_settings(spada.parse_args([]))
+    legacy = {key: value for key, value in baseline.items()
+              if key not in ("timestep_scale", "mesh_h_km", "litho_layers")}
+    assert spada.checkpoint_run_settings({"run": legacy}) == baseline
+    coarse = spada.run_settings(spada.parse_args(["--mesh_h_km", "500", "--litho_layers", "1"]))
+    assert spada.checkpoint_run_settings({"run": legacy}, {"h_km": 500., "litho_layers": 1}) == coarse
+    assert coarse != baseline
+
+
+@pytest.mark.parametrize("scale,steps", [(1, 138), (2, 69)])
+def test_timestep_scaling_preserves_output_epochs(scale, steps):
+    args = spada.parse_args(["--timestep_scale", str(scale)])
+    segments = spada.time_segments(args, spada.EPOCHS_KYR)
+    assert sum(segment[3] for segment in segments) == steps
+    assert [segment[1]/1000 for segment in segments if segment[4]] == list(spada.EPOCHS_KYR[1:])
+    assert segments[-1][1] == 20000.
+    assert segments[0][2] == 10.*scale
+
+
+@pytest.mark.parametrize("option,value", [("--mesh_h_km", "0"), ("--mesh_h_km", "nan"),
+                                          ("--timestep_scale", "-1"), ("--timestep_scale", "inf"),
+                                          ("--litho_layers", "0"), ("--litho_layers", "1.5")])
+def test_invalid_mesh_and_timestep_options(option, value):
+    with pytest.raises(SystemExit):
+        spada.parse_args([option, value])
+
+
 @pytest.mark.parametrize("option", ["--outer_rtol", "--block0_rtol"])
 @pytest.mark.parametrize("value", ["0", "-1", "1", "nan", "inf"])
 def test_invalid_solver_tolerance(option, value):
@@ -186,7 +225,7 @@ def test_profile_writer_samples_vector_components(tmp_path, monkeypatch):
     geometry = spada.profile_geometry("polar-motion", (55, 45), extent_deg=5, spacing_deg=5)
     profiles = spada.build_profile_samplers(mesh, mesh, 1e-6, geometry)
     displacement = Function(VectorFunctionSpace(mesh, "CG", 1)).interpolate(
-        spada.as_vector((1., 2., 3.)))
+        as_vector((1., 2., 3.)))
     potential = Function(FunctionSpace(mesh, "CG", 1)).assign(4.)
     path = tmp_path / "profiles.npz"
     spada.write_profiles(path, SimpleNamespace(displacement=displacement, potential=potential),
@@ -239,3 +278,144 @@ def test_disc_polar_motion_reference():
     for t in spada.EPOCHS_KYR:
         np.testing.assert_allclose(reference.polar_motion(t, "disc"),
                                    np.array(reference.polar_motion(t)) * scale)
+
+
+def test_load_location_is_independent_of_rotation():
+    off = spada.parse_args(["--case", "cap", "--load_centre", "25", "-285"])
+    on = spada.parse_args(["--case", "polar-motion"])
+    assert off.load_centre == on.load_centre == [25., 75.]
+    np.testing.assert_allclose(spada.load_axis(off.case, off.load_centre),
+                               spada.load_axis(on.case, on.load_centre))
+    baseline = spada.run_settings(spada.parse_args([]))
+    assert spada.run_settings(off) == {**baseline, "load_centre_deg": [25., 75.]}
+    legacy = {k: v for k, v in baseline.items() if k != "load_centre_deg"}
+    assert spada.checkpoint_run_settings({"run": legacy}) == baseline
+    assert spada.checkpoint_run_settings({"run": legacy}) != spada.run_settings(off)
+
+
+@pytest.mark.parametrize("centre", [(181, 75), (-1, 75), (25, "nan"), ("inf", 75)])
+def test_invalid_load_location(centre):
+    with pytest.raises(SystemExit):
+        spada.parse_args(["--load_centre", *map(str, centre)])
+
+
+def test_off_axis_projection_uses_load_axis():
+    mesh = UnitCubeMesh(2, 2, 2)
+    x = SpatialCoordinate(mesh)
+    axis = spada.load_axis("cap", [25., 75.])
+    cosine = spada.dot(x, spada.Constant(axis)) / spada.sqrt(spada.dot(x, x))
+    field = (3*cosine**2 - 1) / 2
+    coefficients = spada.project_surface(field, mesh, spada.ds(domain=mesh), False,
+                                         nmax=2, axis=axis)
+    assert coefficients[2] == pytest.approx(1., abs=1e-12)
+    wrong_axis = spada.project_surface(field, mesh, spada.ds(domain=mesh), False, nmax=2)
+    assert abs(wrong_axis[2] - 1) > .1
+
+
+def test_reference_polar_motion_rotates_with_load():
+    ref = spada.TabooReference()
+    mx, my = ref.polar_motion(1.)
+    np.testing.assert_allclose(ref.polar_motion(1., load_centre=[25, 165]), [-my, mx])
+    np.testing.assert_allclose(ref.polar_motion(1., load_centre=[155, 75]), [-mx, -my])
+    np.testing.assert_allclose(ref.polar_motion(1., load_centre=[0, 75]), [0, 0], atol=1e-15)
+
+
+def test_lod_conversion_and_epoch_export(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(spada, "log", lambda *args: None)
+    solver = SimpleNamespace(rotation_values=lambda: {"m1": 1e-4, "m2": -2e-4, "m3": -1e-8})
+    values = spada.rotation_diagnostics(solver)
+    assert values["m3"] == -1e-8
+    assert values["lod_ms"] == pytest.approx(.864)
+    row = spada.compare_polar_motion(1., solver, spada.TabooReference())
+    assert row["lod_ms"] == values["lod_ms"]
+    assert row["lod_eq33_ref_ms"] > 0.
+    assert row["phase_ref"] == pytest.approx(-105.)
+    zero = spada.compare_polar_motion(1., solver, spada.TabooReference(), load_centre=[0, 0])
+    assert zero["phase_ref"] is None
+
+
+def test_lod_eq33_reproduces_independent_gs_archive_value():
+    reference = spada.TabooReference()
+    # giamip converted T02-03 length_of_day/cap/GS, first row. Its source
+    # is lod_GS.dat, SHA256 29f630465a57b165b9624fb31c084d57c3c795952647e56697d0bcab906e5290.
+    assert reference.length_of_day_eq33(.001) == pytest.approx(56.9639388465671, rel=1e-7)
+    for t in (0., 1., 20.):
+        assert reference.length_of_day_eq33(t, "disc") == pytest.approx(
+            reference.length_of_day_eq33(t) * spada.polar_motion_scale("disc"))
+
+
+def test_profile_rates_use_adjacent_steps_and_survive_restart(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from firedrake import Constant, MixedFunctionSpace
+
+    monkeypatch.setattr(spada.common, "RE", .5)
+    monkeypatch.setattr(spada.common, "D_SCALE", 2.)
+    monkeypatch.setattr(spada.common, "gravity_exact_ufl", lambda r: Constant(1.))
+    mesh = UnitCubeMesh(2, 2, 2)
+    space = MixedFunctionSpace([VectorFunctionSpace(mesh, "CG", 1),
+                                FunctionSpace(mesh, "CG", 1)])
+    geometry = spada.profile_geometry("polar-motion", (55, 45), extent_deg=5, spacing_deg=5)
+    samplers = spada.build_profile_samplers(mesh, mesh, 1e-6, geometry)
+    segments = [(0., 10., 10., 1, True), (10., 20., 5., 2, True)]
+
+    def run(start_step, initial_time):
+        solution, old = Function(space), Function(space)
+        u, phi = solution.subfunctions
+        dt = Constant(spada.common.DT_ELASTIC)
+        clock = [initial_time]
+
+        def assign(t_yr):
+            f = 1 + .1*t_yr + .001*t_yr**2
+            u.assign(Constant((f, 2*f, 3*f)))
+            phi.assign(4*f)
+
+        if start_step:
+            assign(initial_time)
+
+        def solve():
+            clock[0] = 0. if clock[0] is None else clock[0] + float(dt)*spada.common.T_BAR_YR
+            assign(clock[0])
+            old.assign(solution)
+
+        solver = SimpleNamespace(solution=solution, solution_old=old,
+                                  displacement=u, potential=phi, solve=solve)
+        history = spada.ProfileRateHistory(
+            solver, initial_time=None if initial_time is None else initial_time/1000.)
+        paths = []
+
+        def on_epoch(t):
+            path = tmp_path / f"{start_step}_{t:g}.npz"
+            spada.write_profiles(path, solver, mesh, samplers, t, rates=history)
+            paths.append(path)
+
+        spada.common.march(solver, dt, segments, elastic=True, start_step=start_step,
+                           before_step=lambda t: history.before_step(solver, t),
+                           on_step=lambda t, *args: history.after_step(solver, t),
+                           on_epoch=on_epoch)
+        return paths
+
+    full = run(0, None)
+    with np.load(full[0]) as data:
+        assert not data["rate_valid"]
+        assert np.all(np.isnan(data["U_m_per_yr"]))
+    for path, dt_yr in zip(full[1:], [10., 5.]):
+        with np.load(path) as data:
+            assert data["rate_valid"]
+            assert data["rate_dt_yr"] == pytest.approx(dt_yr)
+            factor = 1 + .01 * (data["rate_interval_start_kyr"]
+                                + data["rate_interval_end_kyr"]) * 1000
+            for key, basis in [("U", "unit_vectors"), ("V", "south_vectors"),
+                               ("W", "east_vectors"), ("along", "tangent_vectors"),
+                               ("across", "right_vectors")]:
+                np.testing.assert_allclose(data[key+"_m_per_yr"],
+                                           geometry[basis] @ (factor*np.array([.2, .4, .6])),
+                                           atol=1e-12)
+            np.testing.assert_allclose(data["N_m_per_yr"], .8*factor, atol=1e-12)
+    resumed = run(2, 15.)
+    assert len(resumed) == 1
+    with np.load(full[-1]) as a, np.load(resumed[0]) as b:
+        for key in ["U_m_per_yr", "along_m_per_yr", "N_m_per_yr", "rate_dt_yr"]:
+            np.testing.assert_allclose(a[key], b[key], atol=1e-12)

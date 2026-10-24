@@ -923,7 +923,7 @@ def md5sum(filename):
     return digest.hexdigest()
 
 
-def build_meshes(kind, directory, stem):
+def build_meshes(kind, directory, stem, *, mesh_overrides=None):
     """Generate the mesh of `kind` in the job, check it, and curve it.
 
     Rank 0 writes the gmsh file and counts the flat cells while the other
@@ -950,6 +950,8 @@ def build_meshes(kind, directory, stem):
         needs its own name, because the cases of one benchmark can run at
         the same time in one directory, and one job must not read a file
         that another job is writing.
+      mesh_overrides: optional mesh specification overrides, local to this
+        call; the shared MESHES defaults are not changed.
 
     Returns:
       `(parent, mantle, info)`: the two curved meshes, and a dictionary with
@@ -960,7 +962,7 @@ def build_meshes(kind, directory, stem):
       RuntimeError: if every seed tried gives a flat cell, or the curved
         mesh has a folded cell.
     """
-    spec = MESHES[kind]
+    spec = {**MESHES[kind], **(mesh_overrides or {})}
     filename = os.path.join(directory, f"{stem}.msh")
     h = spec["h_km"] / D_KM
     info = {"kind": kind, "file": filename, **{k: v for k, v in spec.items()}}

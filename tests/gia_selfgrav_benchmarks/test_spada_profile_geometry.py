@@ -43,6 +43,14 @@ def test_rotating_profiles_cross_load_with_perpendicular_tangents():
                                atol=1e-15)
 
 
+def test_off_axis_controls_use_identical_profile_geometry():
+    off = profile_geometry("cap", (25., 75.))
+    on = profile_geometry("polar-motion", (25., 75.))
+    assert off["profile_kind"] == on["profile_kind"] == "load-centred"
+    for key in off:
+        np.testing.assert_array_equal(off[key], on[key])
+
+
 def test_custom_locations_and_grid():
     geometry = profile_geometry("polar-motion", (25, 75), centre=(60, -20),
                                 bearings=[45, 135, 225], extent_deg=25, spacing_deg=.3)
@@ -82,6 +90,49 @@ def test_rotating_plot_needs_no_taboo_reference(tmp_path, monkeypatch):
     output = tmp_path / "profiles.png"
     monkeypatch.setattr("sys.argv", ["plot_spada_profiles.py", str(path),
                                      "--reference", str(tmp_path / "absent.npz"),
+                                     "--max-distance", "20", "--output", str(output)])
+    main()
+    assert output.stat().st_size > 0
+
+
+def test_reference_rates_are_time_derivatives():
+    from pathlib import Path
+
+    from plot_spada_profiles import taboo_coefficients
+
+    with np.load(Path(__file__).with_name("reference.npz")) as reference:
+        for shape in ("cap", "disc"):
+            a = taboo_coefficients(reference, 1. - 1e-5, shape)
+            b = taboo_coefficients(reference, 1. + 1e-5, shape)
+            rates = taboo_coefficients(reference, 1., shape, rate=True)
+            for key in rates:
+                np.testing.assert_allclose(rates[key], (b[key] - a[key]) / .02,
+                                           rtol=2e-7, atol=2e-11)
+
+
+def test_off_axis_reference_and_rate_plot(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from plot_spada_profiles import main, reference_profiles
+
+    geometry = profile_geometry("cap", (25., 75.), extent_deg=20, spacing_deg=2)
+    summary = {"case": "cap", "load_shape": "disc", "load_centre_deg": [25., 75.],
+               "load_representation": "spatial", "smoke": True,
+               "epochs": [{"t_kyr": 0}, {"t_kyr": .1}]}
+    shape = geometry["unit_vectors"].shape[:2]
+    path = tmp_path / "summary_cap.json"
+    path.write_text(json.dumps(summary))
+    with np.load(Path(__file__).with_name("reference.npz")) as reference:
+        for epoch in summary["epochs"]:
+            t = epoch["t_kyr"]
+            fields = reference_profiles(reference, t, geometry, summary, rate=True)
+            np.testing.assert_allclose(fields["across"], 0., atol=1e-14)
+            np.testing.assert_allclose(fields["along"], -fields["along"][:, ::-1], atol=1e-12)
+            np.savez(tmp_path / f"profiles_cap_{t:g}kyr.npz", **geometry, t_kyr=t,
+                     found=np.ones(shape, dtype=bool), rate_valid=t > 0,
+                     rate_dt_yr=10., **{k+"_m_per_yr": v for k, v in fields.items()})
+    output = tmp_path / "rates.pdf"
+    monkeypatch.setattr("sys.argv", ["plot_spada_profiles.py", str(path), "--rates",
                                      "--max-distance", "20", "--output", str(output)])
     main()
     assert output.stat().st_size > 0

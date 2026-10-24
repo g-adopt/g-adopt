@@ -33,6 +33,9 @@ discretisation and the output. `selfgrav_common.py` holds the parts that
 both drivers use: the Earth model, the mesh, the time steps and the solver
 settings.
 
+The planned Spada paper run matrix, required outputs, figure coverage and
+remaining workflow work are recorded in [SPADA_STUDY.md](SPADA_STUDY.md).
+
 ## Files
 
 | file | content |
@@ -138,9 +141,10 @@ module. For another project, edit the `-P` and storage lines.
 For Spada, `--load_shape cap` (default) selects the paper's 1500 m parabolic
 cap; `--load_shape disc` selects its uniform 1000 m disc. Both have a 10°
 angular radius and ice density 931 kg m⁻³ (Table 4). This choice is independent
-of `--case`: `cap` remains the name of the non-rotating, pole-centred case,
-even for a disc; `polar-motion` places either load at colatitude 25°,
-longitude 75° and enables rotation. The TABOO U/V/N comparison uses the
+of `--case`: `cap` remains the name of the non-rotating case, with its
+default centre at the pole, even for a disc; `polar-motion` defaults to
+colatitude 25°, longitude 75° and enables rotation. `--load_centre COLAT LON`
+overrides either location. The TABOO U/V/N comparison uses the
 selected load coefficients. The disc polar-motion reference scales the cap
 series by `sigma_2(disc)/sigma_2(cap) = 0.9953950073`, following equation 31.
 The Earth and loading history are unchanged, so this scaling is exact within
@@ -269,10 +273,16 @@ On a laptop with a debug build of PETSc, one step takes 45 to 100 s.
 | flag | meaning |
 |---|---|
 | `--case` | the case |
+| `--load_centre COLAT LON` | Spada: load location in degrees, independent of rotation; defaults 0/0 for `cap`, 25/75 for `polar-motion` |
 | `--bulk_shear_ratio` | K / mu in every layer; default 1000 for Spada and Martinec case B, 100 for other Martinec cases |
 | `--dtn_degree` | Spada: harmonic cutoff on both gravity boundary spheres; default 5, minimum 2 |
 | `--outer_rtol`, `--block0_rtol` | Spada: coupled/inner relative tolerances; defaults 1e-6/1e-4 |
+| `--timestep_scale` | Spada: multiply the graded timestep ladder; default 1, coarse check 2; output epochs remain solved states |
+| `--mesh_h_km` | Spada: bulk mesh size in km; default 250, or 1000 for `--smoke` |
+| `--litho_layers` | Spada: subdivisions of the 70 km lithosphere; default 2, or 1 for `--smoke` |
 | `--write_output` | also write VTK files at every output epoch |
+| `--write_surface_output` | Spada: surface-only displacement, geoid and rates in physical units; independent of `--write_output` and `--write_profiles` |
+| `--surface_output_format` | Spada: `hdf5` (default), one collective surface file per run; `vtk` for direct parallel VTK output |
 | `--output_path` | the directory for every output file (default `./`) |
 | `--smoke` | the coarse mesh and 10 steps |
 | `--checkpoint_every` | the number of steps between two checkpoints (default 50; 0 writes none) |
@@ -441,6 +451,13 @@ The test for rule 2 of case B is therefore marked `xfail`.
 
 ## Walltime and cost
 
+For the 27-run Spada paper study plus four smoke checks, see
+[SPADA_STUDY.md](SPADA_STUDY.md). `spada_study.py prepare` writes the full
+manifest and Gadi PBS files without submitting anything;
+`estimate_spada_cost.py` produces a reproducible SU estimate from the local
+logs. The current central estimate is about 95,000 SU, with the assumptions
+and uncertainty documented in the generated report.
+
 The runs below are on Gadi with `firedrake/main-20260918`, whole `normalsr`
 nodes, gmsh 4.15.2. The walltimes in `meta.py` and `run_benchmark.pbs` are
 about 1.5 times these. The normalsr queue allows at most 24 h for a job of
@@ -474,7 +491,7 @@ For either case and load shape, `--write_profiles` saves direct
 finite-element displacement and geoid profiles at every output epoch as
 `profiles_<case>_<time>kyr.npz`. Non-rotating runs retain the original three
 meridians at 0°, 90° and 180° longitude, with 0.1° colatitude spacing.
-Rotating runs default to two great circles through the load centre
+Off-axis non-rotating runs and rotating runs default to two great circles through the load centre
 (colatitude 25°, longitude 75°): north–south and east–west at that centre.
 Their coordinate is signed angular distance from the centre, from −180°
 to +180° at 0.1° spacing. Positive distance follows the selected bearing;
@@ -501,6 +518,101 @@ and counted in the job output. N uses gravity at the nominal Earth surface.
 These fields retain nondimensional units: multiply displacement by `D_SCALE`
 and potential by `G_BAR * D_SCALE` for physical units.
 
+For maps, use **`--write_surface_output`**. It writes
+one collective Firedrake `CheckpointFile`, `spada_<case>_surface.h5`, for either
+case and either load shape. The mesh is stored once and fields are appended
+at every output epoch. Omit `--write_output` to avoid volume VTK;
+`--write_profiles` is optional and independent. For example:
+
+```bash
+python3 spada.py --case polar-motion --write_surface_output --output_path outputs/polar-surface
+```
+
+This output uses a submesh of the simulation's actual surface triangles,
+with the same resolution and quadratic curved geometry. Displacement is
+copied exactly at its CG3 nodes and potential at its CG2 nodes, through
+the submesh topology maps. There is no inward sampling offset or point
+search. VTK uses degree-3 triangles to retain the cubic displacement.
+The undeformed output coordinates are in metres and PVD times are in kyr;
+simulation coordinates are unchanged.
+
+Convert afterwards in a Firedrake environment, using fewer MPI ranks or
+serially if memory permits. This produces fewer VTK pieces without changing
+the saved resolution. Conversion uses
+[dsroberts/firedrake_h5_to_vtk](https://github.com/dsroberts/firedrake_h5_to_vtk)
+unchanged, through a Spada adapter. It needs the surface HDF5 file,
+Firedrake and the upstream script; the volume mesh, restart checkpoint and
+G-ADOPT are not required. Set up the external converter once:
+
+```bash
+git clone https://github.com/dsroberts/firedrake_h5_to_vtk.git "$HOME/src/firedrake_h5_to_vtk"
+git -C "$HOME/src/firedrake_h5_to_vtk" checkout ba77f27fcf2d8cc4531e5547489924187c4308af
+export FIREDRAKE_H5_TO_VTK="$HOME/src/firedrake_h5_to_vtk/firedrake_h5_to_vtk.py"
+```
+
+The commit above is the version used in our integration tests. Alternatively,
+put its checkout on `PYTHONPATH` or pass `--converter /path/to/firedrake_h5_to_vtk.py`.
+Then convert with the existing commands:
+
+```bash
+python3 convert_spada_surface.py -i outputs/polar-surface/spada_polar-motion_surface.h5 --list
+mpiexec -n 2 python3 convert_spada_surface.py \
+    -i outputs/polar-surface/spada_polar-motion_surface.h5 \
+    -o outputs/polar-surface/maps.pvd
+python3 convert_spada_surface.py \
+    -i outputs/polar-surface/spada_polar-motion_surface.h5 \
+    -o outputs/polar-surface/final-geoid.pvd -t last -f geoid_total_m
+```
+
+`-t` accepts `all`, `last`, or comma-separated frame indices from `--list`;
+`-f` accepts `all` or comma-separated field names. PVD timestamps retain the
+physical times in kyr even when only a subset is converted. The adapter
+passes selected complete, active frame indices to upstream's `main()`;
+upstream performs mesh/field discovery, loading and VTK export. Afterwards
+the adapter replaces frame-number timestamps in the PVD collection with
+the recorded kyr values. It does not change the VTU pieces. Upstream uses
+the maximum degree of the selected fields and geometry, preserving CG3
+when displacement is selected. No upstream source is copied or patched here.
+
+For small debugging runs, `--write_surface_output --surface_output_format vtk`
+instead writes `spada_<case>_surface.pvd` and parallel `.pvtu`/`.vtu` pieces
+during the solve. The default HDF5 path creates no VTK pieces during the run.
+
+Surface fields are:
+
+- `displacement_m`: Cartesian displacement vector, plus
+  `radial_displacement_m`, `northward_displacement_m` and `eastward_displacement_m`.
+- `geoid_gravitational_m`: gravitational potential divided by nominal
+  surface gravity, matching the profile geoid definition.
+- `geoid_rotational_m`: the rotational contribution, using the solver's
+  negated centrifugal potential divided by the same gravity. It is zero
+  when rotation is disabled.
+- `geoid_total_m`: the sum of the gravitational and rotational contributions.
+- Corresponding rates, replacing `_m` with `_rate_m_per_yr`, including
+  `displacement_rate_m_per_yr` and `geoid_total_rate_m_per_yr`.
+- `rate_valid`, `rate_dt_yr`, `rate_interval_start_kyr` and
+  `rate_interval_end_kyr`: the adjacent solved timestep used for each rate.
+
+Rates are backward differences over the last simulation timestep, rather
+than the interval between saved frames. They are stored during the solve;
+the converter does not recompute them. At t=0 they are undefined (NaN,
+with `rate_valid=0`). Archive the surface HDF5 file. When copying converted
+VTK results, keep all referenced pieces with the PVD index. The summary
+records the surface mesh and field metadata.
+
+The surface archive is separate from `checkpoint_<case>.h5`: it contains
+visualisation fields at output epochs, not the full state needed for restart.
+A fresh run preserves an existing surface archive as `*.previous.h5`.
+A restart appends to the existing archive, ignores incomplete frames, and
+marks frames later than the restored checkpoint as obsolete. The converter
+uses only complete, active frames. Appending requires the original rank
+count/partition and matching surface nodes (checked before writing). Nodes
+reordered by loading the volume checkpoint are matched to the stored
+surface nodes and their values copied without field interpolation.
+Reading/conversion can use a different rank count. If surface output is
+first enabled on restart or the archive is absent, its history starts at
+the next output epoch.
+
 Start with a smoke run in a new output folder, submitted from this directory:
 
 ```bash
@@ -508,7 +620,7 @@ mkdir -p smoke/spada-profiles
 qsub -N spada_profiles_smoke \
     -l storage=scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50 \
     -l ncpus=104 -l mem=500GB -l walltime=01:00:00 \
-    -v "DRIVER=spada,CASE=cap,SMOKE=1,OUTPUT=$PWD/smoke/spada-profiles,EXTRA=--write_profiles --write_output" \
+    -v "DRIVER=spada,CASE=cap,SMOKE=1,OUTPUT=$PWD/smoke/spada-profiles,EXTRA=--write_profiles --write_surface_output" \
     run_benchmark.pbs
 ```
 
@@ -565,6 +677,75 @@ The pole-centred meridian comparison continues to overlay TABOO as before.
 The rotating spatial fields require a rotational spatial reference for an
 independent benchmark comparison; Spada's Figure 13 provides polar-motion
 time series rather than those spatial profiles.
+
+### Adjacent-step rates and matched rotation controls
+
+`--write_profiles` also saves `U_m_per_yr`, `V_m_per_yr`, `W_m_per_yr`,
+`along_m_per_yr`, `across_m_per_yr` and `N_m_per_yr`. These are backward
+differences between consecutive solved timesteps, sampled at each output
+epoch. The files record `rate_interval_start_kyr`, `rate_interval_end_kyr`,
+`rate_dt_yr`, `rate_method` and `rate_valid`. The t=0 elastic jump has no
+finite difference rate: those arrays are NaN and `rate_valid` is false.
+The first marched interval uses the separate elastic diagnostic as its
+previous state. Later intervals, including the first after a restart, use
+the previous marched solution. This avoids dividing the elastic jump by
+the first timestep. The elastic diagnostic itself uses the small existing
+`DT_ELASTIC`, so it is an approximation to the instantaneous response.
+
+Plot rates with:
+
+```bash
+python3 plot_spada_profiles.py outputs/cap-spatial/summary_cap.json \
+    --rates --max-distance 25 --output rates_near.pdf
+```
+
+The rate plot omits t=0 and shows U, along, across and N in m/yr. For
+nonrotating runs it overlays the instantaneous analytic TABOO derivative,
+expressed in the saved profile basis. A timestep difference is an interval
+average, so assess its difference from the instantaneous reference with
+the timestep sensitivity run. Older profiles contain no rate arrays and
+must be regenerated. As before, N is the gravitational contribution
+`psi/g0`, excluding centrifugal potential; this definition is saved in the
+profile file and applies to its rate too.
+
+For a nonrotating control at exactly the rotating load location:
+
+```bash
+qsub -N spada_offaxis \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-offaxis,EXTRA=--load_centre 25 75 --write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+Add `--load_shape disc` for its disc counterpart, in another directory.
+Both controls use the same default sampling as `--case polar-motion`.
+Load location is recorded in summaries/checkpoints; legacy checkpoints
+imply the historical location of their case, and a changed location is
+rejected on restart. For nonrotating off-axis loads, the summary's
+Legendre spectra and U0/U180/Vmax are measured about the load axis; V
+points away from the load centre. The saved `V_m` profile array remains
+geographic southward, with `along_m`/`across_m` in the profile basis.
+
+### Length of day
+
+Rotating step logs now include `m3` and `lod_ms`; epoch summaries include
+the same quantities. `m3 = delta(Omega)/Omega = -delta(I33)/C`, and
+`lod_ms = -86400e3*m3`: a positive value means a longer day. The conversion
+is linearized and uses the paper's nominal 86400 s day.
+
+Epoch summaries separately save `lod_eq33_ref_ms`, reconstructed from
+TABOO's degree-2 loading Love number with the geometrical factor of Spada
+equation 33. It reproduces the supplied GS LOD archive curve, which was
+absent from `reference.npz`. No new external dataset is needed to compute
+this reference. There is a sign-convention discrepancy to resolve before
+scoring a signed LOD benchmark: the printed equation 33 factor is positive
+for the default load, whereas the degree-0-free inertia contribution is
+negative under the solver's signed angular-momentum convention. The
+solver output and published formula are therefore labelled separately,
+with no sign adjustment or relative-error score applied.
+
+On restarting an older rotating checkpoint, historical log rows without
+m3/LOD receive NaNs in the added columns; only newly solved states have
+these diagnostics. Earlier profile epochs do not acquire rates on restart.
 
 ### Compare load prescriptions
 

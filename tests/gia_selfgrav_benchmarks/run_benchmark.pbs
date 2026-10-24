@@ -57,6 +57,9 @@
 #   EXTRA_PYTHONPATH
 #             a directory with Python packages that the module does not
 #             have, for example giamip (see below). Default: empty.
+#   FIREDRAKE_MODULE
+#             resolved module to load; default firedrake/main. Study jobs
+#             pin this to a dated build so queued jobs use the same software.
 #
 # Edit the project (-P), the storage line and the module lines for another
 # allocation.
@@ -81,7 +84,7 @@
 source /etc/profile
 module use /g/data/fp50/modules
 # `firedrake/main` is an alias of the newest weekly build `main-YYYYMMDD`.
-module load firedrake/main
+module load "${FIREDRAKE_MODULE:-firedrake/main}" || exit 1
 ulimit -s unlimited 2>/dev/null || true
 
 # This directory and the repository root. The root comes first on PYTHONPATH,
