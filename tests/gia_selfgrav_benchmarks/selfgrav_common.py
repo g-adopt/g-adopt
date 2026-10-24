@@ -1145,7 +1145,8 @@ OUTER_RTOL = 1.0e-6
 BLOCK0_RTOL = 1.0e-4
 
 
-def solver_parameters(layout, snes_type):
+def solver_parameters(layout, snes_type, *, outer_rtol=OUTER_RTOL,
+                      block0_rtol=BLOCK0_RTOL, ainvb=None):
     """The solver settings of both benchmarks.
 
     The library preset `selfgrav_dtn_iterative_solver_parameters` with its
@@ -1160,13 +1161,15 @@ def solver_parameters(layout, snes_type):
       snes_type: `"ksponly"` when the residual is linear in the unknowns (one
         linear solve is exact to the outer tolerance), `"newtonls"` when it is
         not (moving coastline).
+      outer_rtol, block0_rtol: relative tolerances for a sensitivity run.
+      ainvb: explicit choice of the cached Schur apply, or None for the preset.
 
     Returns:
       The PETSc options dictionary.
     """
     return selfgrav_dtn_iterative_solver_parameters(
-        condensed=layout.condensed, outer_rtol=OUTER_RTOL,
-        block0_rtol=BLOCK0_RTOL, snes_type=snes_type,
+        condensed=layout.condensed, outer_rtol=outer_rtol,
+        block0_rtol=block0_rtol, snes_type=snes_type, ainvb=ainvb,
         dtn_representation=DTN_REPRESENTATION,
         n_real=len(layout.real_fields))
 

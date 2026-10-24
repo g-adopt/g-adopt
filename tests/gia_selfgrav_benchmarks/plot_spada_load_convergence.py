@@ -1,4 +1,4 @@
-"""Compare available direct cap runs with uncorrected TABOO degrees 2–256.
+"""Compare direct runs of one load shape with uncorrected TABOO degrees 2–256.
 
 Run with NumPy and Matplotlib, without Firedrake:
     python plot_spada_load_convergence.py
@@ -17,9 +17,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from numpy.polynomial.legendre import legder, legval
-
 from plot_spada_profiles import taboo_coefficients
-
+from spada_loads import LOAD_SHAPES
 
 HERE = Path(__file__).resolve().parent
 QUANTITIES = ("U", "V", "N")
@@ -35,11 +34,12 @@ def evaluate(coefficients, theta_deg, quantity):
     return legval(np.cos(theta), coefficients)
 
 
-def load_runs(root):
+def load_runs(root, load_shape="cap"):
     runs = []
     for path in sorted(root.glob("*/summary_cap.json")):
         summary = json.loads(path.read_text())
-        if summary["case"] != "cap" or summary["smoke"]:
+        if (summary["case"] != "cap" or summary["smoke"]
+                or summary.get("load_shape", "cap") != load_shape):
             continue
         representation = summary.get("load_representation", "spectral")
         cutoff = summary.get("load_nmax", summary.get("nmax", 10))
@@ -48,7 +48,7 @@ def load_runs(root):
                for e in summary["epochs"]):
             runs.append((cutoff or float("inf"), label, summary, path.parent))
     baseline = HERE / "summary_cap.json"
-    if baseline.exists() and not any(r[0] == 10 for r in runs):
+    if load_shape == "cap" and baseline.exists() and not any(r[0] == 10 for r in runs):
         summary = json.loads(baseline.read_text())
         if summary["case"] == "cap" and not summary["smoke"] and summary.get("nmax") == 10:
             runs.append((10, "G-ADOPT load 2–10 (reconstructed)", summary, None))
@@ -81,12 +81,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--outputs", type=Path, default=HERE / "outputs")
     parser.add_argument("--max-colatitude", type=float, default=25)
+    parser.add_argument("--load-shape", choices=LOAD_SHAPES, default="cap",
+                        help="compare only this geometry; legacy summaries are cap loads")
     args = parser.parse_args()
     if not 0 < args.max_colatitude <= 180:
         parser.error("--max-colatitude must be in (0, 180]")
-    runs = load_runs(args.outputs)
+    runs = load_runs(args.outputs, args.load_shape)
     if not runs:
-        parser.error("No complete direct-profile runs found")
+        parser.error(f"No complete {args.load_shape} direct-profile runs found")
+    prefix = "disc_" if args.load_shape == "disc" else ""
     theta = np.linspace(0, 180, 1801)
     selected = theta <= args.max_colatitude
     reference = np.load(HERE / "reference.npz", allow_pickle=False)
@@ -108,7 +111,7 @@ def main():
         squeeze=False, layout="constrained", sharex=True)
     records = []
     for epoch_index, t in enumerate(epochs):
-        coefficients = taboo_coefficients(reference, t)
+        coefficients = taboo_coefficients(reference, t, args.load_shape)
         refs = {q: evaluate(coefficients[q], theta, q) for q in QUANTITIES}
         for run_index, run in enumerate(runs):
             epoch = next(e for e in run[2]["epochs"] if e["t_kyr"] == t)
@@ -141,7 +144,7 @@ def main():
                             label="TABOO 2–256")
                     ax.set_title(f"{NAMES[col]} — {t:g} kyr")
     for row, t in enumerate(showcase):
-        coefficients = taboo_coefficients(reference, t)
+        coefficients = taboo_coefficients(reference, t, args.load_shape)
         for col, q in enumerate(QUANTITIES):
             profiles[1][row, col].plot(theta[selected], evaluate(coefficients[q], theta, q)[selected],
                                        "k--", linewidth=1.8, label="TABOO 2–256")
@@ -163,12 +166,13 @@ def main():
         detail = ("All three direct meridians, sampled ≈6.4 m below surface"
                   if filename == "best_vs_taboo.png" else
                   "0° direct meridian; samples ≈6.4 m below surface")
-        figure.suptitle(title + "\n" + detail, fontsize=12)
+        figure.suptitle(f"Spada {args.load_shape}: " + title + "\n" + detail, fontsize=12)
+        filename = prefix + filename
         figure.savefig(args.outputs / filename, dpi=180)
         figure.savefig(args.outputs / filename.replace(".png", ".pdf"))
         plt.close(figure)
         print(f"Saved {args.outputs / filename}")
-    with (args.outputs / "load_convergence_metrics.csv").open("w", newline="") as stream:
+    with (args.outputs / f"{prefix}load_convergence_metrics.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(records[0]))
         writer.writeheader()
         writer.writerows(records)
@@ -187,10 +191,10 @@ def main():
         axes[col].grid(alpha=.2)
     axes[0].legend()
     figure.suptitle(
-        f"Load convergence: 0–{args.max_colatitude:g}° RMS error, all sampled meridians\n"
-        "TABOO 2–256; degree-10 baseline reconstructed from its spectrum")
+        f"Spada {args.load_shape} load convergence: 0–{args.max_colatitude:g}° RMS error, "
+        "all sampled meridians\nTABOO 2–256")
     for extension in ("png", "pdf"):
-        figure.savefig(args.outputs / f"load_convergence_rms.{extension}", dpi=180)
+        figure.savefig(args.outputs / f"{prefix}load_convergence_rms.{extension}", dpi=180)
     plt.close(figure)
 
 

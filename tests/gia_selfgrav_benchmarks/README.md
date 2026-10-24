@@ -135,17 +135,80 @@ Leave out `EXTRA_PYTHONPATH` if the module has `giamip`. The header of
 `vo05` and loads `firedrake/main`, the newest weekly build of the Firedrake
 module. For another project, edit the `-P` and storage lines.
 
-For Spada, the load and spectral diagnostics have independent cutoffs. Both
-default to degree 10, preserving the original run. For example, retain load
-degrees 2–128 while projecting only degrees 0–10 for diagnostics:
+For Spada, `--load_shape cap` (default) selects the paper's 1500 m parabolic
+cap; `--load_shape disc` selects its uniform 1000 m disc. Both have a 10°
+angular radius and ice density 931 kg m⁻³ (Table 4). This choice is independent
+of `--case`: `cap` remains the name of the non-rotating, pole-centred case,
+even for a disc; `polar-motion` places either load at colatitude 25°,
+longitude 75° and enables rotation. The TABOO U/V/N comparison uses the
+selected load coefficients. The disc polar-motion reference scales the cap
+series by `sigma_2(disc)/sigma_2(cap) = 0.9953950073`, following equation 31.
+The Earth and loading history are unchanged, so this scaling is exact within
+the linear reference model.
+
+For example, run the non-rotating disc with the default spatial load:
 
 ```bash
-qsub -N spada_cap_n128 \
-    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-n128,EXTRA=--load_nmax 128 --diagnostic_nmax 10 --write_profiles --write_output" \
+qsub -N spada_disc_spatial \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/disc-spatial,EXTRA=--load_shape disc --diagnostic_nmax 10 --write_profiles --write_output" \
     run_benchmark.pbs
 ```
 
-Alternatively, evaluate the cap in space and subtract only its analytic
+For a disc polar-motion run, use `CASE=polar-motion` and
+`EXTRA=--load_shape disc --write_output`, with a separate
+output directory. Output filenames still follow the case (`summary_cap.json`
+for the non-rotating disc), so keep different load shapes in separate folders.
+Summaries and checkpoints record `load_shape`; older records imply `cap`.
+Restarting a cap checkpoint as a disc is rejected. Existing error tolerances
+and compressibility/time-step floors were calibrated for the cap only.
+Spada now defaults to `--bulk_shear_ratio 1000`; use 100 for the coarser
+compressibility approximation. The archived runs and existing numerical
+error floors used 100, so those floor corrections need recalculating for
+the new baseline. Restart an archived run with its original ratio explicitly.
+
+For the DtN boundary sensitivity comparison, keep the mesh, time steps,
+load and compressibility fixed and add `--dtn_degree 2` to `EXTRA` in a
+separate output directory. The baseline is degree 5 on both the inner and
+outer gravity boundary spheres. Degree 2 retains the quadrupole needed for
+polar motion and reduces the number of harmonic modes from 36 to 9 per
+sphere. It changes the gravity boundary approximation, independently of
+`--load_nmax` and `--diagnostic_nmax`. Summaries and checkpoints record the
+degree; older checkpoints imply 5, and restarting at another degree is
+rejected. This provides a fifth one-at-a-time sensitivity variant alongside
+time step, bulk mesh size, lithosphere layer count and compressibility.
+
+A sixth sensitivity check loosens the coupled solver tolerance from 1e-6 to
+1e-5 and its inner mechanics-potential tolerance from 1e-4 to 1e-3. For one
+cap polar-motion comparison, with the other baseline settings unchanged:
+
+```bash
+qsub -N spada_pm_loose \
+    -v "DRIVER=spada,CASE=polar-motion,OUTPUT=$PWD/outputs/cap-pm-loose,EXTRA=--outer_rtol 1e-5 --block0_rtol 1e-3" \
+    run_benchmark.pbs
+```
+
+The cached Schur preconditioner is retained explicitly for both Spada cases.
+The preset normally guards its automatic selection above an inner tolerance
+of 1e-4, because inaccurate Schur columns can cause stagnation. This
+experiment uses its supported explicit selection; check convergence reasons
+and iteration counts as well as the benchmark errors. Start with a smoke
+run before the full comparison. Tolerances are recorded in summaries and
+checkpoints; older checkpoints imply 1e-6/1e-4 and cannot be continued with
+different tolerances.
+
+The spatial load is the default and has no upper harmonic cutoff before
+mesh interpolation. Spectral loading is available explicitly with
+`--load_representation spectral`; its cutoff defaults to degree 10.
+The diagnostic cutoff independently defaults to 10. For example, retain
+spectral load degrees 2–128 while projecting only degrees 0–10 for diagnostics:
+
+```bash
+qsub -N spada_cap_n128 \
+    -v "DRIVER=spada,CASE=cap,OUTPUT=$PWD/outputs/cap-n128,EXTRA=--load_representation spectral --load_nmax 128 --diagnostic_nmax 10 --write_profiles --write_output" \
+    run_benchmark.pbs
+```
+
+By default, evaluate the chosen load in space and subtract only its analytic
 degree-0 and degree-1 components (`sigma_0 + sigma_1 cos(gamma)`):
 
 ```bash
@@ -154,12 +217,14 @@ qsub -N spada_cap_spatial \
     run_benchmark.pbs
 ```
 
-`--load_representation spectral` is the default and uses `--load_nmax`.
-Spatial mode has no upper load cutoff, so `--load_nmax` is unused. Both modes
+`--load_representation spatial` is the default; `--load_nmax` is unused
+unless `--load_representation spectral` is also selected. Both modes
 omit degrees 0 and 1 before CG2 interpolation and use the same mesh and
 load prescription for the mechanics traction and gravity mass sheet. The
-spatial cap differs from a degree-128 series; mesh interpolation can introduce
-small low-degree components in either mode.
+spatial load differs from a degree-128 series; mesh interpolation can introduce
+small low-degree components in either mode. Add `--load_shape disc` to use
+the disc's step profile and its own degree-0/1 subtraction in spatial mode.
+Its sharp edge needs a load/mesh convergence check.
 
 `--diagnostic_nmax` must be at least 2 and, for the cap comparison, no larger
 than the available TABOO reference (currently 256). It controls the projected
@@ -168,8 +233,10 @@ detail retained by the solver or by direct profiles. If it exceeds a spectral
 load's cutoff, reference coefficients above that cutoff are zero. Larger
 diagnostic cutoffs still cost more surface assemblies. Use direct profiles
 to compare the full computed fields with the appropriate load reference.
-The existing benchmark tolerances were calibrated for the default degree-10
-configuration.
+The existing benchmark tolerances were calibrated for the original degree-10
+spectral configuration at K / mu = 100. Archived checkpoints without a load
+representation are interpreted as spectral, and must be restarted with
+`--load_representation spectral` and their original bulk/shear ratio.
 
 The summary and checkpoint record `load_representation`, `load_nmax` (`null`
 for spatial mode), and `diagnostic_nmax`. The legacy summary key `nmax` now
@@ -202,7 +269,9 @@ On a laptop with a debug build of PETSc, one step takes 45 to 100 s.
 | flag | meaning |
 |---|---|
 | `--case` | the case |
-| `--bulk_shear_ratio` | K / mu in every layer; default 100, and 1000 for Martinec case B |
+| `--bulk_shear_ratio` | K / mu in every layer; default 1000 for Spada and Martinec case B, 100 for other Martinec cases |
+| `--dtn_degree` | Spada: harmonic cutoff on both gravity boundary spheres; default 5, minimum 2 |
+| `--outer_rtol`, `--block0_rtol` | Spada: coupled/inner relative tolerances; defaults 1e-6/1e-4 |
 | `--write_output` | also write VTK files at every output epoch |
 | `--output_path` | the directory for every output file (default `./`) |
 | `--smoke` | the coarse mesh and 10 steps |
@@ -401,11 +470,29 @@ Without HCOLL the Martinec steps take twice as long.
 
 ## Direct Spada profiles and field plots
 
-For cap runs, `--write_profiles` saves direct finite-element U, V and N at
-all output epochs as `profiles_cap_<time>kyr.npz`. Arrays have shape
-`(longitude, colatitude)` in metres, with meridians at 0, 90 and 180 degrees
-longitude and colatitudes at 0.1 degree spacing. V is signed southward
-displacement, not tangential magnitude. Points sit 1e-6 Earth radii (about
+For either case and load shape, `--write_profiles` saves direct
+finite-element displacement and geoid profiles at every output epoch as
+`profiles_<case>_<time>kyr.npz`. Non-rotating runs retain the original three
+meridians at 0°, 90° and 180° longitude, with 0.1° colatitude spacing.
+Rotating runs default to two great circles through the load centre
+(colatitude 25°, longitude 75°): north–south and east–west at that centre.
+Their coordinate is signed angular distance from the centre, from −180°
+to +180° at 0.1° spacing. Positive distance follows the selected bearing;
+the east–west great circle is not a constant-latitude line.
+
+All displacement arrays are in metres and have shape `(profile, sample)`:
+`U_m` is radial, `V_m` geographic southward and `W_m` geographic eastward.
+`along_m` follows increasing profile coordinate, and `across_m` points to
+its right (along-direction crossed with radial direction). Rotating plots
+show U, along, across and N, capturing both horizontal components. Default
+cap meridian files preserve the original `colatitude_deg`, `longitude_deg`,
+`U_m`, `V_m`, `N_m` and `found` arrays for existing plotting scripts.
+
+Every file includes the profile labels, coordinate, sample colatitudes and
+longitudes, and vector bases. Great-circle files also record their centre
+and bearings. Summaries and checkpoints include compact `profile_sampling`
+metadata. Sampling options are output choices, independent of solver settings.
+Points sit 1e-6 Earth radii (about
 6.4 m) below the nominal surface to help locate them in the curved mesh.
 The depth fraction and point-found mask are saved; missing values are NaN
 and counted in the job output. N uses gravity at the nominal Earth surface.
@@ -441,6 +528,43 @@ python3 plot_spada_profiles.py smoke/spada-profiles/summary_cap.json \
 The plot overlays direct meridians, projected G-ADOPT profiles, matching
 truncated TABOO and all available TABOO degrees. No correction factors are
 applied. Omit `--profiles-dir` for existing summaries without sampled profiles.
+The summary's `load_shape` selects the cap or disc TABOO curves automatically.
+
+For a rotating run, enable the default great-circle profiles with:
+
+```bash
+qsub -N spada_pm_profiles \
+    -v "DRIVER=spada,CASE=polar-motion,OUTPUT=$PWD/outputs/cap-pm-profiles,EXTRA=--write_profiles" \
+    run_benchmark.pbs
+```
+
+To choose locations, `--profile_bearings 0 45 90` selects great circles
+clockwise from geographic north at the profile centre. The default centre
+is the load location; override it with `--profile_centre COLAT LON`.
+`--profile_extent_deg 30` samples −30° to +30° from that centre, while
+`--profile_spacing_deg 0.25` sets a maximum spacing of 0.25° (the grid
+includes the centre and both endpoints). Alternatively,
+`--profile_longitudes 75 165` selects geographic meridians, sampled from
+colatitude 0° to `--profile_extent_deg`. Longitude selection cannot be
+combined with bearings or a great-circle centre. These options also work
+for non-rotating cases. For example:
+
+```bash
+python3 spada.py --case polar-motion --write_profiles \
+    --profile_bearings 0 45 90 --profile_extent_deg 30
+
+python3 plot_spada_profiles.py outputs/cap-pm-profiles/summary_polar-motion.json \
+    --max-distance 25 --output outputs/cap-pm-profiles/profiles_near.png
+```
+
+For rotating runs, the plotting script automatically reads direct profile
+files beside the summary; use `--profiles-dir` to override their location.
+It shows sampled fields without a non-rotating TABOO overlay. The same
+direct plotting path is selected for non-rotating great-circle output.
+The pole-centred meridian comparison continues to overlay TABOO as before.
+The rotating spatial fields require a rotational spatial reference for an
+independent benchmark comparison; Spada's Figure 13 provides polar-motion
+time series rather than those spatial profiles.
 
 ### Compare load prescriptions
 
@@ -451,6 +575,10 @@ subdirectory of `outputs/`, then run:
 ```bash
 python3 plot_spada_load_convergence.py --outputs outputs --max-colatitude 25
 ```
+
+Use `--load-shape disc` for the disc series. Runs are filtered by shape,
+so cap and disc results cannot be mixed in one convergence comparison.
+Disc figure and CSV filenames start with `disc_`.
 
 This needs NumPy and Matplotlib, with no Firedrake. It writes PNG and PDF
 figures for the load comparison, differences from TABOO, RMS error versus

@@ -1,0 +1,241 @@
+"""Small checks for Spada load choices and independent diagnostic cutoffs.
+
+Run with the Firedrake environment; these do not run a GIA time integration.
+"""
+
+import numpy as np
+import pytest
+import spada
+from firedrake import (
+    Function,
+    FunctionSpace,
+    SpatialCoordinate,
+    UnitCubeMesh,
+    UnitOctahedralSphereMesh,
+    VectorFunctionSpace,
+)
+
+
+def test_independent_cli_cutoffs():
+    defaults = spada.parse_args([])
+    assert defaults.load_nmax == defaults.diagnostic_nmax == 10
+    assert defaults.load_shape == "cap"
+    assert defaults.bulk_shear_ratio == 1000.0
+    assert defaults.dtn_degree == 5
+    assert defaults.outer_rtol == 1.0e-6
+    assert defaults.block0_rtol == 1.0e-4
+    assert defaults.load_representation == "spatial"
+    assert spada.run_settings(defaults)["load_nmax"] is None
+    disc = spada.parse_args(["--case", "polar-motion", "--load_shape", "disc"])
+    assert spada.run_settings(disc)["load_shape"] == "disc"
+    args = spada.parse_args(["--load_representation", "spectral", "--load_nmax", "128"])
+    assert args.load_nmax == 128
+    assert args.diagnostic_nmax == 10
+    assert args.load_representation == "spectral"
+    args = spada.parse_args(["--load_nmax", "20", "--diagnostic_nmax", "40"])
+    assert spada.run_settings(args)["diagnostic_nmax"] == 40
+
+
+@pytest.mark.parametrize("option", ["--load_nmax", "--diagnostic_nmax", "--dtn_degree"])
+def test_invalid_cutoff(option):
+    with pytest.raises(SystemExit):
+        spada.parse_args([option, "1"])
+
+
+@pytest.mark.parametrize("shape", ["cap", "disc"])
+def test_reference_above_spectral_load_cutoff(shape):
+    sigma = spada.diagnostic_load_coefficients(
+        40, load_nmax=10, load_shape=shape, load_representation="spectral")
+    reference = spada.TabooReference()
+    for values in reference.coefficients(1.0, sigma, 40):
+        np.testing.assert_array_equal(values[9:], 0.0)  # degrees 11..40
+    np.testing.assert_array_equal(sigma[:2], 0.0)
+    np.testing.assert_array_equal(sigma[2:11], spada.load_coefficients(10, shape)[2:])
+
+
+@pytest.mark.parametrize("shape", ["cap", "disc"])
+def test_spatial_reference_retains_high_degrees(shape):
+    sigma = spada.diagnostic_load_coefficients(
+        40, load_nmax=10, load_shape=shape)
+    np.testing.assert_array_equal(sigma[2:], spada.load_coefficients(40, shape)[2:])
+    settings = spada.run_settings(spada.parse_args(["--load_nmax", "128"]))
+    assert settings["load_nmax"] is None
+    assert settings["load_representation"] == "spatial"
+
+
+@pytest.mark.parametrize("load_nmax,diagnostic_nmax", [(128, 10), (10, 20)])
+@pytest.mark.parametrize("shape", ["cap", "disc"])
+def test_comparison_uses_diagnostic_cutoff(monkeypatch, load_nmax, diagnostic_nmax, shape):
+    reference = spada.TabooReference()
+    sigma = spada.diagnostic_load_coefficients(diagnostic_nmax, load_nmax=load_nmax,
+                                               load_shape=shape, load_representation="spectral")
+    expected = reference.coefficients(0., sigma, diagnostic_nmax)
+    calls = []
+
+    def spectra(solver, parent, mantle, nmax):
+        calls.append(nmax)
+        # A model equal to the reference, including unloaded diagnostic modes.
+        return tuple(np.concatenate(([0., 0.], values)) for values in expected)
+
+    monkeypatch.setattr(spada, "surface_spectra", spectra)
+    monkeypatch.setattr(spada, "log", lambda *args: None)
+    with np.errstate(divide="raise", invalid="raise"):
+        row = spada.compare_cap(0., None, None, None, reference,
+                                load_nmax=load_nmax, diagnostic_nmax=diagnostic_nmax,
+                                load_shape=shape, load_representation="spectral")
+    assert calls == [diagnostic_nmax]
+    np.testing.assert_array_equal(row["degrees"], np.arange(2, diagnostic_nmax + 1))
+    for quantity, values in zip(["U", "V", "N"], expected):
+        np.testing.assert_array_equal(row[f"{quantity}_n"], values)
+        np.testing.assert_array_equal(row[f"{quantity}_n_ref"], values)
+
+
+def test_analytic_cap_low_modes():
+    # Independent closed-form integrals of the cap's mass and dipole.
+    delta = 1 - np.cos(np.deg2rad(spada.CAP_RADIUS_DEG))
+    amplitude = spada.RHO_ICE * spada.CAP_THICKNESS_M
+    expected = [amplitude * delta / 3,
+                amplitude * delta * (1 - 2 * delta / 5)]
+    np.testing.assert_allclose(spada.cap_load(1), expected, rtol=1e-11)
+
+
+def test_reference_range():
+    reference = spada.TabooReference()
+    with pytest.raises(ValueError, match="TABOO reference supports"):
+        reference.love_time(0.0, reference.nmax + 1)
+
+
+def test_checkpoint_records_distinguish_loads():
+    spectral = spada.run_settings(spada.parse_args(
+        ["--load_representation", "spectral", "--load_nmax", "128"]))
+    spatial = spada.run_settings(spada.parse_args([]))
+    assert spectral != spatial
+    assert spada.checkpoint_run_settings({"run": spectral}) == spectral
+    legacy = {"run": {"case": "cap", "bulk_shear_ratio": 100., "smoke": False},
+              "rows": [{"degrees": list(range(2, 41))}]}
+    upgraded = spada.checkpoint_run_settings(legacy)
+    assert upgraded["load_nmax"] == upgraded["diagnostic_nmax"] == 40
+    assert upgraded["load_representation"] == "spectral"
+    assert upgraded["load_shape"] == "cap"
+    assert upgraded["dtn_degree"] == 5
+    assert upgraded["load_representation"] != spatial["load_representation"]
+    # Existing records with split cutoffs also predate the shape option.
+    old_spectral = {k: v for k, v in spectral.items()
+                    if k not in ("load_shape", "dtn_degree", "outer_rtol", "block0_rtol")}
+    assert spada.checkpoint_run_settings({"run": old_spectral}) == spectral
+    disc = spada.run_settings(spada.parse_args(["--load_shape", "disc"]))
+    assert disc != spada.run_settings(spada.parse_args([]))
+
+
+def test_independent_dtn_degree():
+    baseline = spada.run_settings(spada.parse_args([]))
+    coarse = spada.run_settings(spada.parse_args(["--dtn_degree", "2"]))
+    assert coarse == {**baseline, "dtn_degree": 2}
+    assert spada.checkpoint_run_settings({"run": coarse}) == coarse
+    assert spada.checkpoint_run_settings({"run": baseline}) != coarse
+
+
+def test_coarse_solver_tolerances():
+    baseline = spada.run_settings(spada.parse_args([]))
+    coarse = spada.run_settings(spada.parse_args(
+        ["--outer_rtol", "1e-5", "--block0_rtol", "1e-3"]))
+    assert coarse == {**baseline, "outer_rtol": 1.0e-5, "block0_rtol": 1.0e-3}
+    assert spada.checkpoint_run_settings({"run": coarse}) == coarse
+    legacy = {k: v for k, v in baseline.items() if k not in ("outer_rtol", "block0_rtol")}
+    assert spada.checkpoint_run_settings({"run": legacy}) == baseline
+    assert spada.checkpoint_run_settings({"run": legacy}) != coarse
+
+
+@pytest.mark.parametrize("option", ["--outer_rtol", "--block0_rtol"])
+@pytest.mark.parametrize("value", ["0", "-1", "1", "nan", "inf"])
+def test_invalid_solver_tolerance(option, value):
+    with pytest.raises(SystemExit):
+        spada.parse_args([option, value])
+
+
+@pytest.mark.parametrize("n_real", [1, 4])
+def test_coarse_solver_keeps_cached_schur(n_real):
+    from types import SimpleNamespace
+
+    layout = SimpleNamespace(condensed=False, real_fields=tuple(range(n_real)))
+    baseline = spada.common.solver_parameters(layout, "ksponly")
+    coarse = spada.common.solver_parameters(
+        layout, "ksponly", outer_rtol=1.0e-5, block0_rtol=1.0e-3, ainvb=True)
+    assert baseline["dtn_schur_ainvb"] is coarse["dtn_schur_ainvb"] is True
+    assert baseline.keys() == coarse.keys()
+    changed = {k for k in baseline if baseline[k] != coarse[k]}
+    assert changed == {"ksp_rtol", "dtn_fieldsplit_0_condensed_ksp_rtol"}
+
+
+def test_rotating_profile_defaults():
+    args = spada.parse_args(["--case", "polar-motion", "--write_profiles"])
+    geometry = spada.profile_geometry(args.case, spada.LOAD_CENTRE_DEG[args.case],
+                                      longitudes=args.profile_longitudes,
+                                      bearings=args.profile_bearings)
+    assert geometry["profile_kind"] == "load-centred"
+    np.testing.assert_array_equal(geometry["bearing_deg"], [0, 90])
+
+
+def test_profile_writer_samples_vector_components(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    mesh = UnitCubeMesh(2, 2, 2)
+    monkeypatch.setattr(spada.common, "RE", .5)
+    monkeypatch.setattr(spada.common, "D_SCALE", 2.)
+    monkeypatch.setattr(spada.common, "gravity_exact_ufl", lambda r: spada.Constant(1.))
+    geometry = spada.profile_geometry("polar-motion", (55, 45), extent_deg=5, spacing_deg=5)
+    profiles = spada.build_profile_samplers(mesh, mesh, 1e-6, geometry)
+    displacement = Function(VectorFunctionSpace(mesh, "CG", 1)).interpolate(
+        spada.as_vector((1., 2., 3.)))
+    potential = Function(FunctionSpace(mesh, "CG", 1)).assign(4.)
+    path = tmp_path / "profiles.npz"
+    spada.write_profiles(path, SimpleNamespace(displacement=displacement, potential=potential),
+                          mesh, profiles, 1.)
+    with np.load(path, allow_pickle=False) as data:
+        assert np.all(data["found"])
+        for key, basis in [("U_m", "unit_vectors"), ("V_m", "south_vectors"),
+                           ("W_m", "east_vectors"), ("along_m", "tangent_vectors"),
+                           ("across_m", "right_vectors")]:
+            expected = geometry[basis] @ np.array([2., 4., 6.])
+            np.testing.assert_allclose(data[key], expected, atol=1e-12)
+        np.testing.assert_allclose(data["N_m"], 8.)
+        np.testing.assert_array_equal(data["centre_deg"], [55., 45.])
+
+
+@pytest.mark.parametrize("representation", ["spectral", "spatial"])
+@pytest.mark.parametrize("case", ["cap", "polar-motion"])
+@pytest.mark.parametrize("shape", ["cap", "disc"])
+def test_load_interpolation(representation, case, shape):
+    mesh = UnitOctahedralSphereMesh(refinement_level=1, degree=2)
+    axis = spada.load_axis(case)
+    scale = spada.common.RHO_BAR * spada.common.D_SCALE
+    # A non-default cutoff checks that load_field follows the supplied
+    # coefficients, rather than the default diagnostic degree.
+    sigma = spada.load_coefficients(20 if representation == "spectral" else 1, shape) / scale
+    field = spada.load_field(mesh, sigma, axis, representation=representation, load_shape=shape)
+    coordinates = Function(VectorFunctionSpace(mesh, "CG", 2)).interpolate(
+        SpatialCoordinate(mesh)).dat.data_ro
+    cosine = coordinates @ axis / np.linalg.norm(coordinates, axis=1)
+    if representation == "spectral":
+        coefficients = sigma.copy()
+        coefficients[:2] = 0
+        expected = np.polynomial.legendre.legval(cosine, coefficients)
+    else:
+        cos_alpha = np.cos(np.deg2rad(spada.CAP_RADIUS_DEG))
+        if shape == "cap":
+            density = (spada.RHO_ICE * spada.CAP_THICKNESS_M / scale
+                       * np.sqrt(np.maximum((cosine - cos_alpha) / (1 - cos_alpha), 0)))
+        else:
+            density = (spada.RHO_ICE * spada.DISC_THICKNESS_M / scale
+                       * (cosine >= cos_alpha))
+        expected = density - sigma[0] - sigma[1] * cosine
+    np.testing.assert_allclose(field.dat.data_ro, expected, rtol=1e-11, atol=1e-16)
+    assert field.function_space() == FunctionSpace(mesh, "CG", 2)
+
+
+def test_disc_polar_motion_reference():
+    reference = spada.TabooReference()
+    scale = spada.polar_motion_scale("disc")
+    for t in spada.EPOCHS_KYR:
+        np.testing.assert_allclose(reference.polar_motion(t, "disc"),
+                                   np.array(reference.polar_motion(t)) * scale)
