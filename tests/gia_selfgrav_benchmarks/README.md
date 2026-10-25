@@ -43,6 +43,7 @@ recorded in [SPADA_COMPATIBILITY.md](SPADA_COMPATIBILITY.md).
 | file | content |
 |---|---|
 | `spada.py`, `martinec.py` | the two drivers |
+| `plot_martinec_profiles.py` | B/C/D terminal profiles against VEGA, residuals, saved evolution and water-layer/timestep histories; PNG/PDF and profile scores |
 | `selfgrav_common.py` | the shared module |
 | `martinec_e.py`, `CASE_E.md` | Case E topography fitting and staged-job instructions |
 | `test_benchmarks.py` | the pass criteria; it reads the output files and needs `giamip` and no Firedrake |
@@ -479,6 +480,47 @@ as `(start_yr, end_yr, actual_step_yr, step_count, is_output_epoch)` tuples.
 For a ladder run, `time_step_yr` is `null`. Restart with the same effective
 ladder; changing it is rejected. Earlier uniform-step checkpoints remain
 compatible with the matching uniform settings.
+
+## Plot Martinec results
+
+`plot_martinec_profiles.py` reads complete B/C/D runs from their summary
+and NPZ files. Like the Spada plotting script, it works without Firedrake.
+It needs NumPy, SciPy, Matplotlib and `giamip`; run on a login node or local
+machine because `giamip` may download reference files on first use.
+
+For the case B ladder run, from this directory:
+
+```bash
+python3 plot_martinec_profiles.py outputs/B_ladder/summary_B.json \
+    --labels Ladder --output outputs/B_ladder/plots
+```
+
+When the uniform run finishes, overlay both runs:
+
+```bash
+python3 plot_martinec_profiles.py \
+    outputs/B_ladder/summary_B.json outputs/B_uniform/summary_B.json \
+    --labels Ladder "Uniform 10 yr" --output outputs/B_comparison/plots
+```
+
+Each invocation saves five figures in both PNG and PDF: terminal profiles
+through the load and basin with VEGA and residual panels, evolution of
+both profiles over the saved epochs, and water-layer/timestep histories.
+The case definition supplies the meridians, quantities, intervals and
+terminal time, including 10 kyr and the 65–135° basin interval for B.
+Reference profiles appear only at the terminal time. An available reference
+water-layer time series is overlaid; otherwise, including case B, VEGA is
+marked at the terminal time only. The timestep panel excludes the elastic
+diagnostic labelled at t=0.
+
+Terminal plots retain the full curves and shade the bands excluded from
+scoring around cap margins and coastlines. `--band` changes their half
+width; the default 6.744912° matches `test_benchmarks.py` and is a historical
+scoring choice, not a width specified by the paper. `profile_scores.csv`
+contains the maximum/RMS errors, published-code limits and verdicts for
+each run. `plot_manifest.json` records source summaries, labels, mesh
+hashes, `giamip` version and the exclusion width. Inputs are read unchanged;
+missing points, nonfinite profile values and incomplete runs are rejected.
 
 ## Walltime and cost
 
