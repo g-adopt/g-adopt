@@ -15,6 +15,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_PLAN = "outputs/spada-study-plan"
+DEFAULT_FIREDRAKE_VERSION = "2026.10.0"
+DEFAULT_MODULE = f"firedrake/{DEFAULT_FIREDRAKE_VERSION}"
 BASELINE = {"timestep_scale": 1., "mesh_h_km": 250., "litho_layers": 2,
             "bulk_shear_ratio": 1000., "dtn_degree": 5,
             "outer_rtol": 1e-6, "block0_rtol": 1e-4}
@@ -128,6 +130,14 @@ set -e
 source /etc/profile
 module use /g/data/fp50/modules
 module load {shlex.quote(config['module'])}
+python3 - <<'PY'
+from importlib.metadata import version
+expected = {config['firedrake_version']!r}
+actual = version("firedrake")
+print(f"=== Firedrake: {{actual}} (expected {{expected}}) ===", flush=True)
+if actual != expected:
+    raise SystemExit(f"Expected Firedrake {{expected}}, found {{actual}}; prepare a new plan for another version")
+PY
 cd "$PBS_O_WORKDIR"
 python3 spada_study.py verify-source --manifest {_job_path(manifest_path)}
 export DRIVER=spada CASE={shlex.quote(run['case'])} SMOKE={int(run['smoke'])}
@@ -142,15 +152,17 @@ source "$PBS_O_WORKDIR/run_benchmark.pbs"
 
 
 def prepare(plan_dir, *, output_root="outputs/spada-study", project="vo05", queue="normalsr",
-            module="firedrake/main-20261005",
+            module=DEFAULT_MODULE, firedrake_version=DEFAULT_FIREDRAKE_VERSION,
             storage="scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50", directory=HERE):
     plan_path = directory / plan_dir
     if plan_path.exists() and any(plan_path.iterdir()):
         raise ValueError(f"Plan directory is not empty: {plan_path}; use a new --plan-dir")
-    config = {"project": project, "queue": queue, "module": module, "storage": storage}
+    config = {"project": project, "queue": queue, "module": module, "storage": storage,
+              "firedrake_version": firedrake_version}
     # PBS directives must be one literal line; environment values are shell-quoted.
     if any(not value or any(c.isspace() for c in value) for value in config.values()):
-        raise ValueError("Project, queue, module and storage must be nonempty and contain no whitespace")
+        raise ValueError("Project, queue, module, storage and Firedrake version must be nonempty "
+                         "and contain no whitespace")
     manifest = {"version": 1, "created_utc": datetime.now(UTC).isoformat(),
                 "source": source_record(directory), "config": config, "runs": run_matrix(output_root)}
     plan_path.mkdir(parents=True, exist_ok=True)
@@ -190,9 +202,19 @@ def _submit_jobs(plan, plan_dir, stage, *, directory):
         if output.exists() and any(output.iterdir()):
             raise ValueError(f"Refusing nonempty output directory: {output}")
         output.mkdir(parents=True, exist_ok=True)
-        command = ["qsub", "-d", str(directory), "-o", str(output / "pbs.stdout"),
+        # PBS_O_WORKDIR comes from cwd; Gadi uses #PBS -l wd, not qsub -d.
+        command = ["qsub", "-o", str(output / "pbs.stdout"),
                    "-e", str(output / "pbs.stderr"), str(directory / run["script"])]
-        result = subprocess.run(command, cwd=directory, text=True, capture_output=True, check=True)
+        try:
+            result = subprocess.run(command, cwd=directory, text=True, capture_output=True, check=True)
+        except subprocess.CalledProcessError as error:
+            diagnostics = "\n".join(message.strip() for message in
+                                    (error.stderr, error.stdout) if message and message.strip())
+            raise ValueError(
+                f"qsub failed for {run['id']} (exit status {error.returncode}):\n"
+                f"{diagnostics or 'No diagnostic output returned by qsub.'}\n"
+                f"Command: {shlex.join(command)}"
+            ) from error
         job_id = result.stdout.strip()
         entry = {"id": run["id"], "job_id": job_id, "qsub": command,
                  "submitted_utc": datetime.now(UTC).isoformat()}
@@ -209,7 +231,9 @@ def main(argv=None):
     create.add_argument("--output-root", default="outputs/spada-study")
     create.add_argument("--project", default="vo05")
     create.add_argument("--queue", default="normalsr")
-    create.add_argument("--module", default="firedrake/main-20261005")
+    create.add_argument("--module", default=DEFAULT_MODULE)
+    create.add_argument("--firedrake-version", default=DEFAULT_FIREDRAKE_VERSION,
+                        help="required Firedrake package version, checked before the job starts")
     create.add_argument("--storage", default="scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50")
     launch = commands.add_parser("submit", help="explicitly submit one stage with qsub")
     launch.add_argument("--plan-dir", default=DEFAULT_PLAN)
@@ -223,7 +247,8 @@ def main(argv=None):
     try:
         if args.command == "prepare":
             plan = prepare(args.plan_dir, output_root=args.output_root, project=args.project,
-                           queue=args.queue, module=args.module, storage=args.storage)
+                           queue=args.queue, module=args.module, storage=args.storage,
+                           firedrake_version=args.firedrake_version)
             print(f"Prepared {len(plan['runs'])} jobs (4 smoke + 27 production) in {HERE / args.plan_dir}")
             print("No jobs submitted. Inspect with: python3 spada_study.py show")
             return

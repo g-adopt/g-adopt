@@ -876,7 +876,9 @@ class PointSampler:
     A `VertexOnlyMesh` keeps only the points that its parent mesh contains,
     in the order of the mesh partition. The sampler evaluates into the
     `input_ordering` mesh, which restores the order the points were given in,
-    so that the output stays aligned with the published colatitudes.
+    so that the output stays aligned with the published colatitudes. The
+    input points are redundant across ranks; broadcast the ordered values
+    from rank 0 so every rank receives the full profile.
 
     A missing point reads back as zero and not as an error. The constructor
     therefore interpolates the constant 1, which is exactly 1.0 at a located
@@ -897,6 +899,7 @@ class PointSampler:
         # "warn" and not "error": a missing point is counted in the output,
         # and `test_benchmarks.py` refuses a profile with one.
         self.vom = VertexOnlyMesh(mesh, points,
+                                  redundant=True,
                                   missing_points_behaviour="warn")
         self._space = FunctionSpace(self.vom, "DG", 0)
         self._ordered = FunctionSpace(self.vom.input_ordering, "DG", 0)
@@ -907,7 +910,8 @@ class PointSampler:
         at_points = assemble(interpolate(expression, self._space))
         ordered = Function(self._ordered)
         ordered.interpolate(at_points)
-        return np.array(ordered.dat.data_ro, dtype=float)
+        values = np.array(ordered.dat.data_ro, dtype=float)
+        return self.vom.comm.bcast(values if self.vom.comm.rank == 0 else None, root=0)
 
     def __call__(self, expression):
         """A scalar UFL expression at the points, `nan` at a missing point."""

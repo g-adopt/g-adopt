@@ -160,7 +160,7 @@ Run these commands from `tests/gia_selfgrav_benchmarks` in the **Gadi checkout**
 
 ```bash
 module use /g/data/fp50/modules
-module load firedrake/main-20261005
+module load firedrake/2026.10.0
 python3 spada_study.py prepare
 python3 spada_study.py show --stage production
 python3 estimate_spada_cost.py
@@ -177,14 +177,29 @@ Do not modify the checkout during an active run; the startup hash check
 cannot protect against edits made after Python starts.
 
 Defaults are project `vo05`, queue `normalsr`, storage
-`scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50`, and dated module
-`firedrake/main-20261005` (the latest build in the local successful logs).
-Use `prepare --module ...` for another tested dated build, and pass
+`scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50`, and the stable release module
+`firedrake/2026.10.0` on Gadi. Each job checks and prints the
+Firedrake package version before executing; a version other than the plan's
+`firedrake_version` (default `2026.10.0`) stops the job before a solve.
+Use `prepare --module ... --firedrake-version ...` for another tested build, and pass
 `--project`, `--queue`, `--storage`, `--output-root` or `--plan-dir` as needed.
-The dated module's availability and compatibility must be checked by the
-smoke jobs; it has not been queried remotely from this workspace.
+The four smoke jobs still check the target Gadi installation and MPI build.
+The pinned Docker environment, compatibility fixes and local verification
+commands are recorded in [SPADA_COMPATIBILITY.md](SPADA_COMPATIBILITY.md).
 Preparation refuses a nonempty plan directory. Use a fresh plan/output root
 for another study. The existing `meta.py` is independent of this matrix.
+
+After updating code or changing the software version, preserve any failed
+plan and logs and prepare a new plan and output root. Previously submitted
+IDs remain in the old journal even when the job failed. For example:
+
+```bash
+python3 spada_study.py prepare --plan-dir outputs/spada-study-plan-2026.10 \
+    --output-root outputs/spada-study-2026.10
+python3 spada_study.py submit --plan-dir outputs/spada-study-plan-2026.10 --stage smoke
+```
+
+Use that same `--plan-dir` for later submission stages.
 
 Submit in stages, after inspecting each preceding stage's logs and outputs:
 

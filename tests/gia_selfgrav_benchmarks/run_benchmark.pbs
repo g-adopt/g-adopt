@@ -58,8 +58,8 @@
 #             a directory with Python packages that the module does not
 #             have, for example giamip (see below). Default: empty.
 #   FIREDRAKE_MODULE
-#             resolved module to load; default firedrake/main. Study jobs
-#             pin this to a dated build so queued jobs use the same software.
+#             module to load; default firedrake/2026.10.0. Study jobs also
+#             check the required Firedrake package version before running.
 #
 # Edit the project (-P), the storage line and the module lines for another
 # allocation.
@@ -72,7 +72,7 @@
 # `pip install --user` does not work. numpy, scipy, h5py and packaging are
 # in the module, so only giamip and h5netcdf go into the directory:
 #
-#   module use /g/data/fp50/modules; module load firedrake/main
+#   module use /g/data/fp50/modules; module load firedrake/2026.10.0
 #   python3 -m pip install --no-deps --target /g/data/vo05/$USER/python-extra \
 #       giamip h5netcdf
 #   qsub -l ncpus=1872 -l mem=9000GB -l walltime=03:00:00 \
@@ -83,8 +83,8 @@
 
 source /etc/profile
 module use /g/data/fp50/modules
-# `firedrake/main` is an alias of the newest weekly build `main-YYYYMMDD`.
-module load "${FIREDRAKE_MODULE:-firedrake/main}" || exit 1
+# Pin the study to a stable release; FIREDRAKE_MODULE permits another version.
+module load "${FIREDRAKE_MODULE:-firedrake/2026.10.0}" || exit 1
 ulimit -s unlimited 2>/dev/null || true
 
 # This directory and the repository root. The root comes first on PYTHONPATH,

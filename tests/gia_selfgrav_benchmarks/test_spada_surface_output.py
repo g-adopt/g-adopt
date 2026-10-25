@@ -52,7 +52,7 @@ def test_surface_option_is_independent_of_volume_and_profiles():
 
 
 @pytest.mark.parametrize("degree", [2, 3])
-def test_nodal_trace_preserves_curved_geometry_and_cubic_fields(degree):
+def test_nodal_trace_preserves_curved_geometry_and_cubic_fields(degree, monkeypatch):
     parent = curved_cube()
     marker = fd.Function(fd.FunctionSpace(parent, "DG", 0)).assign(1.)
     parent.mark_entities(marker, 101)
@@ -62,7 +62,16 @@ def test_nodal_trace_preserves_curved_geometry_and_cubic_fields(degree):
     source = fd.Function(fd.VectorFunctionSpace(mantle, "CG", degree)).interpolate(
         fd.as_vector((x[0]**degree, x[1] + x[2], x[2]**degree)))
     result = fd.Function(fd.VectorFunctionSpace(surface, "CG", degree))
-    NodalRestriction(mantle, surface, degree)(source, result)
+    function_space = fd.FunctionSpace
+
+    def local_section_space(*args, **kwargs):
+        space = function_space(*args, **kwargs)
+        # Newer petsc4py exposes getLocalSection without the old alias.
+        return SimpleNamespace(dm=SimpleNamespace(getLocalSection=space.dm.getLocalSection))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(fd, "FunctionSpace", local_section_space)
+        NodalRestriction(mantle, surface, degree)(source, result)
     y = fd.SpatialCoordinate(surface)
     expected = fd.Function(result.function_space()).interpolate(
         fd.as_vector((y[0]**degree, y[1] + y[2], y[2]**degree)))

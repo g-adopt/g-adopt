@@ -28,8 +28,8 @@ class NodalRestriction:
         self.degree = degree
         source = fd.FunctionSpace(source_mesh, "CG", degree)
         target = fd.FunctionSpace(target_mesh, "CG", degree)
-        source_section = source.dm.getDefaultSection()
-        target_section = target.dm.getDefaultSection()
+        source_section = source.dm.getLocalSection()
+        target_section = target.dm.getLocalSection()
         parent_points = target_mesh.topology_dm.getSubpointIS().indices
         self.indices = np.full(target_section.getStorageSize(), -1, dtype=np.int64)
         for point in range(*target_section.getChart()):

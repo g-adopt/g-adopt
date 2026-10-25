@@ -1,0 +1,19 @@
+FROM firedrakeproject/firedrake:2026.10.0@sha256:241c3e90b7ed160d8d38647bdc7faea14749ad22889536e9de469c2081f36985
+
+# Gmsh's Python wheel needs these shared libraries even for headless meshing.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libglu1-mesa libgl1 libxft2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --no-cache-dir \
+    doit==0.37.0 pandas==3.1.0 shapely==2.2.0 gmsh==4.15.2 \
+    'irksome @ git+https://github.com/firedrakeproject/Irksome.git@584f097cdd4a5cbe260d12c9e01ac21a9400b3d4'
+
+# Use the colleague's converter unchanged, pinned to the tested revision.
+RUN git clone https://github.com/dsroberts/firedrake_h5_to_vtk.git /opt/firedrake_h5_to_vtk \
+    && git -C /opt/firedrake_h5_to_vtk checkout ba77f27fcf2d8cc4531e5547489924187c4308af
+
+ENV FIREDRAKE_H5_TO_VTK=/opt/firedrake_h5_to_vtk/firedrake_h5_to_vtk.py \
+    PYTHONPATH=/workspace \
+    PYTHONDONTWRITEBYTECODE=1
+WORKDIR /workspace/tests/gia_selfgrav_benchmarks

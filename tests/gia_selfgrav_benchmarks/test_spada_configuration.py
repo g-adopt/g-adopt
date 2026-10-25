@@ -3,6 +3,8 @@
 Run with the Firedrake environment; these do not run a GIA time integration.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import spada
@@ -219,6 +221,7 @@ def test_profile_writer_samples_vector_components(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
     mesh = UnitCubeMesh(2, 2, 2)
+    tmp_path = Path(mesh.comm.bcast(str(tmp_path), root=0))
     monkeypatch.setattr(spada.common, "RE", .5)
     monkeypatch.setattr(spada.common, "D_SCALE", 2.)
     monkeypatch.setattr(spada.common, "gravity_exact_ufl", lambda r: spada.Constant(1.))
@@ -230,6 +233,7 @@ def test_profile_writer_samples_vector_components(tmp_path, monkeypatch):
     path = tmp_path / "profiles.npz"
     spada.write_profiles(path, SimpleNamespace(displacement=displacement, potential=potential),
                           mesh, profiles, 1.)
+    mesh.comm.barrier()
     with np.load(path, allow_pickle=False) as data:
         assert np.all(data["found"])
         for key, basis in [("U_m", "unit_vectors"), ("V_m", "south_vectors"),
@@ -355,6 +359,7 @@ def test_profile_rates_use_adjacent_steps_and_survive_restart(tmp_path, monkeypa
     monkeypatch.setattr(spada.common, "D_SCALE", 2.)
     monkeypatch.setattr(spada.common, "gravity_exact_ufl", lambda r: Constant(1.))
     mesh = UnitCubeMesh(2, 2, 2)
+    tmp_path = Path(mesh.comm.bcast(str(tmp_path), root=0))
     space = MixedFunctionSpace([VectorFunctionSpace(mesh, "CG", 1),
                                 FunctionSpace(mesh, "CG", 1)])
     geometry = spada.profile_geometry("polar-motion", (55, 45), extent_deg=5, spacing_deg=5)
@@ -389,6 +394,7 @@ def test_profile_rates_use_adjacent_steps_and_survive_restart(tmp_path, monkeypa
         def on_epoch(t):
             path = tmp_path / f"{start_step}_{t:g}.npz"
             spada.write_profiles(path, solver, mesh, samplers, t, rates=history)
+            mesh.comm.barrier()
             paths.append(path)
 
         spada.common.march(solver, dt, segments, elastic=True, start_step=start_step,

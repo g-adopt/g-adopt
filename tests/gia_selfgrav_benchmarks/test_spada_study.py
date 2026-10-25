@@ -56,6 +56,8 @@ def test_submit_records_job_id_and_prevents_duplicate_submission(tmp_path, monke
 
     def qsub(command, **kwargs):
         calls.append(command)
+        assert "-d" not in command
+        assert kwargs["cwd"] == tmp_path
         return SimpleNamespace(stdout="123.gadi-pbs\n")
 
     monkeypatch.setattr(study.subprocess, "run", qsub)
@@ -65,6 +67,7 @@ def test_submit_records_job_id_and_prevents_duplicate_submission(tmp_path, monke
     assert calls[0][0] == "qsub"
     record = json.loads((tmp_path / "plan/submissions.jsonl").read_text())
     assert record["job_id"] == "123.gadi-pbs"
+    assert record["qsub"] == calls[0]
 
 
 def test_submit_refuses_existing_results(tmp_path, monkeypatch):
@@ -78,14 +81,43 @@ def test_submit_refuses_existing_results(tmp_path, monkeypatch):
         study.submit({"runs": [run]}, "plan", "smoke", directory=tmp_path)
 
 
+def test_rejected_submission_reports_qsub_error_and_can_be_retried(tmp_path, monkeypatch):
+    monkeypatch.setattr(study, "verify_source", lambda *args: None)
+    run = study.selected_runs({"runs": study.run_matrix()}, "smoke")[0]
+    run["script"] = "plan/job.pbs"
+    (tmp_path / "plan").mkdir()
+
+    def reject(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            2, command, output="", stderr="qsub: submission rejected by scheduler\n")
+
+    monkeypatch.setattr(study.subprocess, "run", reject)
+    with pytest.raises(ValueError, match="qsub: submission rejected by scheduler") as failure:
+        study.submit({"runs": [run]}, "plan", "smoke", directory=tmp_path)
+    assert "smoke/cap-off (exit status 2)" in str(failure.value)
+    assert not (tmp_path / "plan/submissions.jsonl").exists()
+    assert not any((tmp_path / run["output"]).iterdir())
+
+    monkeypatch.setattr(study.subprocess, "run", lambda *args, **kwargs:
+                        SimpleNamespace(stdout="123.gadi-pbs\n"))
+    study.submit({"runs": [run]}, "plan", "smoke", directory=tmp_path)
+    record = json.loads((tmp_path / "plan/submissions.jsonl").read_text())
+    assert record["job_id"] == "123.gadi-pbs"
+
+
 def test_prepared_scripts_are_portable_and_valid_bash(tmp_path, monkeypatch):
     monkeypatch.setattr(study, "source_record", lambda directory: {"sha256": {}})
     plan = study.prepare("plan", directory=tmp_path)
+    assert plan["config"]["module"] == "firedrake/2026.10.0"
+    assert plan["config"]["firedrake_version"] == "2026.10.0"
     assert len(list((tmp_path / "plan/jobs").glob("*.pbs"))) == 31
     for run in plan["runs"]:
         script = tmp_path / run["script"]
         subprocess.run(["bash", "-n", str(script)], check=True, capture_output=True)
         assert "#PBS -P vo05" in script.read_text()
+        assert "#PBS -l wd\n" in script.read_text()
+        assert "module load firedrake/2026.10.0\n" in script.read_text()
+        assert "expected = '2026.10.0'" in script.read_text()
         assert str(tmp_path) not in script.read_text()
         assert f"SMOKE={int(run['smoke'])}" in script.read_text()
     with pytest.raises(ValueError, match="not empty"):

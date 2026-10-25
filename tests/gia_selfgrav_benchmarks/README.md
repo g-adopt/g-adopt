@@ -35,6 +35,8 @@ settings.
 
 The planned Spada paper run matrix, required outputs, figure coverage and
 remaining workflow work are recorded in [SPADA_STUDY.md](SPADA_STUDY.md).
+The Firedrake 2026.10.0 container recipe and local compatibility checks are
+recorded in [SPADA_COMPATIBILITY.md](SPADA_COMPATIBILITY.md).
 
 ## Files
 
@@ -68,7 +70,7 @@ are in the module, so only `giamip` and `h5netcdf` go into the directory:
 
 ```bash
 module use /g/data/fp50/modules
-module load firedrake/main
+module load firedrake/2026.10.0
 python3 -m pip install --no-deps --target /g/data/vo05/$USER/python-extra \
     giamip h5netcdf
 export PYTHONPATH=/g/data/vo05/$USER/python-extra:$PYTHONPATH
@@ -135,8 +137,10 @@ qsub -l ncpus=1872 -l mem=9000GB -l walltime=13:00:00 \
 
 Leave out `EXTRA_PYTHONPATH` if the module has `giamip`. The header of
 `run_benchmark.pbs` lists all its variables. The script uses the project
-`vo05` and loads `firedrake/main`, the newest weekly build of the Firedrake
-module. For another project, edit the `-P` and storage lines.
+`vo05` and loads the stable release `firedrake/2026.10.0` on Gadi. Set
+`FIREDRAKE_MODULE` to select another module. Study plans additionally check
+the required Firedrake package version before solving. For another project,
+edit the `-P` and storage lines.
 
 For Spada, `--load_shape cap` (default) selects the paper's 1500 m parabolic
 cap; `--load_shape disc` selects its uniform 1000 m disc. Both have a 10°
