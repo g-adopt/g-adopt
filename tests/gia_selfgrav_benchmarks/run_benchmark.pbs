@@ -51,6 +51,8 @@
 #             E: --topography_one_pass, then --topography_restart FILE;
 #             see CASE_E.md for Picard and adjoint/ROL commands.
 #             --time_step_yr 500 selects 500 yr steps (E: 30 steps to 15 kyr).
+#             Martinec: --cap_h_km 39 refines only the cap target;
+#             --litho_layers 4 subdivides the 70 km lithosphere into four layers.
 #   RESTART   a checkpoint file (for example checkpoint_B.h5). The run
 #             continues after its last checkpoint. Use the same number of
 #             ranks as the job that wrote it.

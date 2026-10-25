@@ -555,6 +555,7 @@ def run(args, driver):
     with stop_annotating():
         if restart_path:
             parent, mantle, mesh_info, state = common.load_checkpoint(restart_path, mesh_kind)
+            driver.check_mesh_restart(args, mesh_info)
             written = state.record["configuration"]
             # Older E checkpoints used the default grid for their smoke setting.
             _, legacy_step_yr = time_grid(SimpleNamespace(time_step_yr=None, smoke=written["smoke"]),
@@ -570,7 +571,8 @@ def run(args, driver):
             passes = state.record["passes"]
             previous_wall_s = state.record.get("cumulative_wall_s", 0.0)
         else:
-            parent, mantle, mesh_info = common.build_meshes(mesh_kind, str(root), "martinec_E")
+            parent, mantle, mesh_info = common.build_meshes(
+                mesh_kind, str(root), "martinec_E", mesh_overrides=driver.mesh_overrides(args))
             state, pass_number, passes, previous_wall_s = None, 1, [], 0.0
         target_SL = driver.basin_sea_level(mantle, case)
         # Mask width is numerical regularisation. Keep it fixed for both fits:

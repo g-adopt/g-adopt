@@ -10,7 +10,7 @@ module holds everything that the two drivers share:
    moments of the rotation equations.
 3. The mesh: the four-region gmsh sphere, the local refinement of the
    Martinec mesh, the P2 curving and the checks of a generated mesh. The
-   resolution of each mesh is fixed in `MESHES`.
+   defaults are in `MESHES`, with per-run overrides recorded in the outputs.
 4. The time steps: the elastic step at t = 0 and the graded time-step
    sequence that ends on every output epoch.
 5. The solver settings, the time loop and the output helpers.
@@ -423,7 +423,7 @@ def _gmsh_number(value):
 
 
 def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
-                         grade_lateral, depth_km):
+                         grade_lateral, depth_km, cap_h_km=None):
     """The local refinement of the Martinec mesh, as a gmsh size-field hook.
 
     For a region centre c, the angular distance of a point X from the centre
@@ -434,7 +434,8 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
 
         h_region = h_fine + grade_lateral r d_ang,
 
-    and the refinement fades with the distance from Re over `depth`:
+    with h_cap in place of h_fine for the cap when cap_h_km is supplied.
+    The refinement fades with the distance from Re over `depth`:
 
         t = tanh(|r - Re| / depth),
         h = (1 - t) h_region + t h_graded,
@@ -456,6 +457,8 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
       grade_lateral: the growth of the size per unit arc length outside a
         region, dimensionless.
       depth_km: the radial fade length, km.
+      cap_h_km: optional lateral size in the cap region only, km. The
+        coastline bands retain h_fine_km. Defaults to h_fine_km.
 
     Returns:
       A callable that receives the gmsh module, adds one `MathEval` field per
@@ -463,6 +466,7 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
     """
     n = _gmsh_number
     h_fine, depth = h_fine_km / D_KM, depth_km / D_KM
+    h_cap = h_fine if cap_h_km is None else cap_h_km / D_KM
     regions = [(MARTINEC_CAP_CENTRE, "cap", np.radians(cap_deg), 0.0),
                (MARTINEC_B1_CENTRE, "band", np.radians(MARTINEC_COAST_PSI_DEG),
                 np.radians(band_deg)),
@@ -489,7 +493,7 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
             else:
                 d_ang = (f"max(0, abs({psi} - {n(radius)})"
                          f" - {n(half_width)})")
-            h_region = f"({n(h_fine)} + {n(grade_lateral)}*{r}*{d_ang})"
+            h_region = f"({n(h_cap if kind == 'cap' else h_fine)} + {n(grade_lateral)}*{r}*{d_ang})"
             field = gmsh.model.mesh.field.add("MathEval")
             gmsh.model.mesh.field.setString(
                 field, "F", f"(1 - {fade})*{h_region} + {fade}*{h_graded}")

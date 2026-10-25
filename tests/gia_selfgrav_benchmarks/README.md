@@ -481,6 +481,60 @@ For a ladder run, `time_step_yr` is `null`. Restart with the same effective
 ladder; changing it is rejected. Earlier uniform-step checkpoints remain
 compatible with the matching uniform settings.
 
+### Martinec mesh refinement
+
+`--cap_h_km` changes the target lateral spacing in the 12° region around
+the ice-cap centre. The default is 78 km. The two coastline bands keep
+their 78 km targets; the refined region's extent, depth fade and lateral
+grading also retain their defaults. `--litho_layers` independently changes
+the subdivisions of the 70 km lithosphere (default two 35 km layers).
+Both options apply to B/C/D/E. `--cap_h_km` is unavailable with `--smoke`,
+whose mesh has no local refinement.
+
+For a first case B study, change one parameter at a time and use **uniform
+10 yr steps in every run**, rather than changing the mesh and timestep
+ladder together:
+
+| Run | Cap spacing | Lithosphere layers | Layer thickness |
+|---|---|---|---|
+| Baseline | 78 km | 2 | 35 km |
+| Finer cap | 39 km | 2 | 35 km |
+| More lithosphere layers | 78 km | 4 | 17.5 km |
+
+From this directory, run each command in its own job with an appropriate
+MPI rank count (replace `<N>`):
+
+```bash
+mpiexec -n <N> python3 martinec.py --case B --time_step_yr 10 \
+    --output_path outputs/B_mesh_baseline
+mpiexec -n <N> python3 martinec.py --case B --time_step_yr 10 \
+    --cap_h_km 39 --output_path outputs/B_cap39
+mpiexec -n <N> python3 martinec.py --case B --time_step_yr 10 \
+    --litho_layers 4 --output_path outputs/B_litho4
+```
+
+With `run_benchmark.pbs`, pass these options through `EXTRA`, for example
+`EXTRA="--time_step_yr 10 --cap_h_km 39"`, and set a distinct `OUTPUT`.
+An existing uniform-10-yr result can serve as the baseline if its remaining
+settings match. The background target stays at 250 km. These are changes
+to prescribed mesh settings; regenerating a mesh also changes individual
+tetrahedra, and finer targets can increase memory and runtime.
+
+The summary and checkpoint `mesh` records include the effective refinement
+settings, layer count, mesh hash and cell counts. A restart always uses the
+saved mesh. Omitted mesh options inherit it; explicit options that disagree
+with it are rejected. Start a new output directory for a new mesh.
+
+Compare the completed runs with:
+
+```bash
+python3 plot_martinec_profiles.py \
+    outputs/B_mesh_baseline/summary_B.json outputs/B_cap39/summary_B.json \
+    outputs/B_litho4/summary_B.json \
+    --labels Baseline "Cap 39 km" "4 lithosphere layers" \
+    --contributors --output outputs/B_mesh_comparison/plots
+```
+
 ## Plot Martinec results
 
 `plot_martinec_profiles.py` reads complete B/C/D runs from their summary

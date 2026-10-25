@@ -73,6 +73,8 @@ DISCRETISATION
     Mesh      `selfgrav_common.MESHES["martinec"]`, generated in the job:
               250 km lateral size with two 35 km lithosphere layers, refined
               to 78 km in the ice cap and along both initial coastlines.
+              `--cap_h_km` changes cap spacing only; `--litho_layers`
+              changes the subdivisions of the 70 km lithosphere only.
     Unknowns  As the Spada driver, plus the three centre-of-mass rows and
               the `Shift` row.
     Elastic   K / mu = 1000 for case B and 100 for cases C and D
@@ -772,6 +774,30 @@ def run_settings(args, bulk_shear_ratio, ladder):
             "time_step_ladder_yr": [list(pair) for pair in ladder] if graded else None}
 
 
+def mesh_overrides(args):
+    """Per-run mesh changes; cap spacing is independent of coastline spacing."""
+    overrides = {}
+    if args.litho_layers is not None:
+        overrides["litho_layers"] = args.litho_layers
+    if args.cap_h_km is not None:
+        overrides["refinement"] = {**common.MESHES["martinec"]["refinement"],
+                                   "cap_h_km": args.cap_h_km}
+    return overrides
+
+
+def check_mesh_restart(args, mesh_info):
+    """Explicit mesh requests must agree with the saved mesh; omissions inherit it."""
+    if args.litho_layers is not None and args.litho_layers != mesh_info["litho_layers"]:
+        raise ValueError(f"Checkpoint has {mesh_info['litho_layers']} lithosphere layers; "
+                         f"--litho_layers requests {args.litho_layers}")
+    if args.cap_h_km is not None:
+        refinement = mesh_info["refinement"]
+        cap_h_km = refinement.get("cap_h_km", refinement["h_fine_km"])
+        if args.cap_h_km != cap_h_km:
+            raise ValueError(f"Checkpoint cap spacing is {cap_h_km:g} km; "
+                             f"--cap_h_km requests {args.cap_h_km:g} km")
+
+
 def parse_args(argv=None):
     """The command line."""
     p = argparse.ArgumentParser(
@@ -782,6 +808,11 @@ def parse_args(argv=None):
     p.add_argument("--bulk_shear_ratio", type=float, default=None,
                    help="K / mu in every layer; default 1000 for case B and "
                         "100 for cases C, D and E")
+    p.add_argument("--cap_h_km", type=float,
+                   help="target surface spacing in the 12 degree cap-refinement region, km "
+                        "(default 78); coastline bands retain 78 km; not available with --smoke")
+    p.add_argument("--litho_layers", type=int,
+                   help="cell layers across the 70 km lithosphere (default 2; smoke 1)")
     timesteps = p.add_mutually_exclusive_group()
     timesteps.add_argument(
         "--time_step_yr", type=float, default=None,
@@ -813,6 +844,13 @@ def parse_args(argv=None):
     from martinec_e import add_arguments
     add_arguments(p)
     args = p.parse_args(argv)
+    if args.cap_h_km is not None:
+        if not np.isfinite(args.cap_h_km) or args.cap_h_km <= 0:
+            p.error("--cap_h_km must be finite and positive")
+        if args.smoke:
+            p.error("--cap_h_km is not available with --smoke (no local refinement)")
+    if args.litho_layers is not None and args.litho_layers <= 0:
+        p.error("--litho_layers must be a positive integer")
     if args.time_step_yr is not None and (
             not np.isfinite(args.time_step_yr) or args.time_step_yr <= 0):
         p.error("--time_step_yr must be finite and positive")
@@ -865,7 +903,7 @@ def main():
     restart = None
     if args.restart is None:
         parent, mantle, mesh_info = common.build_meshes(
-            mesh_kind, args.output_path, f"martinec_{letter}")
+            mesh_kind, args.output_path, f"martinec_{letter}", mesh_overrides=mesh_overrides(args))
     else:
         parent, mantle, mesh_info, restart = common.load_checkpoint(
             args.restart, mesh_kind)
@@ -876,6 +914,7 @@ def main():
         if written != settings:
             raise RuntimeError(f"{args.restart} was written by the run "
                                f"{written}; this run is {settings}")
+        check_mesh_restart(args, mesh_info)
 
     # Scenario T0 (case B) is a load switched on at t = 0: the elastic solve
     # and then uniform steps of `T0_DT_YR` by default (see `T0_DT_YR`). An
