@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import giamip
-from giamip.benchmarks.results import BenchmarkResult
+from giamip.benchmarks.results import BenchmarkResult, Curve
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -109,15 +109,56 @@ def test_D_reference_history_and_endpoint(tmp_path, reference):
     plt.close(fig)
 
 
-def test_multiple_runs_render_and_export_scores_without_changing_inputs(tmp_path, reference):
+@pytest.fixture
+def contributors(monkeypatch, reference):
+    results = {}
+    for member in ("GA", "WW", "ZM"):
+        result = BenchmarkResult("B", member)
+        x = np.array([5., 16., 37., 45., 65., 78., 125., 135.])
+        for key in reference["B"].profiles:
+            if member == "WW" and key == ("basin", "S"):
+                continue
+            result.add_profile(*key, x, np.full(x.shape, 2.))
+            # Deliberately distinct from profile minus reference to check that
+            # the published residual is used, without resampling its grid.
+            result.differences[key] = Curve(x, np.full(x.shape, .03))
+        results[member] = result
+    monkeypatch.setattr(BenchmarkResult, "reference_path", staticmethod(lambda letter: Path("unused.nc")))
+    monkeypatch.setattr(BenchmarkResult, "members", staticmethod(lambda path: list(results)))
+    monkeypatch.setattr(BenchmarkResult, "read", staticmethod(lambda path, member, case: results[member]))
+    return plot.load_contributors("B")
+
+
+def test_contributor_native_grids_published_residuals_and_missing_quantity(tmp_path, reference, contributors):
+    assert [result.member for result in contributors] == ["GA", "WW"]
+    run = plot.load_run(write_run(tmp_path / "ladder", reference["B"]), "Ladder")
+    case = giamip.case("martinec2018-B")
+    spec = next(spec for spec in case.profiles if spec.name == "basin")
+    fig = plot.plot_terminal([run], case, reference["B"], spec, plot.DEFAULT_BAND_DEG, contributors)
+    for j, q in enumerate(spec.quantities):
+        for row in (0, 1):
+            lines = {line.get_label(): line for line in fig.axes[row * len(spec.quantities) + j].lines}
+            np.testing.assert_array_equal(lines["GA"].get_xdata(), [65., 78., 125., 135.])
+            np.testing.assert_allclose(lines["GA"].get_ydata(), 2. if row == 0 else .03)
+            assert ("WW" in lines) == (q != "S")
+        np.testing.assert_allclose(lines["Ladder"].get_ydata(), .2, atol=1e-12)
+    assert {text.get_text() for text in fig.legends[0].get_texts()} == {
+        "GA", "WW", "VEGA reference", "Ladder"}
+    plt.close(fig)
+
+
+@pytest.mark.parametrize("overlay", [False, True])
+def test_multiple_runs_render_and_export_scores_without_changing_inputs(tmp_path, reference, contributors, overlay):
     paths = [write_run(tmp_path / name, reference["B"], offset)
              for name, offset in (("ladder", .2), ("uniform", .1))]
     before = {path: path.read_bytes() for directory in ("ladder", "uniform")
               for path in (tmp_path / directory).iterdir()}
     output = tmp_path / "plots"
-    plot.main([*map(str, paths), "--labels", "Ladder", "Uniform 10 yr", "--output", str(output)])
+    plot.main([*map(str, paths), "--labels", "Ladder", "Uniform 10 yr", "--output", str(output),
+               *(["--contributors"] if overlay else [])])
     manifest = json.loads((output / "plot_manifest.json").read_text())
     assert manifest["case"] == "B"
+    assert manifest["contributors"] == (["GA", "WW"] if overlay else [])
     assert [row["label"] for row in manifest["runs"]] == ["Ladder", "Uniform 10 yr"]
     assert len(manifest["figures"]) == 10
     for name in manifest["figures"]:

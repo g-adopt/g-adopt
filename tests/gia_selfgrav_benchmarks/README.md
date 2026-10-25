@@ -513,13 +513,25 @@ water-layer time series is overlaid; otherwise, including case B, VEGA is
 marked at the terminal time only. The timestep panel excludes the elastic
 diagnostic labelled at t=0.
 
+Add `--contributors` to either command to overlay the other published codes
+on the terminal profile and residual panels. For B at 10 kyr these are GA,
+GS, KS, SK, VB, VK, WW and YS; WW has no basin S profile. VEGA remains the
+reference. Contributor residuals use the archived differences from VEGA on
+each code's native grid, matching the data used to set the scoring limits.
+The run scores and evolution plots are unchanged. For example:
+
+```bash
+python3 plot_martinec_profiles.py outputs/B_ladder/summary_B.json \
+    --labels Ladder --contributors --output outputs/B_ladder/plots
+```
+
 Terminal plots retain the full curves and shade the bands excluded from
 scoring around cap margins and coastlines. `--band` changes their half
 width; the default 6.744912° matches `test_benchmarks.py` and is a historical
 scoring choice, not a width specified by the paper. `profile_scores.csv`
 contains the maximum/RMS errors, published-code limits and verdicts for
 each run. `plot_manifest.json` records source summaries, labels, mesh
-hashes, `giamip` version and the exclusion width. Inputs are read unchanged;
+hashes, contributor codes, `giamip` version and the exclusion width. Inputs are read unchanged;
 missing points, nonfinite profile values and incomplete runs are rejected.
 
 ## Walltime and cost

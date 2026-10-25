@@ -126,7 +126,14 @@ def mark_features(ax, case, spec, band=None):
     ax.grid(alpha=.2)
 
 
-def plot_terminal(runs, case, reference, spec, band):
+def load_contributors(letter):
+    """Read published members, excluding VEGA (ZM) already shown as reference."""
+    path = BenchmarkResult.reference_path(letter)
+    return [BenchmarkResult.read(path, member, case=letter)
+            for member in BenchmarkResult.members(path) if not member.startswith("ZM")]
+
+
+def plot_terminal(runs, case, reference, spec, band, contributors=()):
     fig, axes = plt.subplots(2, len(spec.quantities), squeeze=False, sharex="col",
                              figsize=(4.6 * len(spec.quantities), 6.6), layout="constrained")
     for j, q in enumerate(spec.quantities):
@@ -134,21 +141,41 @@ def plot_terminal(runs, case, reference, spec, band):
         interpolate_reference = CubicSpline(ref.axis, ref.values)
         lo, hi = spec.colatitude_interval_deg
         xref = np.linspace(lo, hi, 1001)
-        axes[0, j].plot(xref, interpolate_reference(xref), "k--", lw=1.7, label="VEGA reference")
+        for i, contributor in enumerate(contributors):
+            # Retain each archive curve's native grid. In the residual panel,
+            # use the published differences, as the scoring envelopes do.
+            for ax, curves in zip(axes[:, j], (contributor.profiles, contributor.differences)):
+                curve = curves.get((spec.name, q))
+                if curve is None:
+                    continue  # For example, WW did not supply basin S in B.
+                keep = (curve.axis >= lo) & (curve.axis <= hi)
+                ax.plot(curve.axis[keep], curve.values[keep], color=plt.get_cmap("Dark2")(i % 8),
+                        ls=("-", "--", "-.", ":")[i % 4], lw=.9, alpha=.8,
+                        label=contributor.member, zorder=2)
+        axes[0, j].plot(xref, interpolate_reference(xref), "k--", lw=1.7,
+                        label="VEGA reference", zorder=3)
         for i, run in enumerate(runs):
             curve = run.result.profile(spec.name, q)
             keep = (curve.axis >= lo) & (curve.axis <= hi)
             x, y = curve.axis[keep], curve.values[keep]
-            axes[0, j].plot(x, y, color=f"C{i % 10}", label=run.label)
-            axes[1, j].plot(x, y - interpolate_reference(x), color=f"C{i % 10}", label=run.label)
+            axes[0, j].plot(x, y, color=f"C{i % 10}", lw=1.8, label=run.label, zorder=4)
+            axes[1, j].plot(x, y - interpolate_reference(x), color=f"C{i % 10}",
+                            lw=1.8, label=run.label, zorder=4)
         axes[0, j].set_title(QUANTITIES[q])
         axes[0, j].set_ylabel("m, positive upward")
         axes[1, j].axhline(0, color="black", lw=.7)
-        axes[1, j].set_ylabel("Run − VEGA (m)")
+        axes[1, j].set_ylabel("Difference from VEGA (m)" if contributors else "Run − VEGA (m)")
         axes[1, j].set_xlabel("Colatitude (degrees)")
         for ax in axes[:, j]:
             mark_features(ax, case, spec, band)
-    axes[0, 0].legend(fontsize=9)
+    if contributors:
+        handles = {}
+        for ax in axes.flat:
+            lines, labels = ax.get_legend_handles_labels()
+            handles.update(zip(labels, lines))
+        fig.legend(handles.values(), handles.keys(), loc="outside lower center", ncols=5, fontsize=9)
+    else:
+        axes[0, 0].legend(fontsize=9)
     fig.suptitle(f"Martinec {case.letter}: {spec.name} meridian, longitude {spec.longitude_deg:g}°, "
                  f"{case.terminal_time_kyr:g} kyr\n"
                  f"Orange: cap margins / coastline; shaded ±{band:.3g}° bands excluded from scores")
@@ -210,6 +237,8 @@ def main(argv=None):
     parser.add_argument("summaries", nargs="+", type=Path, help="one or more summary_B/C/D.json files for the same case")
     parser.add_argument("--labels", nargs="+", help="one label per summary; defaults to parent folder names")
     parser.add_argument("--output", type=Path, help="figure directory; default: plots/ beside the first summary")
+    parser.add_argument("--contributors", action="store_true",
+                        help="overlay other published codes and their archived differences from VEGA at terminal time")
     parser.add_argument("--band", type=float, default=DEFAULT_BAND_DEG,
                         help="exclusion-band half width in degrees; default matches test_benchmarks.py (6.744912°)")
     args = parser.parse_args(argv)
@@ -224,6 +253,7 @@ def main(argv=None):
     letter = runs[0].result.case
     case = giamip.case(f"martinec2018-{letter}")
     reference = BenchmarkResult.reference(letter)
+    contributors = load_contributors(letter) if args.contributors else []
     # Score before rendering; missing reference curves or uncovered intervals
     # should fail before leaving behind a partly generated figure collection.
     scores = [{"run": run.label, **row} for run in runs
@@ -233,7 +263,7 @@ def main(argv=None):
     paths = []
     with plt.rc_context({"font.size": 10}):
         for spec in case.profiles:
-            paths += save_figure(plot_terminal(runs, case, reference, spec, args.band), directory,
+            paths += save_figure(plot_terminal(runs, case, reference, spec, args.band, contributors), directory,
                                  f"martinec_{letter}_{spec.name}_terminal")
             paths += save_figure(plot_evolution(runs, case, spec), directory,
                                  f"martinec_{letter}_{spec.name}_evolution")
@@ -243,6 +273,7 @@ def main(argv=None):
         writer.writeheader()
         writer.writerows(scores)
     manifest = {"case": letter, "giamip_version": giamip.__version__, "band_half_width_deg": float(args.band),
+                "contributors": [result.member for result in contributors],
                 "runs": [{"label": run.label, "summary": str(run.path),
                           "mesh_md5": run.summary.get("mesh", {}).get("md5")} for run in runs],
                 "figures": paths}
