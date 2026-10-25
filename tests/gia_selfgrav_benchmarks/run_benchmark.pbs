@@ -5,7 +5,7 @@
 #PBS -l mem=7500GB
 #PBS -l jobfs=100GB
 #PBS -l walltime=01:30:00
-#PBS -l storage=scratch/vo05+gdata/vo05+gdata/fp50
+#PBS -l storage=scratch/vo05+scratch/xd2+gdata/vo05+gdata/fp50
 #PBS -l wd
 #
 # One case of the self-gravitating GIA benchmarks on the NCI Gadi cluster.
