@@ -282,6 +282,8 @@ On a laptop with a debug build of PETSc, one step takes 45 to 100 s.
 | `--dtn_degree` | Spada: harmonic cutoff on both gravity boundary spheres; default 5, minimum 2 |
 | `--outer_rtol`, `--block0_rtol` | Spada: coupled/inner relative tolerances; defaults 1e-6/1e-4 |
 | `--timestep_scale` | Spada: multiply the graded timestep ladder; default 1, coarse check 2; output epochs remain solved states |
+| `--time_step_yr` | Martinec: uniform step in years; defaults B 10, C/D/E 50 (E smoke 2500); adjusted to land on output times |
+| `--time_step_ladder END_YR:STEP_YR [...]` | Martinec B only: experimental graded steps in years; increasing end times must cover 10 kyr; mutually exclusive with `--time_step_yr` |
 | `--mesh_h_km` | Spada: bulk mesh size in km; default 250, or 1000 for `--smoke` |
 | `--litho_layers` | Spada: subdivisions of the 70 km lithosphere; default 2, or 1 for `--smoke` |
 | `--write_output` | also write VTK files at every output epoch |
@@ -452,6 +454,31 @@ inside the spread of the published codes. Load N stays 3.5 mm outside:
 The largest N difference is at the cap centre, colatitude 25 degrees. It is
 4 mm above the prediction, and the cause of that remainder is not known.
 The test for rule 2 of case B is therefore marked `xfail`.
+
+Case B also accepts a configurable timestep ladder for convergence studies.
+For example, to reproduce the Spada schedule through 10 kyr (118 marched
+steps plus the separate elastic solve):
+
+```bash
+mpiexec -n 4 python3 martinec.py --case B \
+    --time_step_ladder 100:10 1000:50 10000:100 --output_path case_B_ladder/
+```
+
+Each pair gives a segment's end time and step length in years. End times
+must be finite, positive and strictly increasing; step lengths must be
+finite and positive. The final segment must reach at least 10,000 yr and
+is truncated there if necessary. Steps are adjusted within each segment to
+land exactly on output epochs, so every profile is a solved state. With
+`--smoke`, the run still stops after ten marched steps.
+
+Uniform 10 yr steps remain the default. The example above is the coarser
+schedule that failed the case B comparison, so check accuracy against the
+uniform run and VEGA before adopting another ladder. The summary records
+`time_step_ladder_yr` as pairs of end and step times, and `time_segments_yr`
+as `(start_yr, end_yr, actual_step_yr, step_count, is_output_epoch)` tuples.
+For a ladder run, `time_step_yr` is `null`. Restart with the same effective
+ladder; changing it is rejected. Earlier uniform-step checkpoints remain
+compatible with the matching uniform settings.
 
 ## Walltime and cost
 

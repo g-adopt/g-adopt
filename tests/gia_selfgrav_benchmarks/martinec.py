@@ -80,9 +80,10 @@ DISCRETISATION
               geoid criterion: the error of the compressible model at
               K / mu = 100 adds to the time error of backward Euler.
     Time      Case B: the elastic solve at t = 0, then uniform 10 yr steps
-              to 10 kyr (1000 steps, `T0_DT_YR`). Cases C and D: 50 yr steps
-              from 0 to 15 kyr, with no elastic solve, because the load
-              grows from zero.
+              to 10 kyr (1000 steps, `T0_DT_YR`). `--time_step_ladder`
+              selects an experimental graded schedule for B. Cases C and D:
+              50 yr steps from 0 to 15 kyr, with no elastic solve, because
+              the load grows from zero.
     Solver    Cases B and C have a fixed coastline, so the residual is linear
               in the unknowns and one linear solve per step is exact
               (`ksponly`). Case D has live masks and runs Newton.
@@ -141,7 +142,7 @@ import numpy as np  # noqa: E402
 from gadopt import (COMM_WORLD, Constant, Function,  # noqa: E402
                     FunctionSpace, ParameterLog, SpatialCoordinate,
                     SphericalDtN, VTKFile, acos, assemble,
-                    cos, dot, exp, interpolate, log, max_value, min_value,
+                    cos, dot, exp, log, max_value, min_value,
                     sqrt)
 from gadopt.gia_gravity import (SeaLevel,  # noqa: E402
                                 SelfGravitatingGIASolver,
@@ -730,7 +731,48 @@ def write_profiles(path, solver, layout, samplers, profiles, g_surface,
 # --------------------------------------------------------------------------
 
 
-def parse_args():
+def ladder_segment(value):
+    """Read one END_YR:STEP_YR pair for the case B timestep ladder."""
+    try:
+        end_yr, step_yr = map(float, value.split(":"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected END_YR:STEP_YR") from None
+    if not all(np.isfinite(v) and v > 0 for v in (end_yr, step_yr)):
+        raise argparse.ArgumentTypeError("ladder end times and steps must be finite and positive")
+    return end_yr, step_yr
+
+
+def time_schedule(args, epochs):
+    """Build a uniform or graded schedule ending exactly on every output epoch."""
+    t_end_yr = max(epochs) * 1000.0
+    if args.time_step_ladder is not None:
+        if args.time_step_ladder[-1][0] < t_end_yr:
+            raise ValueError(f"--time_step_ladder must cover the terminal time ({t_end_yr:g} yr)")
+        ladder = common.truncated_ladder(args.time_step_ladder, t_end_yr)
+    else:
+        step_yr = args.time_step_yr
+        if step_yr is None:
+            step_yr = T0_DT_YR if args.case == "B" else T1_DT_YR
+        ladder = ((t_end_yr, step_yr),)
+    return ladder, common.time_segments(epochs, ladder)
+
+
+def checkpoint_run_settings(written):
+    """Interpret pre-ladder checkpoints as uniform runs with their original step."""
+    default_step = T0_DT_YR if written["case"] == "B" else T1_DT_YR
+    return {"time_step_yr": default_step, "time_step_ladder_yr": None, **written}
+
+
+def run_settings(args, bulk_shear_ratio, ladder):
+    """Record the effective schedule in the same JSON layout as checkpoints."""
+    graded = args.time_step_ladder is not None
+    return {"case": args.case, "bulk_shear_ratio": bulk_shear_ratio,
+            "smoke": args.smoke,
+            "time_step_yr": None if graded else ladder[0][1],
+            "time_step_ladder_yr": [list(pair) for pair in ladder] if graded else None}
+
+
+def parse_args(argv=None):
     """The command line."""
     p = argparse.ArgumentParser(
         description=__doc__,
@@ -740,9 +782,16 @@ def parse_args():
     p.add_argument("--bulk_shear_ratio", type=float, default=None,
                    help="K / mu in every layer; default 1000 for case B and "
                         "100 for cases C, D and E")
-    p.add_argument("--time_step_yr", type=float, default=None,
-                   help="time step in years; defaults: B 10, C/D/E 50, E smoke 2500. "
-                        "Adjusted to land exactly on output times (E: terminal time).")
+    timesteps = p.add_mutually_exclusive_group()
+    timesteps.add_argument(
+        "--time_step_yr", type=float, default=None,
+        help="time step in years; defaults: B 10, C/D/E 50, E smoke 2500. "
+             "Adjusted to land exactly on output times (E: terminal time).")
+    timesteps.add_argument(
+        "--time_step_ladder", type=ladder_segment, nargs="+", metavar="END_YR:STEP_YR",
+        help="case B only: increasing segment end times and steps in years, "
+             "e.g. 100:10 1000:50 10000:100; must cover 10 kyr. "
+             "Experimental: accuracy must be checked against VEGA.")
     p.add_argument("--smoke", action="store_true",
                    help=f"run {SMOKE_STEPS} steps (E: six steps to 15 kyr) on a very coarse mesh, to "
                         "check that the code runs; the numbers are not "
@@ -763,12 +812,23 @@ def parse_args():
     # retain their existing dependencies and forward-only execution.
     from martinec_e import add_arguments
     add_arguments(p)
-    args = p.parse_args()
-    if args.time_step_yr is not None and (not np.isfinite(args.time_step_yr)
-                                         or args.time_step_yr <= 0):
+    args = p.parse_args(argv)
+    if args.time_step_yr is not None and (
+            not np.isfinite(args.time_step_yr) or args.time_step_yr <= 0):
         p.error("--time_step_yr must be finite and positive")
-    if args.case != "E" and (args.topography_restart or args.topography_one_pass
-                            or args.check_topography_gradient or args.write_gradients):
+    if args.time_step_ladder is not None:
+        if args.case != "B":
+            p.error("--time_step_ladder requires --case B")
+        ends = [end for end, step in args.time_step_ladder]
+        if any(right <= left for left, right in zip(ends, ends[1:])):
+            p.error("--time_step_ladder end times must be strictly increasing")
+        try:
+            time_schedule(args, (read_case(args.case).terminal_time_kyr,))
+        except ValueError as error:
+            p.error(str(error))
+    if args.case != "E" and (
+            args.topography_restart or args.topography_one_pass
+            or args.check_topography_gradient or args.write_gradients):
         p.error("topography restart/one-pass/gradient options require --case E")
     return args
 
@@ -785,11 +845,11 @@ def main():
     bulk_shear_ratio = (args.bulk_shear_ratio if args.bulk_shear_ratio
                         is not None else BULK_SHEAR_RATIO[letter])
     case = read_case(letter)
-    default_step_yr = T0_DT_YR if case.time_scenario == "T0" else T1_DT_YR
-    step_yr = args.time_step_yr if args.time_step_yr is not None else default_step_yr
     profiles = profile_grid(case)
     epochs = sorted(set(EPOCHS_KYR[case.time_scenario])
                     | {entry["time_kyr"] for entry in profiles.values()})
+    ladder, segments = time_schedule(args, epochs)
+    settings = run_settings(args, bulk_shear_ratio, ladder)
 
     log("=" * 78)
     log(f"Martinec et al. (2018) sea-level benchmark, case {letter}"
@@ -812,22 +872,16 @@ def main():
         # The record says what run wrote the file. A restart with another
         # case or another K / mu would continue a different problem from
         # this state without any error.
-        written = restart.record["run"]
-        # Checkpoints predating the CLI option used the case's default step.
-        written = {"time_step_yr": default_step_yr, **written}
-        this = {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
-                "smoke": args.smoke, "time_step_yr": step_yr}
-        if written != this:
+        written = checkpoint_run_settings(restart.record["run"])
+        if written != settings:
             raise RuntimeError(f"{args.restart} was written by the run "
-                               f"{written}; this run is {this}")
+                               f"{written}; this run is {settings}")
 
     # Scenario T0 (case B) is a load switched on at t = 0: the elastic solve
-    # and then uniform steps of `T0_DT_YR`, which the time error of backward
-    # Euler on a held load needs (see `T0_DT_YR`). A growing load (T1) has no
-    # fast early response and takes uniform steps of `T1_DT_YR`.
-    t_end_yr = max(epochs) * 1000.0
-    ladder = ((t_end_yr, step_yr),)
-    segments = common.time_segments(epochs, ladder)
+    # and then uniform steps of `T0_DT_YR` by default (see `T0_DT_YR`). An
+    # explicit ladder permits experiments with graded steps. A growing load
+    # (T1) has no fast early response and takes uniform steps of `T1_DT_YR`.
+    log(f"  timestep ladder (end yr, step yr): {ladder}")
     log(f"  epochs (kyr) {epochs}, {sum(s[3] for s in segments)} steps")
 
     dt = Constant(common.DT_ELASTIC)
@@ -927,8 +981,7 @@ def main():
 
     def record():
         """The driver's part of a checkpoint: enough to continue the outputs."""
-        return {"run": {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
-                        "smoke": args.smoke, "time_step_yr": step_yr},
+        return {"run": settings,
                 "rows": rows, "profile_files": profile_files,
                 "restarts": restarts,
                 "wall_s": wall_before_s + time.time() - tic_run}
@@ -967,7 +1020,9 @@ def main():
          "timeseries_file": os.path.basename(timeseries_path),
          "terminal_time_kyr": case.terminal_time_kyr,
          "requested_time_step_yr": args.time_step_yr,
-         "time_step_yr": step_yr,
+         "time_step_yr": settings["time_step_yr"],
+         "time_step_ladder_yr": settings["time_step_ladder_yr"],
+         "time_segments_yr": segments,
          "giamip_version": giamip.__version__,
          "cap_volume_error": cap_volume_error,
          "profile_points_found": {
