@@ -146,6 +146,13 @@ jobs:
           path: ./gplates
           ref: PyGPlates-1.0.0
 
+      - name: Fetch gplates
+        uses: actions/checkout@v5
+        with:
+          repository: dsroberts/GPlates
+          path: ./gplates
+          ref: PyGPlates-1.0.0
+
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
