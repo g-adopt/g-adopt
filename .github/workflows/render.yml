@@ -57,7 +57,7 @@ jobs:
         run: |
           apt install -y xvfb gmsh gh unzip
 
-          uv venv --system-site-packages
+          uv venv --system-site-packages --python=3.13
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
           uv cache clean animate
           uv pip install --no-build-isolation git+https://github.com/mesh-adaptation/animate

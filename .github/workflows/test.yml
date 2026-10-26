@@ -69,7 +69,7 @@ jobs:
 
       - name: Run smoke test
         run: |
-          uv venv --system-site-packages
+          uv venv --system-site-packages --python=3.13
           uv pip install .
           . .venv/bin/activate
           make -C demos/mantle_convection/base_case check
@@ -128,7 +128,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          uv venv --system-site-packages
+          uv venv --system-site-packages --python=3.13
           uv pip install .[demos,optimisation,gplates]
 
       - name: Check out repository linked to Trim et al. (2023)

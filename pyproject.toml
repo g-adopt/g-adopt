@@ -10,6 +10,7 @@ authors = [
 description = "A computational platform for inverse geodynamics"
 dynamic = ["version"]
 readme = "README.md"
+requires-python = ">=3.11"
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
