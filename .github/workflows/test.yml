@@ -96,7 +96,12 @@ jobs:
       - name: Install prerequisites
         run: |
           apt update
-          apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
+          apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev \
+              patchelf libgl1-mesa-dev libglu1-mesa-dev libglew-dev \
+              libboost-dev libboost-python-dev libboost-thread-dev libboost-program-options-dev \
+              libqt5opengl5-dev libqt5svg5-dev libqwt-qt5-dev libqt5xmlpatterns5-dev \
+              libgdal-dev libcgal-dev libproj-dev proj-bin zlib1g-dev \
+              libgtest-dev
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
       - name: Install uv
@@ -126,9 +131,17 @@ jobs:
         run: |
           mv tsp_build/tsp-hpc /usr/local/bin/tsp
 
+      - name: Fetch gplates
+        uses: actions/checkout@v5
+        with:
+          repository: dsroberts/GPlates
+          path: ./gplates
+          ref: PyGPlates-1.0.0
+
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
+          uv pip install ./gplates
           uv pip install .[demos,optimisation,gplates]
 
       - name: Check out repository linked to Trim et al. (2023)
