@@ -4,8 +4,9 @@ This is the specification for the planned study, including the profile-rate,
 LOD, off-axis controls and surface HDF5 additions after commit `deebb1ea`.
 `spada_study.py` prepares a manifest and PBS files for all 27 production runs
 and four smoke checks, and submits them in explicit stages. Preparation
-never submits jobs. Figure assembly and the full scientific output audit
-remain separate work.
+never submits jobs. `analyse_spada_study.py` audits transferred summaries,
+profiles and logs and generates sensitivity/reference figures. Surface-map
+assembly and the full checkpoint audit remain separate work.
 
 ## Run matrix
 
@@ -105,10 +106,10 @@ Direct surface VTK is available with `--surface_output_format vtk` for debugging
 |---|---|---|---|
 | Nonrotating cap/disc U, V, N profiles and residuals at selected times | Direct profiles plus projected coefficients | Loading Love numbers and relaxation spectra, degrees 2–256 | Existing profile plotter supports both shapes |
 | Degree-by-degree nonrotating response | Summary coefficients through diagnostic degree 10 | Matching TABOO degrees | Data available; paper panel assembly still needed |
-| Polar-motion components, amplitude and phase versus time | Every-step log plus elastic/epoch summary values | Detailed cap time series; disc scales by its degree-2 excitation factor | Data available from new runs; dedicated panel plotter needed |
+| Polar-motion components, amplitude and phase versus time | Every-step log plus elastic/epoch summary values | Detailed cap time series; disc scales by its degree-2 excitation factor | `analyse_spada_study.py` plots epoch amplitude/error/phase; continuous component panel assembly remains |
 | Polar-motion rate | Finite differences of every-step components | TABOO cap rate series and cap/disc tabulated rate magnitudes | Analysis/plotting needed; label numerical derivative and evaluate timestep sensitivity |
 | Rotating U, along, across, N spatial profiles | Direct profiles on two load-centred great circles | No rotating spatial reference in the supplied archive | Existing direct profile plotter works; these are field illustrations and sensitivity comparisons |
-| Numerical sensitivity errors and cost | Matched baseline/variant profiles, summaries and step logs | TABOO for nonrotating fields and polar motion; baseline differences for rotating fields | New comparison/aggregation script needed |
+| Numerical sensitivity errors and cost | Matched baseline/variant profiles, summaries and step logs | TABOO for nonrotating fields and polar motion; baseline differences for rotating fields | `analyse_spada_study.py` audits and compares transferred runs, including the 125 km cap checks |
 | Spatial deformation/geoid rates | Adjacent-step differences at every saved profile epoch, in m/yr | Instantaneous analytic TABOO derivatives, rotated into the saved profile basis | `plot_spada_profiles.py --rates` works for both cases; t=0 is omitted |
 | Surface maps and rotation-on/off differences | Surface HDF5 displacement, gravitational/rotational/total geoid and rates on simulation boundary facets; offline VTK conversion | No independent rotating spatial reference in the supplied archive | Output/conversion implemented; map panel assembly still needed |
 | Length of day | m3 and signed `lod_ms` at every step and output epoch | `lod_eq33_ref_ms`, reconstructed independently from TABOO loading k2(t) | Output implemented; signed comparison requires resolving the Eq.33/inertia sign convention |
@@ -136,8 +137,10 @@ Rates use the previous solved timestep, not the previous saved epoch.
 Intervals and validity are recorded in the NPZ files. t=0 rates are NaN
 because of the instantaneous jump; the first marched interval subtracts
 the approximate elastic diagnostic, and restarts subtract the restored
-state. Compare these interval averages with instantaneous TABOO rates and
-report timestep sensitivity. N and its rate are gravitational contributions
+state. The individual profile plotter overlays instantaneous TABOO rates;
+`analyse_spada_study.py` instead averages the analytic reference over each
+saved interval before scoring rate errors. State which comparison is used
+and report timestep sensitivity. N and its rate are gravitational contributions
 only (`psi/g0`), excluding the centrifugal potential.
 
 LOD uses `lod_ms = -86400e3*m3`, positive for a longer day. The printed
@@ -277,12 +280,45 @@ python3 plot_spada_profiles.py outputs/spada-study/disc-on/baseline/summary_pola
     --output outputs/spada-study/disc-on/baseline/profiles_near.pdf
 ```
 
-The existing `plot_spada_load_convergence.py` compares load cutoffs. It
-must not be reused unchanged for this study: variants share the same load
-description, and the script neither labels their numerical settings nor
-handles this nested directory layout. The final workflow needs a separate
-sensitivity/rotation panel assembler.
+The existing `plot_spada_load_convergence.py` compares load cutoffs. For this
+parameter study use the separate analysis command, which requires NumPy and
+Matplotlib but does not import Firedrake:
 
-At the time of this audit the local completed Spada datasets are older
-nonrotating cap runs at K/μ = 100. No completed disc or rotating datasets
-were found in `outputs/`; they cannot supply the proposed new baselines.
+```bash
+python3 analyse_spada_study.py outputs/spada-study
+```
+
+It writes `outputs/spada-study-analysis/analysis.md`, PDF/PNG figures,
+CSV metrics and `provenance.json`. The provenance records input/reference
+hashes, analysis/helper script hashes and analysis software versions; the
+run table retains source/module strings and mesh hashes/seeds. The script
+checks saved controls against the planned matrix, all seven epochs,
+profile validity, mesh-quality flags, timestep logs and outer convergence.
+Inner iteration caps are reported separately. Surface HDF5 files and full
+checkpoints are outside this audit.
+
+Sensitivity metrics compare matching physical scenarios on identical saved
+profile points and bases. They include absolute/RMS errors and peak-normalized
+differences within 25° of the load centre, plus global and load-edge-excluded
+metrics. These are line-profile norms, not area-weighted surface norms.
+TABOO spatial reference curves use degrees 2–256; rate errors use matched
+interval averages. Polar-motion errors retain the raw C−A convention
+difference, and signed Eq.33 LOD errors are not scored. One-at-a-time variants
+do not establish an error bound for combined settings. Lithosphere changes
+also regenerate the bulk mesh: the transferred one-layer runs used seed 10
+versus baseline seed 9, so their effects include remeshing.
+
+The transferred October 2026 dataset contains 28 completed production runs:
+26 of the planned 27 plus `cap-off/mesh125` and `cap-on/mesh125`. All seven
+profiles are present for each completed run. `disc-on/dtn2` failed with an
+MPI buffer error and has no completed summary. No 125 km disc run is
+available. Completed production runs cost 214,238.28 SU; including the failed
+DtN attempt gives 214,572.81 SU, excluding smoke checks.
+
+The generated report separates large-scale degree-2–10 diagnostics from
+direct-field spatial accuracy. In particular, the 125 km cap-off geoid rate
+at 10 kyr has a dipole-shaped discrepancy: `low_mode_diagnostics.csv`
+records a fit on the saved profiles, without removing that component from
+the scored errors. A controlled centre-of-mass-frame check is needed before
+claiming convergence of those rates. The scientific interpretation of this
+transferred dataset is in [SPADA_STUDY_ANALYSIS.md](SPADA_STUDY_ANALYSIS.md).
