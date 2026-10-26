@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 import uuid
 
@@ -26,10 +27,11 @@ CASE_ROOTS = [
 # otherwise there will be no slot-aware scheduling of jobs.
 #
 # This is a "dumb" variable, and can only be string-valued.
-# Pass it on the command line as `doit batch_mode=YES ...`
+# Pass it as an environment variable, because doit will
+# lose its value if the --process flag is used!
 # Tasks do support a `params` entry for smarter argparse-style
 # arguments, but this doesn't play well with subtasks.
-batch_mode = get_var("batch_mode", "YES")
+batch_mode = os.getenv("batch_mode", "YES")
 
 
 def discover_cases() -> Iterator[tuple[Path, CaseMeta]]:
