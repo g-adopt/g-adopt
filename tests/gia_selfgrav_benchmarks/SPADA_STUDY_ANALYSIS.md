@@ -77,6 +77,22 @@ excluding points within 1° of that edge still leaves maxima of 7.95% for
 displacement and 10.63% for geoid. The issue is not confined to the immediate
 discontinuity. No 125 km disc result is available to test its improvement.
 
+An additional reference-only check for the four panel epochs (0, 1, 5 and
+20 kyr), on the 0° meridian within 25°, compared harmonic cutoffs 128 and 256.
+The largest geoid change is 2.30% for the cap and 12.11% for the disc,
+normalized by the degree-256 reference peak at the same epoch. These are
+observed cutoff sensitivities, not bounds on the omitted tail above 256.
+They reinforce the need to assess reference convergence for the sharp disc.
+
+The paper's spatial test specification (§2.2.1) prescribes degrees 2–128;
+our reconstructed reference uses the available Love numbers/spectra through
+256. TABOO itself is not intrinsically limited to 256: the archive metadata
+for `T02/disp_t0_point.dat` records a degree-2–512 point-load calculation.
+No corresponding higher-degree cap/disc reference or complete spectra above
+256 were found in the supplied dataset. A 512/1024 convergence check would
+require new calculations for the matching Earth model, not extrapolating
+the existing coefficients or changing the plot label.
+
 For a benchmark paper, the baseline supports a qualified large-scale
 self-gravity comparison. Use the 125 km cap profiles to show the material
 improvement with refinement. Do not describe the baseline disc profiles as

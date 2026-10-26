@@ -280,6 +280,45 @@ python3 plot_spada_profiles.py outputs/spada-study/disc-on/baseline/summary_pola
     --output outputs/spada-study/disc-on/baseline/profiles_near.pdf
 ```
 
+For a six-panel nonrotating baseline figure, with cap/disc columns and radial
+displacement, tangential displacement and geoid rows:
+
+```bash
+python3 plot_spada_baselines.py outputs/spada-study
+```
+
+This overlays direct baseline curves and the Spada/TABOO degree-2–256
+reference at 0 kyr (elastic), 1 kyr, 5 kyr and 20 kyr. It selects the saved
+0° longitude meridian over 0–25° from the north-pole load centre; tangential
+displacement is positive away from that centre. Both columns use the same
+vertical scale within each row. The 10° load edge is marked. No meridian
+averaging or degree-10 projection is applied. Use `--longitude`, `--times-kyr`,
+`--max-colatitude` and `--output` to change these choices. PDF/PNG and an
+input hash/settings JSON are saved as
+`outputs/spada-study-analysis/spada_nonrotating_baselines.*`.
+
+Figure preferences agreed on 26 October 2026, to preserve in future revisions:
+
+- Use a colour-blind-friendly scientific palette. The current Okabe–Ito
+  choices are blue `#0072B2` for elastic, orange `#E69F00` for 1 kyr,
+  bluish green `#009E73` for 5 kyr and reddish purple `#CC79A7` for 20 kyr.
+  Use the same time colour for numerical and reference values, at full opacity.
+- Draw G-ADOPT as solid lines and the reference as crosses without connecting
+  lines. Label the reference **TABOO** in the legend.
+- Put the combined time/method legend in the bottom-right corner of the
+  top-left panel. Use a rectangular white background and a thin **black**
+  border to match the plot outlines.
+- Put all panel labels `(a)`–`(f)` in the same top-right position, slightly
+  inset from both edges: axes coordinates `(0.96, 0.96)`, right/top aligned.
+  Preserve extra headroom in the shared radial-displacement y-axis so the
+  top-row labels remain clear of the curves. The current upper-limit padding
+  adds 7% of the original axis range.
+- Keep explanatory text out of the figure footer. Describe rotation status,
+  mesh resolution, profile location, reference cutoff and the load-edge line
+  in the paper caption. Retain the axis labels, units, column titles and legend.
+- Export both vector PDF for the paper and PNG for preview; retain the JSON
+  recording times, colours, input hashes and reference cutoff.
+
 The existing `plot_spada_load_convergence.py` compares load cutoffs. For this
 parameter study use the separate analysis command, which requires NumPy and
 Matplotlib but does not import Firedrake:
