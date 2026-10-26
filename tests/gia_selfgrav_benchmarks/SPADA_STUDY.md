@@ -319,6 +319,58 @@ Figure preferences agreed on 26 October 2026, to preserve in future revisions:
 - Export both vector PDF for the paper and PNG for preview; retain the JSON
   recording times, colours, input hashes and reference cutoff.
 
+To generate a separate six-panel figure for each completed nonrotating
+comparison, keeping the same layout, time colours and TABOO crosses:
+
+```bash
+python3 plot_spada_baselines.py outputs/spada-study --all-variants
+```
+
+Each figure overlays the **solid G-ADOPT baseline**, one **dashed changed
+run**, and TABOO crosses at elastic, 1, 5 and 20 kyr. The legend names the
+changed setting. PDF/PNG and input-hash/settings JSON files are saved under
+`outputs/spada-study-analysis/nonrotating_variants`, with an `index.md`
+linking the figures and recording cap/disc availability. Use `--output-dir`
+to choose another batch directory. To regenerate just one comparison:
+
+```bash
+python3 plot_spada_baselines.py outputs/spada-study --variant mesh500
+```
+
+The single-variant command writes
+`outputs/spada-study-analysis/spada_nonrotating_mesh500.*`; `--output`
+overrides that stem. Running without either comparison option still
+generates the original baseline figure.
+
+| Variant | Changed setting | Completed nonrotating runs |
+|---|---|---|
+| `dt2` | Doubled timestep | Cap and disc |
+| `mesh500` | 500 km horizontal mesh size | Cap and disc |
+| `litho1` | One lithosphere layer | Cap and disc |
+| `bulk100` | K/μ = 100 | Cap and disc |
+| `dtn2` | DtN degree 2 | Cap and disc |
+| `mesh125` | 125 km horizontal mesh size | Cap only |
+| `offaxis` | Load centre at colatitude 25°, longitude 75°; rotation off | Cap and disc |
+
+The 125 km figure retains baseline/TABOO curves in the disc column and
+labels that column as having no comparison result. The solver-tolerance
+check is a rotating cap run, so it is outside this nonrotating figure set.
+The one-layer runs also regenerate the bulk mesh, as described below.
+
+The off-axis figure is a load-placement control. It uses the positive
+0–25° branch of the saved bearing-0° great circle through the off-axis load
+centre; `--bearing` selects another saved bearing. Tangential displacement
+is positive away from each run's own load centre. The spherical nonrotating
+reference is invariant under rotating the load and profile together.
+
+Before drawing a dashed curve, the plotter checks that the saved settings
+match the advertised variant and the baseline's remaining controls. It
+requires matching sample distances and depths, plus matching spatial bases
+for comparisons at the same load location. Profiles are neither interpolated
+nor averaged. Missing comparisons are labelled explicitly; other invalid
+inputs stop generation. Each figure's JSON records the files used, script
+hashes, software versions, reference cutoff and comparison availability.
+
 The existing `plot_spada_load_convergence.py` compares load cutoffs. For this
 parameter study use the separate analysis command, which requires NumPy and
 Matplotlib but does not import Firedrake:
