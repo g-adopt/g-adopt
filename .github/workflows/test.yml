@@ -104,6 +104,16 @@ jobs:
               libgtest-dev
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
+      - name: Fix OpenMPI installation
+        run: |
+            # Remove block on files in /usr/share/doc being installed
+            rm /etc/dpkg/dpkg.cfg.d/excludes
+            apt reinstall libprrte-dev
+            for i in /usr/share/doc/libprrte-dev/*; do
+              [[ ${i#*\.} == "txt.gz" ]] && gunzip $i
+            done
+            ln -s /usr/share/doc/libprrte-dev /usr/lib/x86_64-linux-gnu/prrte3/share/prte
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
