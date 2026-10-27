@@ -235,6 +235,26 @@ small low-degree components in either mode. Add `--load_shape disc` to use
 the disc's step profile and its own degree-0/1 subtraction in spatial mode.
 Its sharp edge needs a load/mesh convergence check.
 
+Add `--centre_of_mass` to fix the centre of mass of the mantle, fluid core
+and load at the origin using the library's three frame multipliers. This
+option is off by default and applies to both cases and load shapes. Removing
+analytic degree 1 from the load does not fix the coupled translation freedom
+or guarantee zero degree-1 content after interpolation and integration.
+The constraint acts during the solve; direct profiles retain the solved fields.
+For example, from this directory in the Firedrake 2026.10.0 environment:
+
+```bash
+python3 spada.py --case cap --centre_of_mass --write_profiles \
+    --output_path outputs/spada-cap-com
+```
+
+For PBS runs, include `--centre_of_mass` in `EXTRA`. The summary and checkpoint
+record `centre_of_mass`, and the startup log prints whether it is on or off.
+Restart with the same setting; checkpoints without this key are treated as
+unconstrained, so a frame-constrained comparison requires a fresh run. The
+existing study matrix retains its unconstrained settings. Use separate output
+directories for matched frame comparisons.
+
 `--diagnostic_nmax` must be at least 2 and, for the cap comparison, no larger
 than the available TABOO reference (currently 256). It controls the projected
 coefficient arrays and the reconstructed pole values and maximum V, not the

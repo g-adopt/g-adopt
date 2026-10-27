@@ -149,6 +149,19 @@ def test_coarse_solver_tolerances():
     assert spada.checkpoint_run_settings({"run": legacy}) != coarse
 
 
+@pytest.mark.parametrize("case", ["cap", "polar-motion"])
+def test_centre_of_mass_frame_is_opt_in_and_restart_compatible(case):
+    baseline = spada.run_settings(spada.parse_args(["--case", case]))
+    constrained = spada.run_settings(spada.parse_args(["--case", case, "--centre_of_mass"]))
+    assert baseline["centre_of_mass"] is False
+    assert constrained == {**baseline, "centre_of_mass": True}
+    assert spada.checkpoint_run_settings({"run": constrained}) == constrained
+    assert spada.checkpoint_run_settings({"run": constrained}) != baseline
+    legacy = {key: value for key, value in baseline.items() if key != "centre_of_mass"}
+    assert spada.checkpoint_run_settings({"run": legacy}) == baseline
+    assert spada.checkpoint_run_settings({"run": legacy}) != constrained
+
+
 def test_study_options_and_restart_compatibility():
     from spada_study import run_matrix
 

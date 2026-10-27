@@ -90,6 +90,9 @@ DISCRETISATION
               submesh, CG2 potential on the whole mesh, `Real` unknowns for
               the core pressure and, in the polar-motion case, the three
               rotation components.
+    Frame     --centre_of_mass adds three Real multipliers fixing the total
+              mass dipole of mantle, fluid core and load to zero. Off by
+              default; independent of the load's analytic degree-0/1 removal.
     Time      Backward Euler: 10 yr steps to 0.1 kyr, 50 yr to 1 kyr, 100 yr
               to 10 kyr and 500 yr to 20 kyr. The t = 0 state is the elastic
               response, solved on its own.
@@ -563,7 +566,8 @@ def series(coeffs, theta, kind="P"):
 def build_solver(case, parent, mantle, dt, bulk_shear_ratio, *,
                  load_nmax=NMAX, load_representation="spatial", load_shape="cap",
                  dtn_degree=common.DTN_DEGREE, outer_rtol=common.OUTER_RTOL,
-                 block0_rtol=common.BLOCK0_RTOL, load_centre=None):
+                 block0_rtol=common.BLOCK0_RTOL, load_centre=None,
+                 centre_of_mass=False):
     """The coupled self-gravitating solver of one Spada case.
 
     Args:
@@ -576,6 +580,8 @@ def build_solver(case, parent, mantle, dt, bulk_shear_ratio, *,
       load_shape: "cap" or "disc".
       dtn_degree: harmonic cutoff on both gravity boundary spheres.
       outer_rtol, block0_rtol: coupled and inner block relative tolerances.
+      centre_of_mass: fix the total mantle, fluid-core and load mass dipole
+        to zero using the library's frame multipliers.
 
     Returns:
       `(solver, layout)`.
@@ -601,7 +607,8 @@ def build_solver(case, parent, mantle, dt, bulk_shear_ratio, *,
     }
     Z, layout = self_gravitating_gia_space(
         mantle, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-        fluid_core=True, self_gravity_number=common.LAMBDA,
+        fluid_core=True, centre_of_mass=centre_of_mass,
+        self_gravity_number=common.LAMBDA,
         displacement_degree=common.DISPLACEMENT_DEGREE,
         internal_variable_degree=common.INTERNAL_VARIABLE_DEGREE,
         potential_degree=common.POTENTIAL_DEGREE,
@@ -942,6 +949,7 @@ def run_settings(args):
             "load_nmax": (args.load_nmax if args.load_representation == "spectral"
                           else None),
             "diagnostic_nmax": args.diagnostic_nmax, "dtn_degree": args.dtn_degree,
+            "centre_of_mass": args.centre_of_mass,
             "outer_rtol": args.outer_rtol, "block0_rtol": args.block0_rtol,
             "timestep_scale": args.timestep_scale,
             "mesh_h_km": args.mesh_h_km, "litho_layers": args.litho_layers}
@@ -961,6 +969,8 @@ def checkpoint_run_settings(record, mesh_info=None):
     written.setdefault("dtn_degree", 5)
     written.setdefault("outer_rtol", 1.0e-6)
     written.setdefault("block0_rtol", 1.0e-4)
+    # Older Spada runs did not constrain the centre-of-mass frame.
+    written.setdefault("centre_of_mass", False)
     mesh = mesh_info or common.MESHES["smoke" if written["smoke"] else "spada"]
     written.setdefault("timestep_scale", 1.0)
     written.setdefault("mesh_h_km", mesh["h_km"])
@@ -1035,6 +1045,9 @@ def parse_args(argv=None):
                    help="coupled FGMRES relative tolerance (default 1e-6)")
     p.add_argument("--block0_rtol", type=relative_tolerance, default=common.BLOCK0_RTOL,
                    help="inner mechanics-potential FGMRES relative tolerance (default 1e-4)")
+    p.add_argument("--centre_of_mass", action="store_true",
+                   help="constrain the total mass dipole of mantle, fluid core and load "
+                        "to zero (default off); must match the checkpoint on restart")
     p.add_argument("--smoke", action="store_true",
                    help="run on a very coarse mesh to 0.1 kyr, to check that "
                         "the code runs; the numbers are not results")
@@ -1121,6 +1134,7 @@ def main():
     if args.case == "cap":
         log(f"  projected diagnostic degrees 2..{args.diagnostic_nmax}")
     log(f"  solver tolerances: outer {args.outer_rtol:g}, inner {args.block0_rtol:g}")
+    log(f"  centre-of-mass constraint: {'on' if args.centre_of_mass else 'off'}")
 
     # A new run generates its mesh; a restarted run loads it from the
     # checkpoint file, because the stored fields can only be loaded onto the
@@ -1154,7 +1168,8 @@ def main():
                                   load_representation=args.load_representation,
                                   load_shape=args.load_shape, dtn_degree=args.dtn_degree,
                                   outer_rtol=args.outer_rtol, block0_rtol=args.block0_rtol,
-                                  load_centre=args.load_centre)
+                                  load_centre=args.load_centre,
+                                  centre_of_mass=args.centre_of_mass)
     log(f"  solver built ({time.time() - tic:.1f} s): "
         f"{solver.solution.function_space().dim()} unknowns, "
         f"{len(layout.real_fields)} Real rows")
