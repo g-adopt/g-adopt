@@ -80,7 +80,7 @@ jobs:
     container:
       # Prefer specific branch, then PR base, then actual branch
       image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
-      options: --cap-add SYS_NICE
+      options: --cap-add SYS_NICE --shm-size=1024g
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
@@ -113,6 +113,7 @@ jobs:
               [[ ${i#*\.} == "txt.gz" ]] && gunzip $i
             done
             ln -s /usr/share/doc/libprrte-dev /usr/lib/x86_64-linux-gnu/prrte3/share/prte
+        shell: bash
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -136,10 +137,7 @@ jobs:
         run: |
           cmake ./tsp -B ./tsp_build
           cmake --build ./tsp_build
-
-      - name: Put task spooler on PATH
-        run: |
-          mv tsp_build/tsp-hpc /usr/local/bin/tsp
+          mv ./tsp_build/tsp-hpc /usr/local/bin/tsp
 
       - name: Fetch gplates
         uses: actions/checkout@v5
