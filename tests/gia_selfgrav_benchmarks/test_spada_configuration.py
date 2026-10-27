@@ -192,6 +192,93 @@ def test_timestep_scaling_preserves_output_epochs(scale, steps):
     assert segments[0][2] == 10.*scale
 
 
+def test_frame_study_options_and_legacy_restart_defaults():
+    import spada_frame_study as frame
+
+    for run in frame.run_matrix(checks=frame.CHECKS):
+        args = spada.parse_args(run["arguments"])
+        settings = spada.run_settings(args)
+        assert settings["centre_of_mass"] == run["centre_of_mass"]
+        assert settings["write_frame_diagnostics"]
+        assert settings["load_centre_deg"] == run["load_centre_deg"]
+        assert list(spada.output_epochs(args)) == run["epochs_kyr"]
+        assert args.write_surface_output and args.write_profiles
+        for key, value in run["settings"].items():
+            assert settings[key] == value
+    baseline = spada.run_settings(spada.parse_args([]))
+    legacy = {key: value for key, value in baseline.items()
+              if key not in ("write_frame_diagnostics", "extra_epochs_kyr")}
+    assert spada.checkpoint_run_settings({"run": legacy}) == baseline
+    diagnostic = spada.run_settings(spada.parse_args(["--write_frame_diagnostics"]))
+    assert diagnostic != baseline
+    assert spada.checkpoint_run_settings({"run": diagnostic}) == diagnostic
+
+
+@pytest.mark.parametrize("scale,steps", [(1., 138), (.5, 276)])
+def test_extra_epochs_preserve_every_solved_timestep(scale, steps):
+    import spada_frame_study as frame
+
+    args = spada.parse_args(["--timestep_scale", str(scale), "--extra_epochs_kyr",
+                             *map(str, frame.EXTRA_EPOCHS)])
+    original = spada.time_segments(args, spada.EPOCHS_KYR)
+    expanded = spada.time_segments(args, spada.output_epochs(args))
+
+    def schedule(segments):
+        return [(t0 + i*dt, dt) for t0, _, dt, n, _ in segments for i in range(1, n+1)]
+
+    assert len(schedule(expanded)) == steps
+    np.testing.assert_array_equal(schedule(expanded), schedule(original))
+    assert [end/1000 for _, end, _, _, epoch in expanded if epoch] == list(spada.output_epochs(args)[1:])
+
+
+@pytest.mark.parametrize("epoch", ["4.95", "10.1", "0", "-1", "21", "nan", "inf"])
+def test_extra_epochs_cannot_change_integration(epoch):
+    with pytest.raises(SystemExit):
+        spada.parse_args(["--extra_epochs_kyr", epoch])
+
+
+@pytest.mark.parametrize("constrained", [False, True])
+def test_frame_diagnostics_against_exact_body_and_sheet_moments(constrained):
+    """Uniform unit cube (rho=2) and top sheet (sigma=3): known mass/dipole.
+
+    Exercise the actual library moment and sheet forms without a PDE solve.
+    The separate four-rank Spada checkpoint check includes the fluid core.
+    """
+    from types import MethodType, SimpleNamespace
+
+    from firedrake import Constant, Measure
+    from gadopt import SelfGravitatingGIASolver
+    from gadopt.dtn_form import DtNGravityForm
+    from spada_frame_diagnostics import FrameDiagnostics
+
+    mesh = UnitCubeMesh(2, 2, 2)
+    displacement = Function(VectorFunctionSpace(mesh, "CG", 1))
+    sheet = SimpleNamespace(sigma_bcs=[(6, Constant(3.), "exterior_facet")],
+                            ds=Measure("ds", domain=mesh), dS=Measure("dS", domain=mesh))
+    sheet.sheet_integral = MethodType(DtNGravityForm.sheet_integral, sheet)
+    multipliers = [1., 2., 3.] if constrained else []
+    solver = SimpleNamespace(solution_split=[displacement], potential_mesh=mesh,
+                             layout=SimpleNamespace(displacement=0, centre_of_mass=tuple(multipliers)),
+                             approximation=SimpleNamespace(density=Constant(2.)),
+                             dx_m=Measure("dx", domain=mesh), fluid_core=None,
+                             sea_level_parameters=None, form=sheet,
+                             centre_of_mass_multipliers=lambda: multipliers)
+    solver.mass_dipole_form = MethodType(SelfGravitatingGIASolver.mass_dipole_form, solver)
+    diagnostic = FrameDiagnostics(solver)
+    mass_scale = spada.common.RHO_BAR * spada.common.D_SCALE**3
+    assert diagnostic.metadata["background_mass_kg"] == pytest.approx(2*mass_scale)
+    assert diagnostic.metadata["assembled_load_mass_kg"] == pytest.approx(3*mass_scale)
+    np.testing.assert_allclose(diagnostic.metadata["assembled_load_dipole_kg_m"],
+                               np.array([1.5, 1.5, 3.])*mass_scale*spada.common.D_SCALE)
+    sample = diagnostic.sample()
+    np.testing.assert_allclose(sample[:3], np.array([.75, .75, 1.5])*spada.common.D_SCALE)
+    assert sample[3:] == multipliers
+    assert len(sample) == len(diagnostic.columns)
+    # A rigid body shift cancels the sheet's first moment, with no field fitting.
+    displacement.assign(Constant((-.75, -.75, -1.5)))
+    np.testing.assert_allclose(diagnostic.sample()[:3], 0., atol=1e-8)
+
+
 @pytest.mark.parametrize("option,value", [("--mesh_h_km", "0"), ("--mesh_h_km", "nan"),
                                           ("--timestep_scale", "-1"), ("--timestep_scale", "inf"),
                                           ("--litho_layers", "0"), ("--litho_layers", "1.5")])

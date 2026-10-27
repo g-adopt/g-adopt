@@ -153,7 +153,8 @@ source "$PBS_O_WORKDIR/run_benchmark.pbs"
 
 def prepare(plan_dir, *, output_root="outputs/spada-study", project="vo05", queue="normalsr",
             module=DEFAULT_MODULE, firedrake_version=DEFAULT_FIREDRAKE_VERSION,
-            storage="scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50", directory=HERE):
+            storage="scratch/xd2+scratch/vo05+gdata/vo05+gdata/fp50", directory=HERE,
+            runs=None):
     plan_path = directory / plan_dir
     if plan_path.exists() and any(plan_path.iterdir()):
         raise ValueError(f"Plan directory is not empty: {plan_path}; use a new --plan-dir")
@@ -164,7 +165,8 @@ def prepare(plan_dir, *, output_root="outputs/spada-study", project="vo05", queu
         raise ValueError("Project, queue, module, storage and Firedrake version must be nonempty "
                          "and contain no whitespace")
     manifest = {"version": 1, "created_utc": datetime.now(UTC).isoformat(),
-                "source": source_record(directory), "config": config, "runs": run_matrix(output_root)}
+                "source": source_record(directory), "config": config,
+                "runs": run_matrix(output_root) if runs is None else runs}
     plan_path.mkdir(parents=True, exist_ok=True)
     (plan_path / "jobs").mkdir()
     manifest_name = Path(plan_dir) / "manifest.json"

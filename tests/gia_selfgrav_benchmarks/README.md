@@ -610,6 +610,12 @@ missing points, nonfinite profile values and incomplete runs are rejected.
 
 ## Walltime and cost
 
+For the focused centre-of-mass comparison (cap/disc, rotation off/on,
+250/125 km), see [SPADA_FRAME_STUDY.md](SPADA_FRAME_STUDY.md).
+`spada_frame_study.py prepare` writes 16 paired production jobs and eight
+smoke jobs, with optional tolerance, timestep and matched-location controls.
+All frame-study runs save assembled mass moments and COM histories.
+
 For the 27-run Spada paper study plus four smoke checks, see
 [SPADA_STUDY.md](SPADA_STUDY.md). `spada_study.py prepare` writes the full
 manifest and Gadi PBS files without submitting anything;

@@ -950,6 +950,8 @@ def run_settings(args):
                           else None),
             "diagnostic_nmax": args.diagnostic_nmax, "dtn_degree": args.dtn_degree,
             "centre_of_mass": args.centre_of_mass,
+            "write_frame_diagnostics": args.write_frame_diagnostics,
+            "extra_epochs_kyr": list(args.extra_epochs_kyr),
             "outer_rtol": args.outer_rtol, "block0_rtol": args.block0_rtol,
             "timestep_scale": args.timestep_scale,
             "mesh_h_km": args.mesh_h_km, "litho_layers": args.litho_layers}
@@ -971,6 +973,8 @@ def checkpoint_run_settings(record, mesh_info=None):
     written.setdefault("block0_rtol", 1.0e-4)
     # Older Spada runs did not constrain the centre-of-mass frame.
     written.setdefault("centre_of_mass", False)
+    written.setdefault("write_frame_diagnostics", False)
+    written.setdefault("extra_epochs_kyr", [])
     mesh = mesh_info or common.MESHES["smoke" if written["smoke"] else "spada"]
     written.setdefault("timestep_scale", 1.0)
     written.setdefault("mesh_h_km", mesh["h_km"])
@@ -1002,6 +1006,11 @@ def time_segments(args, epochs):
     """Scale the step ladder, retaining exact solved states at output epochs."""
     ladder = tuple((end, dt * args.timestep_scale) for end, dt in common.STEP_LOAD_LADDER_YR)
     return common.time_segments(epochs, common.truncated_ladder(ladder, max(epochs) * 1000.))
+
+
+def output_epochs(args):
+    base = SMOKE_EPOCHS_KYR if args.smoke else EPOCHS_KYR
+    return tuple(sorted(set(base) | set(args.extra_epochs_kyr)))
 
 
 def parse_args(argv=None):
@@ -1048,6 +1057,12 @@ def parse_args(argv=None):
     p.add_argument("--centre_of_mass", action="store_true",
                    help="constrain the total mass dipole of mantle, fluid core and load "
                         "to zero (default off); must match the checkpoint on restart")
+    p.add_argument("--write_frame_diagnostics", action="store_true",
+                   help="record assembled load moments, every-step centre of mass and "
+                        "frame multipliers; must match the checkpoint on restart")
+    p.add_argument("--extra_epochs_kyr", nargs="+", type=float, default=[],
+                   help="extra profile/surface epochs on existing solved timesteps; "
+                        "does not change the timestep ladder; must match on restart")
     p.add_argument("--smoke", action="store_true",
                    help="run on a very coarse mesh to 0.1 kyr, to check that "
                         "the code runs; the numbers are not results")
@@ -1094,6 +1109,18 @@ def parse_args(argv=None):
     mesh = common.MESHES["smoke" if args.smoke else "spada"]
     args.mesh_h_km = mesh["h_km"] if args.mesh_h_km is None else args.mesh_h_km
     args.litho_layers = mesh["litho_layers"] if args.litho_layers is None else args.litho_layers
+    base_epochs = SMOKE_EPOCHS_KYR if args.smoke else EPOCHS_KYR
+    original = time_segments(args, base_epochs)
+    for epoch in args.extra_epochs_kyr:
+        if not np.isfinite(epoch) or not 0 < epoch <= max(base_epochs):
+            p.error("--extra_epochs_kyr must be finite, positive and within the run")
+        aligned = any(t0 < epoch * 1000 <= t1 + 1e-9
+                      and np.isclose((epoch * 1000 - t0) / step,
+                                     round((epoch * 1000 - t0) / step), rtol=0, atol=1e-9)
+                      for t0, t1, step, _, _ in original)
+        if not aligned:
+            p.error("--extra_epochs_kyr must coincide with existing solved timesteps")
+    args.extra_epochs_kyr = sorted(set(args.extra_epochs_kyr))
     return args
 
 
@@ -1118,7 +1145,7 @@ def main():
     settings = run_settings(args)
     tic_run = time.time()
     os.makedirs(args.output_path, exist_ok=True)
-    epochs = SMOKE_EPOCHS_KYR if args.smoke else EPOCHS_KYR
+    epochs = output_epochs(args)
     mesh_kind = "smoke" if args.smoke else "spada"
 
     log("=" * 78)
@@ -1173,6 +1200,12 @@ def main():
     log(f"  solver built ({time.time() - tic:.1f} s): "
         f"{solver.solution.function_space().dim()} unknowns, "
         f"{len(layout.real_fields)} Real rows")
+    frame = None
+    if args.write_frame_diagnostics:
+        from spada_frame_diagnostics import FrameDiagnostics
+
+        frame = FrameDiagnostics(solver)
+        log(f"  assembled frame diagnostics: {frame.metadata}")
 
     vtk = None
     if args.write_output:
@@ -1212,6 +1245,8 @@ def main():
     plog = ParameterLog(os.path.join(args.output_path,
                                      f"params_{args.case}.log"), parent)
     state_columns = ("urms_Re_m" if args.case == "cap" else "mx_deg my_deg m3 lod_ms")
+    if frame is not None:
+        state_columns += " " + " ".join(frame.columns)
     plog.log_str(f"step t_kyr dt_yr wall_s newton outer {state_columns}")
     for line in log_lines:
         plog.log_str(line)
@@ -1232,6 +1267,8 @@ def main():
         else:
             rotation = rotation_diagnostics(solver)
             state = [*polar_motion_deg(solver), rotation["m3"], rotation["lod_ms"]]
+        if frame is not None:
+            state += frame.sample()
         line = " ".join(str(v) for v in
                         [step, t_kyr, dt_yr, wall_s, newton, outer, *state])
         log_lines.append(line)
@@ -1253,6 +1290,8 @@ def main():
             rows.append(compare_polar_motion(t_kyr, solver, reference,
                                               load_shape=args.load_shape,
                                               load_centre=args.load_centre))
+        if frame is not None:
+            rows[-1].update(frame.latest)
         if profiles is not None:
             write_profiles(os.path.join(args.output_path,
                                         f"profiles_{args.case}_{t_kyr:g}kyr.npz"),
@@ -1266,6 +1305,7 @@ def main():
     def record():
         """The driver's part of a checkpoint: enough to continue the outputs."""
         return {"run": settings, "profile_sampling": sampling_settings,
+                "frame_diagnostics": None if frame is None else frame.metadata,
                 "surface_output": None if surface_output is None else surface_output.metadata(),
                 "log_lines": log_lines, "rows": rows, "restarts": restarts,
                 "wall_s": wall_before_s + time.time() - tic_run}
@@ -1294,6 +1334,7 @@ def main():
          "rotation": args.case == "polar-motion",
          "diagnostic_axis": "load-centred" if args.case == "cap" else None,
          "profile_sampling": sampling_settings,
+         "frame_diagnostics": None if frame is None else frame.metadata,
          "surface_output": None if surface_output is None else surface_output.metadata(),
          # Keep the old key for readers of the diagnostic coefficient arrays.
          "nmax": args.diagnostic_nmax,
