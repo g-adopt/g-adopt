@@ -109,7 +109,7 @@ Direct surface VTK is available with `--surface_output_format vtk` for debugging
 | Polar-motion components, amplitude and phase versus time | Every-step log plus elastic/epoch summary values | Detailed cap time series; disc scales by its degree-2 excitation factor | `analyse_spada_study.py` plots epoch amplitude/error/phase; continuous component panel assembly remains |
 | Polar-motion rate | Finite differences of every-step components | TABOO cap rate series and cap/disc tabulated rate magnitudes | Analysis/plotting needed; label numerical derivative and evaluate timestep sensitivity |
 | Rotating U, along, across, N spatial profiles | Direct profiles on two load-centred great circles | No rotating spatial reference in the supplied archive | Existing direct profile plotter works; these are field illustrations and sensitivity comparisons |
-| Numerical sensitivity errors and cost | Matched baseline/variant profiles, summaries and step logs | TABOO for nonrotating fields and polar motion; baseline differences for rotating fields | `analyse_spada_study.py` audits and compares transferred runs, including the 125 km cap checks |
+| Numerical sensitivity errors and cost | Matched baseline/variant profiles, summaries and step logs | TABOO for nonrotating fields and polar motion; baseline differences for rotating fields | `analyse_spada_study.py` audits and compares transferred runs, including the 125 km cap and nonrotating disc checks |
 | Spatial deformation/geoid rates | Adjacent-step differences at every saved profile epoch, in m/yr | Instantaneous analytic TABOO derivatives, rotated into the saved profile basis | `plot_spada_profiles.py --rates` works for both cases; t=0 is omitted |
 | Surface maps and rotation-on/off differences | Surface HDF5 displacement, gravitational/rotational/total geoid and rates on simulation boundary facets; offline VTK conversion | No independent rotating spatial reference in the supplied archive | Output/conversion implemented; map panel assembly still needed |
 | Length of day | m3 and signed `lod_ms` at every step and output epoch | `lod_eq33_ref_ms`, reconstructed independently from TABOO loading k2(t) | Output implemented; signed comparison requires resolving the Eq.33/inertia sign convention |
@@ -297,6 +297,27 @@ averaging or degree-10 projection is applied. Use `--longitude`, `--times-kyr`,
 input hash/settings JSON are saved as
 `outputs/spada-study-analysis/spada_nonrotating_baselines.*`.
 
+For a standalone version using the **125 km cap and disc runs** as the solid
+G-ADOPT curves, select `--baseline-run mesh125`:
+
+```bash
+python3 plot_spada_baselines.py outputs/spada-study --baseline-run mesh125
+python3 plot_spada_baselines.py outputs/spada-study --baseline-run mesh125 --rates
+```
+
+These save `spada_nonrotating_baselines_mesh125.*` and
+`spada_nonrotating_baselines_mesh125_rates.*` in
+`outputs/spada-study-analysis`, with PDF, PNG and provenance JSON files.
+The standalone legend labels the single numerical curve **G-ADOPT**;
+mesh resolution belongs in the caption and provenance. TABOO crosses,
+layout and time colours follow the original figure. Value epochs remain elastic, 1, 5 and
+20 kyr; rate epochs are 0.1, 1, 5 and 20 kyr. TABOO rate averages use the
+selected 125 km run's saved interval. Both fine-mesh runs are required,
+and their saved controls must match the standard baseline except for mesh
+size. This selection produces standalone figures; parameter comparisons
+continue to use the original 250 km baseline. The original output paths
+are preserved.
+
 Figure preferences agreed on 26 October 2026, to preserve in future revisions:
 
 - Use a colour-blind-friendly scientific palette. The current Okabe–Ito
@@ -304,7 +325,9 @@ Figure preferences agreed on 26 October 2026, to preserve in future revisions:
   bluish green `#009E73` for 5 kyr and reddish purple `#CC79A7` for 20 kyr.
   Use the same time colour for numerical and reference values, at full opacity.
 - Draw G-ADOPT as solid lines and the reference as crosses without connecting
-  lines. Label the reference **TABOO** in the legend.
+  lines. Label the reference **TABOO** in the legend. For standalone figures
+  with one numerical run, use **G-ADOPT**, without a baseline or mesh suffix.
+  Comparison figures retain **G-ADOPT baseline** and the changed-setting label.
 - Put the combined time/method legend in the bottom-right corner of the
   top-left panel. Use a rectangular white background and a thin **black**
   border to match the plot outlines.
@@ -349,11 +372,11 @@ generates the original baseline figure.
 | `litho1` | One lithosphere layer | Cap and disc |
 | `bulk100` | K/μ = 100 | Cap and disc |
 | `dtn2` | DtN degree 2 | Cap and disc |
-| `mesh125` | 125 km horizontal mesh size | Cap only |
+| `mesh125` | 125 km horizontal mesh size | Cap and disc |
 | `offaxis` | Load centre at colatitude 25°, longitude 75°; rotation off | Cap and disc |
 
-The 125 km figure retains baseline/TABOO curves in the disc column and
-labels that column as having no comparison result. The solver-tolerance
+The 125 km figure includes both cap and disc comparisons. Missing comparisons
+are labelled explicitly when plotting an incomplete dataset. The solver-tolerance
 check is a rotating cap run, so it is outside this nonrotating figure set.
 The one-layer runs also regenerate the bulk mesh, as described below.
 
@@ -370,6 +393,44 @@ for comparisons at the same load location. Profiles are neither interpolated
 nor averaged. Missing comparisons are labelled explicitly; other invalid
 inputs stop generation. Each figure's JSON records the files used, script
 hashes, software versions, reference cutoff and comparison availability.
+
+For equivalent six-panel radial/tangential displacement-rate and geoid-rate
+figures, add `--rates`:
+
+```bash
+python3 plot_spada_baselines.py outputs/spada-study --rates
+python3 plot_spada_baselines.py outputs/spada-study --rates --all-variants
+```
+
+The baseline figure is saved as
+`outputs/spada-study-analysis/spada_nonrotating_baselines_rates.*`.
+Separate dashed-comparison figures and their index are saved under
+`outputs/spada-study-analysis/nonrotating_rate_variants`. Use, for example,
+`--rates --variant mesh125` for just the 125 km comparison, with both cap
+and disc results. The values and rates have separate default output paths.
+
+Rate panels use **0.1, 1, 5 and 20 kyr**, replacing the undefined elastic
+rate with the first saved post-elastic epoch. The 0.1 kyr curves use blue;
+1, 5 and 20 kyr retain their existing orange, green and purple colours.
+All rate axes are in **mm/yr**, converted from the saved m/yr arrays. The
+layout, meridian, positive-outward tangential basis, legend, panel labels
+and TABOO crosses match the value figures. Extra geoid-row headroom keeps
+the panel labels clear of the late-time curves near zero.
+
+G-ADOPT rates use the previous solved timestep. TABOO crosses use the
+analytic reference increment over exactly the **baseline's** saved interval,
+divided by that interval, rather than its instantaneous derivative at the
+endpoint. Baseline intervals at these four epochs are 0.09–0.1, 0.95–1,
+4.9–5 and 19.5–20 kyr (10, 50, 100 and 500 years). These choices belong in
+the paper caption. The plot JSON records units, averaging convention and
+the actual baseline/variant intervals for each shape and epoch.
+
+Dashed curves retain the changed run's saved rates. The `dt2` intervals are
+twice as long, so those curves include averaging differences as well as
+solver timestep sensitivity; their TABOO crosses still represent the
+baseline interval. No temporal interpolation or correction is applied.
+The plotter rejects invalid rate intervals, nonfinite selected rates and
+an explicit request to plot the undefined elastic rate at t=0.
 
 The existing `plot_spada_load_convergence.py` compares load cutoffs. For this
 parameter study use the separate analysis command, which requires NumPy and
@@ -399,12 +460,13 @@ do not establish an error bound for combined settings. Lithosphere changes
 also regenerate the bulk mesh: the transferred one-layer runs used seed 10
 versus baseline seed 9, so their effects include remeshing.
 
-The transferred October 2026 dataset contains 28 completed production runs:
-26 of the planned 27 plus `cap-off/mesh125` and `cap-on/mesh125`. All seven
-profiles are present for each completed run. `disc-on/dtn2` failed with an
-MPI buffer error and has no completed summary. No 125 km disc run is
-available. Completed production runs cost 214,238.28 SU; including the failed
-DtN attempt gives 214,572.81 SU, excluding smoke checks.
+The transferred October 2026 dataset contains 29 completed production runs:
+26 of the planned 27 plus `cap-off/mesh125`, `cap-on/mesh125` and
+`disc-off/mesh125`. All seven profiles are present for each completed run.
+`disc-on/dtn2` failed with an MPI buffer error and has no completed summary.
+No 125 km rotating disc run is available. Completed production runs cost
+238,018.75 SU; including the failed DtN attempt gives 238,353.28 SU,
+excluding smoke checks.
 
 The generated report separates large-scale degree-2–10 diagnostics from
 direct-field spatial accuracy. In particular, the 125 km cap-off geoid rate

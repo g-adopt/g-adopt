@@ -286,7 +286,7 @@ def spectral_rows(run):
 
 def mesh_rows(runs):
     result = []
-    for scenario in ("cap-off", "cap-on"):
+    for scenario in SCENARIOS:
         levels = [runs.get(scenario + "/" + name) for name in ("mesh500", "baseline", "mesh125")]
         if any(run is None or run.errors for run in levels):
             continue
@@ -426,7 +426,7 @@ def plots(output, runs, profiles, reference):
         fig.suptitle(f"{scenario}: raw TABOO comparison, without amplitude correction")
         save(fig, output, scenario + "_polar_motion")
 
-    for scenario in ("cap-off", "cap-on"):
+    for scenario in SCENARIOS:
         sequence = [runs.get(scenario + "/" + name) for name in ("mesh500", "baseline", "mesh125")]
         if any(run is None or run.errors for run in sequence):
             continue
@@ -569,8 +569,8 @@ def report(output, runs, profiles, scalars, coverage):
               "- The runs vary one parameter at a time. They measure individual sensitivities, not parameter interactions.",
               "- Lithosphere subdivision regenerates the mesh, so its differences include remeshing effects "
               "as well as layer count. Mesh hashes and seeds are retained in runs.csv.",
-              "- The 125 km cap runs provide an observed refinement difference, not an exact solution. "
-              "No 125 km disc runs are available. mesh_convergence.csv records changes over 500–250–125 km; "
+              "- Available 125 km runs provide observed refinement differences, not exact solutions. "
+              "Missing 125 km scenarios are omitted. mesh_convergence.csv records changes over 500–250–125 km; "
               "an apparent order is reported only for decreasing, strongly aligned differences (cosine > 0.9). "
               "Three meshes alone do not prove asymptotic convergence.",
               "- Spatial TABOO comparisons use degrees 2–256; sharp-disc edge errors include finite reference cutoff effects. "

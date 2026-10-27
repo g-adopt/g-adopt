@@ -153,20 +153,22 @@ def test_audit_accepts_undefined_initial_rates_but_rejects_later_nan(saved_run):
 
 
 @pytest.mark.parametrize("aligned", [False, True])
-def test_mesh_order_requires_decreasing_and_aligned_differences(aligned):
+@pytest.mark.parametrize("shape", ["cap", "disc"])
+def test_mesh_order_requires_decreasing_and_aligned_differences(aligned, shape):
     runs = {}
     for name, h, offset in (("mesh500", 500., 4.), ("baseline", 250., 1.), ("mesh125", 125., .25)):
         summary = {**BASELINE, "mesh_h_km": h, "case": "cap", "rotation": False,
-                   "load_shape": "cap", "load_centre_deg": [0, 0]}
+                   "load_shape": shape, "load_centre_deg": [0, 0]}
         data = {t: profile(t) for t in EPOCHS}
         for d in data.values():
             d["N_m"][:] = offset
         if not aligned and name == "mesh500":
             for d in data.values():
                 d["N_m"][0] = [4, -2, 1]
-        identity = "cap-off/"+name
+        identity = f"{shape}-off/"+name
         runs[identity] = analysis.Run(Path(identity), identity, summary, profiles=data)
     rows = [r for r in analysis.mesh_rows(runs) if r["quantity"] == "N" and r["kind"] == "value"]
+    assert len(rows) == len(EPOCHS)
     if aligned:
         assert all(r["apparent_order_if_aligned"] == pytest.approx(2) for r in rows)
     else:

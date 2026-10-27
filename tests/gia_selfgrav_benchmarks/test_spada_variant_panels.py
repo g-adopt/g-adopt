@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from plot_spada_baselines import read_profile, validate_comparison, validate_sampling
+from plot_spada_baselines import main, panel_reference, rate_interval, read_profile, validate_comparison, validate_sampling
 from plot_spada_profiles import reference_profiles
 from spada_profile_geometry import profile_geometry
 from spada_study import BASELINE
@@ -79,3 +79,65 @@ def test_same_location_variants_cannot_silently_compare_different_bases_or_depth
     b["tangent_vectors"] *= -1
     with pytest.raises(ValueError, match="tangent_vectors"):
         validate_sampling(a, b, 0, 0, keep, keep)
+
+
+def saved_rate_profile():
+    data = saved_profile(profile_geometry("cap", [0., 0.], longitudes=[0.],
+                                          extent_deg=25, spacing_deg=1))
+    data.update(rate_valid=np.array(True), rate_interval_start_kyr=np.array(4.5),
+                rate_interval_end_kyr=np.array(5.), rate_dt_yr=np.array(500.))
+    for key in ("U_m_per_yr", "along_m_per_yr", "N_m_per_yr"):
+        data[key] = np.full_like(data["U_m"], .001)
+    return data
+
+
+def test_rate_panel_reference_matches_integrated_instantaneous_rates(baseline):
+    data = saved_rate_profile()
+    nodes, weights = np.polynomial.legendre.leggauss(12)
+    with np.load(Path(__file__).with_name("reference.npz"), allow_pickle=False) as reference:
+        averaged = panel_reference(reference, 5., data, baseline, rates=True)
+        rates = [reference_profiles(reference, 4.75+.25*x, data, baseline, rate=True) for x in nodes]
+        instantaneous = reference_profiles(reference, 5., data, baseline, rate=True)
+    for quantity in ("U", "along", "N"):
+        expected = sum(w*values[quantity] for w, values in zip(weights/2, rates))
+        np.testing.assert_allclose(averaged[quantity], expected, rtol=1e-9, atol=2e-14)
+    assert not np.allclose(averaged["U"], instantaneous["U"], rtol=.001, atol=1e-10)
+
+
+@pytest.mark.parametrize("change", [
+    {"rate_valid": np.array(False)}, {"rate_dt_yr": np.array(100.)},
+    {"rate_interval_end_kyr": np.array(4.9)}, {"rate_interval_start_kyr": np.array(np.nan)},
+])
+def test_rate_panels_reject_invalid_interval_metadata(change):
+    with pytest.raises(ValueError, match="rate|Rate"):
+        rate_interval({**saved_rate_profile(), **change}, 5.)
+
+
+def test_rate_reader_checks_the_rate_fields(tmp_path, baseline):
+    data = saved_rate_profile()
+    data["U_m"][0, 5] = np.nan
+    path = tmp_path / "profiles_cap_5kyr.npz"
+    np.savez(path, **data)
+    read_profile(tmp_path, baseline, 5., 0., 25., {}, rates=True)
+    with pytest.raises(ValueError, match="Nonfinite U_m"):
+        read_profile(tmp_path, baseline, 5., 0., 25., {})
+    data["U_m"][0, 5] = 1.
+    data["N_m_per_yr"][0, 5] = np.nan
+    np.savez(path, **data)
+    with pytest.raises(ValueError, match="N_m_per_yr"):
+        read_profile(tmp_path, baseline, 5., 0., 25., {}, rates=True)
+
+
+def test_rate_cli_rejects_the_undefined_elastic_instant(capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["--rates", "--times-kyr", "0", "1", "5", "20"])
+    assert error.value.code == 2
+    assert "elastic instant" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("selection", [["--variant", "dt2"], ["--all-variants"]])
+def test_fine_baseline_cannot_silently_change_the_reference_for_parameter_comparisons(selection, capsys):
+    with pytest.raises(SystemExit) as error:
+        main(["--baseline-run", "mesh125", *selection])
+    assert error.value.code == 2
+    assert "standalone figure" in capsys.readouterr().err

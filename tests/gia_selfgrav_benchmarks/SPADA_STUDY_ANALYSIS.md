@@ -4,14 +4,16 @@ The 250 km baseline resolves the large-scale self-gravitating response and
 gives a polar-motion signal that changes little under cap mesh refinement.
 It does **not** establish uniform 1% accuracy for direct spatial fields or
 rates. Mesh resolution is the largest measured spatial sensitivity; the
-sharp disc is appreciably less resolved than the cap. The 125 km cap checks
-were useful: they substantially improve direct-profile agreement with TABOO,
-but expose a geoid-rate/frame issue that should be investigated separately.
+sharp disc is appreciably less resolved than the cap. The 125 km cap and
+nonrotating disc checks substantially improve direct-profile agreement with
+TABOO. The cap checks also expose a geoid-rate/frame issue that should be
+investigated separately.
 
 ## Dataset and comparison rules
 
-There are 28 completed production runs with 196 saved profiles: 26 planned
-runs and two extra 125 km cap runs, each with seven epochs from 0 to 20 kyr.
+There are 29 completed production runs with 203 saved profiles: 26 planned
+runs and three extra 125 km runs (cap-off, cap-on and disc-off), each with
+seven epochs from 0 to 20 kyr. The disc-off refinement was added on 27 October.
 All pass the transferred-output checks, including outer solver convergence.
 The remaining planned run, `disc-on/dtn2`, failed with an MPI buffer error;
 it contributes no completed sensitivity result. Four smoke runs are excluded.
@@ -35,7 +37,7 @@ combined cheaper configuration has been tested.
 | Change from baseline | Displacement change | Geoid change | Implication |
 |---|---:|---:|---|
 | Mesh 250 → 500 km | 7.72–27.44% | 13.46–36.69% | Too coarse for accurate local fields; limited cost saving |
-| Mesh 250 → 125 km, cap only | 2.31–2.40% | 4.44–5.51% | Baseline mesh error is still visible |
+| Mesh 250 → 125 km, cap-off/on and disc-off | 2.31–15.41% | 4.44–31.97% | Baseline mesh error is still visible, especially for the disc |
 | Lithosphere two layers → one | 1.20–11.18% | 2.12–5.96% | Keep two layers; this also changes the bulk mesh |
 | K/μ 1000 → 100 | 1.97–3.11% | 0.42–0.85% | Retain 1000 for the near-incompressible benchmark |
 | Double timestep | 0.55–0.61% | 0.68–1.28% | Modest value sensitivity; rates are more sensitive |
@@ -68,6 +70,7 @@ Direct nonrotating profiles give a different assessment:
 | cap-off, 250 km | 2.34% | 6.01% | 1.25% | 2.09% |
 | cap-off, 125 km | 0.50% | 1.70% | 0.47% | 1.10% |
 | disc-off, 250 km | 14.74% | 35.13% | 3.98% | 8.83% |
+| disc-off, 125 km | 2.27% | 5.52% | 0.61% | 3.21% |
 
 Each column takes its own maximum across epochs. Maximum errors divide by
 the reference peak; RMS errors divide by its profile RMS. The TABOO curves
@@ -75,7 +78,10 @@ use degrees 2–256, whereas the solver uses the spatial load. Reference
 ringing near the sharp 10° disc edge contributes to the discrepancy, but
 excluding points within 1° of that edge still leaves maxima of 7.95% for
 displacement and 10.63% for geoid. The issue is not confined to the immediate
-discontinuity. No 125 km disc result is available to test its improvement.
+discontinuity. At 125 km, these edge-excluded maxima fall to 1.44% for
+displacement and 5.52% for geoid. Refinement substantially improves agreement,
+while the remaining geoid discrepancy still needs a reference-cutoff and
+mesh-convergence assessment.
 
 An additional reference-only check for the four panel epochs (0, 1, 5 and
 20 kyr), on the 0° meridian within 25°, compared harmonic cutoffs 128 and 256.
@@ -94,9 +100,9 @@ require new calculations for the matching Earth model, not extrapolating
 the existing coefficients or changing the plot label.
 
 For a benchmark paper, the baseline supports a qualified large-scale
-self-gravity comparison. Use the 125 km cap profiles to show the material
-improvement with refinement. Do not describe the baseline disc profiles as
-converged local fields, or infer a universal convergence order from the three
+self-gravity comparison. Use the 125 km cap and nonrotating disc profiles to
+show the material improvement with refinement. Do not describe the baseline
+disc profiles as converged local fields, or infer a universal convergence order from the three
 cap meshes: the mesh-difference patterns are not consistently aligned.
 
 ## Polar motion
@@ -138,15 +144,16 @@ priority than spending more on general refinement before understanding this.
 2. Resolve the C−A convention explicitly for polar motion; keep raw reference
    errors visible. Resolve the separate signed LOD convention before claiming
    LOD validation.
-3. Refine the disc if local disc accuracy is part of the paper's claim.
-   The existing results cannot certify it. Coordinate this with any frame
-   fix so new runs remain interpretable.
+3. Use the new 125 km nonrotating disc result to quantify improvement and
+   assess the remaining geoid error, including reference-cutoff sensitivity.
+   The rotating disc has no 125 km result. Coordinate further refinement
+   with any frame fix so new runs remain interpretable.
 4. Use a smaller timestep if deformation/geoid rates are a main result.
    Complete `disc-on/dtn2` only if a full DtN sensitivity matrix is needed.
 
-The completed runs used 214,238.28 SU; the failed DtN attempt adds 334.53 SU,
-giving 214,572.81 SU excluding smoke. The two 125 km runs cost 44,599.53 SU
-combined, about 2.4–2.7 times their individual baseline costs. Loose cap-on
+The completed runs used 238,018.75 SU; the failed DtN attempt adds 334.53 SU,
+giving 238,353.28 SU excluding smoke. The three 125 km runs cost 68,380.00 SU
+combined, about 2.4–2.8 times their individual baseline costs. Loose cap-on
 tolerances save 20.75%; reducing DtN degree saves only about 3–5%. The 500 km
 mesh saves little despite large spatial errors, because solver performance
 also changes. These are observed costs, not predictions for combinations.
@@ -166,5 +173,5 @@ input/helper hashes and software versions. This interpretation is a separate
 review of the transferred dataset and is not overwritten by the command.
 
 Start with `parameter_sensitivity.pdf`, `cap_mesh_profiles.pdf`,
-`disc_mesh_profiles.pdf`, `cap-on_polar_motion.pdf` and
+`disc_mesh_profiles.pdf`, `disc-off_mesh_sensitivity.pdf`, `cap-on_polar_motion.pdf` and
 `cap_off_geoid_rates.pdf`. PNG versions are also available.

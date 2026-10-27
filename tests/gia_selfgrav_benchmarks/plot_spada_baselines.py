@@ -2,6 +2,8 @@
 
 Run: python3 plot_spada_baselines.py outputs/spada-study
 Variants: python3 plot_spada_baselines.py outputs/spada-study --all-variants
+Rates: python3 plot_spada_baselines.py outputs/spada-study --rates
+Fine mesh: python3 plot_spada_baselines.py outputs/spada-study --baseline-run mesh125
 Saves a three-row, two-column figure as PDF/PNG, plus input provenance.
 """
 
@@ -78,7 +80,32 @@ def validate_sampling(base, changed, base_index, changed_index, base_keep, chang
             raise ValueError(f"Variant profile {key} differs; comparisons require matching samples")
 
 
-def read_profile(directory, summary, t, longitude, maximum, hashes, *, bearing=None):
+def rate_interval(profile, t):
+    """Validate the preceding solved-step interval represented by a saved rate."""
+    keys = ("rate_valid", "rate_interval_start_kyr", "rate_interval_end_kyr", "rate_dt_yr")
+    if any(key not in profile or np.asarray(profile[key]).shape != () for key in keys):
+        raise ValueError("Rate profiles require scalar interval metadata")
+    if t <= 0 or not bool(profile["rate_valid"]):
+        raise ValueError("Saved rates are undefined at the elastic instant or marked invalid")
+    start, end, dt = (float(profile[key]) for key in keys[1:])
+    if (not np.isfinite([start, end, dt]).all() or not 0 <= start < end or dt <= 0
+            or not np.isclose(end, t, rtol=0, atol=1e-10)
+            or not np.isclose((end-start)*1000, dt, rtol=1e-10, atol=1e-9)):
+        raise ValueError(f"Invalid rate interval at {t:g} kyr")
+    return {"t_kyr": t, "start_kyr": start, "end_kyr": end, "dt_yr": dt}
+
+
+def panel_reference(reference, t, profile, summary, *, rates=False):
+    """Reference values in metres, or baseline-interval average rates in m/yr."""
+    if not rates:
+        return reference_profiles(reference, t, profile, summary)
+    interval = rate_interval(profile, t)
+    first = reference_profiles(reference, interval["start_kyr"], profile, summary)
+    last = reference_profiles(reference, interval["end_kyr"], profile, summary)
+    return {key: (last[key] - first[key]) / interval["dt_yr"] for key in last}
+
+
+def read_profile(directory, summary, t, longitude, maximum, hashes, *, bearing=None, rates=False):
     """Select an actual saved meridian, without averaging spatial differences."""
     if not any(np.isclose(epoch["t_kyr"], t) for epoch in summary["epochs"]):
         raise ValueError(f"No saved epoch at {t:g} kyr in {directory}")
@@ -106,58 +133,74 @@ def read_profile(directory, summary, t, longitude, maximum, hashes, *, bearing=N
     keep = (coordinate >= -1e-9) & (coordinate <= maximum + 1e-9)
     if not profile["found"][index, keep].all():
         raise ValueError(f"Missing sample points on the selected meridian in {path}")
-    for key in ("U_m", "along_m", "N_m"):
-        if not np.isfinite(profile[key][index, keep]).all():
+    if rates:
+        rate_interval(profile, t)
+    suffix = "_m_per_yr" if rates else "_m"
+    for key in (quantity + suffix for quantity in ("U", "along", "N")):
+        if key not in profile or not np.isfinite(profile[key][index, keep]).all():
             raise ValueError(f"Nonfinite {key} on the selected meridian in {path}")
     return profile, index, keep
 
 
 def render(args, variant, output):
     colours = [TIME_COLOURS[i % len(TIME_COLOURS)] for i in range(len(args.times_kyr))]
-    quantities = (("U", "Radial displacement (m)"),
-                  ("along", "Tangential displacement (m)"),
-                  ("N", "Geoid height (m)"))
+    quantities = (("U", "Radial displacement rate (mm/yr)" if args.rates else "Radial displacement (m)"),
+                  ("along", "Tangential displacement rate (mm/yr)" if args.rates else "Tangential displacement (m)"),
+                  ("N", "Geoid rate (mm/yr)" if args.rates else "Geoid height (m)"))
+    suffix, scale = ("_m_per_yr", 1000.) if args.rates else ("_m", 1.)
     hashes = {str(args.reference): hashlib.sha256(args.reference.read_bytes()).hexdigest()}
     for name in ("plot_spada_profiles.py", "spada_loads.py"):
         path = Path(__file__).with_name(name)
         hashes[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
     availability = {}
+    intervals = {}
+    mesh_sizes = {}
     with plt.rc_context({"font.size": 10, "axes.labelsize": 11,
                          "axes.titlesize": 13, "xtick.labelsize": 9, "ytick.labelsize": 9}):
         fig, axes = plt.subplots(3, 2, figsize=(9.2, 10.2), sharex=True, sharey="row")
         with np.load(args.reference, allow_pickle=False) as reference:
             nmax = int(reference["degrees"][-1])
             for column, shape in enumerate(("cap", "disc")):
-                path = summary_path(args.root, shape)
+                path = summary_path(args.root, shape, args.baseline_run)
                 directory = path.parent
                 summary = read_summary(path, shape, hashes)
+                if args.baseline_run != "baseline":
+                    standard = read_summary(summary_path(args.root, shape), shape, hashes)
+                    validate_comparison(standard, summary, args.baseline_run)
+                mesh_sizes[shape] = summary["mesh_h_km"]
                 changed_path = summary_path(args.root, shape, variant) if variant else None
                 changed_summary = None
                 if changed_path is not None and changed_path.exists():
                     changed_summary = read_summary(changed_path, shape, hashes, offaxis=variant == "offaxis")
                     validate_comparison(summary, changed_summary, variant)
                 availability[shape] = changed_summary is not None if variant else True
+                intervals[shape] = {"baseline": [], "variant": []}
                 missing = variant is not None and changed_summary is None
                 axes[0, column].set_title(f"{shape.capitalize()} load" + (" (no result)" if missing else ""), pad=12)
                 for t, colour in zip(args.times_kyr, colours):
                     profile, index, keep = read_profile(
-                        directory, summary, t, args.longitude, args.max_colatitude, hashes)
+                        directory, summary, t, args.longitude, args.max_colatitude, hashes, rates=args.rates)
                     x = profile["coordinate_deg"][keep]
-                    curves = reference_profiles(reference, t, profile, summary)
+                    curves = panel_reference(reference, t, profile, summary, rates=args.rates)
+                    if args.rates:
+                        intervals[shape]["baseline"].append(rate_interval(profile, t))
                     if changed_summary is not None:
                         changed, changed_index, changed_keep = read_profile(
                             changed_path.parent, changed_summary, t, args.longitude,
-                            args.max_colatitude, hashes, bearing=args.bearing if variant == "offaxis" else None)
+                            args.max_colatitude, hashes, bearing=args.bearing if variant == "offaxis" else None,
+                            rates=args.rates)
                         validate_sampling(profile, changed, index, changed_index, keep, changed_keep,
                                           offaxis=variant == "offaxis")
+                        if args.rates:
+                            intervals[shape]["variant"].append(rate_interval(changed, t))
                     for row, (quantity, _) in enumerate(quantities):
                         ax = axes[row, column]
-                        ax.plot(x, profile[quantity + "_m"][index, keep],
+                        ax.plot(x, scale * profile[quantity + suffix][index, keep],
                                 color=colour, linewidth=1.9, zorder=2)
                         if changed_summary is not None:
-                            ax.plot(x, changed[quantity + "_m"][changed_index, changed_keep],
+                            ax.plot(x, scale * changed[quantity + suffix][changed_index, changed_keep],
                                     color=colour, linewidth=1.65, linestyle=(0, (4, 3)), zorder=2.5)
-                        ax.plot(x, curves[quantity][index, keep], color=colour,
+                        ax.plot(x, scale * curves[quantity][index, keep], color=colour,
                                 linestyle="none", marker="x", markersize=4,
                                 markeredgewidth=.9, markevery=.045, zorder=3)
                 for row, (_, label) in enumerate(quantities):
@@ -175,11 +218,15 @@ def render(args, variant, output):
 
         lower, upper = axes[0, 0].get_ylim()
         axes[0, 0].set_ylim(lower, upper + .07 * (upper - lower))
+        if args.rates:
+            lower, upper = axes[2, 0].get_ylim()
+            axes[2, 0].set_ylim(lower, upper + .10 * (upper - lower))
 
         times = [Line2D([], [], color=colour, linewidth=2,
                         label="Elastic (0 kyr)" if t == 0 else f"{t:g} kyr")
                  for t, colour in zip(args.times_kyr, colours)]
-        methods = [Line2D([], [], color="0.2", linewidth=1.9, label="G-ADOPT baseline")]
+        label = "G-ADOPT baseline" if variant else "G-ADOPT"
+        methods = [Line2D([], [], color="0.2", linewidth=1.9, label=label)]
         if variant:
             methods.append(Line2D([], [], color="0.2", linewidth=1.65, linestyle=(0, (4, 3)),
                                   label=VARIANTS[variant][0]))
@@ -199,6 +246,10 @@ def render(args, variant, output):
 
     provenance = {"times_kyr": args.times_kyr, "longitude_deg": args.longitude % 360,
                   "variant": variant, "variant_available": availability,
+                  "baseline_run": args.baseline_run, "baseline_mesh_h_km": mesh_sizes,
+                  "quantity_kind": "rate" if args.rates else "value", "units": "mm/yr" if args.rates else "m",
+                  "rate_intervals": intervals if args.rates else None,
+                  "reference_rate_convention": "average over baseline saved rate interval" if args.rates else None,
                   "offaxis_bearing_deg": args.bearing if variant == "offaxis" else None,
                   "colour_palette": "Okabe–Ito (yellow omitted)", "time_colours_hex": colours,
                   "max_colatitude_deg": args.max_colatitude, "reference_degrees": [2, nmax],
@@ -213,19 +264,29 @@ def render(args, variant, output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", nargs="?", type=Path, default=Path("outputs/spada-study"))
+    parser.add_argument("--baseline-run", choices=("baseline", "mesh125"), default="baseline",
+                        help="run used for solid cap/disc curves; mesh125 makes a standalone fine-mesh figure")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--variant", choices=VARIANTS, help="one dashed comparison against baseline")
     selection.add_argument("--all-variants", action="store_true", help="one figure per available nonrotating variant")
-    parser.add_argument("--times-kyr", nargs="+", type=float, default=[0., 1., 5., 20.])
+    parser.add_argument("--rates", action="store_true", help="adjacent-step rates in mm/yr; TABOO averaged over baseline intervals")
+    parser.add_argument("--times-kyr", nargs="+", type=float,
+                        help="epochs: default 0, 1, 5, 20; with --rates: 0.1, 1, 5, 20 kyr")
     parser.add_argument("--longitude", type=float, default=0., help="saved north-pole meridian in degrees")
     parser.add_argument("--bearing", type=float, default=0., help="saved off-axis profile bearing; positive branch only")
     parser.add_argument("--max-colatitude", type=float, default=25.)
     parser.add_argument("--reference", type=Path, default=Path(__file__).with_name("reference.npz"))
     parser.add_argument("--output", type=Path, help="output stem for one figure; writes .pdf, .png and .json")
     parser.add_argument("--output-dir", type=Path,
-                        default=Path("outputs/spada-study-analysis/nonrotating_variants"),
-                        help="directory for --all-variants figures and index.md")
+                        help="batch directory; defaults to nonrotating_variants or nonrotating_rate_variants under outputs/spada-study-analysis")
     args = parser.parse_args(argv)
+    if args.baseline_run != "baseline" and (args.variant or args.all_variants):
+        parser.error("--baseline-run mesh125 makes a standalone figure; omit --variant and --all-variants")
+    if args.times_kyr is None:
+        args.times_kyr = [0.1 if args.rates else 0., 1., 5., 20.]
+    if args.output_dir is None:
+        args.output_dir = Path("outputs/spada-study-analysis") / (
+            "nonrotating_rate_variants" if args.rates else "nonrotating_variants")
     if not np.isfinite(args.max_colatitude) or not 0 < args.max_colatitude <= 180:
         parser.error("--max-colatitude must be in (0, 180]")
     if not np.isfinite(args.longitude) or not np.isfinite(args.bearing):
@@ -233,13 +294,19 @@ def main(argv=None):
     if (not all(np.isfinite(t) and t >= 0 for t in args.times_kyr)
             or len(set(args.times_kyr)) != len(args.times_kyr)):
         parser.error("--times-kyr must contain distinct finite nonnegative times")
+    if args.rates and any(t == 0 for t in args.times_kyr):
+        parser.error("--rates requires positive epochs; saved rates at the elastic instant are undefined")
     if args.all_variants and args.output is not None:
         parser.error("Use --output-dir with --all-variants")
     variants = list(VARIANTS) if args.all_variants else [args.variant]
-    index = ["# Nonrotating Spada variant panels", "",
+    suffix = "_rates" if args.rates else ""
+    index = ["# Nonrotating Spada variant" + (" rate" if args.rates else "") + " panels", "",
              "Solid: G-ADOPT baseline. Dashed: one changed run. Crosses: TABOO (degrees 2–256).",
              "Times: " + ", ".join(f"{t:g} kyr" for t in args.times_kyr) + ".", "",
              "| Variant | Cap | Disc | PDF | PNG |", "|---|---|---|---|---|"]
+    if args.rates:
+        index[2:2] = ["Rates are in mm/yr. TABOO crosses are averaged over each baseline's saved interval.",
+                      "Dashed rates retain the changed run's interval; timestep variants therefore include averaging differences.", ""]
     produced = 0
     for variant in variants:
         if variant and not any(summary_path(args.root, shape, variant).exists() for shape in ("cap", "disc")):
@@ -249,9 +316,10 @@ def main(argv=None):
             index.append(f"| {variant} | unavailable | unavailable | — | — |")
             continue
         if args.all_variants:
-            output = args.output_dir / f"spada_nonrotating_{variant}"
+            output = args.output_dir / f"spada_nonrotating_{variant}{suffix}"
         else:
-            output = args.output or Path(f"outputs/spada-study-analysis/spada_nonrotating_{variant or 'baselines'}")
+            name = variant or "baselines" + (f"_{args.baseline_run}" if args.baseline_run != "baseline" else "")
+            output = args.output or Path(f"outputs/spada-study-analysis/spada_nonrotating_{name}{suffix}")
         available = render(args, variant, output)
         produced += 1
         statuses = ["available" if available[shape] else "no completed run" for shape in ("cap", "disc")]
