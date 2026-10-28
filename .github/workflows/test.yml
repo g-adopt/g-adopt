@@ -104,6 +104,17 @@ jobs:
               libgtest-dev
           git config --global --add safe.directory $GITHUB_WORKSPACE
 
+      - name: Fix OpenMPI installation
+        run: |
+            # Remove block on files in /usr/share/doc being installed
+            rm /etc/dpkg/dpkg.cfg.d/excludes
+            apt reinstall libprrte-dev
+            for i in /usr/share/doc/libprrte-dev/*; do
+              [[ ${i#*\.} == "txt.gz" ]] && gunzip $i
+            done
+            ln -s /usr/share/doc/libprrte-dev /usr/lib/x86_64-linux-gnu/prrte3/share/prte
+        shell: bash
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
@@ -126,10 +137,7 @@ jobs:
         run: |
           cmake ./tsp -B ./tsp_build
           cmake --build ./tsp_build
-
-      - name: Put task spooler on PATH
-        run: |
-          mv tsp_build/tsp-hpc /usr/local/bin/tsp
+          mv ./tsp_build/tsp-hpc /usr/local/bin/tsp
 
       - name: Fetch gplates
         uses: actions/checkout@v5
@@ -143,6 +151,9 @@ jobs:
           uv venv --system-site-packages
           uv pip install ./gplates
           uv pip install .[demos,optimisation,gplates]
+          # Clear gplates otherwise pytest picks up the tests from
+          # its source tree
+          rm -rf ./gplates
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v5
