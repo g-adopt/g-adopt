@@ -1,4 +1,5 @@
 import firedrake as fd
+from firedrake.petsc import PETSc
 from gadopt.utility import get_boundary_ids
 import pytest
 import tempfile
@@ -140,6 +141,31 @@ def test_extruded_mesh_cubed_sphere_to_sphere():
     assert not hasattr(boundary, "right")
     assert not hasattr(boundary, "front")
     assert not hasattr(boundary, "back")
+
+
+def test_extruded_mesh_no_unlabelled_boundary():
+    # On ranks without cells, top and bottom still come from mesh.extruded.
+    mesh = fd.ExtrudedMesh(fd.UnitIntervalMesh(2), 2)
+    boundary = get_boundary_ids(mesh)
+    assert boundary.top == "top"
+    assert boundary.bottom == "bottom"
+    assert -1 not in boundary
+
+
+def test_unlabelled_faces_are_not_a_boundary():
+    # Faces without a "Face Sets" value must not map to a boundary name.
+    # Edit the label before fd.Mesh distributes the plex, so this runs in parallel.
+    plex = PETSc.DMPlex().createBoxMesh((4, 4), simplex=False, interpolate=True, comm=fd.COMM_WORLD)
+    # DMPlex numbers the sides bottom 1, right 2, top 3, left 4
+    label = plex.getLabel("Face Sets")
+    # The stratum IS is null on ranks without a left face
+    if label.getStratumSize(4) > 0:
+        for point in label.getStratumIS(4).getIndices():
+            label.clearValue(point, 4)
+    boundary = get_boundary_ids(fd.Mesh(plex))
+    assert not hasattr(boundary, "left")
+    assert -1 not in boundary
+    assert (boundary.right, boundary.bottom, boundary.top) == (2, 1, 3)
 
 
 geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*/mesh/*.geo")

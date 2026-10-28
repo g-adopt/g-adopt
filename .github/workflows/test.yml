@@ -80,7 +80,7 @@ jobs:
     container:
       # Prefer specific branch, then PR base, then actual branch
       image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
-      options: --cap-add SYS_NICE
+      options: --cap-add SYS_NICE --shm-size=1024m
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
@@ -96,8 +96,24 @@ jobs:
       - name: Install prerequisites
         run: |
           apt update
-          apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev
+          apt install -y time unzip git-lfs gmsh gcc cmake libsqlite3-dev libhwloc-dev \
+              patchelf libgl1-mesa-dev libglu1-mesa-dev libglew-dev \
+              libboost-dev libboost-python-dev libboost-thread-dev libboost-program-options-dev \
+              libqt5opengl5-dev libqt5svg5-dev libqwt-qt5-dev libqt5xmlpatterns5-dev \
+              libgdal-dev libcgal-dev libproj-dev proj-bin zlib1g-dev \
+              libgtest-dev
           git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Fix OpenMPI installation
+        run: |
+            # Remove block on files in /usr/share/doc being installed
+            rm /etc/dpkg/dpkg.cfg.d/excludes
+            apt reinstall libprrte-dev
+            for i in /usr/share/doc/libprrte-dev/*; do
+              [[ ${i#*\.} == "txt.gz" ]] && gunzip $i
+            done
+            ln -s /usr/share/doc/libprrte-dev /usr/lib/x86_64-linux-gnu/prrte3/share/prte
+        shell: bash
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -121,15 +137,23 @@ jobs:
         run: |
           cmake ./tsp -B ./tsp_build
           cmake --build ./tsp_build
+          mv ./tsp_build/tsp-hpc /usr/local/bin/tsp
 
-      - name: Put task spooler on PATH
-        run: |
-          mv tsp_build/tsp-hpc /usr/local/bin/tsp
+      - name: Fetch gplates
+        uses: actions/checkout@v5
+        with:
+          repository: dsroberts/GPlates
+          path: ./gplates
+          ref: PyGPlates-1.0.0
 
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
+          uv pip install ./gplates
           uv pip install .[demos,optimisation,gplates]
+          # Clear gplates otherwise pytest picks up the tests from
+          # its source tree
+          rm -rf ./gplates
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v5
@@ -152,7 +176,7 @@ jobs:
         id: run_tests
         run: |
           firedrake-clean
-          tsp --timeout -T 7200
+          tsp --timeout -T 9000
           tsp --memprof
           . .venv/bin/activate
           uv run doit run --process $(nproc --all) --continue --always-execute run_case || true
