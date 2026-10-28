@@ -8,7 +8,6 @@ from firedrake import VertexBasedLimiter, FunctionSpace, TrialFunction, LinearSo
 from firedrake import max_value, min_value, Function, pack
 from firedrake import TensorProductElement, VectorElement, HDivElement, MixedElement, EnrichedElement, FiniteElement
 from firedrake.functionspaceimpl import WithGeometry
-from ufl import triangle
 import numpy as np
 from firedrake.petsc import PETSc
 import pyop3 as op3
@@ -137,10 +136,8 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         self.is_vector = p1dg_space.value_size > 1
         if self.is_vector:
-            mesh = p1dg_space.mesh()
-            mesh_cell = mesh.ufl_cell()
-            element = "DG" if mesh_cell == triangle else "DQ"
-            p1dg_scalar_space = FunctionSpace(mesh, element, 1)
+            # Component values are copied dof by dof, so the scalar space must share the node layout
+            p1dg_scalar_space = FunctionSpace(p1dg_space.mesh(), p1dg_space.ufl_element().sub_elements[0])
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_scalar_space)
         else:
             super(VertexBasedP1DGLimiter, self).__init__(p1dg_space)
@@ -154,6 +151,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         self.clip_min = clip_min
         self.clip_max = clip_max
+        # Boundary loops of compute_bounds are built on first use on this placeholder
+        self._bound_field = Function(self.P1DG, name="gadopt_limiter_bound_field")
+        self._bound_loops = None
 
     def _construct_centroid_solver(self) -> LinearSolver:
         """Constructs a linear problem to compute centroids.
@@ -193,9 +193,35 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
           field: Firedrake function onto which the limiter is applied
 
         """
+        assert field.function_space() == self.P1DG, "Given field does not belong to this objects function space"
+
         # Call general-purpose bound computation.
         super(VertexBasedP1DGLimiter, self).compute_bounds(field)
 
+        # Building a pyop3 loop is far more expensive than running it, so build the
+        # loops once on a placeholder field. Each call passes the current field's Dat
+        # in place of the placeholder, by the placeholder's Dat name (pyop3 makes
+        # Dat names unique, so it can differ from the Function name).
+        if self._bound_loops is None:
+            self._bound_loops = self._build_bound_loops(self._bound_field)
+        for loop in self._bound_loops:
+            loop(**{self._bound_field.dat.name: field.dat})
+
+        if self.clip_min is not None:
+            self.min_field.interpolate(max_value(self.min_field, self.clip_min))
+        if self.clip_max is not None:
+            self.max_field.interpolate(min_value(self.max_field, self.clip_max))
+
+    def _build_bound_loops(self, field: Function) -> list[op3.Loop]:
+        """Builds the loops that add boundary facet means to the min/max fields.
+
+        Arguments:
+          field: Function that the loops read as the limited field
+
+        Returns:
+          The lateral facet loop and, on extruded meshes, the bottom and top loops.
+
+        """
         # Add the average of lateral boundary facets to min/max fields
         # NOTE this just computes the arithmetic mean of nodal values on the facet,
         # which in general is not equivalent to the mean of the field over the bnd facet.
@@ -210,6 +236,10 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         local_facet_nodes = np.array([boundary_dofs[e] for e in sorted(boundary_dofs.keys())])
         n_bnd_nodes = local_facet_nodes.shape[1]
         local_facet_idx = op3.Dat.from_array(local_facet_nodes.ravel(), name='local_facet_idx', constant=True, rank_equal=True)
+        if self.extruded:
+            facet_number = self.mesh.exterior_facet_vert_local_facet_indices
+        else:
+            facet_number = self.mesh.exterior_facet_local_facet_indices
         code = """
                 double face_mean = 0.0;
                 for (int i = 0; i < %(nnodes)d; i++) {
@@ -229,26 +259,25 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                 ("qmax", op3.ScalarType, op3.MAX_RW),
                 ("qmin", op3.ScalarType, op3.MIN_RW),
                 ("field", op3.ScalarType, op3.READ),
-                ("facet", field.dat.dtype, op3.READ),
+                ("facet", facet_number.dtype, op3.READ),
                 ("local_facet_idx", local_facet_idx.dtype, op3.READ),
             ],
         )
-        op3.loop(
-            f := self.P1DG.mesh().iter("exterior_facet_vert" if self.extruded else "exterior_facet"),
+        loops = [op3.loop(
+            f := self.mesh.iter("exterior_facet_vert" if self.extruded else "exterior_facet"),
             bnd_kernel(
                 pack(self.max_field, f),
                 pack(self.min_field, f),
                 pack(field, f),
-                self.P1DG.mesh().exterior_facet_vert_local_facet_indices[f] if self.extruded else self.P1DG.mesh().exterior_facet_local_facet_indices[f],
+                facet_number[f],
                 local_facet_idx,
             ),
-            eager=True,
-        )
+        )]
         if self.extruded:
             # Add nodal values from surface/bottom boundaries
             # NOTE calling firedrake par_loop with measure=ds_t raises an error
-            bottom_nodes = get_facet_mask(self.P1CG, 'bottom')
-            top_nodes = get_facet_mask(self.P1CG, 'top')
+            bottom_nodes = get_facet_mask(self.P1CG, 'bottom').astype(op3.dtypes.IntType)
+            top_nodes = get_facet_mask(self.P1CG, 'top').astype(op3.dtypes.IntType)
             bottom_idx = op3.Dat.from_array(bottom_nodes, name='node_idx', constant=True, rank_equal=True)
             top_idx = op3.Dat.from_array(top_nodes, name='node_idx', constant=True, rank_equal=True)
             code = """
@@ -268,37 +297,24 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                     ("qmax", op3.ScalarType, op3.MAX_RW),
                     ("qmin", op3.ScalarType, op3.MIN_RW),
                     ("field", op3.ScalarType, op3.READ),
-                    ("idx", "int", op3.READ),
+                    ("idx", bottom_idx.dtype, op3.READ),
                 ],
             )
 
-            op3.loop(
-                f := self.mesh.iter("exterior_facet_bottom"),
-                kernel(
-                    pack(self.max_field, f),
-                    pack(self.min_field, f),
-                    pack(field, f),
-                    bottom_idx,
-                ),
-                eager=True,
-            )
+            for name, idx in [("exterior_facet_bottom", bottom_idx), ("exterior_facet_top", top_idx)]:
+                loops.append(op3.loop(
+                    f := self.mesh.iter(name),
+                    kernel(
+                        pack(self.max_field, f),
+                        pack(self.min_field, f),
+                        pack(field, f),
+                        idx,
+                    ),
+                ))
 
-            op3.loop(
-                f := self.mesh.iter("exterior_facet_top"),
-                kernel(
-                    pack(self.max_field, f),
-                    pack(self.min_field, f),
-                    pack(field, f),
-                    top_idx,
-                ),
-                eager=True,
-            )
+        return loops
 
-        if self.clip_min is not None:
-            self.min_field.assign(max_value(self.min_field, self.clip_min))
-        if self.clip_max is not None:
-            self.max_field.assign(min_value(self.max_field, self.clip_max))
-
+    @PETSc.Log.EventDecorator("gadopt.VertexBasedP1DGLimiter.apply")
     def apply(self, field):
         """Applies the limiter on the given field (in place).
 
@@ -308,15 +324,16 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         """
         if annotate_tape():
             raise RuntimeError('Limiting is currently not compatible for adjoint modelling.')
-        with PETSc.Log.Stage("limiter"):
-
-            if self.is_vector:
-                tmp_func = self.P1DG.get_work_function()
-                fs = field.function_space()
+        if self.is_vector:
+            tmp_func = self.P1DG.get_work_function()
+            fs = field.function_space()
+            try:
                 for i in range(fs.value_size):
-                    tmp_func.dat.data_with_halos[:] = field.dat.data_with_halos[:, i]
+                    tmp_func.dat.data_wo_with_halos[:] = field.dat.data_ro_with_halos[:, i]
                     super(VertexBasedP1DGLimiter, self).apply(tmp_func)
-                    field.dat.data_with_halos[:, i] = tmp_func.dat.data_with_halos[:]
+                    # Writes one component only, so the other entries must stay valid: use rw.
+                    field.dat.data_rw_with_halos[:, i] = tmp_func.dat.data_ro_with_halos[:]
+            finally:
                 self.P1DG.restore_work_function(tmp_func)
-            else:
-                super(VertexBasedP1DGLimiter, self).apply(field)
+        else:
+            super(VertexBasedP1DGLimiter, self).apply(field)
