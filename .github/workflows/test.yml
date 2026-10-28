@@ -14,6 +14,24 @@ on:
         type: string
         required: true
         default: dev-main
+      firedrake_repo:
+        description: GitHub repository (owner/name) to fetch the Firedrake branch from
+        type: string
+        default: firedrakeproject/firedrake
+      firedrake_ref:
+        description: Firedrake branch or commit to install over the Firedrake in the container
+        type: string
+        default: sghelichkhani/fix-for-gadopt-pyop3
+
+# DROP BEFORE MERGE: temporary test of the pyop3 slowdown fixes. The Firedrake
+# in the container is replaced by FIREDRAKE_REF from FIREDRAKE_REPO in both
+# jobs. On pull request and push events there are no inputs, so the defaults
+# below apply. sghelichkhani/fix-for-gadopt-pyop3 is origin/main with the open
+# Firedrake PRs #5560 (with #5562), #5564 and #5569 and five further fixes
+# merged in.
+env:
+  FIREDRAKE_REPO: ${{ inputs.firedrake_repo || 'firedrakeproject/firedrake' }}
+  FIREDRAKE_REF: ${{ inputs.firedrake_ref || 'sghelichkhani/fix-for-gadopt-pyop3' }}
 
 jobs:
   check_commit:
@@ -56,6 +74,24 @@ jobs:
           apt update
           apt install -y git-lfs
           git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Install Firedrake from ${{ env.FIREDRAKE_REPO }}@${{ env.FIREDRAKE_REF }} (DROP BEFORE MERGE)
+        run: |
+          # The image has Firedrake installed in editable mode from the git
+          # clone in /opt/firedrake, so checking out another commit there
+          # changes the code that is imported. The reinstall rebuilds the
+          # Cython extensions of firedrake and pyop3 for that commit.
+          # --no-deps keeps the PETSc, UFL, FIAT and other packages of the
+          # image, which is correct while the branch changes no dependency.
+          git config --global --add safe.directory /opt/firedrake
+          cd /opt/firedrake
+          echo "Firedrake in the container: $(git log -1 --format='%h %ci %s')"
+          git fetch --no-tags "https://github.com/${FIREDRAKE_REPO}.git" "${FIREDRAKE_REF}"
+          git checkout --detach FETCH_HEAD
+          echo "Firedrake installed for this run: $(git log -1 --format='%h %ci %s')"
+          python3 -m pip install --no-deps --no-build-isolation --editable /opt/firedrake
+          # Remove compiled kernels of the container's Firedrake from the disk cache.
+          firedrake-clean
 
       - uses: actions/checkout@v5
         with:
@@ -103,6 +139,24 @@ jobs:
               libgdal-dev libcgal-dev libproj-dev proj-bin zlib1g-dev \
               libgtest-dev
           git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Install Firedrake from ${{ env.FIREDRAKE_REPO }}@${{ env.FIREDRAKE_REF }} (DROP BEFORE MERGE)
+        run: |
+          # The image has Firedrake installed in editable mode from the git
+          # clone in /opt/firedrake, so checking out another commit there
+          # changes the code that is imported. The reinstall rebuilds the
+          # Cython extensions of firedrake and pyop3 for that commit.
+          # --no-deps keeps the PETSc, UFL, FIAT and other packages of the
+          # image, which is correct while the branch changes no dependency.
+          git config --global --add safe.directory /opt/firedrake
+          cd /opt/firedrake
+          echo "Firedrake in the container: $(git log -1 --format='%h %ci %s')"
+          git fetch --no-tags "https://github.com/${FIREDRAKE_REPO}.git" "${FIREDRAKE_REF}"
+          git checkout --detach FETCH_HEAD
+          echo "Firedrake installed for this run: $(git log -1 --format='%h %ci %s')"
+          python3 -m pip install --no-deps --no-build-isolation --editable /opt/firedrake
+          # Remove compiled kernels of the container's Firedrake from the disk cache.
+          firedrake-clean
 
       - name: Fix OpenMPI installation
         run: |
