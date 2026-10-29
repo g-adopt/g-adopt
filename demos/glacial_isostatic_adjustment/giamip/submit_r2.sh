@@ -213,6 +213,32 @@ case ${EXP} in
         L0_SOURCE=${ARCHIVE}/exp${EXP}/L0/invert-protocol/state.h5 ;;
 esac
 
+# The schedule of the forward run (SCHEDULE of run_forward.pbs), its extra
+# options and the name of its directory. The b chain (FORWARD_B=1) changes
+# all three; it is checked here, before the search for the run directory,
+# so a wrong use stops with its own message.
+FSCHEDULE=${SCHEDULE}
+FEXTRA=""
+FWD_NAME=${SCHEDULE}
+FORWARD_B=${FORWARD_B:-0}
+case ${FORWARD_B} in
+    0) ;;
+    1)
+        if [ "${SCHEDULE}" != "windows-coarse" ] || [ "${STAGE}" != "forward" ]; then
+            echo "error: FORWARD_B=1 is for the forward stage of Exp09, Exp10 and Exp12 on schedule D (windows-coarse)" >&2
+            exit 1
+        fi
+        # Schedule D plus the protocol years, from the schedule-D state
+        # file of the inversion. The inversion ran without the rebuild
+        # guard; the forward run of the fine schedules has it on by
+        # default, which changes where the preconditioner is rebuilt
+        # (NOTES exp12-forward-J-check), so the b run turns it off.
+        FSCHEDULE=windows-coarse-protocol
+        FEXTRA=",EXTRA=--gia_rebuild_max_outer 0"
+        FWD_NAME=windows-coarse-b ;;
+    *) echo "error: FORWARD_B=${FORWARD_B}; use 0 or 1" >&2; exit 1 ;;
+esac
+
 # The schedule D production of the restart and forward stages (the header
 # explains the layout of T8). D_RUN=1 selects its search for the run
 # directory and its defaults of PREP, XFER_DIR and TEST_DIR. The other
@@ -302,32 +328,10 @@ case ${SCHEDULE} in
     *)        PREP_EXTRA="${MESH_EXTRA} --schedule ${SCHEDULE}" ;;
 esac
 SOURCE=${SOURCE:-${L0_SOURCE}}
-FWD=${ARCHIVE}/exp${EXP}/r2/forward-${SCHEDULE}
-# The schedule of the forward run (SCHEDULE of run_forward.pbs) and its
-# extra options, and the archive job of the forward chain: its directory
-# and its variables. The b chain (FORWARD_B=1) changes all four.
-FSCHEDULE=${SCHEDULE}
-FEXTRA=""
-ARCH_DIR=${ARCHIVE}/exp${EXP}/r2
-FORWARD_B=${FORWARD_B:-0}
-case ${FORWARD_B} in
-    0) ;;
-    1)
-        if [ "${SCHEDULE}" != "windows-coarse" ] || [ "${STAGE}" != "forward" ]; then
-            echo "error: FORWARD_B=1 is for the forward stage of Exp09, Exp10 and Exp12 on schedule D (windows-coarse)" >&2
-            exit 1
-        fi
-        # Schedule D plus the protocol years, from the schedule-D state
-        # file of the inversion. The inversion ran without the rebuild
-        # guard; the forward run of the fine schedules has it on by
-        # default, which changes where the preconditioner is rebuilt
-        # (NOTES exp12-forward-J-check), so the b run turns it off.
-        FSCHEDULE=windows-coarse-protocol
-        FEXTRA=",EXTRA=--gia_rebuild_max_outer 0"
-        FWD=${ARCHIVE}/exp${EXP}/r2/forward-windows-coarse-b
-        ARCH_DIR=${FWD} ;;
-    *) echo "error: FORWARD_B=${FORWARD_B}; use 0 or 1" >&2; exit 1 ;;
-esac
+# The forward directory and the archive directory of the forward chain
+# (the b chain: see FORWARD_B above).
+FWD=${ARCHIVE}/exp${EXP}/r2/forward-${FWD_NAME}
+if [ "${FORWARD_B}" = "1" ]; then ARCH_DIR=${FWD}; else ARCH_DIR=${ARCHIVE}/exp${EXP}/r2; fi
 
 # The longest wall time of a normalsr job on n nodes (NCI queue limits,
 # which go by cores: 1-1040 cores 48 h, 1144-2080 24 h, 2184-4160 10 h,
