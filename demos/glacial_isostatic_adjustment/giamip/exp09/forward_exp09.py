@@ -145,6 +145,42 @@ SCHEDULE D (`--schedule windows-coarse`; R12 of the r2 production)
     year is reached. `paraview_exp09.py` reads the indices of the file, so
     the gaps need no change there.
 
+SCHEDULE D WITH THE PROTOCOL YEARS (`--schedule windows-coarse-protocol`; R14)
+    The forward run of a schedule-D inversion ("b" run) with every GIAMIP
+    protocol year added as a step end, so the output exists at every
+    protocol year and needs no interpolation in time. The years are the
+    union of the years of schedule D and the protocol years
+    (`exp09_common.merge_protocol_years` through
+    `exp09_common.window_schedule`): a schedule-D step that has protocol
+    years inside it is split at them. Outside the windows the 1 kyr steps
+    become 500 yr steps before year -26000 and 100 yr steps after it; the
+    windows keep their 50 yr and 20 yr steps (they reach every protocol
+    year already). A piece shorter than
+    `exp09_common.SCHEDULE_DP_MIN_STEP_YR` (10 yr) would be removed with
+    its schedule-D end; for the three ice histories none is. From 122 ka
+    to +1000 yr: 572 steps for ICE-6G_D, 582 for GLAC3c profile 1, 592 for
+    profile 2. The output index is the protocol position, so the surface
+    file holds the contiguous series 0 .. 462.
+
+    The run reads a state file of schedule D (the inversion is unchanged).
+    The steps that end at a year of the file, up to year 0, take the ice of
+    the file, as the inversion does; every other step (a protocol year
+    added by the merge, or a step after year 0) takes the protocol slice of
+    its year from giamip (`LinearIce` at a protocol year is the slice bit
+    for bit). The load history therefore differs from that of the
+    inversion between two years of schedule D: the inversion holds the
+    ice of the end of each 1 kyr step over the whole step (backward Euler),
+    this run changes the load at every protocol year. The misfit at year 0
+    measures the effect of that difference (THE MISFIT CHECK); J is not
+    expected to equal the J of the inversion.
+
+    The time step changes after year -26000 (500 to 100 yr) and at the
+    window edges. Each change rebuilds the preconditioner at the next
+    solve (THE TIME STEP). For a run that is to repeat the solver
+    behaviour of the inversion, pass `--gia_rebuild_max_outer 0` (the
+    inversions run without the guard; the default of the fine schedules
+    is FINE_REBUILD_MAX_OUTER).
+
 THE RESTART
     With checkpoints (the fine schedules by default, or `--checkpoint_every`
     or `--wall_limit_hours`) the run copies the state file into the output
@@ -1385,7 +1421,7 @@ def parse_args():
     p.add_argument("--output_path", default="./")
     p.add_argument("--schedule",
                    choices=["inversion", "protocol", "fine", "fine_b",
-                            *common.WINDOW_SCHEDULES],
+                            *common.WINDOW_SCHEDULES, common.SCHEDULE_DP],
                    default="inversion",
                    help="the steps of the march: those of the input file "
                         "(2 kyr, then +1000 yr), every model year of the "
@@ -1401,7 +1437,10 @@ def parse_args():
                         "C), or schedule D (windows-coarse: 1 kyr steps "
                         "plus 50 yr and 20 yr steps in the same windows, "
                         "the march of the inversion on schedule D; output "
-                        "at the protocol years it reaches)")
+                        "at the protocol years it reaches), or schedule D "
+                        "with every protocol year as an extra step end "
+                        "(windows-coarse-protocol, from a schedule-D state "
+                        "file; output at every protocol year)")
     p.add_argument("--steps", type=int, default=None,
                    help="stop the march after this many steps")
     p.add_argument("--plus_step", choices=["auto", "always", "never"],
@@ -1504,7 +1543,9 @@ def main():
     # Schedules C (`windows`) and D (`windows-coarse`) are fine schedules:
     # output at the protocol years they reach, the same preconditioner rule,
     # checkpoints and restart.
-    window = args.schedule in common.WINDOW_SCHEDULES
+    # Schedule D with the protocol years (`windows-coarse-protocol`) is one
+    # of them too; it reads a state file of schedule D.
+    window = common.input_schedule_of(args.schedule) is not None
     fine = args.schedule in ("fine", "fine_b") or window
     # The protocol schedule rebuilds the preconditioner every 20 solves
     # unless the command line says otherwise; the inversion schedule keeps
@@ -1671,10 +1712,21 @@ def main():
     # between protocol years, so it must run with its own schedule.
     file_schedule = record["march"].get("schedule")
     if file_schedule in common.WINDOW_SCHEDULES:
-        if args.schedule != file_schedule:
+        # Schedule C runs from a file of schedule C only. A file of
+        # schedule D runs with schedule D, or with schedule D plus the
+        # protocol years, whose steps contain the steps of the file.
+        allowed = [name for name in (*common.WINDOW_SCHEDULES,
+                                     common.SCHEDULE_DP)
+                   if common.input_schedule_of(name) == file_schedule]
+        if args.schedule not in allowed:
             raise SystemExit(f"the state file holds the march of "
                              f"--schedule {file_schedule}; run it with "
-                             f"--schedule {file_schedule}")
+                             f"--schedule {' or '.join(allowed)}")
+    elif args.schedule == common.SCHEDULE_DP:
+        # The run is defined as the forward run of a schedule-D inversion.
+        raise SystemExit(f"--schedule {common.SCHEDULE_DP} needs a state "
+                         f"file of schedule D; this file holds the march "
+                         f"of {file_schedule!r}")
     # Each entry of `schedule` is (step, year, dt_yr, ice): `ice` is a
     # callable that returns the ice of the end of the step (backward Euler)
     # as a CG1 Function on the mantle, so the protocol schedule reads one
@@ -1696,7 +1748,10 @@ def main():
         # own (protocol step -1 in the record). With the same `--schedule`
         # its steps up to year 0 take their ice from the file (SCHEDULE C
         # and SCHEDULE D in the module docstring).
-        c_file = window and file_schedule == args.schedule
+        # With `windows-coarse-protocol` the file is of schedule D
+        # (`input_schedule_of`).
+        c_file = (window
+                  and file_schedule == common.input_schedule_of(args.schedule))
         # The years of the input file that are protocol years: every year
         # of a 2 kyr march, the protocol years of a schedule-C march.
         f_year_set = set(f_years.tolist())
@@ -1849,20 +1904,50 @@ def main():
         linear = LinearIce(forcing, f_years)
         n_fine = len(fine_y) - 1
         last = n_fine if args.steps is None else min(n_fine, args.steps)
+        # The years of schedule D that the merge removed for a piece shorter
+        # than SCHEDULE_DP_MIN_STEP_YR (none for the three histories).
+        dropped = []
         if c_file:
-            # The march of the file must be the beginning of this schedule,
-            # to year 0, so its step j is step j here.
-            if not (np.array_equal(years, fine_y[:n_ice].astype(float))
-                    and float(fine_y[year0]) == 0.0
-                    and year0 == n_ice - 1):
-                raise RuntimeError(f"the march of the input file of "
-                                   f"--schedule {args.schedule} is not the "
-                                   f"schedule of this run to year 0")
-            # The steps 1 .. year 0 take the ice of the file, as the
-            # inversion does (`I.assign(ice[step])`).
-            file_steps = set(range(1, n_ice))
+            if args.schedule == file_schedule:
+                # Schedule C or D: the march of the file must be the
+                # beginning of this schedule, to year 0, so its step j is
+                # step j here.
+                if not (np.array_equal(years, fine_y[:n_ice].astype(float))
+                        and float(fine_y[year0]) == 0.0
+                        and year0 == n_ice - 1):
+                    raise RuntimeError(f"the march of the input file of "
+                                       f"--schedule {args.schedule} is not "
+                                       f"the schedule of this run to year 0")
+            else:
+                # Schedule D plus the protocol years: the march of the file
+                # must be schedule D to year 0, and every year of it must be
+                # a year of this schedule (the merge only adds years; a year
+                # removed for a short piece would leave a file step without
+                # a step here, and the run stops).
+                _, d_years = common.window_schedule(
+                    file_schedule, ice_file, int(f_years[0]), f_years,
+                    LAST_YEAR)
+                d_year0 = int(np.flatnonzero(d_years == 0)[0])
+                _, dropped = common.merge_protocol_years(d_years, f_years)
+                fine_set = set(int(y) for y in fine_y)
+                if not (np.array_equal(years,
+                                       d_years[:d_year0 + 1].astype(float))
+                        and year0 == n_ice - 1
+                        and all(int(y) in fine_set for y in years)):
+                    raise RuntimeError(f"the march of the input file is not "
+                                       f"schedule D to year 0, or a year of "
+                                       f"it is not a year of --schedule "
+                                       f"{args.schedule}")
+            # The steps of this run that end at a year of the file, up to
+            # year 0, take the ice of the file, as the inversion does
+            # (`I.assign(ice[j])`, j the step of the file). Map each such
+            # step of this run to the step of the file with the same year;
+            # for schedule C and D the map is the identity.
+            fine_index = {int(y): k for k, y in enumerate(fine_y)}
+            file_steps = {fine_index[int(years[j])]: j
+                          for j in range(1, n_ice)}
         schedule = [(index, float(fine_y[index]), float(fine_dts[index - 1]),
-                     ((lambda index=index: I.assign(ice[index]))
+                     ((lambda j=file_steps[index]: I.assign(ice[j]))
                       if index in file_steps else
                       (lambda year=float(fine_y[index]): linear.set(year, I))),
                      position.get(int(fine_y[index])))
@@ -1896,7 +1981,18 @@ def main():
                               "ice_history": ice_file,
                               "ice_from_input_file_steps": (
                                   [min(file_steps), max(file_steps)]
-                                  if file_steps else None)}
+                                  if file_steps else None),
+                              # Schedule D plus the protocol years: the
+                              # schedule of the state file, the number of
+                              # steps from the file, the shortest piece
+                              # and the schedule-D years removed for it.
+                              "input_schedule": file_schedule,
+                              "steps_with_file_ice": len(file_steps),
+                              "min_step_yr": (
+                                  common.SCHEDULE_DP_MIN_STEP_YR
+                                  if args.schedule == common.SCHEDULE_DP
+                                  else None),
+                              "dropped_years": dropped}
     else:
         last = year0 if args.steps is None else min(year0, args.steps)
         plus = (args.plus_step == "always"
@@ -1977,6 +2073,21 @@ def main():
         restored = checkpoints.latest()
         if restored is None:
             raise SystemExit(f"--restart: {state_path} holds no checkpoint")
+        # The step of the checkpoint must end at the year of the checkpoint
+        # in the schedule of this leg. A state file of schedule D can run
+        # with two schedules (D, and D plus the protocol years), whose step
+        # numbers mean different years; a leg with the other schedule than
+        # the first leg stops here, before it loads anything.
+        # A checkpoint is never written after the last step of a leg's
+        # schedule, so its step is always a step of the schedule.
+        step_year = {int(entry[0]): entry[1] for entry in schedule}
+        if step_year.get(int(restored["step"])) != float(restored["year"]):
+            raise SystemExit(
+                f"--restart: checkpoint step {int(restored['step'])} is at "
+                f"year {restored['year']:.0f}, but in --schedule "
+                f"{args.schedule} that step ends at year "
+                f"{step_year.get(int(restored['step']))}; run the restart "
+                f"with the schedule of the first leg")
         checkpoints.load(restored)
         last_written = surface_last_index(surface_path)
         say(f"  restart from checkpoint {int(restored['index'])}: step "

@@ -41,6 +41,16 @@
 #   XFER_DIR  the directory of the bed transfer (default RUN_ROOT/transfer)
 #   TEST_DIR  the directory of the test of the inversion (default
 #             RUN_ROOT/invert-3steps); copied to DEST under its own name
+#   COPY      1 (default) copies the four directories above. 0 copies
+#             nothing: the job writes the MD5 of invert/state.h5 and
+#             invert/controls.h5 of RUN_ROOT to DEST/inversion_md5.txt and
+#             the MANIFEST.txt of DEST. This is the archive job of a second
+#             forward run from an inversion whose records an earlier archive
+#             job already copied (the "b" forward run of Exp09, Exp10 and
+#             Exp12, DEST = its forward directory). The MD5 file records
+#             from which state file that forward run started. With COPY=0
+#             the job writes only these two files in DEST and changes no
+#             other file of the archive.
 #
 # PREP_DIR, XFER_DIR and TEST_DIR exist because the readiness jobs can run
 # in another run directory than the inversion: the partition of the
@@ -66,10 +76,19 @@ DEST=${DEST:-/g/data/xd2/sg8812/gia-mip/exp05/r2}
 PREP_DIR=${PREP_DIR:-${RUN_ROOT}/prepare}
 XFER_DIR=${XFER_DIR:-${RUN_ROOT}/transfer}
 TEST_DIR=${TEST_DIR:-${RUN_ROOT}/invert-3steps}
+COPY=${COPY:-1}
+case ${COPY} in
+    0|1) ;;
+    *) echo "error: COPY=${COPY}; use 1 or 0" >&2; exit 1 ;;
+esac
 status=0
 
 echo "job ${PBS_JOBID}: ${RUN_ROOT} -> ${DEST}"
-echo "prepare from ${PREP_DIR}, transfer from ${XFER_DIR}, test from ${TEST_DIR}"
+if [ "${COPY}" = "1" ]; then
+    echo "prepare from ${PREP_DIR}, transfer from ${XFER_DIR}, test from ${TEST_DIR}"
+else
+    echo "COPY=0: no copy; the MD5 of the inversion files and the manifest of ${DEST} only"
+fi
 date
 mkdir -p ${DEST} || exit 1
 
@@ -104,25 +123,43 @@ copy_dir() {
     fi
 }
 
-# The input files are 50-100 GB each on r2 and invert/state.h5 holds the
-# same mesh, fields and ice; the .bak file of a failed transfer is a copy.
-copy_dir prepare ${PREP_DIR} --exclude='*.h5' --exclude='*.bak'
-copy_dir transfer ${XFER_DIR} --exclude='*.h5' --exclude='*.bak'
-# The test keeps the name of its directory: invert-3steps/ for the 3-step
-# test, invert-test6/ for the 6-step test of schedule D (submit_r2.sh), so
-# the archive says which test it holds.
-copy_dir $(basename ${TEST_DIR}) ${TEST_DIR} --exclude='state.h5'
-copy_dir invert ${RUN_ROOT}/invert
+if [ "${COPY}" = "1" ]; then
+    # The input files are 50-100 GB each on r2 and invert/state.h5 holds the
+    # same mesh, fields and ice; the .bak file of a failed transfer is a copy.
+    copy_dir prepare ${PREP_DIR} --exclude='*.h5' --exclude='*.bak'
+    copy_dir transfer ${XFER_DIR} --exclude='*.h5' --exclude='*.bak'
+    # The test keeps the name of its directory: invert-3steps/ for the 3-step
+    # test, invert-test6/ for the 6-step test of schedule D (submit_r2.sh), so
+    # the archive says which test it holds.
+    copy_dir $(basename ${TEST_DIR}) ${TEST_DIR} --exclude='state.h5'
+    copy_dir invert ${RUN_ROOT}/invert
 
-# The MD5 of the two files that a later step reads.
-for f in state.h5 controls.h5; do
-    if [ -e ${RUN_ROOT}/invert/${f} ]; then
-        a=$(md5sum ${RUN_ROOT}/invert/${f} | cut -d' ' -f1)
-        b=$(md5sum ${DEST}/invert/${f} 2>/dev/null | cut -d' ' -f1)
-        echo "invert/${f}: md5 source ${a}, copy ${b}"
-        [ "${a}" = "${b}" ] || { echo "error: invert/${f} md5 differs" >&2; status=1; }
-    fi
-done
+    # The MD5 of the two files that a later step reads.
+    for f in state.h5 controls.h5; do
+        if [ -e ${RUN_ROOT}/invert/${f} ]; then
+            a=$(md5sum ${RUN_ROOT}/invert/${f} | cut -d' ' -f1)
+            b=$(md5sum ${DEST}/invert/${f} 2>/dev/null | cut -d' ' -f1)
+            echo "invert/${f}: md5 source ${a}, copy ${b}"
+            [ "${a}" = "${b}" ] || { echo "error: invert/${f} md5 differs" >&2; status=1; }
+        fi
+    done
+else
+    # No copy. The MD5 of the inversion files, so the archive of the forward
+    # run says from which state file it started; the archive of the first
+    # forward chain holds the copy of invert/ with its own MD5 in its job
+    # output.
+    : > ${DEST}/inversion_md5.txt
+    for f in state.h5 controls.h5; do
+        if [ -e ${RUN_ROOT}/invert/${f} ]; then
+            a=$(md5sum ${RUN_ROOT}/invert/${f} | cut -d' ' -f1)
+            echo "${a}  ${RUN_ROOT}/invert/${f}" >> ${DEST}/inversion_md5.txt
+            echo "invert/${f}: md5 ${a}"
+        else
+            echo "error: no ${RUN_ROOT}/invert/${f}" >&2
+            status=1
+        fi
+    done
+fi
 
 # The list of every file of the archive, with its size in bytes.
 ( cd ${DEST} && find . -type f ! -name MANIFEST.txt -printf '%s %p\n' | sort -k2 ) > ${DEST}/MANIFEST.txt

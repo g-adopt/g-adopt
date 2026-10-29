@@ -85,6 +85,20 @@
 #   FORWARD_RESTART=1  forward stage: continue the forward run from its last
 #                      checkpoint (RESTART=1), then ParaView, images and
 #                      archive as before
+#   FORWARD_B=1        forward stage, Exp09, Exp10, Exp12 on schedule D only:
+#                      the "b" forward chain (decision R14). The forward run
+#                      marches schedule D with every protocol year as an
+#                      extra step end (SCHEDULE=windows-coarse-protocol,
+#                      572-592 steps), from the same invert/state.h5 as the
+#                      schedule-D forward run, with --gia_rebuild_max_outer
+#                      0 as in the inversion. Forward, ParaView and images
+#                      go to ARCHIVE/expXX/r2/forward-windows-coarse-b/; the
+#                      archive job runs with COPY=0 and DEST in that
+#                      directory, so it copies nothing and changes no file
+#                      of the existing archive (it writes the MD5 of the
+#                      inversion files and the manifest of the b directory).
+#                      A b leg after a wall-time stop: FORWARD_B=1
+#                      FORWARD_RESTART=1 with the same other variables.
 #   FORWARD_NODES=<n>  forward stage: the nodes of the forward run. The
 #                      forward run is not taped, so it needs no node disk
 #                      per rank and puts the NP ranks of the partition on
@@ -289,6 +303,31 @@ case ${SCHEDULE} in
 esac
 SOURCE=${SOURCE:-${L0_SOURCE}}
 FWD=${ARCHIVE}/exp${EXP}/r2/forward-${SCHEDULE}
+# The schedule of the forward run (SCHEDULE of run_forward.pbs) and its
+# extra options, and the archive job of the forward chain: its directory
+# and its variables. The b chain (FORWARD_B=1) changes all four.
+FSCHEDULE=${SCHEDULE}
+FEXTRA=""
+ARCH_DIR=${ARCHIVE}/exp${EXP}/r2
+FORWARD_B=${FORWARD_B:-0}
+case ${FORWARD_B} in
+    0) ;;
+    1)
+        if [ "${SCHEDULE}" != "windows-coarse" ] || [ "${STAGE}" != "forward" ]; then
+            echo "error: FORWARD_B=1 is for the forward stage of Exp09, Exp10 and Exp12 on schedule D (windows-coarse)" >&2
+            exit 1
+        fi
+        # Schedule D plus the protocol years, from the schedule-D state
+        # file of the inversion. The inversion ran without the rebuild
+        # guard; the forward run of the fine schedules has it on by
+        # default, which changes where the preconditioner is rebuilt
+        # (NOTES exp12-forward-J-check), so the b run turns it off.
+        FSCHEDULE=windows-coarse-protocol
+        FEXTRA=",EXTRA=--gia_rebuild_max_outer 0"
+        FWD=${ARCHIVE}/exp${EXP}/r2/forward-windows-coarse-b
+        ARCH_DIR=${FWD} ;;
+    *) echo "error: FORWARD_B=${FORWARD_B}; use 0 or 1" >&2; exit 1 ;;
+esac
 
 # The longest wall time of a normalsr job on n nodes (NCI queue limits,
 # which go by cores: 1-1040 cores 48 h, 1144-2080 24 h, 2184-4160 10 h,
@@ -487,13 +526,13 @@ case ${STAGE} in
         [ -d "${PREP}" ] || { echo "error: no prepare directory ${PREP}; set PREP" >&2; exit 1; }
         if [ "${FORWARD_RESTART:-0}" = "1" ]; then
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
-                -v "${FNPV}RESTART=1,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+                -v "${FNPV}RESTART=1,SCHEDULE=${FSCHEDULE}${FEXTRA}" ${G}/run_forward.pbs)
         else
             refuse_if ${FWD}/forward_exp${EXP}_surface.h5
             [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/summary_invert.json" ] || \
                 echo "warning: ${R}/invert has no summary_invert.json; is the inversion finished?" >&2
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
-                -v "${FNPV}STATE=${R}/invert/state.h5,SCHEDULE=${SCHEDULE}" ${G}/run_forward.pbs)
+                -v "${FNPV}STATE=${R}/invert/state.h5,SCHEDULE=${FSCHEDULE}${FEXTRA}" ${G}/run_forward.pbs)
         fi
         pv=$(submit ${FWD} -N x${EXP}-pv -W depend=afterok:${fwd} ${G}/run_paraview.pbs)
         imgs=""
@@ -502,11 +541,18 @@ case ${STAGE} in
                 -v PART=${p},NPARTS=${IMAGE_PARTS} ${G}/run_images.pbs)
             imgs="${imgs}:${img}"
         done
-        arch=$(submit ${ARCHIVE}/exp${EXP}/r2 -N x${EXP}-arch -W depend=afterok${imgs} \
-            -v "RUN_ROOT=${R},PREP_DIR=${PREP},XFER_DIR=${XFER_DIR},TEST_DIR=${TEST_DIR},DEST=${ARCHIVE}/exp${EXP}/r2" ${G}/run_archive.pbs)
-        echo "exp${EXP} forward on ${FORWARD_NODES} nodes: forward ${fwd} paraview ${pv} images ${imgs#:} archive ${arch}"
+        if [ "${FORWARD_B}" = "1" ]; then
+            # The b chain: no copy, DEST is the b directory (see FORWARD_B).
+            ARCH_V="RUN_ROOT=${R},COPY=0,DEST=${ARCH_DIR}"
+        else
+            ARCH_V="RUN_ROOT=${R},PREP_DIR=${PREP},XFER_DIR=${XFER_DIR},TEST_DIR=${TEST_DIR},DEST=${ARCH_DIR}"
+        fi
+        arch=$(submit ${ARCH_DIR} -N x${EXP}-arch -W depend=afterok${imgs} \
+            -v "${ARCH_V}" ${G}/run_archive.pbs)
+        echo "exp${EXP} forward (${FSCHEDULE}) on ${FORWARD_NODES} nodes in ${FWD}: forward ${fwd} paraview ${pv} images ${imgs#:} archive ${arch}"
         echo "  a forward run that stops at the wall time exits with 3; the jobs after it are then deleted by PBS."
-        echo "  Continue with the same variables and FORWARD_RESTART=1 bash submit_r2.sh ${EXP} ${NODES} forward"
+        if [ "${FORWARD_B}" = "1" ]; then B_WORD=" FORWARD_B=1"; else B_WORD=""; fi
+        echo "  Continue with the same variables and FORWARD_RESTART=1${B_WORD} bash submit_r2.sh ${EXP} ${NODES} forward"
         ;;
     *)
         echo "error: STAGE=${STAGE}; use ready, transfer, test, invert, restart or forward" >&2

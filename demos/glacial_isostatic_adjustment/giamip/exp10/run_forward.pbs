@@ -19,6 +19,13 @@
 #                       in the same windows (Exp09, Exp10, Exp12 on r2,
 #                       decision R12). A state file of schedule D gives the
 #                       ice to year 0, as for schedule C.
+#   windows-coarse-protocol
+#                       schedule D with every protocol year as an extra step
+#                       end (the "b" forward run, decision R14): the steps of
+#                       schedule D split at the protocol years, 572 to 592
+#                       steps from 122 ka. It reads a state file of schedule
+#                       D (forward_exp10.py, SCHEDULE D WITH THE PROTOCOL
+#                       YEARS) and writes an output at every protocol year.
 # The surface fields and the scalars are written at the protocol years that
 # the march reaches, so paraview_exp10.py reads the same kind of series.
 # Schedule D reaches only the whole kyr outside the windows, so its series
@@ -70,8 +77,8 @@
 # Variables (pass them with -v NAME=value,...):
 #   STATE             the state.h5 of the inversion (required on the first
 #                     leg; a restart reads forward_state.h5)
-#   SCHEDULE          protocol (default), windows or windows-coarse (see
-#                     above)
+#   SCHEDULE          protocol (default), windows, windows-coarse or
+#                     windows-coarse-protocol (see above)
 #   REBUILD_EVERY     solves between preconditioner rebuilds (default 100,
 #                     the setting of the r2 inversions; the rule also
 #                     rebuilds at every change of dt)
@@ -159,8 +166,8 @@ SCHEDULE=${SCHEDULE:-protocol}
 REBUILD_EVERY=${REBUILD_EVERY:-100}
 RESTART=${RESTART:-0}
 case ${SCHEDULE} in
-    protocol|windows|windows-coarse) ;;
-    *) echo "error: SCHEDULE=${SCHEDULE}; use protocol, windows or windows-coarse" >&2; exit 1 ;;
+    protocol|windows|windows-coarse|windows-coarse-protocol) ;;
+    *) echo "error: SCHEDULE=${SCHEDULE}; use protocol, windows, windows-coarse or windows-coarse-protocol" >&2; exit 1 ;;
 esac
 
 # The wall time of this job from the PBS server (Resource_List.walltime,

@@ -1815,15 +1815,119 @@ def schedule_d_years(start, protocol_years, windows, last=SCHEDULE_LAST_YEAR,
     return years
 
 
+# --------------------------------------------------------------------------
+# Schedule D with the protocol years as extra step ends (the "b" forward run)
+# --------------------------------------------------------------------------
+
+#: The `--schedule` value of the forward run that marches schedule D with
+#: every protocol year added as a step end (decision R14 of the r2
+#: production, Sia 2026-10-29). Only the forward script knows it: the
+#: inversion and its input file stay on schedule D, and this forward run
+#: starts from the bed of a schedule-D state file.
+SCHEDULE_DP = "windows-coarse-protocol"
+
+#: The shortest step (yr) that the merge of schedule D and the protocol
+#: years may make. A step piece shorter than this is removed by removing
+#: its end that is a schedule-D year and not a protocol year (the protocol
+#: years must stay, they carry the output). 10 yr is the shortest step of
+#: every schedule of these experiments, and the drop rule of the Extended
+#: Burgers elements (`prepare_expXX.EB_DROP_DT_YR`) assumes that no step is
+#: shorter: an element with a Maxwell time below 5 yr is dropped because it
+#: relaxes fully inside a 10 yr step, which a shorter step would not
+#: guarantee. For the three histories the rule never fires: every protocol
+#: year and every schedule-D year is a whole multiple of 10 yr, the
+#: schedule-D windows already reach every protocol year inside them, and
+#: outside the windows a 1 kyr step is cut into pieces of 500 yr or 100 yr.
+SCHEDULE_DP_MIN_STEP_YR = 10
+
+#: The number of steps of schedule D plus the protocol years from 122 ka to
+#: +1000 yr. Outside the windows the merge gives the protocol steps: 192
+#: steps of 500 yr to year -26000, then 100 yr steps from -26000 to the
+#: first window, from the last window to year 0 and from year 0 to +1000.
+#: The windows keep their schedule-D steps (they reach every protocol year
+#: already). ICE-6G_D: 192 + 100 + (20 + 100 + 40) + 110 + 10 = 572;
+#: GLAC3c profile 1: 192 + 100 + (20 + 50 + 40 + 50 + 20) + 100 + 10 = 582;
+#: GLAC3c profile 2: 192 + 100 + (20 + 50 + 60 + 50 + 20) + 90 + 10 = 592.
+SCHEDULE_DP_STEPS_122KA = {"iceHistory-ICE-6G_D.nc": 572,
+                           "iceHistory-GLAC3c_profile1.nc": 582,
+                           "iceHistory-GLAC3c_profile2.nc": 592}
+
+
+def merge_protocol_years(base_years, protocol_years,
+                         min_step=SCHEDULE_DP_MIN_STEP_YR):
+    """A march with every protocol year of its span added as a step end.
+
+    The years of the result are the union of `base_years` and the protocol
+    years from the first to the last base year. Where a protocol year falls
+    inside a base step, that step is split into two (or more, for several
+    protocol years inside it); the base years themselves all stay. Every
+    year is an integer, so no rounding error enters the step lengths.
+
+    A piece shorter than `min_step` is removed by removing its end that is
+    a base year and not a protocol year, which merges the piece into its
+    neighbour. The first and the last year stay. A short piece whose two
+    ends are both protocol years, or both base years that are not protocol
+    years (a short step of the base march itself, not made by a split), is
+    refused, since removing either end would change what the run outputs or
+    what the base march means.
+
+    Args:
+      base_years: the years of the base march (schedule D), ascending
+        integers.
+      protocol_years: the protocol years of giamip, ascending.
+      min_step: the shortest piece, yr (`SCHEDULE_DP_MIN_STEP_YR`).
+
+    Returns:
+      `(years, dropped)`: the NumPy integer array of the merged years and
+      the list of base years that were removed for a short piece (empty
+      for the three histories).
+
+    Raises:
+      ValueError: if a protocol year is not a whole year, or if a short
+        piece cannot be removed by the rule above.
+    """
+    base = [int(y) for y in base_years]
+    if any(float(y) != float(b) for y, b in zip(base_years, base)):
+        raise ValueError("the base years are not whole years")
+    first, last = base[0], base[-1]
+    protocol = [int(round(p)) for p in protocol_years]
+    if any(float(p) != float(q) for p, q in zip(protocol_years, protocol)):
+        raise ValueError("the protocol years are not whole years")
+    pset = {p for p in protocol if first <= p <= last}
+    bset = set(base)
+    years = sorted(bset | pset)
+    dropped = []
+    while True:
+        # The first piece that is too short, if any.
+        short = next((j for j in range(1, len(years))
+                      if years[j] - years[j - 1] < min_step), None)
+        if short is None:
+            break
+        ends = (years[short - 1], years[short])
+        # The ends that may go: a base year, not a protocol year, and not
+        # the first or last year of the march.
+        removable = [y for y in ends
+                     if y in bset and y not in pset and y not in (first, last)]
+        if len(removable) != 1:
+            raise ValueError(f"the piece {ends} is shorter than {min_step} yr "
+                             f"and has no single schedule-D end that may be "
+                             f"removed")
+        years.remove(removable[0])
+        dropped.append(removable[0])
+    return np.asarray(years, dtype=np.int64), dropped
+
+
 def window_schedule(name, ice_file, start, protocol_years,
                     last=SCHEDULE_LAST_YEAR):
-    """The windows and the years of schedule C or D.
+    """The windows and the years of schedule C, D, or D plus the protocol years.
 
     The one call of the prepare script and of the forward script, so the
     input file and the forward run of a schedule march the same years.
+    `SCHEDULE_DP` is a forward schedule only (its input file is one of
+    schedule D, `input_schedule_of`).
 
     Args:
-      name: `SCHEDULE_C` or `SCHEDULE_D`.
+      name: `SCHEDULE_C`, `SCHEDULE_D` or `SCHEDULE_DP`.
       ice_file: the basename of the ice history.
       start: the first year (a protocol year).
       protocol_years: the protocol years of giamip, ascending.
@@ -1834,10 +1938,11 @@ def window_schedule(name, ice_file, start, protocol_years,
       integer array of the years from `start` to `last`.
 
     Raises:
-      ValueError: if `name` is not one of the two schedules, or if the
+      ValueError: if `name` is not one of the three schedules, or if the
         schedule breaks one of its rules.
       RuntimeError: if a march from 122 ka does not have the step count of
-        `SCHEDULE_C_STEPS_122KA` or `SCHEDULE_D_STEPS_122KA`.
+        `SCHEDULE_C_STEPS_122KA`, `SCHEDULE_D_STEPS_122KA` or
+        `SCHEDULE_DP_STEPS_122KA`.
     """
     if name == SCHEDULE_C:
         windows = schedule_c_windows(ice_file)
@@ -1847,6 +1952,14 @@ def window_schedule(name, ice_file, start, protocol_years,
         windows = schedule_d_windows(ice_file)
         years = schedule_d_years(int(start), protocol_years, windows, last)
         expected = SCHEDULE_D_STEPS_122KA.get(ice_file)
+    elif name == SCHEDULE_DP:
+        # Schedule D, then every protocol year added as a step end. The
+        # windows are those of schedule D: the merge adds no year inside
+        # them (their steps reach every protocol year there).
+        windows = schedule_d_windows(ice_file)
+        d_years = schedule_d_years(int(start), protocol_years, windows, last)
+        years, _ = merge_protocol_years(d_years, protocol_years)
+        expected = SCHEDULE_DP_STEPS_122KA.get(ice_file)
     else:
         raise ValueError(f"unknown window schedule {name!r}")
     # The counts are for the full march of a 122 ka experiment.
@@ -1855,6 +1968,22 @@ def window_schedule(name, ice_file, start, protocol_years,
         raise RuntimeError(f"{name} has {len(years) - 1} steps for "
                            f"{ice_file}, expected {expected}")
     return windows, years
+
+
+def input_schedule_of(name):
+    """The schedule of the input file that a forward run of `name` reads.
+
+    Schedule C and schedule D run from an input file (state file) of their
+    own schedule. `SCHEDULE_DP` runs from a state file of schedule D: it
+    marches the years of schedule D plus the protocol years, so the steps
+    of the file are a part of its steps. Any other name has no window input
+    file (None).
+    """
+    if name in WINDOW_SCHEDULES:
+        return name
+    if name == SCHEDULE_DP:
+        return SCHEDULE_D
+    return None
 
 
 def window_march_record(name, years, protocol_steps, ice_steps, year0_step,
