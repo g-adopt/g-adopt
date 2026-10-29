@@ -523,7 +523,11 @@ case ${STAGE} in
         [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5" >&2; exit 1; }
         # The archive job copies the prepare and transfer records from PREP
         # and beside it; a missing PREP would leave them out without an error.
-        [ -d "${PREP}" ] || { echo "error: no prepare directory ${PREP}; set PREP" >&2; exit 1; }
+        # The archive job of the b chain copies nothing (COPY=0), so the b
+        # chain does not need PREP.
+        if [ "${FORWARD_B}" != "1" ]; then
+            [ -d "${PREP}" ] || { echo "error: no prepare directory ${PREP}; set PREP" >&2; exit 1; }
+        fi
         if [ "${FORWARD_RESTART:-0}" = "1" ]; then
             fwd=$(submit ${FWD} -N x${EXP}-fwd -l ${FRES},walltime=${FLONG} \
                 -v "${FNPV}RESTART=1,SCHEDULE=${FSCHEDULE}${FEXTRA}" ${G}/run_forward.pbs)
