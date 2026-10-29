@@ -43,12 +43,14 @@ class AdaptiveSimulation(abc.ABC):
     def __init__(
         self,
         mesh: fd.MeshGeometry,
+        metric_fields: dict[str, dict[str, bool | float]],
         metric_parameters: dict[str, int | float],
         time_end: float,
         time_normalisation: float,
         time_step: float,
         adapt_calls: int = 3,
         initial_adapt_loops: int = 3,
+        iterations: int = 16,
     ) -> None:
         """Stores the simulation setup and performs the initial solve.
 
@@ -80,11 +82,13 @@ class AdaptiveSimulation(abc.ABC):
 
         """
         self.mesh = mesh
+        self.metric_fields = metric_fields
         self.metric_parameters = metric_parameters
         self.time_end = time_end
         self.time_normalisation = time_normalisation
         self.adapt_calls = adapt_calls
         self.initial_adapt_loops = initial_adapt_loops
+        self.iterations = iterations
 
         # Time-stepping objects
         self.time = fd.Constant(0.0)  # Initial time

@@ -1,6 +1,7 @@
 from firedrake import *
 from firedrake.output import VTKFile
 
+from .adaptive_simulation import AdaptiveSimulation
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
@@ -32,17 +33,21 @@ from .stokes_integrators import (
     ViscoelasticStokesSolver,
 )
 from .time_stepper import *
-from .transport_solver import DiffusiveSmoothingSolver, EnergySolver, GenericTransportSolver
+from .transport_solver import (
+    DiffusiveSmoothingSolver,
+    EnergySolver,
+    GenericTransportSolver,
+)
 from .utility import (
     InteriorBC,
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
+    get_boundary_ids,
     interpolate_1d_profile,
     log,
     node_coordinates,
     timer_decorator,
-    get_boundary_ids,
 )
 
 PETSc.Sys.popErrorHandler()
