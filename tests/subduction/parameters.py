@@ -30,7 +30,7 @@ mesh_generation = "gmsh"
 
 # Spatial parameters
 domain_height = 2.9e6
-domain_aspect_ratio = 8.0 / 2.9
+domain_aspect_ratio = 16.0 / 2.9
 distance_scale = domain_height if dimensionless else 1.0
 domain_dims = (
     domain_aspect_ratio * domain_height / distance_scale,
@@ -49,7 +49,7 @@ mesh_layers = {
 
 # Physical parameters
 rho_mantle = 3.3e3
-rho_weak_layer = 3.1e3
+rho_weak_layer = 3.3e3
 if free_surface:
     rho_water = 1e3
 alpha = 3e-5
@@ -109,12 +109,12 @@ viscous_creep_params = {
     "upper": {
         "diffusion": {"prefactor": 1.5e-11, "n": 1.0, "act_nrg": 3e5, "act_vol": 4e-6},
         "dislocation": {
-            "prefactor": 5e-17,
+            "prefactor": 1.5e-17,
             "n": 3.5,
             "act_nrg": 5.4e5,
             "act_vol": 1.2e-5,
         },
-        "Peierls": {"prefactor": 1e-144, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
+        "Peierls": {"prefactor": 1e-145, "n": 20.0, "act_nrg": 5.4e5, "act_vol": 1e-5},
     },
     "lower": {
         "diffusion": {"prefactor": 3.3e-17, "n": 1.0, "act_nrg": 2e5, "act_vol": 1.5e-6}
@@ -134,7 +134,7 @@ initial_adapt_loops = 3
 adapt_calls = 3
 metric_parameters = {  # For further information: `set_parameters` in animate/metric.py
     "dm_plex_metric": {
-        "target_complexity": 250_000,  # Metric complexity, analogous to cell count
+        "target_complexity": 200_000,  # Metric complexity, analogous to cell count
         "h_min": 2e3 / distance_scale,  # Minimum metric magnitude (i.e. cell size)
         "h_max": 5e5 / distance_scale,  # Maximum metric magnitude (i.e. cell size)
         "a_max": 5.0,  # Maximum metric anisotropy (cell aspect ratio)
