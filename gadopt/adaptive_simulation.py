@@ -55,8 +55,8 @@ class AdaptiveSimulation(abc.ABC):
         initial_adapt_loops: int = 3,
         iterations: int = 16,
         remesh_jump_limit: float | None = 2.0,
-        checkpoint_frequency: float = 1,
-        output_frequency: float = 1,
+        checkpoint_frequency: int | float = 1,  # noqa: PYI041
+        output_frequency: int | float = 1,  # noqa: PYI041
         time_normalisation: float = 1.0,
     ) -> None:
         """Stores the simulation setup and performs the initial solve.
@@ -90,11 +90,11 @@ class AdaptiveSimulation(abc.ABC):
             disables the freezing. The default of 2.0 freezes adaptation once a remesh
             perturbs the solution by more than it changes per time step.
           checkpoint_frequency:
-            Frequency of checkpointing, either as a number of time steps (int) or as a
-            time interval (float, in simulation time units).
+            Frequency of checkpointing: an int counts time steps and a float spans
+            simulation time, the exact runtime type picking the semantics.
           output_frequency:
-            Frequency of output, either as a number of time steps (int) or as a time
-            interval (float, in simulation time units).
+            Frequency of output: an int counts time steps and a float spans simulation
+            time, the exact runtime type picking the semantics.
           time_normalisation:
             Divisor applied to the simulation time when writing output, e.g. the number
             of time units per million years.
@@ -266,9 +266,7 @@ class AdaptiveSimulation(abc.ABC):
 
         The method is invoked with `initial` set, once the simulation is initialised,
         i.e. after the initial mesh-adaptivity loops and the initial checkpoint and
-        output, and after every time step, immediately before `plot_diagnostics`. It is
-        also invoked upon completion of the simulation, after the final checkpoint and
-        output.
+        output, and after every time step, immediately before `plot_diagnostics`.
 
         Args:
           initial:
@@ -314,14 +312,15 @@ class AdaptiveSimulation(abc.ABC):
         e.g. to plot time series of the values computed by `diagnostics`.
 
         The method is invoked by `time_loop` after every time step, following
-        `diagnostics`, and upon completion of the simulation, following the final
-        `diagnostics` invocation. Unlike the latter, it is not invoked upon
-        initialisation, since time series are empty at that point.
+        `diagnostics`. Unlike the latter, it is not invoked upon initialisation, since
+        time series are empty at that point.
 
         """
 
     def run(
-        self, steady_state: Callable | None = None, time_end: float | None = None
+        self,
+        steady_state: Callable[[], bool] | None = None,
+        time_end: float | None = None,
     ) -> None:
         """Runs the simulation to completion, adapting the mesh en route.
 
@@ -335,6 +334,11 @@ class AdaptiveSimulation(abc.ABC):
         `diagnostics` jumps across two consecutive remeshes by more than
         `remesh_jump_limit`, the mesh is frozen and only `time_loop` is repeated, since
         remeshing then perturbs the solution by more than it changes per time step.
+
+        Note that the simulation terminates on the `exit_status` attribute alone, which
+        the base `time_loop` sets once the end condition is met: a subclass overriding
+        `time_loop` must likewise set `exit_status` to True once the end condition,
+        `exit_loop`, is met, or the simulation will not terminate.
 
         Args:
           steady_state:
@@ -402,9 +406,9 @@ class AdaptiveSimulation(abc.ABC):
               e.g. a derived diagnostic; fields with an entry are interpolated from it
               for output, and before mesh adaptation
             - `include_in_metric`: whether the field drives mesh adaptation
-            - `metric_mods` (fields in the metric only): keyword arguments of the
-              per-field metric, `scale` and `log`, scaling the Hessian and switching to
-              its base-10 logarithm; components of vector fields provide lists thereof
+            - `metric_mods` (fields in the metric only): the per-field metric modifiers
+              `scale` and `log`, scaling the Hessian and switching to its base-10
+              logarithm; components of vector fields provide lists thereof
             - `scale` (optional): scalar or callable applied to the field for output;
               defaults to 1.0, i.e. no scaling
 
@@ -475,10 +479,6 @@ class AdaptiveSimulation(abc.ABC):
                 for event in ("checkpoint", "output"):
                     if event not in due_events:
                         getattr(self, f"write_{event}")()
-
-                # Calculate final simulation diagnostics and produce graphs
-                self.measure = self.diagnostics()
-                self.plot_diagnostics()
 
                 break
 
