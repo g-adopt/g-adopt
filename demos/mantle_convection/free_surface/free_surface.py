@@ -130,19 +130,17 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # physically consistent description for a closed box like this one, and is required for
 # open or periodic domains, where topography must be allowed to cross lateral
 # boundaries.
-# * *volume_multiplier*: With horizontal transport enabled, topography converges towards
-# regions of convergent flow beneath the surface, which drifts the mean height upwards
-# over time. Because a uniform shift of the height is dynamically inert (it is absorbed
-# by a uniform pressure shift, and only height gradients load the interior), we remove
-# it through a uniform correction to the surface's normal speed. For this closed box,
-# evaluating the multiplier as the surface's mean height tendency, with the previous
-# step's fields, renders the mean height stationary; the G-ADOPT function
-# *free_surface_volume_multiplier* automates the calculation. The multiplier is a
-# `Constant`, so it can be updated between solves without rebuilding the solver.
+# * *auto_volume_multiplier*: With horizontal transport enabled, topography converges
+# towards regions of convergent flow beneath the surface, which drifts the mean height
+# upwards over time. Because a uniform shift of the height is dynamically inert (it is
+# absorbed by a uniform pressure shift, and only height gradients load the interior),
+# we remove it through a uniform correction to the surface's normal speed. With this
+# option, the Stokes solver automates the calculation, updating the multiplier before
+# each solve with the surface's mean height tendency, evaluated with the previous
+# step's fields, which renders the mean height stationary for this closed box.
 
 # +
 Bfs = 10.0  # Free surface buoyancy number
-volume_multiplier = Constant(0.0)  # Uniform correction to the surface's normal speed
 
 stokes_bcs = {
     boundary.bottom: {"uy": 0},
@@ -150,7 +148,7 @@ stokes_bcs = {
         "free_surface": {
             "RaFS": Ra * Bfs,
             "exact_normal": True,
-            "volume_multiplier": volume_multiplier,
+            "auto_volume_multiplier": True,
         }
     },
     boundary.left: {"ux": 0},
@@ -210,11 +208,6 @@ for timestep in range(timesteps):
 
     dt = t_adapt.update_timestep()
     time += dt
-
-    # Update the uniform correction to the free surface's normal speed from the previous
-    # state: the surface-mean height tendency. For this closed box, it renders the mean
-    # height stationary.
-    volume_multiplier.assign(free_surface_volume_multiplier(u, eta, boundary.top))
 
     # Solve Stokes sytem:
     stokes_solver.solve()
