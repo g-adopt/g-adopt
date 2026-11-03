@@ -32,6 +32,7 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
+    free_surface_volume_multiplier,
     get_device_type,
     is_cartesian,
     is_continuous,
@@ -780,6 +781,8 @@ class StokesSolver(StokesSolverBase):
         self.free_surface_map = {}
         self.free_surface_options = {}
         self.free_surface_equations = []
+        # Free surfaces whose volume multiplier is auto-updated before each solve
+        self.auto_volume_multiplier = set()
         super().__init__(solution, approximation, **kwargs)
 
     def set_free_surface_boundary(
@@ -798,6 +801,13 @@ class StokesSolver(StokesSolverBase):
         params_fs = {
             key: value for key, value in params_fs.items() if key not in fs_options
         }
+        # The auto_volume_multiplier option, documented in gadopt/free_surface_equation.py,
+        # requests the volume multiplier to be auto-updated before each solve; it is not
+        # an equation option, so it is consumed here rather than in fs_options
+        if params_fs.pop("auto_volume_multiplier", False):
+            self.auto_volume_multiplier.add(bc_id)
+            # The multiplier is created if not supplied by the user
+            fs_options.setdefault("volume_multiplier", fd.Constant(0.0))
         self.free_surface_options[bc_id] = fs_options
 
         normal_stress, buoyancy = self.approximation.free_surface_terms(
@@ -901,6 +911,32 @@ class StokesSolver(StokesSolverBase):
                 {"fieldsplit_1": {"pc_python_type": "gadopt.FreeSurfaceMassInvPC"}}
             )
         self.add_to_solver_config(solver_extras)
+
+    def solve(self) -> None:
+        """Solves the system, auto-updating volume multipliers beforehand.
+
+        Before the solve, the volume multiplier of every free surface passed the
+        `auto_volume_multiplier` option is updated with the boundary-averaged height
+        tendency computed from the current (pre-solve) fields. For a closed domain,
+        this renders the mean deflection stationary, removing the uniform vertical
+        drift associated with the tangential transport of topography; for open or
+        periodic domains, the boundary flux of tangentially transported topography must
+        instead be accounted for by the user, updating the multiplier manually without
+        the option.
+        """
+        # Velocity, followed by the free-surface deflections, which trail velocity and
+        # pressure in the mixed space
+        u, _, *eta = self.solution_split
+
+        for bc_id in self.auto_volume_multiplier:
+            # The free-surface map holds the index of the boundary's deflection within
+            # the mixed space, two components of which precede the deflections
+            eta_ind = self.free_surface_map[bc_id][0]
+            self.free_surface_options[bc_id]["volume_multiplier"].assign(
+                free_surface_volume_multiplier(u, eta[eta_ind - 2], bc_id)
+            )
+
+        super().solve()
 
     def force_on_boundary(self, subdomain_id: int | str, **kwargs) -> fd.Function:
         """Computes the force acting on a boundary.

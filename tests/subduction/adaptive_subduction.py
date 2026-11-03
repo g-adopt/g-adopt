@@ -89,8 +89,6 @@ class AdaptiveSubduction(AdaptiveSimulation):
             self.boundary.left: {"ux": 0.0},
             self.boundary.right: {"ux": 0.0},
         }
-        if prms.free_surface:
-            self.volume_multiplier = Constant(0.0)
 
         if prms.dimensionless:
             RaB_material = material_field(
@@ -122,7 +120,7 @@ class AdaptiveSubduction(AdaptiveSimulation):
                     "free_surface": {
                         "RaFS": RaFS,
                         "exact_normal": True,
-                        "volume_multiplier": self.volume_multiplier,
+                        "auto_volume_multiplier": True,
                     }
                 }
             else:
@@ -161,15 +159,15 @@ class AdaptiveSubduction(AdaptiveSimulation):
                     "free_surface": {
                         "delta_rho_fs": prms.rho_mantle - prms.rho_water,
                         "exact_normal": True,
-                        "volume_multiplier": self.volume_multiplier,
+                        "auto_volume_multiplier": True,
                     }
                 }
             else:
                 stokes_bcs[self.boundary.top] = {"uy": 0.0}
 
         for field_name, field_specs in self.fields.items():
-            field_specs["include_in_metric"] = field_name in prms.metric_fields
-            field_specs["metric_mods"] = prms.metric_fields.get(field_name)
+            field_specs["include_in_metric"] = field_name in self.metric_fields
+            field_specs["metric_mods"] = self.metric_fields.get(field_name)
             field_specs["scale"] = prms.scales[field_name]
 
         if prms.free_surface:
@@ -187,7 +185,7 @@ class AdaptiveSubduction(AdaptiveSimulation):
             u,
             V,
             target_cfl=0.6 * prms.subcycles,
-            maximum_timestep=prms.output_frequency,
+            maximum_timestep=self.output_frequency,
         )
 
         # Solvers
@@ -226,37 +224,6 @@ class AdaptiveSubduction(AdaptiveSimulation):
 
         self.solvers = [self.level_set_solver, self.energy_solver, self.stokes_solver]
 
-    def time_loop(self) -> None:
-        for _ in range(prms.iterations):  # Time loop
-            log(f"Time loop iteration #{self.step}")
-
-            self.tstep_adapt.update_timestep()  # Update time step
-
-            if prms.free_surface:
-                u, _, eta = split(self.stokes)
-                self.volume_multiplier.assign(
-                    free_surface_volume_multiplier(u, eta, self.boundary.top)
-                )
-
-            for solver in self.solvers:  # Perform solves
-                solver.solve()
-
-            # Increment iteration count and time
-            self.step += 1
-            self.time.assign(self.time + self.time_step)
-
-            # Write checkpoint and output
-            if float(self.time) >= self.checkpoint_counter * prms.checkpoint_frequency:
-                self.write_checkpoint()
-            if float(self.time) >= self.output_counter * prms.output_frequency:
-                self.write_output()
-
-            # Check if simulation has completed
-            if float(self.time) >= prms.time_end:
-                log("Reached end of simulation")
-
-                break
-
 
 if __name__ == "__main__":
     match prms.mesh_generation:  # Mesh generation
@@ -274,11 +241,14 @@ if __name__ == "__main__":
 
     simulation = AdaptiveSubduction(
         mesh=mesh,
+        metric_fields=prms.metric_fields,
         metric_parameters=prms.metric_parameters,
-        time_end=prms.time_end,
-        time_normalisation=prms.myr_to_seconds,
         time_step=prms.time_step,
         adapt_calls=prms.adapt_calls,
         initial_adapt_loops=prms.initial_adapt_loops,
+        iterations=prms.iterations,
+        checkpoint_frequency=prms.checkpoint_frequency,
+        output_frequency=prms.output_frequency,
+        time_normalisation=prms.myr_to_seconds,
     )
-    simulation.run()
+    simulation.run(time_end=prms.time_end)

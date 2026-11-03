@@ -8,8 +8,8 @@ $$
 
 By default, the free surface is advanced with the linearised kinematic boundary
 condition $d\eta / dt = u \dot n$, where $n$ denotes the reference (undeformed) boundary
-normal. Two opt-in extensions are supported, enabled through the free-surface boundary
-condition parameters:
+normal. The following opt-in extensions are supported, enabled through the free-surface
+boundary condition parameters:
 
 - `exact_normal`: Replace the reference normal with the exact normal of the deformed
   surface, obtained by displacing the reference boundary by the free-surface deflection
@@ -30,6 +30,12 @@ condition parameters:
   preserving its physically relevant gradients. For open or periodic domains, the
   boundary flux of tangentially transported topography must additionally be accounted
   for when choosing the multiplier.
+
+- `auto_volume_multiplier`: Consumed by `StokesSolver` rather than by the equation:
+  request the `volume_multiplier` to be auto-updated before each solve, with the
+  closed-domain value above computed from the previous state's fields. A multiplier
+  `Constant` is created if none is supplied. For open or periodic domains, pass
+  `volume_multiplier` alone and update it manually.
 
 Note that the normal stress applied at the free surface remains evaluated with the
 reference normal in either case; accounting for the tilt of the surface there is a
