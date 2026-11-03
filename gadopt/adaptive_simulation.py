@@ -6,6 +6,7 @@ objects are rebuilt on the new mesh by the subclass, which provides the physics.
 """
 
 import abc
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from shutil import rmtree
@@ -28,7 +29,8 @@ class AdaptiveSimulation(abc.ABC):
     and define the instance attributes documented under `set_up` and `time_loop`. This
     class provides everything else: the mesh-adaptivity cycle, the interpolation of
     fields onto adapted meshes, and the checkpointing and output of the simulation
-    state.
+    state. Near a steady state, mesh adaptation is disabled once remeshes perturb the
+    solution more than it changes per time step (`remesh_jump_limit`).
 
     The lifecycle of a simulation is:
 
@@ -52,6 +54,7 @@ class AdaptiveSimulation(abc.ABC):
         adapt_calls: int = 3,
         initial_adapt_loops: int = 3,
         iterations: int = 16,
+        remesh_jump_limit: float | None = 2.0,
         checkpoint_frequency: float = 1,
         output_frequency: float = 1,
         time_normalisation: float = 1.0,
@@ -81,6 +84,11 @@ class AdaptiveSimulation(abc.ABC):
           iterations:
             Number of time steps between mesh adaptations, i.e. the iteration budget of
             `time_loop`.
+          remesh_jump_limit:
+            Jump in the measure returned by `diagnostics` across a remesh beyond which
+            mesh adaptation is disabled, once exceeded by two consecutive remeshes; None
+            disables the freezing. The default of 2.0 freezes adaptation once a remesh
+            perturbs the solution by more than it changes per time step.
           checkpoint_frequency:
             Frequency of checkpointing, either as a number of time steps (int) or as a
             time interval (float, in simulation time units).
@@ -102,6 +110,7 @@ class AdaptiveSimulation(abc.ABC):
         self.adapt_calls = adapt_calls
         self.initial_adapt_loops = initial_adapt_loops
         self.iterations = iterations
+        self.remesh_jump_limit = remesh_jump_limit
         self.checkpoint_frequency = checkpoint_frequency
         self.output_frequency = output_frequency
         self.time_normalisation = time_normalisation
@@ -112,6 +121,16 @@ class AdaptiveSimulation(abc.ABC):
         self.step = 0  # A counter to keep track of the simulation time-loop iterations
         self.checkpoint_counter = 0  # A counter to keep track of checkpoint files
         self.output_counter = 0  # A counter to keep track of output files
+
+        # Steady-state tracking: the measure of the solution's change returned by
+        # `diagnostics`, the measure just before the most recent remesh, the jump
+        # factors of the two most recent remeshes, and whether a remesh just occurred
+        self.measure = None
+        self.measure_pre_remesh = None
+        self.remesh_jumps = deque(maxlen=2)
+        self.just_remeshed = False
+        # Whether mesh adaptation has been disabled near a steady state
+        self.remesh_frozen = False
 
         self.initialise()  # Initialise solutions on the initial mesh
 
@@ -127,7 +146,7 @@ class AdaptiveSimulation(abc.ABC):
         self.write_output(initial=True)
 
         # Calculate initial simulation diagnostics
-        self.diagnostics(initial=True)
+        self.measure = self.diagnostics(initial=True)
 
     def adapt_mesh(self, initial: bool = False) -> None:
         """Adapts the mesh to the fields flagged for adaptation.
@@ -232,12 +251,18 @@ class AdaptiveSimulation(abc.ABC):
 
             self.interpolate_fields()
 
-    def diagnostics(self, initial: bool = False) -> None:
+    def diagnostics(self, initial: bool = False) -> float | None:
         """Computes simulation diagnostics.
 
         Optional method doing nothing by default; subclasses are free to override it,
         e.g. to compute and log integral diagnostics, such as G-ADOPT's geodynamical
         diagnostics, or to track a convergence measure for `steady_state`.
+
+        The method may return a scalar measure of the solution's change over the last
+        time step, e.g. the change of a solution field, which the base class tracks
+        across remeshes: once the measure jumps across two consecutive remeshes by more
+        than `remesh_jump_limit`, mesh adaptation is disabled, since remeshing then
+        perturbs the solution by more than it changes per time step.
 
         The method is invoked with `initial` set, once the simulation is initialised,
         i.e. after the initial mesh-adaptivity loops and the initial checkpoint and
@@ -249,6 +274,9 @@ class AdaptiveSimulation(abc.ABC):
           initial:
             Whether the diagnostics are the initial ones, in which case the simulation
             is at its initial state, e.g. for creating a log file.
+
+        Returns:
+          A measure of the solution's change over the last time step, or None.
 
         """
 
@@ -303,6 +331,11 @@ class AdaptiveSimulation(abc.ABC):
         `time_end` or once the `steady_state` callable returns True, with both
         conditions checked after each time step.
 
+        Near a steady state, mesh adaptation is disabled: once the measure returned by
+        `diagnostics` jumps across two consecutive remeshes by more than
+        `remesh_jump_limit`, the mesh is frozen and only `time_loop` is repeated, since
+        remeshing then perturbs the solution by more than it changes per time step.
+
         Args:
           steady_state:
             Callable invoked after each time step; the simulation completes once it
@@ -332,7 +365,24 @@ class AdaptiveSimulation(abc.ABC):
             if self.exit_status:  # Exit loop once simulation completes
                 break
 
+            # Disable mesh adaptation once the measure jumps across two consecutive
+            # remeshes by more than the limit, since remeshing then undoes more
+            # convergence than it buys
+            if (
+                not self.remesh_frozen
+                and self.remesh_jump_limit is not None
+                and len(self.remesh_jumps) == 2
+                and all(jump >= self.remesh_jump_limit for jump in self.remesh_jumps)
+            ):
+                self.remesh_frozen = True
+                log("Near steady state: mesh adaptation disabled")
+
+            if self.remesh_frozen:  # Continue on the current mesh, without adapting it
+                continue
+
+            self.measure_pre_remesh = self.measure  # Measure at the block's end
             self.adapt_mesh()  # Adapt mesh based on current fields
+            self.just_remeshed = True  # The next measure follows a remesh
             self.set_up()  # Set simulation objects on the new mesh
 
     @abc.abstractmethod
@@ -367,7 +417,8 @@ class AdaptiveSimulation(abc.ABC):
 
         The method is invoked repeatedly by `run` and must return once the end condition
         set by the latter, `exit_loop`, is met or the iteration budget (`iterations`) is
-        exhausted; between invocations, the mesh is adapted and `set_up` re-run.
+        exhausted; between invocations, the mesh is adapted and `set_up` re-run, unless
+        mesh adaptation has been disabled near a steady state.
 
         Subclasses relying on this implementation must define the `solvers` instance
         attribute, holding the solvers invoked per time step, in order. They may also
@@ -408,7 +459,12 @@ class AdaptiveSimulation(abc.ABC):
                 getattr(self, f"write_{event}")()
 
             # Compute and log diagnostics
-            self.diagnostics()
+            self.measure = self.diagnostics()
+            if self.just_remeshed:  # The measure follows a remesh
+                self.just_remeshed = False
+                # Record the jump the measure suffers across the remesh
+                if self.measure is not None and self.measure_pre_remesh:
+                    self.remesh_jumps.append(self.measure / self.measure_pre_remesh)
             self.plot_diagnostics()
 
             if self.exit_loop():  # Exit loop once simulation completes
@@ -421,7 +477,7 @@ class AdaptiveSimulation(abc.ABC):
                         getattr(self, f"write_{event}")()
 
                 # Calculate final simulation diagnostics and produce graphs
-                self.diagnostics()
+                self.measure = self.diagnostics()
                 self.plot_diagnostics()
 
                 break

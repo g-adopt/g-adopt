@@ -11,8 +11,13 @@ class AdaptiveBaseCase(AdaptiveSimulation):
     across adaptations by interpolation.
     """
 
-    def diagnostics(self, initial: bool = False) -> None:
+    def diagnostics(self, initial: bool = False) -> float:
         """Computes and logs simulation diagnostics.
+
+        Returns the maximum change of the temperature field over the last time step,
+        serving as the measure of the solution's change monitored by
+        `AdaptiveSimulation` for disabling mesh adaptation near a steady state, in
+        addition to being the `steady_state` criterion.
 
         Args:
           initial:
@@ -37,6 +42,8 @@ class AdaptiveBaseCase(AdaptiveSimulation):
             f"{self.gd.ux_max(self.boundary.top)} {self.gd.Nu_top()} "
             f"{self.gd.Nu_bottom()} {energy_conservation} {self.gd.T_avg()}"
         )
+
+        return self.maxchange
 
     def initialise(self) -> None:
         """Initialises the simulation on the current mesh.
@@ -165,9 +172,9 @@ if __name__ == "__main__":
     }
     metric_parameters = {  # For further information, refer to animate/metric.py
         "dm_plex_metric": {
-            "target_complexity": 5_000,  # Metric complexity, analogous to cell count
-            "h_min": 5e-3,  # Minimum metric magnitude (i.e. cell size)
-            "h_max": 1e-1,  # Maximum metric magnitude (i.e. cell size)
+            "target_complexity": 1_000,  # Metric complexity, analogous to cell count
+            "h_min": 5e-4,  # Minimum metric magnitude (i.e. cell size)
+            "h_max": 5e-2,  # Maximum metric magnitude (i.e. cell size)
             "a_max": 10.0,  # Maximum metric anisotropy (cell aspect ratio)
             "p": inf,  # Metric normalisation order
             "gradation_factor": 1.5,  # Maximum length variation between adjacent edges
@@ -180,5 +187,5 @@ if __name__ == "__main__":
         metric_parameters=metric_parameters,
         time_step=1e-6,
     )
-    simulation.run(steady_state=lambda: simulation.maxchange < 1e-5)
+    simulation.run(steady_state=lambda: simulation.maxchange < 1e-9)
     simulation.plog.close()
