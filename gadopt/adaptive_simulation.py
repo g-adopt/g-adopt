@@ -1,4 +1,4 @@
-r"""This module provides the base class for simulations with adaptive meshes.
+"""This module provides the base class for simulations with adaptive meshes.
 
 The class drives the mesh-adaptivity cycle of Animate: fields flagged for adaptation are
 turned into a metric, the mesh is regenerated from the metric, and the simulation
@@ -9,30 +9,33 @@ import abc
 from collections.abc import Callable
 from pathlib import Path
 from shutil import rmtree
+from sys import float_info
 
 import firedrake as fd
 from animate.adapt import adapt
 from animate.metric import RiemannianMetric
 from mpi4py import MPI
+from ufl.indexed import Indexed
 
 from .utility import function_name, log
 
 
 class AdaptiveSimulation(abc.ABC):
-    r"""Base class for a time-stepped simulation on an adaptively refined mesh.
+    """Base class for a time-stepped simulation on an adaptively refined mesh.
 
-    Subclasses provide the physics through three methods, `initialise`, `set_up`, and
-    `time_loop`, and define the `solutions` and `fields` instance attributes documented
-    under `set_up`. This class provides everything else: the mesh-adaptivity cycle, the
-    interpolation of fields onto adapted meshes, and the checkpointing and output of the
-    simulation state.
+    Subclasses provide the physics through the abstract methods `initialise` and
+    `set_up`, optionally overriding `time_loop`, `diagnostics`, and `plot_diagnostics`,
+    and define the instance attributes documented under `set_up` and `time_loop`. This
+    class provides everything else: the mesh-adaptivity cycle, the interpolation of
+    fields onto adapted meshes, and the checkpointing and output of the simulation
+    state.
 
     The lifecycle of a simulation is:
 
         __init__: `initialise` on the initial mesh, followed by the initial
             mesh-adaptivity loops with `initialise` re-run between loops, and the
             initial checkpoint and output
-        run: [`time_loop`, `adapt_mesh`, `set_up`] until the end time
+        run: [`time_loop`, `adapt_mesh`, `set_up`] until the end condition is met
 
     A typical subclass defines no `__init__`, passing the mesh and the simulation
     parameters to this constructor. A subclass that does define its own `__init__` must
@@ -43,29 +46,29 @@ class AdaptiveSimulation(abc.ABC):
     def __init__(
         self,
         mesh: fd.MeshGeometry,
-        metric_fields: dict[str, dict[str, bool | float]],
+        metric_fields: dict[str, dict[str, bool | float | list[bool | float]]],
         metric_parameters: dict[str, int | float],
-        time_end: float,
-        time_normalisation: float,
         time_step: float,
         adapt_calls: int = 3,
         initial_adapt_loops: int = 3,
         iterations: int = 16,
+        checkpoint_frequency: float = 1,
+        output_frequency: float = 1,
+        time_normalisation: float = 1.0,
     ) -> None:
         """Stores the simulation setup and performs the initial solve.
 
         Args:
           mesh:
             Firedrake mesh on which the simulation starts.
+          metric_fields:
+            Fields driving the mesh adaptation, keyed by field name, with the per-field
+            metric modifiers `scale` and `log` documented under `set_up` as values;
+            components of vector fields provide lists thereof.
           metric_parameters:
             Parameters passed to Animate's RiemannianMetric, as documented under
             `set_parameters` in `animate/metric.py`. The target complexity and the
             minimum and maximum metric magnitudes must be specified.
-          time_end:
-            Simulation end time; `run` exits once it is reached.
-          time_normalisation:
-            Divisor applied to the simulation time when writing output, e.g. the number
-            of time units per million years.
           time_step:
             Initial time step, also the time-step `Constant` handed to the subclass's
             solvers through the `time_step` attribute.
@@ -75,6 +78,18 @@ class AdaptiveSimulation(abc.ABC):
           initial_adapt_loops:
             Number of mesh-adaptivity loops performed on the initial fields, with
             `initialise` re-run between loops.
+          iterations:
+            Number of time steps between mesh adaptations, i.e. the iteration budget of
+            `time_loop`.
+          checkpoint_frequency:
+            Frequency of checkpointing, either as a number of time steps (int) or as a
+            time interval (float, in simulation time units).
+          output_frequency:
+            Frequency of output, either as a number of time steps (int) or as a time
+            interval (float, in simulation time units).
+          time_normalisation:
+            Divisor applied to the simulation time when writing output, e.g. the number
+            of time units per million years.
 
         Notes:
           `initialise` is invoked within this constructor; a subclass defining its own
@@ -84,11 +99,12 @@ class AdaptiveSimulation(abc.ABC):
         self.mesh = mesh
         self.metric_fields = metric_fields
         self.metric_parameters = metric_parameters
-        self.time_end = time_end
-        self.time_normalisation = time_normalisation
         self.adapt_calls = adapt_calls
         self.initial_adapt_loops = initial_adapt_loops
         self.iterations = iterations
+        self.checkpoint_frequency = checkpoint_frequency
+        self.output_frequency = output_frequency
+        self.time_normalisation = time_normalisation
 
         # Time-stepping objects
         self.time = fd.Constant(0.0)  # Initial time
@@ -110,6 +126,9 @@ class AdaptiveSimulation(abc.ABC):
         self.write_checkpoint(initial=True)
         self.write_output(initial=True)
 
+        # Calculate initial simulation diagnostics
+        self.diagnostics(initial=True)
+
     def adapt_mesh(self, initial: bool = False) -> None:
         """Adapts the mesh to the fields flagged for adaptation.
 
@@ -127,12 +146,21 @@ class AdaptiveSimulation(abc.ABC):
 
         """
 
-        def add_metric(field: fd.Function, scale: float = 1.0, log: bool = False):
+        def add_metric(
+            field: fd.Function | Indexed, scale: float = 1.0, use_log: bool = False
+        ) -> None:
+            """Computes the Hessian-based metric of a scalar field and appends it to
+            `metrics`.
+
+            The Hessian is that of the base-10 logarithm of the field if `use_log` is
+            set, and the metric is scaled by `scale` and by the maximum value of its
+            Frobenius norm across the mesh.
+            """
             # Firedrake function for a metric over the mesh where the field lives
             metric = RiemannianMetric(M, name=f"Metric ({function_name(field)})")
             metric.set_parameters(self.metric_parameters)  # Set metric parameters
             # Field Hessian
-            metric.compute_hessian(fd.ln(field) / fd.ln(10.0) if log else field)
+            metric.compute_hessian(fd.ln(field) / fd.ln(10.0) if use_log else field)
             metric.enforce_spd()  # Ensure boundedness (symmetric positive-definite)
 
             # Frobenius norm
@@ -140,8 +168,12 @@ class AdaptiveSimulation(abc.ABC):
             metric_magnitude_max = MPI.COMM_WORLD.allreduce(
                 metric_magnitude.dat.data_ro.max(), MPI.MAX
             )
-            # Scale metric by the maximum value of its Frobenius norm across the mesh
-            metric.assign(scale * metric / metric_magnitude_max)
+            # Scale metric by the maximum value of its Frobenius norm across the mesh,
+            # floored at the machine epsilon to guard against a vanishing Hessian, e.g.
+            # for a constant field, which would otherwise divide by zero
+            metric.assign(
+                scale * metric / max(metric_magnitude_max, float_info.epsilon)
+            )
 
             metrics.append(metric)
 
@@ -162,6 +194,8 @@ class AdaptiveSimulation(abc.ABC):
                     continue
 
                 if isinstance(field_specs["field"].ufl_element(), fd.VectorElement):
+                    # Components of vector fields are passed separately, with the
+                    # modifiers provided per component
                     for dim in range(field_specs["field"].ufl_shape[0]):
                         add_metric(
                             field_specs["field"][dim],
@@ -169,7 +203,14 @@ class AdaptiveSimulation(abc.ABC):
                             field_specs["metric_mods"]["log"][dim],
                         )
                 else:
-                    add_metric(field_specs["field"], **field_specs["metric_mods"])
+                    add_metric(
+                        field_specs["field"],
+                        field_specs["metric_mods"]["scale"],
+                        field_specs["metric_mods"]["log"],
+                    )
+
+            if not metrics:
+                raise ValueError("No fields are flagged for mesh adaptation.")
 
             overall_metric = metrics[0].copy(deepcopy=True)  # Overall metric
             overall_metric.rename("Metric (overall)")
@@ -190,6 +231,26 @@ class AdaptiveSimulation(abc.ABC):
                 break
 
             self.interpolate_fields()
+
+    def diagnostics(self, initial: bool = False) -> None:
+        """Computes simulation diagnostics.
+
+        Optional method doing nothing by default; subclasses are free to override it,
+        e.g. to compute and log integral diagnostics, such as G-ADOPT's geodynamical
+        diagnostics, or to track a convergence measure for `steady_state`.
+
+        The method is invoked with `initial` set, once the simulation is initialised,
+        i.e. after the initial mesh-adaptivity loops and the initial checkpoint and
+        output, and after every time step, immediately before `plot_diagnostics`. It is
+        also invoked upon completion of the simulation, after the final checkpoint and
+        output.
+
+        Args:
+          initial:
+            Whether the diagnostics are the initial ones, in which case the simulation
+            is at its initial state, e.g. for creating a log file.
+
+        """
 
     @abc.abstractmethod
     def initialise(self) -> None:
@@ -212,24 +273,63 @@ class AdaptiveSimulation(abc.ABC):
             if not field_specs["include_in_metric"] and "expr" in field_specs:
                 continue
 
-            field = field_specs.pop("field")
+            field = field_specs["field"]
             space = fd.FunctionSpace(self.mesh, field.ufl_element())
             new_field = fd.Function(space, name=field.name())
             new_field.interpolate(field)
             field_specs["field"] = new_field
 
-    def run(self) -> None:
-        """Runs the simulation to the end time, adapting the mesh en route.
+    def plot_diagnostics(self) -> None:
+        """Produces graphs of simulation diagnostics.
 
-        The time loop is repeated until the end time is reached, with the mesh adapted
-        to the current fields and the simulation objects rebuilt on the new mesh between
-        loops.
+        Optional method doing nothing by default; subclasses are free to override it,
+        e.g. to plot time series of the values computed by `diagnostics`.
+
+        The method is invoked by `time_loop` after every time step, following
+        `diagnostics`, and upon completion of the simulation, following the final
+        `diagnostics` invocation. Unlike the latter, it is not invoked upon
+        initialisation, since time series are empty at that point.
+
         """
+
+    def run(
+        self, steady_state: Callable | None = None, time_end: float | None = None
+    ) -> None:
+        """Runs the simulation to completion, adapting the mesh en route.
+
+        The simulation proceeds in blocks of `iterations` time steps, with the mesh
+        adapted to the current fields and the simulation objects rebuilt on the new mesh
+        by `set_up` between blocks. It completes either once the simulation time reaches
+        `time_end` or once the `steady_state` callable returns True, with both
+        conditions checked after each time step.
+
+        Args:
+          steady_state:
+            Callable invoked after each time step; the simulation completes once it
+            returns True, i.e. once a steady state is reached.
+          time_end:
+            Simulation end time; takes precedence over `steady_state`.
+
+        Raises:
+          ValueError: neither `steady_state` nor `time_end` is provided.
+
+        """
+        if time_end is not None:  # The simulation stops after reaching a certain time
+
+            def exit_loop() -> bool:
+                return float(self.time) >= time_end
+
+            self.exit_loop = exit_loop
+        elif steady_state is not None:  # The simulation stops if a condition is met
+            self.exit_loop = steady_state
+        else:
+            raise ValueError("One of `steady_state` or `time_end` must be provided.")
+
+        self.exit_status = False
         while True:  # Mesh adaptivity loop
             self.time_loop()  # Run the time loop
 
-            # Exit loop after reaching target time
-            if float(self.time) >= self.time_end:
+            if self.exit_status:  # Exit loop once simulation completes
                 break
 
             self.adapt_mesh()  # Adapt mesh based on current fields
@@ -262,14 +362,69 @@ class AdaptiveSimulation(abc.ABC):
         assign the current state from `fields` before discarding and regenerating them.
         """
 
-    @abc.abstractmethod
     def time_loop(self) -> None:
-        """Advances the simulation in time over a number of time steps.
+        r"""Advances the simulation in time over a number of time steps.
 
-        The method is invoked repeatedly by `run` and must return once the end time is
-        reached or the subclass's iteration budget is exhausted; between invocations,
-        the mesh is adapted and `set_up` re-run.
+        The method is invoked repeatedly by `run` and must return once the end condition
+        set by the latter, `exit_loop`, is met or the iteration budget (`iterations`) is
+        exhausted; between invocations, the mesh is adapted and `set_up` re-run.
+
+        Subclasses relying on this implementation must define the `solvers` instance
+        attribute, holding the solvers invoked per time step, in order. They may also
+        define `tstep_adapt`, an object updating the time step, e.g. G-ADOPT's
+        TimestepAdaptor, which is invoked when present.
+
+        Checkpoints and output are written at the frequencies given to the constructor.
+
         """
+
+        def due(event: str) -> bool:
+            # Whether a checkpoint or output is due, based on the step count or the
+            # simulation time, for int and float frequencies, respectively
+            frequency = getattr(self, f"{event}_frequency")
+            if isinstance(frequency, int):
+                return self.step % frequency == 0
+            elif isinstance(frequency, float):
+                return float(self.time) >= getattr(self, f"{event}_counter") * frequency
+            else:
+                raise TypeError(f"'{event}_frequency' must be an int or a float")
+
+        for _ in range(self.iterations):  # Time loop
+            log(f"Time loop iteration #{self.step}")
+
+            if hasattr(self, "tstep_adapt"):
+                self.tstep_adapt.update_timestep()  # Update time step
+
+            for solver in self.solvers:  # Perform solves
+                solver.solve()
+
+            # Increment iteration count and time
+            self.step += 1
+            self.time.assign(self.time + self.time_step)
+
+            # Write checkpoint and output
+            due_events = [event for event in ("checkpoint", "output") if due(event)]
+            for event in due_events:
+                getattr(self, f"write_{event}")()
+
+            # Compute and log diagnostics
+            self.diagnostics()
+            self.plot_diagnostics()
+
+            if self.exit_loop():  # Exit loop once simulation completes
+                self.exit_status = True
+                log("Simulation complete")
+
+                # Write checkpoint and output, unless already written this time step
+                for event in ("checkpoint", "output"):
+                    if event not in due_events:
+                        getattr(self, f"write_{event}")()
+
+                # Calculate final simulation diagnostics and produce graphs
+                self.diagnostics()
+                self.plot_diagnostics()
+
+                break
 
     def write_checkpoint(self, initial: bool = False) -> None:
         """Checkpoints the mesh and all solution fields to an HDF5 file.
