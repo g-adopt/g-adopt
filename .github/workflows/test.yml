@@ -80,7 +80,7 @@ jobs:
     container:
       # Prefer specific branch, then PR base, then actual branch
       image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
-      options: --cap-add SYS_NICE
+      options: --cap-add SYS_NICE --shm-size=1024m
 
     concurrency:
       group: testing-${{ github.head_ref || github.run_id }}
@@ -176,7 +176,7 @@ jobs:
         id: run_tests
         run: |
           firedrake-clean
-          tsp --timeout -T 7200
+          tsp --timeout -T 9000
           tsp --memprof
           . .venv/bin/activate
           doit run --process $(nproc --all) --continue --always-execute run_case || true

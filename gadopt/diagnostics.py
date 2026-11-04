@@ -90,7 +90,7 @@ def ts_cache(
     as the underlying Firedrake functions remain unmodified. The modification of
     Firedrake functions is tracked by the `dat_version` attribute of the `dat` object
     which is based on the 'state' of the underlying PETSc object (see e.g.
-    https://petsc.org/release/manualpages/Sys/PetscObjectStateGet/). Pyop2 also
+    https://petsc.org/release/manualpages/Sys/PetscObjectStateGet/). pyop3 also
     maintains a similar counter for non-PETSc objects.
 
     The purpose of this decorator is to allow multiple calls to the same diagnostic
@@ -253,7 +253,7 @@ class FunctionContext:
     @cached_property
     def boundary_ids(self):
         """The boundary IDs of the mesh associated with this instance"""
-        return tuple(self.mesh.topology.exterior_facets.unique_markers) + (
+        return tuple(self.mesh.facet_markers) + (
             ("top", "bottom") if self.mesh.extruded else ()
         )
 
@@ -281,25 +281,25 @@ class FunctionContext:
     @cache
     def get_boundary_nodes(
         self, boundary_id: Sequence[int | str] | int | str
-    ) -> list[int]:
-        """Return the list of nodes on the boundary owned by this process
+    ) -> np.ndarray:
+        """Return the indices of the boundary nodes owned by this process
 
-        Creates a `DirichletBC` object, then uses the `.nodes` attribute for that
-        object to provide a list of indices that reside on the boundary of the domain
-        of the function associated with this `FunctionContext` instance. The
-        `dof_dset.size` parameter of the `FunctionSpace` is used to exclude nodes in
-        the halo region of the domain.
+        Ghost nodes are excluded, so each node is counted on exactly one process.
 
         Args:
-            boundary_id: Integer ID of the domain boundary
+            boundary_id: Boundary ID: an integer mesh marker, a tuple of integer
+            markers, or "top"/"bottom" on an extruded mesh
 
         Returns:
-            List of integers corresponding to nodes on the boundary identified by
-            `boundary_id`
+            Node indices into `dat.data_ro` of the function associated with this
+            `FunctionContext` instance, for the boundary given by `boundary_id`
         """
         self.check_boundary_id(boundary_id)
-        bc = fd.DirichletBC(self.function_space, 0, boundary_id)
-        return [n for n in bc.nodes if n < self.function_space.dof_dset.size]
+        nodes = self.function_space.boundary_nodes(boundary_id)
+        # Owned nodes are numbered before ghost nodes, so this comparison removes
+        # exactly the ghosts. The space already has a function, so this is a local query.
+        n_owned = self.function_space.nodes.owned.local_size
+        return nodes[nodes < n_owned]
 
 
 class BaseDiagnostics:
