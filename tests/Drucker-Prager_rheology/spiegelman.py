@@ -155,8 +155,11 @@ def spiegelman(U0, mu1, nx, ny, picard_iterations, stabilisation=False):
     # depsii/deps = eps/(2*epsii)
     # the Constant(1) is the perturbation: derivative computes a Gateaux derivative for a given perturbation
     b = replace(derivative(eta(eps2, p), eps2, Constant(1)) * eps / (2*eps2), {eps2: epsii})
-    abnorm = sqrt(inner(a, a)*inner(b, b))
-    beta = (1-inner(b, a)/abnorm)**2*abnorm
+    # we can simplify equation (18) from Fraters through our assumption that eta is a function of epsii
+    # so we can write b as a scalar multiple of a. then ||a|| * ||b|| = |b:a|, can avoid division for
+    # the limiting case b = 0.
+    ba = inner(b, a)
+    beta = 2 * (abs(ba) - ba)
     c_safety = Constant(1.0)
     alpha_SPD = conditional(beta < c_safety*2*mu, 1, c_safety*2*mu/beta)
 
