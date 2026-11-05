@@ -16,11 +16,12 @@ classifiers = [
   "Operating System :: OS Independent"
 ]
 dependencies = [
+  "firedrake~=2026.10.0",
   "doit",
   "pandas",
   "shapely",
   "vtk",
-  "irksome @ git+https://github.com/firedrakeproject/Irksome",
+  "IRKsome~=2026.0.0",
 ]
 
 [project.optional-dependencies]
