@@ -23,7 +23,11 @@ from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
-from .free_surface_equation import free_surface_option_keys, free_surface_terms
+from .free_surface_equation import (
+    free_surface_option_keys,
+    free_surface_terms,
+    free_surface_volume_multiplier,
+)
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
@@ -32,7 +36,6 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
-    free_surface_volume_multiplier,
     get_device_type,
     is_cartesian,
     is_continuous,
