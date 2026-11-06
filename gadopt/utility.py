@@ -7,7 +7,6 @@ depending on what they would like to achieve.
 import logging
 import os
 import time
-from collections.abc import Sequence
 from functools import cached_property
 from logging import CRITICAL, DEBUG, ERROR, INFO, WARNING  # NOQA
 from types import SimpleNamespace
@@ -17,8 +16,6 @@ import numpy as np
 import ufl
 from mpi4py import MPI
 from scipy.linalg import solveh_banded
-from ufl.core.expr import Expr
-from ufl.core.operator import Operator
 from ufl.corealg.traversal import traverse_unique_terminals
 
 try:
@@ -137,82 +134,6 @@ def horizontal_components(u):
     """Returns expression for vector u with vertical component removed, i.e. returns the vector UFL expression orthogonal to gravity."""
     mesh = fd.ufl_expr.extract_unique_domain(u)
     return u - vertical_component(u) * upward_normal(mesh)
-
-
-def free_surface_normal(deflection: Expr, reference_normal: Expr) -> Operator:
-    r"""Unit normal of the deformed free surface.
-
-    The deformed surface is the reference boundary displaced by `deflection` along the
-    upwards direction. Its (unnormalised) normal reads $n - \nabla_t \eta$, where $n$ is
-    the reference (undeformed) boundary normal and $\nabla_t \eta$ the tangential
-    gradient of the deflection along the reference normal. The construction is agnostic
-    to the domain geometry (Cartesian, cylindrical, or spherical; 2-D or 3-D) and
-    handles both top and bottom free surfaces.
-
-    Args:
-      deflection:
-        UFL expression for the free-surface deflection.
-      reference_normal:
-        UFL expression for the reference (undeformed) boundary normal.
-
-    Returns:
-      UFL expression for the unit normal of the deformed free surface.
-
-    """
-    # The deflection is measured along the upward direction; converting it to a
-    # deflection along the reference normal flips its sign at bottom free surfaces
-    grad_deflection = fd.grad(deflection * vertical_component(reference_normal))
-    tangential_gradient = (
-        grad_deflection - fd.dot(grad_deflection, reference_normal) * reference_normal
-    )
-    normal = reference_normal - tangential_gradient
-
-    return normal / fd.sqrt(fd.dot(normal, normal))
-
-
-def free_surface_volume_multiplier(
-    u: fd.Function,
-    deflection: fd.Function,
-    boundary_id: Sequence[int | str] | int | str,
-    quad_degree: int = 4,
-) -> float:
-    r"""Mean tendency of the free-surface deflection over a boundary.
-
-    Returns the boundary average of the local height tendency $u \cdot n / n_{up}$,
-    where $n$ is the exact normal of the deformed free surface (see
-    `free_surface_normal`) and $n_{up}$ its upward component. For a closed domain,
-    assigning the returned value to the `volume_multiplier` free-surface boundary
-    condition parameter before a solve, using the previous step's fields, renders the
-    mean deflection stationary, removing the uniform vertical drift associated with the
-    tangential transport of topography. For open or periodic domains, the boundary flux
-    of tangentially transported topography must additionally be accounted for.
-
-    Args:
-      u:
-        Firedrake function for the velocity.
-      deflection:
-        Firedrake function for the free-surface deflection.
-      boundary_id:
-        Boundary identifier of the free surface.
-      quad_degree:
-        Degree of polynomial quadrature approximation. Only used on extruded meshes,
-        whose surface measure requires an explicit quadrature degree.
-
-    Returns:
-      The boundary-averaged height tendency.
-
-    """
-    mesh = fd.ufl_expr.extract_unique_domain(u)
-    if mesh.extruded:
-        ds_surf = CombinedSurfaceMeasure(mesh, quad_degree)(boundary_id)
-    else:
-        ds_surf = fd.ds(boundary_id, domain=mesh)
-
-    n = free_surface_normal(deflection, fd.FacetNormal(mesh))
-
-    return fd.assemble(fd.dot(u, n) / vertical_component(n) * ds_surf) / fd.assemble(
-        fd.Constant(1.0) * ds_surf
-    )
 
 
 def ensure_constant(f):
