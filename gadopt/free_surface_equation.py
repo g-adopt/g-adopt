@@ -21,6 +21,9 @@ boundary condition parameters:
   gradients, and is thus valid for Cartesian, cylindrical, and spherical domains, in 2-D
   and 3-D alike. It is required for open or periodic domains, where topography must be
   allowed to cross lateral boundaries, and redistributes topography in closed domains.
+  The deflection entering the exact normal is the theta-midpoint of the ongoing and old
+  deflections in the default (manual) time discretisation, or the stage deflection that
+  Irksome's machinery substitutes for the ongoing solution under `use_irksome`.
 
 - `volume_multiplier`: Add a uniform correction to the surface's normal speed, i.e.
   $d\eta/dt \mathrel{-}= vm$ for a multiplier $vm$. For a closed domain, evaluating
@@ -139,10 +142,20 @@ def free_surface_volume_multiplier(
     )
 
 
-def _midpoint_deflection(eq: Equation, trial: fd.Argument | Indexed) -> Operator:
+def _midpoint_deflection(
+    eq: Equation, trial: fd.Argument | Indexed | fd.Function
+) -> Expr:
+    if getattr(eq, "use_irksome", False):
+        # Irksome's machinery substitutes every occurrence of the ongoing solution
+        # in the residual with the stage deflection at t_n + c_i dt, which is already
+        # the temporally consistent point for the exact normal. No theta-midpoint
+        # with a manually managed old deflection is needed; `trial` is returned alone.
+        return trial
+
     if not hasattr(eq, "trial_old"):
         raise ValueError(
-            "The exact free-surface normal requires the 'trial_old' equation attribute."
+            "The exact free-surface normal requires the 'trial_old' equation "
+            "attribute when use_irksome=False."
         )
 
     return 0.5 * (trial + eq.trial_old)
