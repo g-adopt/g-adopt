@@ -232,7 +232,7 @@ def check_and_get_absolute_paths(base_path: Path, reconstruction: str) -> dict[s
             f"An object with the expected name ({reconstructions[reconstruction]['directory']}) exists, but does not contain all of the required files",
         )
 
-    # Return absolute paths of the files, normalized to lists
+    # Return absolute paths of the files, normalised to lists
     return {
         key: [str(base_path / filename) for filename in to_list(files)]
         for key, files in filenames.items()

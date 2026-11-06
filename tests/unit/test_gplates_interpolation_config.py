@@ -72,7 +72,7 @@ class PassThroughOutput(OutputStrategy):
 
     requires = frozenset({"thickness"})
 
-    def compute(self, interpolated, r_target, too_far, mesh):
+    def compute(self, interpolated, r_target, outside_source_range, mesh):
         return interpolated["thickness"]
 
 
@@ -92,9 +92,9 @@ def mockedSource():
 
 @pytest.fixture
 def mockedFieldConnector(mockedSource):
-    """Provides a ScalarFieldConnector whose `_interp_geometry` method is a Mock().
+    """Provides a ScalarFieldConnector whose `_interpolator.geometry` method is a Mock().
 
-    The connector's `_interp_geometry` method builds the interpolation geometry on a
+    The connector's `_interpolator.geometry` method builds the interpolation geometry on a
     cache miss. The Mock replaces this method and counts the calls. The call count is
     a proxy for the number of cache misses.
 
@@ -102,14 +102,14 @@ def mockedFieldConnector(mockedSource):
         mockedSource: The `mockedSource` pytest fixture
 
     Returns:
-        A ScalarFieldConnector object with a Mock `_interp_geometry` method
+        A ScalarFieldConnector object with a Mock `_interpolator.geometry` method
     """
-    cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
+    cfg_idw = InterpolationConfig(kernel="idw", neighbor_count=4)
     conn_idw = ScalarFieldConnector(
         mockedSource, PassThroughOutput(), interpolation=cfg_idw
     )
-    conn_idw._interp_geometry = Mock(
-        return_value={"idx": 0, "k1": True, "too_far": None}
+    conn_idw._interpolator.geometry = Mock(
+        return_value={"idx": 0, "k1": True, "outside_source_range": None}
     )
     return conn_idw
 
@@ -157,8 +157,8 @@ class TestGeometryCacheKey:
         # Test that the geometry cache is used when the two different
         # `ScalarFieldConnector` objects with an identical (by value) configuration
         # each make a `get_indicator` call on the same target at the same `ndtime`.
-        cfg_a = InterpolationConfig(kernel="idw", k_neighbors=4)
-        cfg_b = InterpolationConfig(kernel="idw", k_neighbors=4)
+        cfg_a = InterpolationConfig(kernel="idw", neighbor_count=4)
+        cfg_b = InterpolationConfig(kernel="idw", neighbor_count=4)
         assert cfg_a is not cfg_b
         assert cfg_a == cfg_b
 
@@ -186,9 +186,9 @@ class TestGeometryCacheKey:
         # Test that the geometry cache is not reused and is populated correctly when
         # two different `ScalarFieldConnector` objects with differing configurations
         # each make a `get_indicator` call on the same target at the same `ndtime`.
-        cfg_idw = InterpolationConfig(kernel="idw", k_neighbors=4)
+        cfg_idw = InterpolationConfig(kernel="idw", neighbor_count=4)
         cfg_gauss = InterpolationConfig(
-            kernel="gaussian", k_neighbors=4, gaussian_sigma=0.5
+            kernel="gaussian", neighbor_count=4, gaussian_width_rad=0.5
         )
 
         targets = unit_targets()
@@ -232,7 +232,7 @@ class TestGeometryCacheKey:
         assert len(mockedSource._interp_geometry_cache) == 1
 
         # Age change triggers geometry rebuild
-        assert mockedFieldConnector._interp_geometry.call_count == 2
+        assert mockedFieldConnector._interpolator.geometry.call_count == 2
 
         # Age change triggers source recompute
         assert mockedSource._compute_sources.call_count == 2
@@ -267,4 +267,4 @@ class TestGeometryCacheKey:
         mockedSource._compute_sources.assert_called_once()
 
         # Target change triggers geometry rebuild
-        assert mockedFieldConnector._interp_geometry.call_count == 2
+        assert mockedFieldConnector._interpolator.geometry.call_count == 2
