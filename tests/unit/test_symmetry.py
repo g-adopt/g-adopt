@@ -8,8 +8,9 @@ this file runs in.
 """
 
 import firedrake as fd
-import gadopt
 import pytest
+
+import gadopt
 from gadopt.equations import Equation
 from gadopt.momentum_equation import viscosity_term
 
@@ -28,25 +29,12 @@ def generic_velocity(mesh):
 
 
 N = 4  # resolution in all directions
-
-
 mesh1d = fd.UnitIntervalMesh(N)
-
-
 mesh1dcircle = fd.CircleManifoldMesh(N)
-
-
 mesh2dtri = fd.UnitSquareMesh(N, N, quadrilateral=False)
-
-
 mesh2dquad = fd.UnitSquareMesh(N, N, quadrilateral=True)
-
-
 mesh2dcs = fd.UnitCubedSphereMesh()
-
-
 mesh2dico = fd.IcosahedralSphereMesh(1)
-
 
 meshes = {
     "2D-tri": mesh2dtri,
@@ -58,7 +46,7 @@ meshes = {
     "3D-extruded-prism": fd.ExtrudedMesh(mesh2dtri, N),
     "2D-cylinder": fd.ExtrudedMesh(mesh1dcircle, N),
     "3D-cubed-sphere": fd.ExtrudedMesh(mesh2dcs, N),
-    "3D-icosahedral-sphere": fd.ExtrudedMesh(mesh2dico, N)
+    "3D-icosahedral-sphere": fd.ExtrudedMesh(mesh2dico, N),
 }
 
 
@@ -76,15 +64,19 @@ def taylor_hood(mesh):
 @pytest.fixture(scope="module", params=meshes.items(), ids=meshes.keys())
 def mesh(request):
     id, mesh = request.param
-    mesh.cartesian = not any(x in id for x in ['cylinder', 'sphere'])
+    mesh.cartesian = not any(x in id for x in ["cylinder", "sphere"])
     return mesh
 
 
-@pytest.fixture(scope="module",
-                params=[gadopt.BoussinesqApproximation,
-                        gadopt.ExtendedBoussinesqApproximation,
-                        gadopt.TruncatedAnelasticLiquidApproximation,
-                        gadopt.AnelasticLiquidApproximation])
+@pytest.fixture(
+    scope="module",
+    params=[
+        gadopt.BoussinesqApproximation,
+        gadopt.ExtendedBoussinesqApproximation,
+        gadopt.TruncatedAnelasticLiquidApproximation,
+        gadopt.AnelasticLiquidApproximation,
+    ],
+)
 def approximation(request):
     Ra = 1
     Di = 1
@@ -94,7 +86,7 @@ def approximation(request):
         return request.param(Ra, Di)
 
 
-@pytest.fixture(scope="module", params=["TaylorHood",])
+@pytest.fixture(scope="module", params=["TaylorHood"])
 def solution_space(request, mesh):
     match request.param:
         case "TaylorHood":
@@ -103,12 +95,24 @@ def solution_space(request, mesh):
             raise ValueError("Unknown discretisation type")
 
 
+@pytest.fixture(scope="module")
+def free_surface_space(mesh, solution_space):
+    """The Taylor-Hood mixed space extended with a free-surface deflection.
+
+    A scalar deflection function trails velocity and pressure in the mixed
+    space, one per free-surface boundary. Here we exercise a single free
+    surface, on the top boundary, with the deflection in the same space as the
+    pressure, as in the free-surface demos.
+    """
+    return solution_space * fd.FunctionSpace(mesh, "CG", 1)
+
+
 def test_stokes_symmetry(approximation, mesh, solution_space):
     """Test symmetry of discretised Stokes matrix where expected
 
     In particular, tests symmetry of weak bc terms."""
     z = fd.Function(solution_space)
-    u, p = z.subfunctions
+    u = z.subfunctions[0]
     # use a velocity that's not divergence free, to test symmetry of div(u) terms:
     X = fd.SpatialCoordinate(mesh)
     u.interpolate(X)
@@ -116,30 +120,73 @@ def test_stokes_symmetry(approximation, mesh, solution_space):
     T = fd.Function(solution_space.sub(1))
     boundary = gadopt.get_boundary_ids(mesh)
     bids = list(boundary)
-    bcs = {bids[0]: {'un': 0}, bids[1]: {'normal_stress': 0}}
+    bcs = {bids[0]: {"un": 0}, bids[1]: {"normal_stress": 0}}
     # cylindrical/spherical meshes only have 2 boundaries
     # if we have more, let's test some more bc types
     if len(bids) > 2:
         dim = mesh.geometric_dimension
         zero_vec = fd.Constant([0] * dim)
-        bcs[bids[2]] = {'stress': zero_vec}
+        bcs[bids[2]] = {"stress": zero_vec}
         # note that we are only testing the weak bc terms here
         # weak "u" is not actually supported at the moment
         # (but will need to be for future element pairs)
         # at the moment type "u" is convert to a strong DirichletBC()
-        bcs[bids[3]] = {'u': zero_vec}
+        bcs[bids[3]] = {"u": zero_vec}
     solver = gadopt.StokesSolver(z, approximation, T, bcs=bcs)
 
     if approximation.compressible:
         # only the velocity block will be symmetric
-        M = fd.assemble(fd.derivative(solver.F, z), mat_type='nest')
+        M = fd.assemble(fd.derivative(solver.F, z), mat_type="nest")
         # the velocity block is assembled as type 'baij' for which .isSymmetric()
         # appears to not work (always returns False); so convert to type 'aij'
-        M00 = M.petscmat.getNestSubMatrix(0, 0).convert('aij')
+        M00 = M.petscmat.getNestSubMatrix(0, 0).convert("aij")
         assert M00.isSymmetric(1e-13)
     else:
         # test symmetry of entire matrix
-        M = fd.assemble(fd.derivative(solver.F, z), mat_type='aij')
+        M = fd.assemble(fd.derivative(solver.F, z), mat_type="aij")
+        assert M.petscmat.isSymmetric(1e-13)
+
+
+def test_stokes_free_surface_symmetry(approximation, mesh, free_surface_space):
+    """Test symmetry of the discretised Stokes matrix with a free surface
+
+    The momentum equation couples to the deflection through the free-surface
+    normal-stress condition, while the kinematic free-surface equation couples
+    back to the velocity. These off-diagonal blocks are transposes of one
+    another only if the free-surface equation's prefactor matches the
+    normal-stress coefficient, which is what the approximation's
+    `free_surface_terms` returns.
+    """
+    z = fd.Function(free_surface_space)
+    u = z.subfunctions[0]
+    # use a velocity that's not divergence free, to test symmetry of div(u) terms:
+    X = fd.SpatialCoordinate(mesh)
+    u.interpolate(X)
+    # a non-constant temperature renders the interior buoyancy entering the
+    # free-surface terms spatially varying, so a prefactor that does not match
+    # the normal-stress coefficient would break the off-diagonal symmetry
+    T = fd.Function(free_surface_space.sub(1))
+    T.interpolate(sum(X) + 1)
+
+    boundary = gadopt.get_boundary_ids(mesh)
+    bcs = {bc_id: {"un": 0} for bc_id in boundary}
+    bcs[boundary.top] = {"free_surface": {"RaFS": 1}}
+    solver = gadopt.StokesSolver(z, approximation, T, dt=1, bcs=bcs)
+
+    if approximation.compressible:
+        # only the velocity block is symmetric: for approximations whose
+        # buoyancy depends on the pressure (e.g. the AnelasticLiquidApproximation),
+        # the free-surface prefactor makes the free-surface equation depend on
+        # the pressure, so the blocks coupling pressure to the deflection lose
+        # their transposes
+        M = fd.assemble(fd.derivative(solver.F, z), mat_type="nest")
+        # the velocity block is assembled as type 'baij' for which .isSymmetric()
+        # appears to not work (always returns False); so convert to type 'aij'
+        M00 = M.petscmat.getNestSubMatrix(0, 0).convert("aij")
+        assert M00.isSymmetric(1e-13)
+    else:
+        # test symmetry of entire coupled system
+        M = fd.assemble(fd.derivative(solver.F, z), mat_type="aij")
         assert M.petscmat.isSymmetric(1e-13)
 
 
@@ -158,28 +205,27 @@ def test_internal_variable_symmetry(mesh):
     u.interpolate(X)
     density = fd.Function(DG0).assign(1)
     approximation = gadopt.MaxwellApproximation(
-        bulk_modulus=1,
-        viscosity=1,
-        shear_modulus=1,
-        B_mu=1.27,
-        density=density)
+        bulk_modulus=1, viscosity=1, shear_modulus=1, B_mu=1.27, density=density
+    )
     boundary = gadopt.get_boundary_ids(mesh)
     bids = list(vars(boundary).values())
-    bcs = {bids[0]: {'un': 0}, bids[1]: {'free_surface': {}}}
+    bcs = {bids[0]: {"un": 0}, bids[1]: {"free_surface": {}}}
     # cylindrical/spherical meshes only have 2 boundaries
     # if we have more, let's test some more bc types
     if len(bids) > 2:
         dim = mesh.geometric_dimension
         zero_vec = fd.Constant([0] * dim)
-        bcs[bids[2]] = {'stress': zero_vec}
+        bcs[bids[2]] = {"stress": zero_vec}
         # note that we are only testing the weak bc terms here
         # weak "u" is not actually supported at the moment
         # (but will need to be for future element pairs)
         # at the moment type "u" is convert to a strong DirichletBC()
-        bcs[bids[3]] = {'u': zero_vec}
-    solver = gadopt.InternalVariableSolver(u, approximation, dt=1, internal_variables=m, bcs=bcs)
+        bcs[bids[3]] = {"u": zero_vec}
+    solver = gadopt.InternalVariableSolver(
+        u, approximation, dt=1, internal_variables=m, bcs=bcs
+    )
 
-    M = fd.assemble(fd.derivative(solver.F, u), mat_type='aij')
+    M = fd.assemble(fd.derivative(solver.F, u), mat_type="aij")
     assert M.petscmat.isSymmetric(1e-13)
 
 
@@ -206,7 +252,7 @@ def test_viscosity_term_rejects_stress_independent_of_trial():
     unrelated = fd.Function(V).interpolate(generic_velocity(mesh))
 
     approximation = gadopt.BoussinesqApproximation(1)
-    bc_id = list(gadopt.get_boundary_ids(mesh))[0]
+    bc_id = next(iter(gadopt.get_boundary_ids(mesh)))
     eq = Equation(
         fd.TestFunction(V),
         V,
