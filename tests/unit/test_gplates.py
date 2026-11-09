@@ -124,7 +124,7 @@ def test_velocity_reconstruction_regression(write_pvd=False):
 # and the factory never drives it, so these tests use a Mock gtrack producer
 # and a Mock plate model connector and need no reconstruction data. Age
 # validation is tested in test_sources.py. The path with a real producer is
-# covered by the reconstruction-backed tests in test_connectors.py
+# covered by the reconstruction-backed tests in test_gplates_connectors.py
 # (indicator and geotherm) and by test_velocity_reconstruction_regression
 # above (velocity).
 

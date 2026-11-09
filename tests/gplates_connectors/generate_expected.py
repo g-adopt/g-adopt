@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the pickled reference fixture used by tests/unit/test_connectors.py.
+"""Generate the reference file used by test_gplates_connectors.py.
 
 Runs the four factory connectors (lith indicator/geotherm, polygon
 indicator/geotherm) against the Muller 2022 SE v1.2 reconstruction on a
 small extruded mesh, collects reduced quantities per age, and pickles them
-into `test_connectors.pkl`.
+into `expected.pkl`.
 
 Usage:
-    python tests/unit/data/generate_expected_connectors.py
+    python tests/gplates_connectors/generate_expected.py
 """
 
 from pathlib import Path
@@ -34,7 +34,7 @@ from gtrack import (
 )
 from gtrack.config import TracerConfig
 
-# Shared with tests/unit/test_connectors.py so the reference and the test that
+# Shared with test_gplates_connectors.py so the reference and the test that
 # loads it cannot disagree on the fixture configuration (this script's own
 # directory is on sys.path when it is run directly).
 from regression_config import (
@@ -46,12 +46,12 @@ from regression_config import (
     REGRESSION_LAYER_HEIGHTS,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 GPLATES_GLOBAL = REPO_ROOT / "demos/mantle_convection/gplates_global"
 GPLATES_FIELDS = REPO_ROOT / "demos/mantle_convection/gplates_fields"
 CONTINENTAL_DATA = GPLATES_FIELDS / "continental_lithospheric_thickness_mesh.h5"
 CRATON_SHAPEFILE = GPLATES_FIELDS / "Craton_Boundaries_Inferred.shp"
-OUT = Path(__file__).resolve().parent / "test_connectors.pkl"
+OUT = Path(__file__).resolve().parent / "expected.pkl"
 
 
 def half_space_cooling(age_myr):

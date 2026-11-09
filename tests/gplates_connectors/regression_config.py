@@ -1,7 +1,7 @@
 """Shared configuration for the connector regression fixture.
 
-Imported by BOTH ``tests/unit/test_connectors.py`` (which loads the pickled
-reference) and ``generate_expected_connectors.py`` (which produces it). The
+Imported by BOTH ``test_gplates_connectors.py`` (which loads the pickled
+reference) and ``generate_expected.py`` (which produces it). The
 reference values are computed from these numbers, so the two sides must agree
 exactly — a disagreement would compare the test against a fixture built for a
 different configuration. One definition, read by both, removes that hazard.

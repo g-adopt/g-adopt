@@ -4,7 +4,7 @@ PointCloudSource wraps a gtrack ``AgeCloudSource`` producer and gives it the
 cached, collective ``prepare(age)`` interface of ``Source``. These tests drive
 it with a Mock producer and a Mock plate model connector, so they need no
 reconstruction data. The path with a real gtrack producer is covered by the
-reconstruction-backed tests in test_connectors.py.
+reconstruction-backed tests in tests/gplates_connectors.
 """
 
 from unittest.mock import Mock

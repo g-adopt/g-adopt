@@ -1,32 +1,24 @@
-"""Tests for ScalarFieldConnector and its factory functions.
+"""Tests for ScalarFieldConnector and the connector factories.
 
-Three groups:
+These tests need no plate reconstruction. Small in-memory sources stand in
+for gtrack producers. The tests cover:
 
-  * **Validation contracts** — no reconstruction data; verify that bad
-    Source/Output pairings raise at construction, that bad function spaces
-    are caught up front by GplatesScalarFunction, and that
-    InterpolationConfig rejects invalid kernels.
+  * the channel contract between a source and an output, checked when a
+    connector is created;
+  * the connector-level garbage collection interval;
+  * the result cache, keyed on the identity of the target coordinate array;
+  * the separation of membership from thickness in bounded outputs;
+  * the interpolation geometry and source step that sibling connectors share;
+  * the function space check in GplatesScalarFunction.
 
-  * **Connector regression** — for each of the four factory pairings
-    (lithosphere indicator, lithosphere geotherm, polygon indicator, polygon
-    geotherm) plus the GplatesScalarFunction wrapper, evaluate on a small
-    extruded cubed-sphere mesh at a fixed series of geological ages, record
-    volume/surface integrals, and compare against a pickled reference. Built
-    once against the Muller 2022 SE v1.2 reconstruction.
-
-  * **Shared-source consistency** — confirms that a single LithosphereSource
-    can drive both an indicator and a geotherm connector simultaneously
-    without producing duplicate state.
+The regression test against a real reconstruction is in
+tests/gplates_connectors/test_gplates_connectors.py.
 """
 
 import gc
-import sys
 from unittest.mock import Mock
-from pathlib import Path
-import pickle
 
 import firedrake as fd
-import h5py
 import numpy as np
 import pytest
 from mpi4py import MPI
@@ -40,86 +32,16 @@ from gadopt.gplates import (
     BoundedLinearGeotherm,
     BoundedLayerIndicator,
     MeshConfig,
-    PlateModelFiles,
-    PointCloudSource,
     Source,
     GlobalLayerIndicator,
-    ensure_reconstruction,
     ConnectorFactory,
     LithosphereConnectorFactory,
     PolygonConnectorFactory,
-    pyGplatesConnector,
 )
-from gtrack import (
-    LithosphereCloudConfig,
-    LithosphereCloudSource,
-    PolygonIndicatorConfig,
-    PolygonIndicatorSource,
-)
-from gtrack.config import TracerConfig
-# Internal to the deblend rather than public API, so imported from the module
-# it lives in rather than widening gadopt.gplates.
+# Not part of the public gadopt.gplates API, so imported from the modules
+# that define them.
 from gadopt.gplates.outputs import MEMBERSHIP_FLOOR
 from gadopt.gplates.interpolation import gather
-
-
-# ---------------------------------------------------------------------------
-# Paths and constants
-# ---------------------------------------------------------------------------
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-GPLATES_GLOBAL = REPO_ROOT / "demos/mantle_convection/gplates_global"
-GPLATES_FIELDS = REPO_ROOT / "demos/mantle_convection/gplates_fields"
-CONTINENTAL_DATA = GPLATES_FIELDS / "continental_lithospheric_thickness_mesh.h5"
-CRATON_SHAPEFILE = GPLATES_FIELDS / "Craton_Boundaries_Inferred.shp"
-DATA_DIR = Path(__file__).resolve().parent / "data"
-
-# The regression fixture's configuration lives in one place — data/
-# regression_config.py — imported here and by the generator that builds the
-# pickle, so the two cannot silently disagree on the numbers the reference
-# values are computed from.
-sys.path.insert(0, str(DATA_DIR))
-from regression_config import (  # noqa: E402
-    OLDEST_AGE,
-    LITH_TRACKER_POINT_COUNT,
-    POLYGON_BACKGROUND_POINT_COUNT,
-    POLYGON_SCALAR_INPUT_POINT_COUNT,
-    TEST_AGES,
-    REGRESSION_LAYER_HEIGHTS,
-)
-
-
-def _require_data():
-    """Fail with a download hint if the continental thickness data is absent.
-
-    The plate model itself is fetched by ``ensure_reconstruction`` in the
-    fixtures that need it, matching ``test_gplates.py``.
-    """
-    assert CONTINENTAL_DATA.exists(), (
-        f"Continental thickness data missing at {CONTINENTAL_DATA}; download "
-        "https://data.gadopt.org/demos/continental_lithospheric_thickness_mesh.h5 there."
-    )
-
-
-def _require_craton():
-    """Fail with a download hint if the craton shapefile is absent."""
-    assert CRATON_SHAPEFILE.exists(), (
-        f"Craton shapefile missing at {CRATON_SHAPEFILE}; download the .shp, "
-        ".shx, .dbf and .prj parts of Craton_Boundaries_Inferred from "
-        "https://data.gadopt.org/demos/ there."
-    )
-
-
-def half_space_cooling(age_myr):
-    age_sec = np.maximum(age_myr, 0.0) * 3.15576e13
-    return np.minimum(2.32 * np.sqrt(1e-6 * age_sec) / 1e3, 150.0)
-
-
-def _load_continental_data():
-    with h5py.File(CONTINENTAL_DATA, "r") as f:
-        lonlat = f["lonlat"][:]
-        values = f["values"][:]
-    return np.column_stack([lonlat[:, 1], lonlat[:, 0]]), values
 
 
 # ---------------------------------------------------------------------------
@@ -198,15 +120,16 @@ class TestConnectorConstruction:
     def test_defaults_use_module_level_configs(self):
         src = _DummySource({"thickness"})
         conn = ScalarFieldConnector(src, GlobalLayerIndicator())
-        assert isinstance(conn.mesh, MeshConfig)
-        assert isinstance(conn.interpolation, InterpolationConfig)
+        assert conn.mesh == MeshConfig()
+        assert conn.interpolation == InterpolationConfig()
 
 
 class TestGcCollectDefault:
     """Use the same garbage-collection interval on every construction path.
 
-    Collection on every call added approximately 130 seconds to a 5000-step
-    loop. Gtrack also collects the pyGPlates wrapper cycles internally.
+    The default interval is 10 calls, because a collection on every call is
+    slow in a long time loop. Gtrack also collects the pyGPlates wrapper
+    cycles internally.
     """
 
     def test_default_is_ten_direct(self):
@@ -227,19 +150,6 @@ class TestGcCollectDefault:
         factory.create_indicator_output()
         assert factory.indicator.gc_collect_frequency == 10
 
-    def _drive(self, monkeypatch, frequency, n_calls):
-        mock_gc = Mock()
-        monkeypatch.setattr("gadopt.gplates.connectors.gc.collect", mock_gc)
-        conn = ScalarFieldConnector(
-            _DataSource(), GlobalLayerIndicator(), gc_collect_frequency=frequency
-        )
-        target = _target_coords()
-        # Distinct ages (spaced > delta_t=1.0, all <= oldest_age=100) so every
-        # call is a cache miss and runs _compute (where the gc counter lives).
-        for age in range(90, 90 - 10 * n_calls, -10):
-            conn.get_indicator(target, conn.source.age2ndtime(float(age)))
-        return mock_gc.call_count
-
     @pytest.mark.parametrize(
         "frequency, n_calls, expected_collects",
         [
@@ -249,7 +159,18 @@ class TestGcCollectDefault:
         ],
     )
     def test_collect_cadence(self, monkeypatch, frequency, n_calls, expected_collects):
-        assert self._drive(monkeypatch, frequency, n_calls) == expected_collects
+        mock_gc = Mock()
+        with monkeypatch.context() as m:
+            m.setattr("gadopt.gplates.connectors.gc.collect", mock_gc)
+            conn = ScalarFieldConnector(
+                _DataSource(), GlobalLayerIndicator(), gc_collect_frequency=frequency
+            )
+            target = _target_coords()
+            # Distinct ages (spaced > delta_t=1.0, all <= oldest_age=100) so every
+            # call is a cache miss and runs _compute (where the gc counter lives).
+            for age in range(90, 90 - 10 * n_calls, -10):
+                conn.get_indicator(target, conn.source.age2ndtime(float(age)))
+        assert mock_gc.call_count == expected_collects
 
 
 class TestResultCacheKey:
@@ -305,7 +226,7 @@ class TestResultCacheKey:
 
 
 # ---------------------------------------------------------------------------
-# Shared interpolation geometry (P10)
+# Small in-memory sources for the interpolation tests
 # ---------------------------------------------------------------------------
 
 class _DataSource(Source):
@@ -358,10 +279,6 @@ class _CapSource(_DataSource):
     Linear interpolation preserves `masked_thickness = DEPTH_KM * membership`.
     Therefore, division by nonzero membership must recover the constant depth
     for every interpolation width.
-
-    The proportional channels cannot detect confusion between membership and
-    thickness. `test_recovers_a_laterally_varying_depth_exactly` uses
-    non-proportional channels to test that distinction.
     """
 
     provides = frozenset({"masked_thickness", "membership"})
@@ -385,11 +302,6 @@ def _target_coords():
     return 2.0 * xyz / np.linalg.norm(xyz, axis=1, keepdims=True)
 
 
-class _MaskedSource(_CapSource):
-    """Stands in for a polygon-style source: provides ``masked_thickness`` and
-    ``membership`` rather than a plain ``thickness`` channel."""
-
-
 class TestChannelNameGuard:
     """Reject outputs that interpret weighted thickness as physical thickness.
 
@@ -399,26 +311,26 @@ class TestChannelNameGuard:
 
     def test_global_indicator_on_bounded_source_raises_via_factory(self):
         factory = ConnectorFactory()
-        factory.source = _MaskedSource()
+        factory.source = _CapSource()
         factory.output = GlobalLayerIndicator()
         with pytest.raises(ValueError, match="thickness"):
             _ = factory.indicator
 
     def test_bounded_indicator_on_bounded_source_passes(self):
         factory = ConnectorFactory()
-        factory.source = _MaskedSource()
+        factory.source = _CapSource()
         factory.output = BoundedLayerIndicator(base_transition_width_km=50.0)
         assert factory.indicator is not None
 
     def test_bounded_geotherm_on_bounded_source_passes(self):
         """Pair the bounded geotherm with its required source channels."""
         assert ScalarFieldConnector(
-            _MaskedSource(), BoundedLinearGeotherm()
+            _CapSource(), BoundedLinearGeotherm()
         ) is not None
 
     def test_unmasked_geotherm_on_bounded_source_raises(self):
         with pytest.raises(ValueError, match="thickness"):
-            ScalarFieldConnector(_MaskedSource(), LinearGeotherm())
+            ScalarFieldConnector(_CapSource(), LinearGeotherm())
 
 
 class TestMembershipDoesNotContaminateDepth:
@@ -485,7 +397,12 @@ class TestMembershipDoesNotContaminateDepth:
             # Where the region is present at all, the two agree to machine
             # precision — measured max difference 7e-16, not a loose bound.
             covered = surface > MEMBERSHIP_FLOOR
-            assert covered.sum() > 10, "sweep must straddle the boundary"
+            # The compared nodes must lie on both sides of the cap edge, so
+            # the comparison includes the transition and not only the interior.
+            edge = _CapSource.CAP_RADIUS_RAD
+            assert covered[polar < edge].any() and covered[polar > edge].any(), (
+                "the compared nodes must include both sides of the cap edge"
+            )
             np.testing.assert_allclose(
                 above_base[covered], surface[covered], rtol=1e-12, atol=1e-14,
                 err_msg=f"base depth contaminated by membership at sigma={sigma}",
@@ -527,7 +444,11 @@ class TestMembershipDoesNotContaminateDepth:
 
 
 class TestGeometrySharing:
-    """Reuse interpolation geometry for one source, target array, and config."""
+    """Share one source step and one geometry build between sibling connectors.
+
+    Connectors on the same source, target array and interpolation config
+    reuse the source arrays and the interpolation geometry at one age.
+    """
 
     @pytest.fixture(autouse=True)
     def _patch_tree(self, monkeypatch):
@@ -556,6 +477,23 @@ class TestGeometrySharing:
         assert self.mock_tree.call_count == 1
         # Both GlobalLayerIndicators on the same source/geometry must agree byte-for-byte.
         np.testing.assert_array_equal(out_a, out_b)
+
+    def test_indicator_and_geotherm_share_one_source_step(self):
+        # An indicator and a geotherm on one source compute different fields
+        # from the same source arrays. The second connector at the same age
+        # must take those arrays from the source cache, so the source
+        # computes them once.
+        src = _DataSource()
+        src._compute_sources = Mock(wraps=src._compute_sources)
+        target = _target_coords()
+        indicator = ScalarFieldConnector(src, GlobalLayerIndicator())
+        geotherm = ScalarFieldConnector(src, LinearGeotherm())
+
+        ndtime = src.age2ndtime(50.0)
+        indicator.get_indicator(target, ndtime)
+        geotherm.get_indicator(target, ndtime)
+
+        assert src._compute_sources.call_count == 1
 
     def test_distinct_config_values_build_separately(self):
         src = _DataSource()
@@ -630,297 +568,3 @@ class TestGplatesScalarFunctionSpaceCheck:
         conn = ScalarFieldConnector(src, GlobalLayerIndicator())
         # Construction does not request data from the mock source.
         GplatesScalarFunction(Q, indicator_connector=conn)
-
-
-# ---------------------------------------------------------------------------
-# Reconstruction-backed fixtures for regression tests
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def plate_model():
-    _require_data()
-    files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
-    return pyGplatesConnector(
-        rotation_filenames=files["rotation_filenames"],
-        topology_filenames=files["topology_filenames"],
-        oldest_age=OLDEST_AGE,
-    )
-
-
-@pytest.fixture(scope="module")
-def plate_files():
-    _require_data()
-    files = ensure_reconstruction("Muller 2022 SE v1.2", GPLATES_GLOBAL)
-    return PlateModelFiles(
-        continental_polygons=files.get("continental_polygons"),
-        static_polygons=files.get("static_polygons"),
-    )
-
-
-def _make_lith_source(plate_model, plate_files):
-    """Wrap a gtrack LithosphereCloudSource in a gadopt PointCloudSource."""
-    producer = LithosphereCloudSource(
-        rotation_files=plate_model.rotation_filenames,
-        topology_files=plate_model.topology_filenames,
-        continental_polygons=plate_files.continental_polygons,
-        static_polygons=plate_files.static_polygons,
-        continental_data=_load_continental_data(),
-        oceanic_thickness_from_age=half_space_cooling,
-        plate_model_max_age_ma=OLDEST_AGE,
-        config=LithosphereCloudConfig(
-            tracer=TracerConfig(tracker_point_count=LITH_TRACKER_POINT_COUNT),
-        ),
-    )
-    return PointCloudSource(producer, plate_model)
-
-
-@pytest.fixture(scope="module")
-def lith_source(plate_model, plate_files):
-    return _make_lith_source(plate_model, plate_files)
-
-
-@pytest.fixture(scope="module")
-def poly_source(plate_model, plate_files):
-    _require_craton()
-    producer = PolygonIndicatorSource(
-        rotation_files=plate_model.rotation_filenames,
-        topology_files=plate_model.topology_filenames,
-        polygons=str(CRATON_SHAPEFILE),
-        static_polygons=plate_files.static_polygons,
-        thickness_data=200.0,
-        # Scalar thickness -> scalar_input_point_count sizes the seeds; pin both so the
-        # regression matches the old single-n_points seeding.
-        config=PolygonIndicatorConfig(
-            background_point_count=POLYGON_BACKGROUND_POINT_COUNT,
-            scalar_input_point_count=POLYGON_SCALAR_INPUT_POINT_COUNT,
-        ),
-    )
-    return PointCloudSource(producer, plate_model)
-
-
-@pytest.fixture(scope="module")
-def regression_mesh():
-    """Bigger than `tiny_mesh` to give the indicator field somewhere to
-    show structure, but still cheap. Refinement level 2 + 6 graded layers ~
-    2700 DoFs at CG1."""
-    mesh2d = fd.IcosahedralSphereMesh(radius=1.208, refinement_level=2, degree=1)
-    mesh = fd.ExtrudedMesh(
-        mesh2d,
-        layers=len(REGRESSION_LAYER_HEIGHTS),
-        layer_height=np.array(REGRESSION_LAYER_HEIGHTS, dtype=float),
-        extrusion_type="radial",
-    )
-    mesh.cartesian = False
-    return mesh
-
-
-@pytest.fixture(scope="module")
-def Q(regression_mesh):
-    return fd.FunctionSpace(regression_mesh, "CG", 1)
-
-
-# ---------------------------------------------------------------------------
-# Regression: four factory pairings + GplatesScalarFunction wrapper
-# ---------------------------------------------------------------------------
-
-def _reduced_quantities(f):
-    """Volume and surface integrals of a scalar Function on the regression
-    mesh, plus mean / std / min / max of its DoF values."""
-    values = f.dat.data_ro_with_halos
-    return {
-        "volume": float(fd.assemble(f * fd.dx)),
-        "surface": float(fd.assemble(f * fd.ds_t)),
-        "mean": float(values.mean()),
-        "std": float(values.std()),
-        "min": float(values.min()),
-        "max": float(values.max()),
-    }
-
-
-def _evaluate_connectors_lockstep(connectors_by_name, mesh, Q, ages):
-    """Drive all connectors in lockstep through the same age series.
-
-    Connectors sharing a forward-only source (LithosphereSource) must
-    advance together: once the tracker passes an age, it can't be revisited
-    by any sibling connector. The lockstep walk mirrors a real time loop.
-    """
-    sfs = {
-        name: GplatesScalarFunction(Q, indicator_connector=c, name=name)
-        for name, c in connectors_by_name.items()
-    }
-    out = {name: {} for name in connectors_by_name}
-    sample = next(iter(connectors_by_name.values()))
-    for age in ages:
-        ndtime = sample.source.age2ndtime(float(age))
-        for name in connectors_by_name:
-            sfs[name].update_plate_reconstruction(ndtime)
-            out[name][age] = _reduced_quantities(sfs[name])
-    return out
-
-
-def _load_reference():
-    ref_path = DATA_DIR / "test_connectors.pkl"
-    assert ref_path.exists(), (
-        f"Reference fixture missing: {ref_path}. "
-        "Generate via tests/unit/data/generate_expected_connectors.py."
-    )
-    with open(ref_path, "rb") as f:
-        return pickle.load(f)
-
-
-def _check_reduced(observed, expected, label):
-    # atol floors the round-off on quantities that are analytically zero
-    # (for example a geotherm's surface integral) so they aren't held to rtol.
-    for key, expected_value in expected.items():
-        np.testing.assert_allclose(
-            observed[key], expected_value, rtol=1e-3, atol=1e-9,
-            err_msg=f"{label}: {key}",
-        )
-
-
-class TestConnectorRegression:
-    """Drive the four factory connectors in lockstep (siblings sharing a
-    Source advance together) and assert volume/surface integrals match the
-    pickled reference."""
-
-    def test_lithosphere_pair(self, lith_source, regression_mesh, Q):
-        ref = _load_reference()
-        factory = LithosphereConnectorFactory()
-        factory.source = lith_source
-        # Must match generate_expected_connectors.py. Age sensitivity comes
-        # from the radial grading of `regression_mesh`: with the plain
-        # one-sided step, nodes have to sit inside the lithosphere for a
-        # moving base depth to change the reduced integrals at all.
-        factory.create_indicator_output()
-        factory.create_geotherm_output()
-        observed = _evaluate_connectors_lockstep({
-            "lith_indicator": factory.indicator,
-            "lith_geotherm": factory.geotherm,
-        }, regression_mesh, Q, TEST_AGES)
-        for name in ("lith_indicator", "lith_geotherm"):
-            for age in TEST_AGES:
-                _check_reduced(observed[name][age], ref[name][age],
-                               f"{name} age {age}")
-
-    def test_polygon_pair(self, poly_source, regression_mesh, Q):
-        ref = _load_reference()
-        factory = PolygonConnectorFactory()
-        factory.source = poly_source
-        factory.create_indicator_output()
-        factory.create_geotherm_output()
-        observed = _evaluate_connectors_lockstep({
-            "polygon_indicator": factory.indicator,
-            "polygon_geotherm": factory.geotherm,
-        }, regression_mesh, Q, TEST_AGES)
-        for name in ("polygon_indicator", "polygon_geotherm"):
-            for age in TEST_AGES:
-                _check_reduced(observed[name][age], ref[name][age],
-                               f"{name} age {age}")
-
-    def test_reference_is_age_sensitive(self):
-        """Require the fixture to vary with reconstruction age.
-
-        On a uniform four-layer mesh, no node samples the lithosphere interior.
-        The indicator is then one at the surface and zero at the next node.
-        Its volume remains 6.856154 at all ages. The graded
-        ``REGRESSION_LAYER_HEIGHTS`` restores sensitivity to base-depth changes.
-
-        Only volume, mean, and standard deviation contain the base-depth signal.
-        The surface integral, minimum, and maximum are constant by construction.
-        The constant surface contribution cancels from each age difference.
-        """
-        ref = _load_reference()
-        for name in ("lith_indicator", "polygon_indicator"):
-            volumes = [ref[name][age]["volume"] for age in TEST_AGES]
-            assert len(set(volumes)) == len(TEST_AGES), (
-                f"{name} has repeated volumes across {TEST_AGES}: {volumes}. "
-                "The reference does not depend on the reconstruction, so the "
-                "regression cannot detect a change in it."
-            )
-
-    def test_geotherm_surface_is_zero(self):
-        """Keep the global lithosphere geotherm at zero on the surface.
-
-        The background source points cover the complete sphere. Therefore, a
-        nonzero surface integral indicates a gap in the source range.
-
-        The bounded geotherm is excluded because it assigns mantle temperature
-        outside its region, including the exterior surface.
-        """
-        ref = _load_reference()
-        for age in TEST_AGES:
-            name = "lith_geotherm"
-            assert abs(ref[name][age]["surface"]) < 1e-9, (
-                f"{name} at {age} Ma has surface integral "
-                f"{ref[name][age]['surface']:.3e}, not ~0 — some surface "
-                "node was flagged outside_source_range."
-            )
-
-
-class TestSharedSourceConsistency:
-    """Two connectors holding the same lithosphere source must produce the
-    same field as a connector built standalone (same source instance, only a
-    different consumer).
-
-    Uses a fresh source (class-scoped) so the forward-only tracker hasn't
-    been walked past the test age by sibling regression tests.
-    """
-
-    @pytest.fixture(scope="class")
-    def fresh_lith_source(self, plate_model, plate_files):
-        return _make_lith_source(plate_model, plate_files)
-
-    def test_two_indicators_sharing_source_agree(
-        self, fresh_lith_source, regression_mesh, Q
-    ):
-        # Two factories create independent indicators that share one source.
-        # The shared source and target nodes must produce identical values.
-        factory_a = LithosphereConnectorFactory()
-        factory_a.source = fresh_lith_source
-        factory_a.create_indicator_output()
-        factory_b = LithosphereConnectorFactory()
-        factory_b.source = fresh_lith_source
-        factory_b.create_indicator_output()
-        ind_a = factory_a.indicator
-        ind_b = factory_b.indicator
-
-        sf_a = GplatesScalarFunction(Q, indicator_connector=ind_a, name="ind_a")
-        sf_b = GplatesScalarFunction(Q, indicator_connector=ind_b, name="ind_b")
-
-        ndtime = fresh_lith_source.age2ndtime(50.0)
-        sf_a.update_plate_reconstruction(ndtime)
-        sf_b.update_plate_reconstruction(ndtime)
-
-        # DoF arrays must match to machine precision — the kNN interpolation
-        # is deterministic given identical inputs.
-        np.testing.assert_array_equal(
-            sf_a.dat.data_ro_with_halos,
-            sf_b.dat.data_ro_with_halos,
-        )
-
-    def test_indicator_and_geotherm_share_one_tracker_step(
-        self, fresh_lith_source, regression_mesh, Q
-    ):
-        # Pair an indicator with a geotherm on the same source. Both produce
-        # different scalar fields (quintic step vs. erf geotherm), but they must
-        # use the same source arrays. The second call must use the age cache.
-        factory = LithosphereConnectorFactory()
-        factory.source = fresh_lith_source
-        factory.create_indicator_output()
-        factory.create_geotherm_output()
-        ind = factory.indicator
-        geo = factory.geotherm
-
-        sf_ind = GplatesScalarFunction(Q, indicator_connector=ind, name="ind")
-        sf_geo = GplatesScalarFunction(Q, indicator_connector=geo, name="geo")
-
-        # Use a fresh age that lies forward of the previous test's stop
-        # (we share the class-scoped source, which is forward-only).
-        ndtime = fresh_lith_source.age2ndtime(40.0)
-        sf_ind.update_plate_reconstruction(ndtime)
-        d_first = fresh_lith_source._cached_dict
-        sf_geo.update_plate_reconstruction(ndtime)
-        d_second = fresh_lith_source._cached_dict
-
-        # The geotherm call must use the source cache.
-        assert d_first is d_second
