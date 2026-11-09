@@ -1,5 +1,7 @@
 import pickle
 from pathlib import Path
+from unittest.mock import Mock
+
 import numpy as np
 import pytest
 
@@ -116,57 +118,45 @@ def test_velocity_reconstruction_regression(write_pvd=False):
 # Factory mechanics
 # =============================================================================
 #
-# ConnectorFactory only does bookkeeping — the single-source/single-output
-# guards, inheritance through the setters, and forwarding of the connector-level
-# parameters. That logic is producer-agnostic, so these tests use a fake
-# producer and a stand-in connector rather than a real gtrack
-# LithosphereCloudSource: the factory never drives the producer, so there is no
-# reconstruction to download. Age validation is covered data-free in
-# test_sources.py, and the end-to-end path with a REAL producer is the
-# reconstruction-backed regression in test_connectors.py (indicator/geotherm)
-# plus test_velocity_reconstruction_regression above (velocity).
-#
-# Checkpoint discovery moved into gtrack (CheckpointPolicy) with the ocean
-# tracker; it is exercised by gtrack's own suite. gadopt no longer owns it.
+# ConnectorFactory only does bookkeeping: the single-source and single-output
+# guards, sharing of a source or output between factories, and forwarding of
+# the connector-level parameters. That logic does not depend on the producer,
+# and the factory never drives it, so these tests use a Mock gtrack producer
+# and a Mock plate model connector and need no reconstruction data. Age
+# validation is tested in test_sources.py. The path with a real producer is
+# covered by the reconstruction-backed tests in test_connectors.py
+# (indicator and geotherm) and by test_velocity_reconstruction_regression
+# above (velocity).
 
 
-class _FakeProducer:
-    """Minimal gtrack ``AgeCloudSource`` for the factory tests: satisfies the
-    protocol (provides / monotonic_backward / at_age / validate_age) so
-    PointCloudSource accepts it, with no reconstruction data. ``provides``
-    carries both ``thickness`` and ``age`` so a GlobalLayerIndicator indicator and a
-    HalfSpaceCoolingGeotherm geotherm both pass the connector's requires<=provides
-    check. ``at_age`` raises: the factory-mechanics tests must never drive it."""
+def _producer():
+    """Return a Mock gtrack producer that the factory accepts but never drives.
 
-    provides = frozenset({"thickness", "age"})
-    monotonic_backward = False
+    spec=AgeCloudSource lets the Mock pass the isinstance check in
+    PointCloudSource. ``provides`` carries both ``thickness`` and ``age``, so a
+    GlobalLayerIndicator and a HalfSpaceCoolingGeotherm both pass the
+    connector's check that the source provides every required channel.
+    ``at_age`` raises, so a test fails if the factory steps the producer.
+    """
+    producer = Mock(spec=AgeCloudSource)
+    producer.provides = frozenset({"thickness", "age"})
+    producer.monotonic_backward = False
+    producer.at_age.side_effect = AssertionError(
+        "The factory tests must not step the producer"
+    )
+    return producer
 
-    def at_age(self, age):
-        raise AssertionError("factory-mechanics tests must not drive the producer")
 
-    def validate_age(self, age):
-        pass
+def _gplates_connector():
+    """Return a Mock plate model connector.
 
-
-class _DummyGplates:
-    """Stand-in for pyGplatesConnector: the factory tests store it on the source
-    but never touch its time API."""
-
-    oldest_age = 100.0
-    delta_t = 1.0
-
-    def ndtime2age(self, ndtime):
-        return float(ndtime) * 100.0
-
-    def age2ndtime(self, age):
-        return age / 100.0
+    The factory stores it on the source but does not call its time
+    conversions.
+    """
+    return Mock(spec=pyGplatesConnector, oldest_age=100.0, delta_t=1.0)
 
 
 class TestConnectorFactory:
-    def test_fake_producer_satisfies_the_protocol(self):
-        # If this fails, every factory test that wraps it is testing nothing.
-        assert isinstance(_FakeProducer(), AgeCloudSource)
-
     def test_cannot_create_source_without_class(self):
         factory = ConnectorFactory()
         with pytest.raises(
@@ -184,21 +174,21 @@ class TestConnectorFactory:
 
     def test_constructed_source(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_producer(), _gplates_connector())
 
         assert isinstance(factory.source, PointCloudSource)
 
     def test_inherited_source(self):
         factory1 = ConnectorFactory(source_class=PointCloudSource)
         factory2 = ConnectorFactory()
-        factory1.create_source(_FakeProducer(), _DummyGplates())
+        factory1.create_source(_producer(), _gplates_connector())
         factory2.source = factory1.source
         assert factory1.source is factory2.source
 
     def test_strictly_single_source(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.create_source(_FakeProducer(), _DummyGplates())
-        source = PointCloudSource(_FakeProducer(), _DummyGplates())
+        factory.create_source(_producer(), _gplates_connector())
+        source = PointCloudSource(_producer(), _gplates_connector())
         with pytest.raises(RuntimeError, match=r"This factory already has a source\."):
             factory.source = source
 
@@ -251,7 +241,7 @@ class TestConnectorFactory:
 
     def test_geotherm_requires_geotherm_output(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_producer(), _gplates_connector())
         with pytest.raises(
             RuntimeError,
             match="A geotherm output must be created or assigned before you access the geotherm",
@@ -263,7 +253,7 @@ class TestConnectorFactory:
         Source instance, so the forward-only ocean tracker advances once per
         age no matter which connector updates first."""
         factory = LithosphereConnectorFactory()
-        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_producer(), _gplates_connector())
         factory.create_indicator_output()
         factory.create_geotherm_output()
 
@@ -282,7 +272,7 @@ class TestConnectorFactory:
         factory = LithosphereConnectorFactory(
             mesh=mesh_cfg, interpolation=interp_cfg, gc_collect_frequency=3
         )
-        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_producer(), _gplates_connector())
         factory.create_indicator_output()
         factory.create_geotherm_output()
 
@@ -295,7 +285,7 @@ class TestConnectorFactory:
 
     def test_indicator_raises_when_output_not_constructed(self):
         factory = ConnectorFactory(source_class=PointCloudSource)
-        factory.create_source(_FakeProducer(), _DummyGplates())
+        factory.create_source(_producer(), _gplates_connector())
         with pytest.raises(
             RuntimeError,
             match="An output must be created or assigned before you access the indicator",
