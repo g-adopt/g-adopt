@@ -329,6 +329,12 @@ in `test_benchmarks.py` give the numbers behind each bound.
 
 ### Martinec et al. (2018)
 
+The numbers of this section and of the run table were computed with the
+masks of the sea-level load (ocean and grounded-ice functions with a
+slope-scaled steepness). The solver now uses the softplus sheet of
+`gadopt.sea_level_sheet` with a width of 1 m, so cases B, C and D need a new
+run before these numbers describe the code.
+
 The test uses the rules of the earlier Martinec runs on the branch
 `sghelichkhani/sea-level`:
 

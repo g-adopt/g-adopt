@@ -1356,7 +1356,7 @@ class TestEustaticLimit:
 
 
 #: The solved shoreline states, one per representation, so that
-#: `TestRepresentationParity` reads the same solves as `TestLiveMaskSolve`
+#: `TestRepresentationParity` reads the same solves as `TestLiveCoastlineSolve`
 #: instead of solving each state a second time.
 _SHORELINE = {}
 
@@ -1396,7 +1396,7 @@ def shoreline_solved(meshes, representation):
     return solve_shoreline(meshes, representation)
 
 
-class TestLiveMaskSolve:
+class TestLiveCoastlineSolve:
 
     def test_it_converges(self, shoreline_solved):
         solver, _, _, _ = shoreline_solved
@@ -1580,7 +1580,7 @@ class TestRepresentationParity:
     def test_the_net_sheet_mass_agrees(self, states):
         """`int sigma dS` to 1e-6 relative.
 
-        The net mass is of order the multipliers (`TestLiveMaskSolve`), so it
+        The net mass is of order the multipliers (`TestLiveCoastlineSolve`), so it
         has the same relative accuracy. Measured difference: 5.2e-9 relative.
         """
         net = {name: fd.assemble(solver.surface_load_sheet()
@@ -1920,7 +1920,7 @@ def block1_context(solver):
     return block1.getPC().getPythonContext()
 
 
-class TestLiveMaskRebuildRules:
+class TestLiveCoastlineRebuildRules:
     """W4: the moving coastline makes the Jacobian state-dependent.
 
     With `SeaLevel(fixed_ocean=False)` the sheet is the rounded maximum of the
@@ -2300,10 +2300,10 @@ def coastline_fields(sub, land, *, d_ice=0.0, ocean_ice=0.0):
     The fields are DG0, so a sector edge sits on mesh vertices and no
     quadrature point sees a transition (`indicator`). `SL_init` is `+DEEP` in
     the ocean and `-DEEP` on the land, so both the fixed ocean function
-    `C0 = C(SL_init)` and the a live coastline are saturated. This is what makes a
-    fixed and a live coastline the same problem: the ice rests on land, so
-    the live grounded-ice function is 0 there, and the ocean is deep and free
-    of grounded ice, so the live `B C` is 1 there.
+    `C0 = H(r SL_init / eps)` and the live sheet are saturated. This is what
+    makes a fixed and a live coastline the same problem: the ice rests on
+    land, so the live water fraction is 0 there, and the ocean is deep and
+    free of grounded ice, so the live water fraction is 1 there.
 
     Args:
       sub: the mechanics submesh.
@@ -2424,7 +2424,7 @@ def solved_fields_agree(z_a, z_b, layout, rel):
 class TestFixedOcean:
     """`SeaLevel(fixed_ocean=True)`: the coastline of Martinec et al. (2018), cases B and C.
 
-        C0    = C(SL_init)
+        C0    = H(r SL_init / eps)
         sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
 
     Work item W2 of `NOTES/DESIGN-MARTINEC-3D.md`. Every test runs on both
@@ -2478,7 +2478,7 @@ class TestFixedOcean:
 
         Two fixed solves of the land sector state with a grounded ice change
         of 1e-2 on the land: one without ocean ice, one with `GROUNDED` ice
-        grown over the whole ocean. The factor `1 - C0` is `sech`-small in the
+        grown over the whole ocean. The factor `1 - C0` is `exp(-537)` in the
         deep ocean (it evaluates to exactly 0.0 on these DG0 fields), so both
         solves assemble the same system. The tolerance is 1e-8 relative in
         `solved_fields_agree`, and the measured difference is 0.0.
@@ -2518,7 +2518,7 @@ class TestFixedOcean:
         initial guess with the tolerances of `solve_settings`. The outer
         Krylov solve reduces the residual by 1e-12, below `snes_rtol = 1e-10`,
         so a linear residual stops at iteration 1. A live-coastline solve of the
-        same state takes more (`TestLiveMaskSolve`).
+        same state takes more (`TestLiveCoastlineSolve`).
         """
         _, sub = meshes
         solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),

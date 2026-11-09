@@ -536,7 +536,8 @@ def ocean_and_ice(solver, case, pieces):
       the bed under grounded marine ice as ocean.
     * int B C dS, the water area of the sheet. For the softplus sheet the
       water fraction `B` is already the rounded product of the ocean and the
-      grounded-ice functions, so this area equals int B dS.
+      grounded-ice functions, so the driver returns int B dS for it. The two
+      differ only inside the rounding at an ice-free coast, where `B = C`.
 
     With a fixed coastline B does not exist and all three are int C0 dS.
     With a fixed coastline the ice over the initial ocean is removed by
