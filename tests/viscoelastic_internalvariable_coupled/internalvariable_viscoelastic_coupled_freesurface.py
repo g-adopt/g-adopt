@@ -221,9 +221,11 @@ def viscoelastic_model(
         V.sub(1), name="vertical displacement"
     )  # Function to store vertical displacement for output
     f = Function(V).interpolate(as_vector([X[0], X[1]]))
-    bc_displacement = DirichletBC(V.sub(1), 0, 4)
+    # Owned nodes only, so that each surface node appears once in the gathered arrays
+    top_nodes = DirichletBC(V, 0, top_id).nodes
+    top_nodes = top_nodes[top_nodes < V.nodes.owned.local_size]
 
-    surface_x = f.sub(0).dat.data_ro_with_halos[bc_displacement.nodes]
+    surface_x = f.sub(0).dat.data_ro[top_nodes]
     surface_x_all = f.sub(0).comm.gather(surface_x)
     displacement_df = pd.DataFrame()
     if MPI.COMM_WORLD.rank == 0:
@@ -266,9 +268,7 @@ def viscoelastic_model(
 
         # get displacement at surface for plotting
         vertical_displacement.interpolate(vc(z.subfunctions[0]) * D)
-        surface_disp = vertical_displacement.dat.data_ro_with_halos[
-            bc_displacement.nodes
-        ]
+        surface_disp = vertical_displacement.dat.data_ro[top_nodes]
         surface_disp_all = vertical_displacement.comm.gather(surface_disp)
 
         if MPI.COMM_WORLD.rank == 0:
