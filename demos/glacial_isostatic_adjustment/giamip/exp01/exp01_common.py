@@ -1856,7 +1856,8 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
         `time_step`.
       options: the command line of the caller (`k_s`, `block0_max_it`,
         `outer_atol`, `outer_max_it`, `gia_rebuild`, `gia_rebuild_every`,
-        `gia_rebuild_max_outer`).
+        `gia_rebuild_max_outer`, and optionally `sheet` and
+        `softplus_width_m`).
       record: the record of the input file. Required when `fields` holds
         the power-law fields: its `power_law` entry gives the background
         stress (`power_law_settings`).
@@ -1921,14 +1922,26 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
                            rho_core=constants["rho_core_nondim"],
                            g=Constant(constants["g_cmb_nondim"]))
 
+    # The sea-level sheet: the masks with the frozen slope (the default), or
+    # the softplus sheet with a width in metres of ice (`--sheet`,
+    # `--softplus_width_m` of `forward_exp01.py`; `gadopt.SeaLevel`). A
+    # caller without those options gets the masks.
+    sheet = getattr(options, "sheet", "masks")
+    if sheet == "softplus":
+        sheet_settings = dict(
+            sheet="softplus",
+            softplus_width=float(options.softplus_width_m) / D_SCALE)
+    else:
+        sheet_settings = dict(alpha_mask=DEFAULT_ALPHA_MASK,
+                              slope=fields["slope"],
+                              grad_floor=DEFAULT_GRAD_FLOOR)
     # g_s = g_bar by the choice of the gravity scale.
     sea_level = SeaLevel(
         boundary=SURF_RE, rho_w=constants["rho_w_nondim"],
         rho_i=constants["rho_i_nondim"], g_surface=1.0,
         SL_init=forcing["SL_init"], I=forcing["I"], I_init=forcing["I_init"],
-        N_init=Constant(0.0), ur_init=Constant(0.0),
-        alpha_mask=DEFAULT_ALPHA_MASK, slope=fields["slope"],
-        grad_floor=DEFAULT_GRAD_FLOOR, fixed_ocean=False)
+        N_init=Constant(0.0), ur_init=Constant(0.0), fixed_ocean=False,
+        **sheet_settings)
 
     parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=layout.condensed, outer_rtol=OUTER_RTOL,

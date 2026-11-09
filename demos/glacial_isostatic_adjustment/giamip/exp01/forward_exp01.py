@@ -143,6 +143,29 @@ THE RESTART
     a checkpoint; the run then leaves the file RESTART_NEEDED, and
     `run_forward_fine.slurm` submits the next leg.
 
+A BRANCH RUN
+    `--branch_checkpoint N` starts from checkpoint `N` of a finished run and
+    writes a new run into `--output_path`. `--state` is then the state file
+    of that finished run (its `forward_state.h5`, with the checkpoints). The
+    file is only read: the meshes, the fields and checkpoint `N` are loaded
+    from it, and nothing is appended. The rank count must be that of the
+    finished run. The branch run writes no checkpoints, starts a new surface
+    file and parameter log, and does not write step 0. `--steps` is the last
+    step, as in a run from the start. With `--sheet` a branch run continues
+    the same state with another sea-level sheet, which is how the masks and
+    the softplus sheet are compared over a few steps. The sheet is a function
+    of the current state and the reference state only, so it can change at a
+    checkpoint.
+
+THE SEA-LEVEL SHEET
+    `--sheet masks` (the default) uses the masks `B` and `C` of
+    `gadopt.sea_level_masks` with the frozen slope. `--sheet softplus` uses
+    the softplus sheet, `rho_w SL + rho_i eps softplus((I - r SL) / eps)`,
+    with `eps = --softplus_width_m` (`gadopt.SeaLevel`). The surface fields
+    `ocean_function` and `ocean_without_grounded_ice` are then
+    `water_fraction(0, SL)` and `water_fraction(I, SL)`: 1 where the sea level
+    is positive, and 1 over open water and floating ice.
+
 THE INITIAL SEA LEVEL
     The inversion wrote the control of each ROL iteration into the state
     file as `extend(b)`: the surface bed `b` copied onto the mantle CG2
@@ -350,7 +373,7 @@ from gadopt import (COMM_WORLD, CheckpointFile, Constant,  # noqa: E402
                     dot, ds, gt, max_value, sqrt)
 from gadopt.momentum_equation import rotational_potential  # noqa: E402
 from gadopt.sea_level_masks import (grounded_ice_function,  # noqa: E402
-                                    ocean_function)
+                                    ocean_function, water_fraction)
 from mpi4py import MPI  # noqa: E402
 from pyadjoint.tape import annotate_tape, pause_annotation  # noqa: E402
 
@@ -575,6 +598,35 @@ def rebuild_counts(solver):
 # --------------------------------------------------------------------------
 
 
+def sheet_fractions(solver, I, SL):
+    """`(C, B)` of the solver's sheet at the sea level `SL`.
+
+    `C` is 1 where the sea level is positive (ocean, also under grounded
+    ice), and `B` is 1 over open water and floating ice. For the masks these
+    are the masks themselves, with the solver's steepness (facet area, frozen
+    slope). For the softplus sheet they are the water fractions
+    `1 - H(f / eps)` of `gadopt.sea_level_masks.water_fraction`, with
+    `f = I - r SL` for `B` and `f = -r SL` (no ice) for `C`. The two sheets
+    agree on both wherever the masks are saturated.
+
+    Args:
+      solver: the `SelfGravitatingGIASolver`.
+      I: the ice thickness.
+      SL: the sea level, a UFL expression.
+
+    Returns:
+      `(C, B)`, UFL expressions.
+    """
+    p = solver.sea_level_parameters
+    if p.sheet == "softplus":
+        eps = Constant(float(p.softplus_width))
+        return (water_fraction(Constant(0.0), SL, eps, p.rho_w, p.rho_i),
+                water_fraction(I, SL, eps, p.rho_w, p.rho_i))
+    k = solver._sea_level_steepness()
+    return (ocean_function(SL, k),
+            grounded_ice_function(I, SL, k, p.rho_w, p.rho_i))
+
+
 class SurfaceOutput:
     """The surface fields of every step, and the scalars, of the forward run.
 
@@ -695,10 +747,7 @@ class SurfaceOutput:
         n_m = FacetNormal(mantle)
         SL_m = (self.SL_init + (self.N_expr - p.N_init)
                 - (dot(u, n_m) - p.ur_init) + self.shift_const)
-        # The mask steepness of the solver (facet area, frozen slope).
-        k = solver._sea_level_steepness()
-        C_m = ocean_function(SL_m, k)
-        B_m = grounded_ice_function(self.I, SL_m, k, p.rho_w, p.rho_i)
+        C_m, B_m = sheet_fractions(solver, self.I, SL_m)
         cover = conditional(gt(self.I, ICE_COVER_MIN_M / D_SCALE), 1.0, 0.0)
         # The mantle facet measure on Re, intersected with the cells of the
         # surface submesh, at the solver's quadrature degree.
@@ -720,9 +769,7 @@ class SurfaceOutput:
         dss = solver.sea_level_measure()(common.SURF_RE)
         self.dss = dss
         SL = solver.sea_level()
-        k_s = solver._sea_level_steepness()
-        C = ocean_function(SL, k_s)
-        B = grounded_ice_function(self.I, SL, k_s, p.rho_w, p.rho_i)
+        C, B = sheet_fractions(solver, self.I, SL)
         u_split = solver.solution_split[layout.displacement]
         # N + Shift of the solver: SL - SL_init + (u . n - ur_init) + N_init.
         sea_surface = (SL - self.SL_init + (dot(u_split, n_m) - p.ur_init)
@@ -1269,12 +1316,23 @@ class Checkpoints:
         return common.elapsed(tic)
 
     def latest(self):
-        """The timestepping values of the last checkpoint, or None.
+        """The timestepping values of the last checkpoint, or None."""
+        return self.at(None)
+
+    def at(self, index):
+        """The timestepping values of checkpoint `index`, or None.
 
         Read with h5py on rank 0 from the attributes that `CheckpointFile`
         writes for the displacement copy, and broadcast.
+
+        Args:
+          index: the checkpoint index, or None for the last one.
+
+        Raises:
+          SystemExit: if the file has checkpoints but not `index`.
         """
         found = None
+        error = None
         if COMM_WORLD.rank == 0:
             import h5py
             hits = {}
@@ -1293,9 +1351,22 @@ class Checkpoints:
             with h5py.File(self.path, "r") as handle:
                 handle.visititems(visit)
             if hits:
-                last = int(np.argmax(hits["index"]))
-                found = {key: float(value[last]) for key, value in hits.items()}
-        return COMM_WORLD.bcast(found, root=0)
+                indices = np.asarray(hits["index"]).astype(int)
+                if index is None:
+                    position = int(np.argmax(indices))
+                elif index in indices:
+                    position = int(np.flatnonzero(indices == index)[0])
+                else:
+                    position = None
+                    error = (f"{self.path} has checkpoints "
+                             f"{sorted(indices.tolist())}, not {index}")
+                if position is not None:
+                    found = {key: float(value[position])
+                             for key, value in hits.items()}
+        found, error = COMM_WORLD.bcast((found, error), root=0)
+        if error is not None:
+            raise SystemExit(error)
+        return found
 
     def load(self, info):
         """Restore the solution and `S0_m` from the checkpoint of `info`.
@@ -1414,6 +1485,15 @@ def parse_args():
     p.add_argument("--restart", action="store_true",
                    help="continue the run in --output_path from its last "
                         "checkpoint")
+    p.add_argument("--branch_checkpoint", type=int, default=None,
+                   metavar="N",
+                   help="start a new run in --output_path from checkpoint N "
+                        "of the finished run whose state file is --state "
+                        "(read only; see A BRANCH RUN)")
+    p.add_argument("--sheet", choices=["masks", "softplus"], default="masks",
+                   help="the sea-level sheet (see THE SEA-LEVEL SHEET)")
+    p.add_argument("--softplus_width_m", type=float, default=1.0,
+                   help="eps of the softplus sheet, m of ice")
     p.add_argument("--ice_check_years", type=int, default=3,
                    help="fine schedules: compare the ice of this many "
                         "protocol years after the start with a fresh read "
@@ -1497,6 +1577,16 @@ def main():
     checkpointing = (args.checkpoint_every > 0
                      or args.wall_limit_hours is not None
                      or args.stop_after_step is not None)
+    branch = args.branch_checkpoint is not None
+    if branch:
+        # A branch run reads the finished run's state file and writes no
+        # checkpoint into it (A BRANCH RUN).
+        if args.restart or args.wall_limit_hours is not None \
+                or args.stop_after_step is not None:
+            raise SystemExit("--branch_checkpoint takes no --restart, "
+                             "--wall_limit_hours or --stop_after_step")
+        args.checkpoint_every = 0
+        checkpointing = False
     if args.restart and not checkpointing:
         raise SystemExit("--restart needs checkpoints: a fine schedule, "
                          "--checkpoint_every or --wall_limit_hours")
@@ -1508,7 +1598,10 @@ def main():
     say("=" * 78)
     say(f"GIAMIP Exp01 forward run from an inverted bed, {COMM_WORLD.size} "
         f"ranks, schedule {args.schedule}"
-        f"{', RESTART' if args.restart else ''}")
+        f"{', RESTART' if args.restart else ''}"
+        f"{f', BRANCH from checkpoint {args.branch_checkpoint}' if branch else ''}"
+        f", sheet {args.sheet}"
+        f"{f' (eps {args.softplus_width_m} m)' if args.sheet == 'softplus' else ''}")
     say(f"  annotation on: {annotate_tape()} (must be False)")
     say("=" * 78)
     if annotate_tape():
@@ -1931,7 +2024,7 @@ def main():
                            {"SL_init": SL_init, "I": I, "SL_obs": SL_obs},
                            scales, surface_path, new_file=not args.restart)
     checkpoints = (Checkpoints(state_path, parent, solver, layout, output)
-                   if checkpointing else None)
+                   if checkpointing or branch else None)
     # The restart: the last checkpoint of the run's state file gives the
     # step, the year, the output index and the solution at the end of that
     # step. The surface file and the parameter log of the earlier legs are
@@ -1940,6 +2033,15 @@ def main():
     # is cut back to the checkpoint and gets those rows again).
     restored = None
     last_written = -1
+    if branch:
+        restored = checkpoints.at(args.branch_checkpoint)
+        if restored is None:
+            raise SystemExit(f"--branch_checkpoint: {state_path} holds no "
+                             "checkpoint")
+        checkpoints.load(restored)
+        say(f"  branch from checkpoint {int(restored['index'])} of "
+            f"{state_path}: step {int(restored['step'])}, year "
+            f"{restored['year']:.0f}, output {int(restored['out_index'])}")
     if args.restart:
         restored = checkpoints.latest()
         if restored is None:

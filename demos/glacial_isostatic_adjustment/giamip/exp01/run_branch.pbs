@@ -1,0 +1,85 @@
+#!/bin/bash
+# GIAMIP Exp01: a branch run (forward_exp01.py, A BRANCH RUN) on Gadi.
+#
+# The run starts from checkpoint CHECKPOINT of a finished forward run and
+# marches to step LAST_STEP with the sea-level sheet SHEET. The state file of
+# the finished run (its forward_state.h5, with the checkpoints) is only read.
+# The outputs (surface file, parameter log, summary) go to the directory of
+# submission. The job must have the rank count of the finished run: 624 ranks
+# on 6 nodes for the r2 production of Exp01. The job needs jobfs: with the
+# Gadi default of 100 MB per node the run is killed while it reads the
+# forcing. The default here is that of run_forward.pbs, 400 GB per node.
+#
+# Two branch runs from the same checkpoint, one with SHEET=masks and one with
+# SHEET=softplus, compare the two sheets over the same steps. The masks run
+# also repeats the steps of the finished run, which checks the branch: its
+# Shift agrees with the finished run's log to the tolerance of the outer
+# solve. The two do not agree bit for bit, because the branch builds the
+# preconditioner at its first solve and the finished run had built it
+# earlier. The finished r2 run used REBUILD_EVERY=100, the default here.
+#
+# Submit from a new run directory:
+#   B=/scratch/xd2/$USER/giamip/exp01/softplus-branch/masks
+#   mkdir -p $B && cd $B
+#   qsub -l ncpus=624,mem=3000GB,walltime=02:00:00 \
+#       -v SHEET=masks,ENV_FILE=/g/data/xd2/sg8812/giamip-software/env-softplus.sh \
+#       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp01/run_branch.pbs
+#
+# Variables (pass them with -v NAME=value,...):
+#   STATE            the finished run's state file (default: the r2
+#                    production forward run of Exp01)
+#   CHECKPOINT       the checkpoint index (default 2; in the r2 forward run of
+#                    Exp01 that is step 300, year -15200, from its log)
+#   LAST_STEP        the last step of the branch (default 306)
+#   SHEET            masks (default) or softplus
+#   EPS_M            eps of the softplus sheet in m of ice (default 1)
+#   REBUILD_EVERY    solves between preconditioner rebuilds (default 100)
+#   ENV_FILE         the environment file (must set MY_GADOPT)
+#   EXTRA            further arguments of forward_exp01.py
+#PBS -N exp01-branch
+#PBS -P xd2
+#PBS -q normalsr
+#PBS -l ncpus=624
+#PBS -l mem=3000GB
+#PBS -l walltime=02:00:00
+#PBS -l jobfs=2400GB
+#PBS -l storage=scratch/xd2+gdata/xd2+gdata/fp50
+#PBS -l wd
+#PBS -j oe
+#PBS -W umask=0022
+
+set -u
+ulimit -c 0
+ENV_FILE=${ENV_FILE:?set ENV_FILE to an environment file that sets MY_GADOPT}
+source ${ENV_FILE}
+
+HERE=${MY_GADOPT}/demos/glacial_isostatic_adjustment/giamip/exp01
+OUT=${PBS_O_WORKDIR}
+STATE=${STATE:-/g/data/xd2/sg8812/gia-mip/exp01/r2/forward-protocol/forward_state.h5}
+CHECKPOINT=${CHECKPOINT:-2}
+LAST_STEP=${LAST_STEP:-306}
+SHEET=${SHEET:-masks}
+EPS_M=${EPS_M:-1}
+REBUILD_EVERY=${REBUILD_EVERY:-100}
+
+if [ -e "${OUT}/forward_exp01_surface.h5" ]; then
+    echo "error: ${OUT} holds the surface file of an earlier run; use a new directory" >&2
+    exit 1
+fi
+
+ARGS="--state ${STATE} --output_path ${OUT} --schedule protocol"
+ARGS="${ARGS} --gia_rebuild_every ${REBUILD_EVERY}"
+ARGS="${ARGS} --branch_checkpoint ${CHECKPOINT} --steps ${LAST_STEP}"
+ARGS="${ARGS} --sheet ${SHEET} --softplus_width_m ${EPS_M}"
+ARGS="${ARGS} ${EXTRA:-}"
+
+echo "job ${PBS_JOBID}, ${PBS_NCPUS} ranks"
+echo "code ${MY_GADOPT}"
+echo "environment ${ENV_FILE}"
+echo "arguments: ${ARGS}"
+date
+mpiexec -np ${PBS_NCPUS} python3 ${HERE}/forward_exp01.py ${ARGS}
+status=$?
+date
+echo "exit code of mpiexec ${status}"
+exit ${status}
