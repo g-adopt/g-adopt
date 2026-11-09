@@ -42,7 +42,8 @@ jobs:
           python3 /opt/firedrake/scripts/firedrake-configure \
             --arch default --show-petsc-configure-options | \
             xargs -L1 ./configure --with-make-np=8 --download-slepc \
-            --download-mmg --download-eigen --download-parmmg
+            --download-mmg --download-mmg-cmake-arguments=-DUSE_SCOTCH=OFF \
+            --download-eigen --download-parmmg
           make PETSC_DIR=/opt/petsc PETSC_ARCH=arch-firedrake-default all
 
       - name: Fetch LFS artifacts
@@ -53,12 +54,24 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
+      - name: Fetch gplates
+        uses: actions/checkout@v5
+        with:
+          repository: dsroberts/GPlates
+          path: ./gplates
+          ref: PyGPlates-1.0.0
+
       - name: Install dependencies
         run: |
-          apt install -y xvfb gmsh gh unzip
+          apt install -y xvfb gmsh gh unzip \
+              patchelf libgl1-mesa-dev libglu1-mesa-dev libglew-dev \
+              libboost-dev libboost-python-dev libboost-thread-dev libboost-program-options-dev \
+              libqt5opengl5-dev libqt5svg5-dev libqwt-qt5-dev libqt5xmlpatterns5-dev \
+              libgdal-dev libcgal-dev libproj-dev proj-bin zlib1g-dev
 
           uv venv --system-site-packages
-          uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation] pygplates
+          uv pip install ./gplates
+          uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation]
           uv cache clean animate
           uv pip install --no-build-isolation git+https://github.com/mesh-adaptation/animate
 
@@ -89,7 +102,7 @@ jobs:
           export GADOPT_RENDER=true
           Xvfb $DISPLAY -screen 0 1024x768x24 > /dev/null 2>&1 &
           sleep 3
-          uv run doit run --process $(nproc --all) --always-execute convert
+          doit run --process $(nproc --all) --always-execute convert
           rm -rf rendered && mkdir rendered
           tar -xf artifact.tar -C rendered
         env:
