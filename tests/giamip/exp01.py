@@ -160,14 +160,14 @@ from gadopt.gia_gravity import (FluidCore, SeaLevel,  # noqa: E402
                                 selfgrav_dtn_iterative_solver_parameters)
 from gadopt.sea_level_sheet import (ocean_fraction,  # noqa: E402
                                     water_fraction)
-
-#: The width `eps` of the softplus sea-level sheet, in metres of ice; the
-#: solver takes it in units of D like the sea level.
-SOFTPLUS_WIDTH_M = 1.0
 from mpi4py import MPI  # noqa: E402
 from petsc4py import PETSc  # noqa: E402
 
 import giamip  # noqa: E402
+
+#: The width `eps` of the softplus sea-level sheet, in metres of ice; the
+#: solver takes it in units of D like the sea level.
+SOFTPLUS_WIDTH_M = 1.0
 from giamip import grids  # noqa: E402
 from giamip.mip.inputs import GiamipExperiment  # noqa: E402
 from giamsh.radial import RadialStructure  # noqa: E402
@@ -627,8 +627,7 @@ def coarse_step_indices(years, step_years):
 class SurfaceForcing:
     """The bed and the ice on the mantle mesh, from the GIAMIP files.
 
-    `SL_init = -bed / D` is CG2, because the mask width reads its slope (as
-    in the Martinec driver). The ice is CG1: a CG2 interpolant of a field
+    `SL_init = -bed / D` is CG2. The ice is CG1: a CG2 interpolant of a field
     that is zero next to a thick ice margin undershoots below zero between
     nodes, and a negative thickness is a negative load. Every node of the
     mantle mesh takes the value of its direction, so the fields are defined
@@ -1436,7 +1435,7 @@ def main():
         plog.log_str(" ".join(str(row[key]) for key in ROW_KEYS))
 
     # The initial state: the ice of 122 ka on the undeformed Earth. The row
-    # is written with the masks of the initial sea level.
+    # is written with the fractions of the sheet at the initial sea level.
     if restart is None:
         rows.append(state_row(solver, layout, forcing, scales, 0, 0.0, 0.0))
         plog.log_str(" ".join(str(rows[-1][key]) for key in ROW_KEYS))
