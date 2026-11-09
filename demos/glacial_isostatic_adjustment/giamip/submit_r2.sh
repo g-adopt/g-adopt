@@ -123,6 +123,10 @@
 #                      schedule D) or windows (schedule C). It sets the march
 #                      of the prepare job and the schedule of the forward
 #                      run. The other nine experiments do not read it.
+#   INV_ITERATIONS=<k> invert and restart stages: the ROL iteration limit of
+#                      each inversion job (`--iterations` of invert_expXX.py;
+#                      default 10, the stop rule of r2, which the RMS rule of
+#                      1 mm stops earlier)
 #   WALLTIME=HH:MM:SS  the wall time of the inversion, restart or forward
 #                      job instead of the queue limit of its node count. It
 #                      must not be above that limit.
@@ -179,6 +183,11 @@ G=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/exp${EXP}
 # the input file belongs to the rank count NP, not to the node count, so a
 # run with fewer ranks per node gets its own run directory named after both.
 RANKS_PER_NODE=${RANKS_PER_NODE:-104}
+INV_ITERATIONS=${INV_ITERATIONS:-10}
+if ! [[ ${INV_ITERATIONS} =~ ^[1-9][0-9]*$ ]]; then
+    echo "error: INV_ITERATIONS=${INV_ITERATIONS} is not a positive integer" >&2
+    exit 1
+fi
 if ! [[ ${RANKS_PER_NODE} =~ ^[1-9][0-9]*$ ]] || [ ${RANKS_PER_NODE} -gt 104 ]; then
     echo "error: RANKS_PER_NODE=${RANKS_PER_NODE}; use 1 .. 104" >&2
     exit 1
@@ -510,14 +519,14 @@ case ${STAGE} in
     invert)
         refuse_if ${R}/invert/state.h5
         inv=$(submit ${R}/invert -N x${EXP}-inv -l ${RES},walltime=${LONG} \
-            -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
+            -v "${NPV}INPUTS=${INPUTS},RESTART=${INPUTS},MODE=invert,ITERATIONS=${INV_ITERATIONS},WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
             ${G}/run_invert.pbs)
         echo "exp${EXP} ${NODES} nodes: inversion ${inv}"
         ;;
     restart)
         [ "${DRY_RUN}" = "1" ] || [ -e "${R}/invert/state.h5" ] || { echo "error: no ${R}/invert/state.h5 to continue from" >&2; exit 1; }
         inv=$(submit ${R}/invert -N x${EXP}-inv -l ${RES},walltime=${LONG} \
-            -v "${NPV}INPUTS=${INPUTS},RESTART=state.h5,MODE=invert,ITERATIONS=10,WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
+            -v "${NPV}INPUTS=${INPUTS},RESTART=state.h5,MODE=invert,ITERATIONS=${INV_ITERATIONS},WATCHDOG_MIN=30,MEMORY_SAMPLER=20,JOBFS_SAMPLER=30,EXTRA=${INV_EXTRA}" \
             ${G}/run_invert.pbs)
         echo "exp${EXP} ${NODES} nodes: inversion restart ${inv}"
         ;;
