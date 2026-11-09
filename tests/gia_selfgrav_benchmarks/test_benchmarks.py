@@ -178,9 +178,8 @@ ICE_MASS_TOLERANCE_PERCENT = 0.5
 
 #: The half width of the band that criterion 2 removes around each feature,
 #: in degrees of colatitude: 1.5 facets of the 500 km mesh of the first
-#: Martinec runs, 500 km on a sphere of 6371 km, 6.74 degrees. The smooth
-#: ocean mask goes from 0.1 to 0.9 over about 1.5 facets, so this band covers
-#: the displacement kink and the mask. This is the width of the parent's
+#: Martinec runs, 500 km on a sphere of 6371 km, 6.74 degrees. It covers the
+#: displacement kink at the coastline. This is the width of the parent's
 #: pass verdicts. At 1.5 facets of the 78 km refinement (1.05 degrees) the
 #: parent's case C run is outside on basin U by 1.04 times (0.0926 m against
 #: 0.0887 m). The paper gives no width, so the band stays at the width of

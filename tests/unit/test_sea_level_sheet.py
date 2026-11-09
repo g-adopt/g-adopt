@@ -1,29 +1,28 @@
 """The softplus sheet of the sea-level equation, 2-D annulus.
 
 With sharp masks and a non-negative ice thickness, the load of water and ice at
-one point is `max(rho_w SL, rho_i I)`. `SeaLevel(sheet="softplus")` rounds that
-maximum over a fixed width `eps` in units of ice thickness:
+one point is `max(rho_w SL, rho_i I)`. The sea-level sheet rounds that maximum
+over a fixed width `eps = SeaLevel.softplus_width` in units of ice thickness:
 
     S(I, SL) = rho_w SL + rho_i eps softplus((I_+ - r SL) / eps),
     sigma    = S(I, SL) - S(I_init, SL_init),       r = rho_w / rho_i
 
-The tests check four things:
+The tests check three things:
 
-1. The functions of `gadopt.sea_level_masks` (`softplus`, `logistic`,
-   `softplus_column`, `water_fraction`): values, the maximum identity in its
-   five cases, and finite derivatives up to third order at arguments of 1e4,
-   the size of `f / eps` for 3 km of ice over 1 m.
-2. The settings of `SeaLevel`: every combination that has no meaning is
-   refused at construction.
-3. The sheet inside the solver: saturated states with a closed form, the
-   written residual against the energy, and the symmetry of the Jacobian.
-4. Solves and derivatives: the shoreline state and a marine grounding line
-   converge and conserve mass, the eustatic limit holds, and Taylor tests of
+1. The functions of `gadopt.sea_level_sheet` (`softplus`, `logistic`,
+   `softplus_column`, `water_fraction`, `ocean_fraction`): values, the maximum
+   identity in its cases, and finite derivatives up to third order at
+   arguments of 1e4, the size of `f / eps` for 3 km of ice over 1 m.
+2. The sheet inside the solver where the rounding is active: the sheet
+   pointwise, the water fraction, the written residual against the energy,
+   and the symmetry of the Jacobian.
+3. Solves and derivatives where the rounding is active: the shoreline state
+   and a marine grounding line converge and conserve mass, and Taylor tests of
    first order (adjoint) and second order (Hessian) pass.
 
 The configuration and the helpers are those of `test_sea_level.py`, which
-documents them. The tests there run on the masks, the default sheet, and are
-unchanged.
+documents them and holds the tests of the sea-level equation on states where
+the sheet is the sharp maximum.
 """
 
 import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
@@ -39,14 +38,14 @@ from firedrake.adjoint import (
     pause_annotation,
     stop_annotating,
 )
-from petsc4py import PETSc
 from pyadjoint import taylor_to_dict
 
 from gadopt import gia_gravity
-from gadopt import sea_level_masks as masks
+from gadopt import sea_level_sheet as sls
 import test_sea_level as tsl
 from test_sea_level import (  # noqa: F401  (pytest fixtures)
     B_MU,
+    EPS,
     G_RE,
     MELT,
     PHASE,
@@ -69,21 +68,12 @@ from test_sea_level import (  # noqa: F401  (pytest fixtures)
     vector_norm,
 )
 
-#: The width of the softplus in the annulus tests, in units of D like every
-#: length of the test. The sea level of the shoreline state is of order 1 and
-#: the facets of the coarse annulus are about 0.2 long, so with a shoreline
-#: slope of order 1 the band where the second derivative of the sheet is
-#: nonzero, about `eps / (r s)`, is a quarter of a facet wide and the facet
-#: quadrature samples it. The saturated states have `|f| >= 26.9`, so
-#: `exp(-|f| / eps)` is below 1e-230 and the sheet is exact there.
-EPS = 0.05
-
 R = RHO_W / RHO_I
 
 
-def softplus_overrides(eps=EPS, **extra):
-    """`sea_level_overrides` of the softplus sheet."""
-    return dict(sheet="softplus", softplus_width=eps, **extra)
+def width(eps=EPS):
+    """`sea_level_overrides` that set the width of the sheet."""
+    return dict(softplus_width=eps)
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +117,7 @@ class TestSoftplusFunctions:
         """
         mesh, space = unit_interval
         v = ufl.variable(fd.Function(space).assign(x))
-        sp = masks.softplus(v)
+        sp = sls.softplus(v)
         d1 = ufl.diff(sp, v)
         d2 = ufl.diff(d1, v)
         d3 = ufl.diff(d2, v)
@@ -142,7 +132,7 @@ class TestSoftplusFunctions:
         got = {
             "softplus": evaluate(sp, mesh),
             "d1": evaluate(d1, mesh),
-            "logistic": evaluate(masks.logistic(v), mesh),
+            "logistic": evaluate(sls.logistic(v), mesh),
             "d2": evaluate(d2, mesh),
             "d3": evaluate(d3, mesh),
         }
@@ -158,7 +148,7 @@ class TestSoftplusFunctions:
     def test_slope_at_zero_is_one_half(self, unit_interval):
         mesh, space = unit_interval
         v = ufl.variable(fd.Function(space).assign(0.0))
-        assert evaluate(ufl.diff(masks.softplus(v), v), mesh) == 0.5
+        assert evaluate(ufl.diff(sls.softplus(v), v), mesh) == 0.5
 
 
 class TestSoftplusColumn:
@@ -181,7 +171,7 @@ class TestSoftplusColumn:
         negative ice check the clip: without it, land with `I < 0` would carry
         the negative water column `rho_w SL`."""
         mesh, space = unit_interval
-        column = masks.softplus_column(fd.Function(space).assign(I),
+        column = sls.softplus_column(fd.Function(space).assign(I),
                                        fd.Function(space).assign(SL),
                                        self.EPS, RHO_W, RHO_I)
         assert evaluate(column, mesh) == pytest.approx(expected, rel=1e-14,
@@ -202,7 +192,7 @@ class TestSoftplusColumn:
         eps = 0.05
         vI = ufl.variable(fd.Function(space).assign(I))
         vSL = ufl.variable(fd.Function(space).assign(SL))
-        column = masks.softplus_column(vI, vSL, eps, RHO_W, RHO_I)
+        column = sls.softplus_column(vI, vSL, eps, RHO_W, RHO_I)
         dI = evaluate(ufl.diff(column, vI), mesh)
         dSL = evaluate(ufl.diff(column, vSL), mesh)
         H = logistic_reference((max(I, 0.0) - R * SL) / eps)
@@ -213,7 +203,7 @@ class TestSoftplusColumn:
         assert -1e-15 <= dI <= RHO_I * (1 + 1e-15)
         assert -1e-15 <= dSL <= RHO_W * (1 + 1e-15)
         # `water_fraction` is `d S / d SL / rho_w`.
-        W = evaluate(masks.water_fraction(vI, vSL, eps, RHO_W, RHO_I), mesh)
+        W = evaluate(sls.water_fraction(vI, vSL, eps, RHO_W, RHO_I), mesh)
         assert W == pytest.approx(dSL / RHO_W, rel=1e-12, abs=1e-14)
 
     def test_new_ice_on_ice_free_land_loads_with_the_ice_density(
@@ -227,7 +217,7 @@ class TestSoftplusColumn:
         mesh, space = unit_interval
         vI = ufl.variable(fd.Function(space).assign(0.0))
         SL = fd.Function(space).assign(-1.0)
-        column = masks.softplus_column(vI, SL, 1e-3, RHO_W, RHO_I)
+        column = sls.softplus_column(vI, SL, 1e-3, RHO_W, RHO_I)
         assert evaluate(ufl.diff(column, vI), mesh) == pytest.approx(RHO_I,
                                                                      rel=1e-14)
 
@@ -236,44 +226,8 @@ class TestSoftplusColumn:
 # 2. The settings
 # ---------------------------------------------------------------------------
 
-class TestSettings:
-    """`SeaLevel.__post_init__` refuses every combination without a meaning."""
-
-    @staticmethod
-    def make(**overrides):
-        """A `SeaLevel` with placeholder fields and the given settings."""
-        fields = dict(boundary=1, rho_w=RHO_W, rho_i=RHO_I, g_surface=1.0,
-                      SL_init=None, I=None, I_init=None, N_init=None,
-                      ur_init=None)
-        fields.update(overrides)
-        return gia_gravity.SeaLevel(**fields)
-
-    def test_the_masks_are_the_default(self):
-        assert self.make().sheet == "masks"
-
-    def test_the_softplus_sheet_is_accepted(self):
-        sea_level = self.make(sheet="softplus", softplus_width=0.1)
-        assert sea_level.sheet == "softplus"
-
-    def test_a_softplus_width_given_as_a_constant_is_accepted(self):
-        self.make(sheet="softplus", softplus_width=fd.Constant(0.1))
-
-    @pytest.mark.parametrize("overrides, words", [
-        (dict(sheet="max"), "must be 'masks' or 'softplus'"),
-        (dict(sheet="softplus"), "needs softplus_width"),
-        (dict(sheet="softplus", softplus_width=0.0), "must be positive"),
-        (dict(sheet="softplus", softplus_width=-1.0), "must be positive"),
-        (dict(softplus_width=0.1), "does not read it"),
-        (dict(sheet="softplus", softplus_width=0.1, fixed_ocean=True),
-         "fixed_ocean=True"),
-    ])
-    def test_refusals(self, overrides, words):
-        with pytest.raises(ValueError, match=words):
-            self.make(**overrides)
-
-
 # ---------------------------------------------------------------------------
-# 3. The sheet inside the solver
+# 2. The sheet inside the solver
 # ---------------------------------------------------------------------------
 
 class TestSurfaceLoadSheet:
@@ -292,7 +246,7 @@ class TestSurfaceLoadSheet:
     def test_the_water_sheet(self, meshes, state, density_per_unit):
         _, sub = meshes
         solver, z, layout = build(meshes, surface_fields(sub, state),
-                                  sea_level_overrides=softplus_overrides())
+                                  sea_level_overrides=width())
         z.subfunctions[layout.sea_level].assign(self.S)
         dss = re_measure(solver)
         length = fd.assemble(fd.Constant(1.0) * dss)
@@ -308,7 +262,7 @@ class TestSurfaceLoadSheet:
         fields["I"].assign(10.0)
         fields["I_init"].assign(10.0)
         solver, z, layout = build(meshes, fields,
-                                  sea_level_overrides=softplus_overrides())
+                                  sea_level_overrides=width())
         z.subfunctions[layout.sea_level].assign(self.S)
         dss = re_measure(solver)
         length = fd.assemble(fd.Constant(1.0) * dss)
@@ -320,7 +274,7 @@ class TestSurfaceLoadSheet:
         d_ice = 0.5
         solver, z, layout = build(meshes,
                                   surface_fields(sub, "cap", d_ice=d_ice),
-                                  sea_level_overrides=softplus_overrides())
+                                  sea_level_overrides=width())
         z.subfunctions[layout.sea_level].assign(self.S)
         dss = re_measure(solver)
         cap = indicator(sub, "cap")
@@ -337,12 +291,12 @@ class TestSurfaceLoadSheet:
         _, sub = meshes
         fields = surface_fields(sub, "shoreline")
         solver, z, layout = build(meshes, fields,
-                                  sea_level_overrides=softplus_overrides())
+                                  sea_level_overrides=width())
         shift = 0.05
         z.subfunctions[layout.sea_level].assign(shift)
         SL0, I, I0 = fields["SL_init"], fields["I"], fields["I_init"]
-        expected = (masks.softplus_column(I, SL0 + shift, EPS, RHO_W, RHO_I)
-                    - masks.softplus_column(I0, SL0, EPS, RHO_W, RHO_I))
+        expected = (sls.softplus_column(I, SL0 + shift, EPS, RHO_W, RHO_I)
+                    - sls.softplus_column(I0, SL0, EPS, RHO_W, RHO_I))
         weight = fd.Function(fd.FunctionSpace(sub, "CG", 2))
         weight.dat.data[:] = np.random.default_rng(7).uniform(
             0.5, 1.5, weight.dat.data.shape)
@@ -356,22 +310,36 @@ class TestSurfaceLoadSheet:
         """`sea_level_water_fraction()` on the cap state: the ocean length.
 
         Under the grounded cap it is 0 and in the deep ocean 1, so its integral
-        is the length of Re outside the cap. The masks give the same number on
-        this state, which the second assertion checks.
+        is the length of Re outside the cap, for the live sheet. With a fixed
+        coastline it is `C0`, which on this state is 1 over the whole circle:
+        the cap's ice rests on the floor of a deep ocean, and `C0` counts that
+        ocean (the fixed sheet removes the ice over it).
         """
         _, sub = meshes
         fields = surface_fields(sub, "cap")
-        dss = None
-        values = {}
-        for overrides in (softplus_overrides(), {}):
-            solver, _, _ = build(meshes, fields, sea_level_overrides=overrides)
-            dss = re_measure(solver)
-            values[bool(overrides)] = fd.assemble(
-                solver.sea_level_water_fraction() * dss)
+        live, _, _ = build(meshes, fields)
+        fixed, _, _ = build(meshes, fields,
+                            sea_level_overrides=dict(fixed_ocean=True))
+        dss = re_measure(live)
         cap = indicator(sub, "cap")
+        length = fd.assemble(fd.Constant(1.0) * dss)
         ocean_length = fd.assemble((1 - cap) * dss)
-        assert values[True] == pytest.approx(ocean_length, rel=1e-12)
-        assert values[False] == pytest.approx(ocean_length, rel=1e-12)
+        assert fd.assemble(live.sea_level_water_fraction() * dss) == \
+            pytest.approx(ocean_length, rel=1e-12)
+        assert fd.assemble(fixed.sea_level_water_fraction() * dss) == \
+            pytest.approx(length, rel=1e-12)
+
+    def test_ocean_fraction_is_the_water_fraction_without_ice(
+            self, unit_interval):
+        """`ocean_fraction(SL) = water_fraction(0, SL)` on both sides of a coast."""
+        mesh, space = unit_interval
+        for value in (-0.3, -0.01, 0.0, 0.01, 0.3):
+            SL = fd.Function(space).assign(value)
+            zero = fd.Function(space)
+            a = evaluate(sls.ocean_fraction(SL, 0.05, RHO_W, RHO_I), mesh)
+            b = evaluate(sls.water_fraction(zero, SL, 0.05, RHO_W, RHO_I),
+                         mesh)
+            assert a == pytest.approx(b, rel=1e-14, abs=1e-16)
 
 
 class TestResidualIsTheVariationOfTheEnergy:
@@ -384,13 +352,12 @@ class TestResidualIsTheVariationOfTheEnergy:
         The energy of the softplus sheet is the tangent of the sheet at a
         frozen copy of the solution, so the identity holds at the state where
         the energy is built, saturated or not. The shoreline state has the
-        rounding active over a wide arc, which the masks version of this test
-        could not use. Tolerance 1e-11 relative per sub-field.
+        rounding active at its coast. Tolerance 1e-11 relative per sub-field.
         """
         _, sub = meshes
         solver, z, layout = build(meshes,
                                   surface_fields(sub, state, d_ice=0.5),
-                                  sea_level_overrides=softplus_overrides())
+                                  sea_level_overrides=width())
         perturb(z, 1e-1, seed=5)
         written = fd.assemble(solver.sea_level_residual())
         derived = fd.assemble(fd.derivative(solver.sea_level_energy(),
@@ -420,7 +387,7 @@ class TestTransposes:
         _, sub = meshes
         solver, z, layout = build(meshes,
                                   surface_fields(sub, "shoreline"),
-                                  sea_level_overrides=softplus_overrides())
+                                  sea_level_overrides=width())
         perturb(z, 1e-3, seed=11)
         A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
         return A, layout
@@ -443,7 +410,7 @@ class TestTransposes:
 
 
 # ---------------------------------------------------------------------------
-# 4. Solves and derivatives
+# 3. Solves and derivatives
 # ---------------------------------------------------------------------------
 
 def marine_fields(sub):
@@ -514,7 +481,7 @@ def solve_state(meshes, representation, which):
                   else marine_fields(sub))
         solver, z, layout = build(meshes, fields,
                                   representation=representation,
-                                  sea_level_overrides=softplus_overrides(),
+                                  sea_level_overrides=width(),
                                   **solve_settings(representation))
         initial_norm = vector_norm(fd.assemble(solver.F))
         solver.solve()
@@ -532,8 +499,8 @@ class TestSolves:
     @pytest.mark.parametrize("which", ["shoreline", "marine"])
     def test_it_converges_in_at_most_five_newton_iterations(
             self, meshes, representation, which):
-        """The bound of `NOTES/DECISIONS.md` for the live masks: more than 4 to
-        5 Newton iterations means the Jacobian is wrong."""
+        """The bound of `NOTES/DECISIONS.md` for a live coastline: more than 4
+        to 5 Newton iterations means the Jacobian is wrong."""
         solver, _, _, _, iterations = solve_state(meshes, representation,
                                                   which)
         assert solver_converged(solver)
@@ -557,7 +524,7 @@ class TestSolves:
         sl = solver.sea_level_parameters
         dss = re_measure(solver)
         W_now = solver.sea_level_water_fraction()
-        W_ref = masks.water_fraction(sl.I_init, sl.SL_init, EPS, RHO_W, RHO_I)
+        W_ref = sls.water_fraction(sl.I_init, sl.SL_init, EPS, RHO_W, RHO_I)
         # The arc length over which the water fraction changed, integrated.
         # Two grounding lines that each move by one facet of the 32-cell
         # annulus give two facet lengths; half a facet length in total is the
@@ -578,7 +545,7 @@ class TestSolves:
         solver, z, layout = build(
             meshes, surface_fields(sub, "caps", d_ice=d_ice), lam=1e-6,
             stiff=True, representation=representation,
-            sea_level_overrides=softplus_overrides(),
+            sea_level_overrides=width(),
             **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
@@ -600,7 +567,7 @@ def ice_control_and_direction(sub, which):
 
     `"shoreline"`: the melted ice sheet on land, and the same sine times the
     ice thickness over its maximum. The ice is zero on most of the circle,
-    and the sheet clips the ice at zero (`gadopt.sea_level_masks.
+    and the sheet clips the ice at zero (`gadopt.sea_level_sheet.
     nonnegative_ice`). A direction that thins ice-free ground makes the ice
     negative there, the clip then puts a kink into the functional at the
     control, and the Taylor rate falls to 1 (measured 1.016 with the plain
@@ -643,7 +610,7 @@ def taped_solve(meshes, which, representation, eps):
         fields["I"] = control
         solver, _, layout = build(meshes, fields,
                                   representation=representation,
-                                  sea_level_overrides=softplus_overrides(eps),
+                                  sea_level_overrides=width(eps),
                                   **solve_settings(representation))
     continue_annotation()
     try:
@@ -681,13 +648,15 @@ class TestTaylor:
                                                   representation, EPS)
         assert_taylor_with_guards(Jhat, control, direction, J, min_rate=1.90)
 
-    @pytest.mark.xfail(raises=PETSc.Error, strict=True, reason=(
+    @pytest.mark.xfail(run=False, reason=(
         "The second-order adjoint of the coupled solve fails in "
         "MatGetDiagonal of a matrix-free operator with a Jacobi "
-        "preconditioner (PETSc error 73), the gap that "
-        "test_gravity_adjoint.taylor_first_order_ladder records. It is "
-        "independent of the sheet. TestSheetHessianAgainstWidth checks the "
-        "second derivative of the sheet without a solve."))
+        "preconditioner (PETSc error 73 when the test runs alone, a "
+        "segmentation fault after the other tests of the file), the gap "
+        "that test_gravity_adjoint.taylor_first_order_ladder records. It is "
+        "independent of the sheet, and not run because a crash stops the "
+        "test session. TestSheetHessianAgainstWidth checks the second "
+        "derivative of the sheet without a solve."))
     @pytest.mark.parametrize("which", ["shoreline", "marine"])
     def test_second_order(self, meshes, which):
         """`R2` of `taylor_to_dict` converges at rate 3 (at least 2.9).
@@ -748,7 +717,7 @@ class TestSheetHessianAgainstWidth:
                 control = fields["I"]
             direction = fd.Function(V).interpolate(fd.sin(phi - PHASE))
             solver, z, layout = build(
-                meshes, fields, sea_level_overrides=softplus_overrides(eps))
+                meshes, fields, sea_level_overrides=width(eps))
             z.subfunctions[layout.sea_level].assign(0.05)
         continue_annotation()
         try:

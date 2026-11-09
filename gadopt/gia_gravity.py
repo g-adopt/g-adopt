@@ -190,10 +190,7 @@ from .stokes_integrators import (
     newton_stokes_solver_parameters,
 )
 from .utility import CombinedSurfaceMeasure, ensure_constant
-from .sea_level_masks import (DEFAULT_ALPHA_MASK, DEFAULT_GRAD_FLOOR,
-                              grounded_ice_function,
-                              mask_steepness, ocean_function, softplus_column,
-                              water_fraction)
+from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
 from ufl import derivative as ufl_derivative
 from ufl.algorithms.ad import expand_derivatives
 
@@ -1581,52 +1578,49 @@ class SeaLevel:
     radial displacement at the surface and `Shift` a `Real` unknown, the
     uniform sea-level change that conserves the mass of water and ice. With
     the centre-of-mass multipliers the conservation holds to order of those
-    multipliers, which is discretisation error (see `sea_level_energy`). The
-    sheet is
+    multipliers, which is discretisation error (see `sea_level_energy`).
 
-        sigma = rho_w (B C SL - B_init C_init SL_init)
-                + rho_i ((1 - B) I - (1 - B_init) I_init)
-
-    with the ocean function `C` and the grounded-ice function `B` of
-    `gadopt.sea_level_masks`. `SelfGravitatingGIASolver.sea_level_energy`
-    documents the energy whose variation gives every row.
-
-    **The softplus sheet.** With `sheet="softplus"` the masks are not used.
-    With sharp masks and `I >= 0` the column of water and ice at one point is
-    `max(rho_w SL, rho_i I)`, and the softplus sheet rounds that maximum over a
-    fixed width `eps = softplus_width` in units of ice thickness:
+    **The sheet.** With the ocean function `C` and the grounded-ice function
+    `B` of Martinec et al. (2018) as sharp 0/1 fields and a non-negative ice
+    thickness, the column of water and ice at one point is
+    `rho_w B C SL + rho_i (1 - B) I = max(rho_w SL, rho_i I)`. The sheet is
+    that maximum rounded by a softplus of a fixed width `eps =
+    softplus_width` in units of ice thickness, minus the same column at the
+    reference state:
 
         sigma = S(I, SL) - S(I_init, SL_init),
         S(I, SL) = rho_w SL + rho_i eps softplus((I_+ - r SL) / eps)
 
     with `r = rho_w / rho_i` and `I_+` the ice thickness clipped at zero
-    (`gadopt.sea_level_masks.softplus_column`). The masks set their width from
-    the facet size and a frozen slope, so on a steep sea floor far from any
-    coast they leave the ocean function below 1, and under thick grounded ice
-    on a steep bed below sea level they count part of the ice as floating. The
-    softplus sheet is exact wherever `|I_+ - r SL|` is more than a few `eps`,
-    on any slope and any mesh, and all its derivatives are continuous.
-    `alpha_mask`, `slope` and `grad_floor` have no effect on it.
+    (`gadopt.sea_level_sheet`). The sheet is exact wherever `|I_+ - r SL|` is
+    more than a few `eps`, on any slope and any mesh, its derivatives with
+    respect to `I` and `SL` lie in `[0, rho_i]` and `[0, rho_w]`, and every
+    derivative is continuous. The coastline and the grounding line move with
+    the sea level and the ice, and floating ice loads as the water it
+    displaces. `SelfGravitatingGIASolver.sea_level_energy` documents the
+    energy whose variation gives every row.
 
     **The fixed coastline.** With `fixed_ocean=True` the ocean function is
     held at its value in the reference state, Martinec et al. (2018), eq. 7
     and 8 (their sea-level equation of level 1, `fixed_ocean=1` in radopt):
 
-        C0    = C(SL_init)                    (same smooth step, same steepness)
+        C0    = H(r SL_init / eps)            (`ocean_fraction`)
         sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
 
-    The factor `1 - C0` removes the ice over the reference ocean: that ice
-    does not load the Earth and does not enter the mass balance. The
-    grounded-ice function `B` is not used, because all ice
-    on the reference land rests on the bed, and `C0` is zero there, so the
-    water term vanishes on land. `C0` depends on the prescribed `SL_init`
-    only, so `sigma` is affine in `Delta = SL - SL_init`. The sea-level rows
-    are then linear in the unknowns, and the Jacobian does not change with
-    the state. A Newtonian rheology converges in one Newton iteration when
-    the linear solve reduces the residual below `snes_rtol`, and can use
-    `snes_type ksponly`. A badly conditioned system, for example a stiff
-    Earth with a degree-1 load, can need more iterations and then stops on
-    the step-size test. Such a count is not a sign of nonlinearity.
+    `C0` is the rounded ocean function of the reference state, with the
+    rounding of the live sheet at a coast without ice. The factor `1 - C0`
+    removes the ice over the reference ocean: that ice does not load the
+    Earth and does not enter the mass balance. The grounded-ice function `B`
+    is not used, because all ice on the reference land rests on the bed, and
+    `C0` is zero there, so the water term vanishes on land. `C0` depends on
+    the prescribed `SL_init` only, so `sigma` is affine in
+    `Delta = SL - SL_init`. The sea-level rows are then linear in the
+    unknowns, and the Jacobian does not change with the state. A Newtonian
+    rheology converges in one Newton iteration when the linear solve reduces
+    the residual below `snes_rtol`, and can use `snes_type ksponly`. A badly
+    conditioned system, for example a stiff Earth with a degree-1 load, can
+    need more iterations and then stops on the step-size test. Such a count is
+    not a sign of nonlinearity.
 
     Attributes:
       boundary: the tag of the outer surface, as seen from the mechanics mesh
@@ -1642,36 +1636,21 @@ class SeaLevel:
       I, I_init: the current and the reference ice thickness.
       N_init, ur_init: the geoid height and radial displacement of the
         reference state. Zero for a run that starts undeformed.
-      alpha_mask: the factor of the mask steepness `k = alpha p / h`. The
-        default is `gadopt.sea_level_masks.DEFAULT_ALPHA_MASK`, which carries
-        the measurement that fixes it and the quadrature degree it holds at.
-      slope: an optional frozen `Function` of the surface slope of `SL`; see
-        `gadopt.sea_level_masks.mask_steepness`.
-      grad_floor: the lower bound applied to `slope`, so that a flat region
-        gives a finite steepness. It has no effect without a `slope`. The
-        default is `gadopt.sea_level_masks.DEFAULT_GRAD_FLOOR`, which carries
-        the measurement that fixes it.
-      fixed_ocean: hold the ocean function at `C0 = C(SL_init)` and remove
-        the ice over that ocean, as described above. `False`, the default,
-        gives the live masks `B` and `C` of the current sea level (a moving
+      softplus_width: `eps`, the width of the rounding, in the units of the ice
+        thickness and the sea level (a number or a `Constant`). The error of
+        the sheet is at most `rho_i eps log(2)` at the coastline and the
+        grounding line and falls as `exp(-|I_+ - r SL| / eps)` away from them.
+        The second derivative of the sheet is nonzero in a band about
+        `eps / (r s)` wide along a coast of slope `s`, so a Hessian, or a
+        Taylor test of second order, needs `eps` large enough for the surface
+        quadrature to sample that band (`gadopt.sea_level_sheet`).
+      fixed_ocean: hold the ocean function at `C0 = H(r SL_init / eps)` and
+        remove the ice over that ocean, as described above. `False`, the
+        default, gives the live sheet of the current sea level (a moving
         coastline and floating ice).
-      sheet: the form of the live sheet. `"masks"`, the default, is the sheet
-        of the masks `B` and `C`. `"softplus"` is the rounded maximum described
-        above. A fixed coastline has its own sheet, so `fixed_ocean=True`
-        accepts `"masks"` only.
-      softplus_width: `eps` of the softplus sheet, in the units of the ice
-        thickness and the sea level. Required with `sheet="softplus"`, and
-        refused with `"masks"`. The error of the sheet is at most
-        `rho_i eps log(2)` at the coastline and the grounding line and falls as
-        `exp(-|I_+ - r SL| / eps)` away from them. Its second derivative is
-        nonzero in a band about `eps / (r s)` wide along a coast of slope `s`,
-        so a Hessian or a Taylor test of second order needs `eps` large enough
-        for the surface quadrature to sample that band.
 
     Raises:
-      ValueError: for an unknown `sheet`, a `softplus_width` that is missing,
-        not positive or given with the masks, and the softplus sheet with a
-        fixed coastline.
+      ValueError: for a `softplus_width` that is not positive.
     """
 
     boundary: int | str
@@ -1683,40 +1662,11 @@ class SeaLevel:
     I_init: Any
     N_init: Any
     ur_init: Any
-    alpha_mask: float = DEFAULT_ALPHA_MASK
-    slope: Any = None
-    grad_floor: float = DEFAULT_GRAD_FLOOR
+    softplus_width: Any
     fixed_ocean: bool = False
-    sheet: str = "masks"
-    softplus_width: Any = None
 
     def __post_init__(self):
-        """Refuses the combinations of `sheet` that have no meaning.
-
-        The settings are checked here, at construction, so that a wrong
-        combination fails before any form is built.
-        """
-        if self.sheet not in ("masks", "softplus"):
-            raise ValueError(
-                f"SeaLevel.sheet must be 'masks' or 'softplus', got "
-                f"{self.sheet!r}.")
-        if self.sheet == "masks":
-            if self.softplus_width is not None:
-                raise ValueError(
-                    "SeaLevel.softplus_width is given with sheet='masks', "
-                    "which does not read it. Pass sheet='softplus' to use the "
-                    "softplus sheet, or remove softplus_width.")
-            return
-        if self.fixed_ocean:
-            raise ValueError(
-                "SeaLevel.sheet='softplus' with fixed_ocean=True: a fixed "
-                "coastline has its own sheet, rho_w C0 Delta + rho_i (1 - C0) "
-                "dI, with C0 from the masks. Use sheet='masks' with a fixed "
-                "coastline.")
-        if self.softplus_width is None:
-            raise ValueError(
-                "SeaLevel.sheet='softplus' needs softplus_width, the width "
-                "eps of the rounded maximum in the units of the ice thickness.")
+        """Refuses a width that is not positive, at construction."""
         # A Constant or a number: read the value only to check the sign.
         if scalar_value(self.softplus_width) <= 0.0:
             raise ValueError(
@@ -3559,15 +3509,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
            gravity boundary conditions, for the same reason on the other row.
         3. A surface quadrature degree below `2 p`, with `p` the highest degree
            of the displacement and the potential. The sheet contains
-           polynomials of degree `p` and products of them, and the masks are
-           integrated at the quadrature points. The calibration
-           (`NOTES/findings/FINDING-mask-steepness.md`) needs `q >= 2 p`
-           for the derivative through the masks at `alpha = 0.5`. This check
-           does not know `alpha`, and the default `alpha = 1` was calibrated at
-           the solver's own `q = 9` with `p = 2`. At the floor `q = 2 p` the
-           same measurement allows only 0.5
-           (`NOTES/findings/FINDING-alpha-floor-mass.md`), so a caller who
-           lowers the degree to the floor must lower `alpha_mask` as well.
+           polynomials of degree `p` and products of them, and the quadrature
+           has to integrate them.
 
         Raises:
           ValueError: for any of the three.
@@ -3601,16 +3544,15 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             raise ValueError(
                 f"The sea-level measure uses the boundary quadrature degree "
                 f"{q}, below 2 p = {2 * p} for polynomial degree p = {p} of the "
-                "displacement and the potential. The mask derivative is not "
-                "resolved at that degree. Pass a larger quad_degree to "
+                "displacement and the potential. The sheet is not integrated "
+                "accurately at that degree. Pass a larger quad_degree to "
                 "self_gravitating_gia_space, or None for the calibrated default.")
 
     def _sea_level_polynomial_degree(self) -> int:
         """`p`, the highest polynomial degree of the displacement and the potential.
 
         The sea level contains `u . n` and `psi`, so its degree on a facet is
-        the larger of the two. The mask steepness and the quadrature check
-        both read it.
+        the larger of the two. The quadrature check reads it.
         """
         # The space of the solution Function, read directly, because the check
         # runs before the base constructor sets `solution_space`.
@@ -3647,8 +3589,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """`SL` built from the sub-functions `split` of a solution.
 
         `sea_level` passes the live solution. `sea_level_energy` passes a
-        frozen copy, from which it builds the masks that the energy holds
-        fixed.
+        frozen copy, at which it linearises the sheet.
 
         Args:
           split: the `split()` of a `Function` on the mixed space.
@@ -3692,78 +3633,21 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """
         return self._sea_level_expression(self.solution_split)
 
-    def _sea_level_steepness(self):
-        """The mask steepness `k = alpha p / (h s)` on the sea-level measure.
+    def _sheet_of(self, SL):
+        r"""The load sheet for the sea level `SL`.
 
-        `grad_floor` reaches `mask_steepness` from `SeaLevel`, so a caller sets
-        the floor of the frozen slope where every other mask setting is set. It
-        has no effect without a `slope`.
-        """
-        sl = self.sea_level_parameters
-        return mask_steepness(self.mesh, self._sea_level_polynomial_degree(),
-                              sl.alpha_mask, sl.slope,
-                              grad_floor=sl.grad_floor)
-
-    def _sheet_of(self, SL, mask_SL=None):
-        r"""The load sheet for the sea level `SL`, with masks from `mask_SL`.
-
-        With live masks (`SeaLevel.fixed_ocean` false):
-
-            sigma = rho_w (B C SL - B_init C_init SL_init)
-                    + rho_i ((1 - B) I - (1 - B_init) I_init)
-
-        With a fixed coastline (`SeaLevel.fixed_ocean` true):
-
-            sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
-
-        with `C0 = C(SL_init)`. `mask_SL` has no effect there, because the
-        only mask is a function of the prescribed `SL_init`.
-
-        With the softplus sheet (`SeaLevel.sheet == "softplus"`):
+        The live sheet (`SeaLevel.fixed_ocean` false):
 
             sigma = S(I, SL) - S(I_init, SL_init)
 
-        with `S = gadopt.sea_level_masks.softplus_column`. It has no masks, so
-        `mask_SL` must be `None` there.
-
-        Args:
-          SL: the sea level in the water term.
-          mask_SL: the sea level that the masks `B` and `C` are evaluated at.
-            `None` uses `SL`, which gives the live masks.
-        """
-        sl = self.sea_level_parameters
-        if sl.sheet == "softplus":
-            if mask_SL is not None:
-                raise ValueError(
-                    "_sheet_of: the softplus sheet has no masks, so it takes "
-                    "no mask_SL.")
-            return self._softplus_sheet(SL)
-        k = self._sea_level_steepness()
-        if sl.fixed_ocean:
-            return self._fixed_ocean_sheet(SL, k)
-        mask_SL = SL if mask_SL is None else mask_SL
-        rho_w, rho_i = sl.rho_w, sl.rho_i
-        B = grounded_ice_function(sl.I, mask_SL, k, rho_w, rho_i)
-        C = ocean_function(mask_SL, k)
-        B_init = grounded_ice_function(sl.I_init, sl.SL_init, k, rho_w, rho_i)
-        C_init = ocean_function(sl.SL_init, k)
-        # The water term: the water column `B C SL` now minus the reference
-        # water column. Floating ice (`B = 1`) is counted as water, because it
-        # displaces its own mass of water.
-        water = rho_w * (B * C * SL - B_init * C_init * sl.SL_init)
-        # The grounded-ice term: the ice resting on the bed now minus before.
-        ice = rho_i * ((1 - B) * sl.I - (1 - B_init) * sl.I_init)
-        return water + ice
-
-    def _softplus_sheet(self, SL):
-        r"""The softplus sheet `S(I, SL) - S(I_init, SL_init)`.
-
-            S(I, SL) = rho_w SL + rho_i eps softplus((I_+ - r SL) / eps)
-
-        The rounded maximum of the water column and the ice column, minus the
-        same quantity at the reference state (`SeaLevel` docstring). The
+        with `S = gadopt.sea_level_sheet.softplus_column`, the rounded maximum
+        of the water column and the ice column (`SeaLevel` docstring). The
         reference column is subtracted so that a state without change carries
-        no load, as for the masks.
+        no load. With a fixed coastline (`SeaLevel.fixed_ocean` true):
+
+            sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
+
+        with `C0 = H(r SL_init / eps)` (`_fixed_ocean_sheet`).
 
         Args:
           SL: the sea level of the current column.
@@ -3772,6 +3656,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           The UFL expression of `sigma`.
         """
         sl = self.sea_level_parameters
+        if sl.fixed_ocean:
+            return self._fixed_ocean_sheet(SL)
         eps = ensure_constant(sl.softplus_width)
         now = softplus_column(sl.I, SL, eps, sl.rho_w, sl.rho_i)
         reference = softplus_column(sl.I_init, sl.SL_init, eps, sl.rho_w,
@@ -3785,48 +3671,36 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         water and floating ice, 0 on land and under grounded ice. Its integral
         on the sea-level measure is the ocean area of the barystatic sea-level
         change, the area that `- (rho_i / rho_w) dV_ice / A_ocean` divides by.
-        A diagnostic that reads the same for both sheets:
-
-        - masks: `B`, which is 1 over open water and floating ice. The product
-          `B C` is narrower than `B` by about `1 / k` at every ice-free coast
-          (`grounded_ice_function`), so `int B` is the ocean area of the masks
-          and `int B C` is low by that strip;
-        - softplus: `1 - H(f / eps)` with `f = I_+ - r SL`
-          (`gadopt.sea_level_masks.water_fraction`).
-
-        With a fixed coastline it is `C0`.
+        For the live sheet it is `1 - H(f / eps)` with `f = I_+ - r SL`
+        (`gadopt.sea_level_sheet.water_fraction`); with a fixed coastline it
+        is `C0`.
 
         Returns:
           A UFL expression on the sea-level measure, with values in `[0, 1]`.
         """
         sl = self.sea_level_parameters
-        SL = self.sea_level()
-        if sl.sheet == "softplus":
-            return water_fraction(sl.I, SL, ensure_constant(sl.softplus_width),
-                                  sl.rho_w, sl.rho_i)
         if sl.fixed_ocean:
             return self._fixed_ocean_mask()
-        return grounded_ice_function(sl.I, SL, self._sea_level_steepness(),
-                                     sl.rho_w, sl.rho_i)
+        return water_fraction(sl.I, self.sea_level(),
+                              ensure_constant(sl.softplus_width),
+                              sl.rho_w, sl.rho_i)
 
-    def _fixed_ocean_mask(self, k=None):
-        """`C0 = C(SL_init)`, the ocean function of the reference state.
+    def _fixed_ocean_mask(self):
+        """`C0 = H(r SL_init / eps)`, the ocean function of the reference state.
 
-        The same smooth step and the same steepness `k` as the live ocean
-        function, so a switch between the two settings changes only whether
-        the mask follows the solution.
-
-        Args:
-          k: the mask steepness. `None` builds `_sea_level_steepness()`.
+        `gadopt.sea_level_sheet.ocean_fraction` at the reference sea level,
+        with the width of the live sheet: the rounding of the live sheet at a
+        coast without ice. A switch between a fixed and a live coastline then
+        changes only whether the coastline follows the solution.
 
         Returns:
           The UFL expression of `C0` on the sea-level measure.
         """
         sl = self.sea_level_parameters
-        k = self._sea_level_steepness() if k is None else k
-        return ocean_function(sl.SL_init, k)
+        return ocean_fraction(sl.SL_init, ensure_constant(sl.softplus_width),
+                              sl.rho_w, sl.rho_i)
 
-    def _fixed_ocean_sheet(self, SL, k):
+    def _fixed_ocean_sheet(self, SL):
         r"""The sheet of a fixed coastline, `rho_w C0 Delta + rho_i (1 - C0) dI`.
 
             I_eff      = (1 - C0) I,   I_eff_init = (1 - C0) I_init
@@ -3842,13 +3716,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         Args:
           SL: the sea level in the water term.
-          k: the mask steepness.
 
         Returns:
           The UFL expression of `sigma`.
         """
         sl = self.sea_level_parameters
-        C0 = self._fixed_ocean_mask(k)
+        C0 = self._fixed_ocean_mask()
         # The water column added over the reference ocean.
         water = sl.rho_w * C0 * (SL - sl.SL_init)
         # The ice change on the reference land, `rho_i (I_eff - I_eff_init)`
@@ -3860,7 +3733,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """The surface mass density `sigma` of ocean and ice at the current state.
 
         Positive where mass has been added, in the convention of every
-        `interior_sigma`. UFL on the sea-level measure. The masks are live,
+        `interior_sigma`. UFL on the sea-level measure. The coastline is live,
         or fixed at the reference state when `SeaLevel.fixed_ocean` is true
         (`_sheet_of`). Every consumer of the sheet (the sea-level rows, the
         centre-of-mass moment, the rotation row, the scale of the net mass
@@ -3886,8 +3759,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             delta Delta = avg(v) / g_s - (w . n) + s + Omega_sq p_i nu_i / g_s
 
         with `w`, `v`, `s` and `nu_i` the test functions of the displacement,
-        the potential, `Shift` and the rotation scalars, and live masks in
-        `d sigma / d SL`. With `SeaLevel.fixed_ocean` the sheet is affine, and
+        the potential, `Shift` and the rotation scalars, and the live sheet in
+        `d sigma / d SL = rho_w (1 - H(f / eps))`. With `SeaLevel.fixed_ocean` the sheet is affine, and
         the same derivative gives `d sigma / d SL = rho_w C0`.
 
         Built as the Gateaux derivative of `surface_load_sheet` with respect to
@@ -3897,7 +3770,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         - The expression is the same one that the Jacobian assembly derives for
           the transpose block, so the two blocks agree to round-off without a
-          hand-derived mask derivative.
+          hand-derived derivative of the sheet.
         - No unevaluated derivative node stays in the form, so `split_form`
           removes the parent-mesh terms from the blocks that do not contain
           these test functions (`NOTES/DESIGN-SEA-LEVEL.md`).
@@ -3912,7 +3785,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 * ensure_constant(self.sea_level_parameters.g_surface))
 
     def sea_level_energy(self) -> Form:
-        r"""The sea-level energy with the masks fixed at the current state.
+        r"""The sea-level energy, with the sheet linearised at the current state.
 
             E_sl = -c B_mu g_s int_Re G(Delta) dS,   dG/dDelta = sigma
 
@@ -3939,34 +3812,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         reference gravity at the surface, so the potential variation cancels
         it and the displacement variation keeps it.
 
-        **Fixed masks.** With `B` and `C` held at their current values `B_f`,
-        `C_f`, the sheet is affine in `Delta`:
-
-            sigma = sigma_f(0) + rho_w B_f C_f Delta,
-            G(Delta) = sigma_f(0) Delta + 0.5 rho_w B_f C_f Delta^2
-
-        The masks are built from a copy of the solution made at the call, so
-        `derivative(E_sl, solution)` does not differentiate them. With live
-        masks the residual is still the variation of `int G(Delta)` for the
-        exact `G`, because `sigma` depends pointwise on the one scalar `Delta`.
-        That `G` has no closed form, which is why the residual is written
-        directly in `sea_level_residual`, and this energy is the check of it
-        on a state where the masks are saturated.
-
-        **Fixed coastline.** With `SeaLevel.fixed_ocean` the sheet is
-        `sigma = rho_i (I_eff - I_eff_init) + rho_w C0 Delta` with
-        `I_eff = (1 - C0) I` and `C0 = C(SL_init)`, so
-
-            G(Delta) = rho_i (I_eff - I_eff_init) Delta + 0.5 rho_w C0 Delta^2
-
-        for any state and any `C0`, not only for saturated masks. The masks
-        depend on the prescribed `SL_init` only, so no frozen copy of the
-        solution is made, and `derivative(E_sl, solution)` equals the written
-        residual exactly.
-
-        **Softplus sheet.** With `SeaLevel.sheet == "softplus"`, `sigma(Delta)`
-        has a potential that needs the dilogarithm, which UFL does not have. The
-        energy linearises the sheet at a frozen copy of the solution instead:
+        **The live sheet.** The exact `G` of the softplus sheet needs the
+        dilogarithm, which UFL does not have. The energy linearises the sheet
+        at a copy of the solution made at the call (`SL_f`) instead:
 
             sigma_lin(SL) = sigma(SL_f) + rho_w W_f (SL - SL_f),
             G(Delta)      = sigma_lin(SL_init) Delta + 0.5 rho_w W_f Delta^2
@@ -3974,8 +3822,20 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         with `W_f = 1 - H(f_f / eps)` the water fraction at the frozen state.
         `dG/dDelta = sigma_lin(SL)`, which equals `sigma(SL)` at the frozen
         state. So `derivative(E_sl, solution)` equals the written residual at
-        the state where the energy is built, for any state and not only for a
-        saturated one.
+        the state where the energy is built, for any state. The residual itself
+        is the variation of `int G(Delta)` for the exact `G`, because `sigma`
+        depends pointwise on the one scalar `Delta`; it is written directly in
+        `sea_level_residual`, and this energy is the check of it.
+
+        **Fixed coastline.** With `SeaLevel.fixed_ocean` the sheet is
+        `sigma = rho_i (I_eff - I_eff_init) + rho_w C0 Delta` with
+        `I_eff = (1 - C0) I` and `C0 = H(r SL_init / eps)`, so
+
+            G(Delta) = rho_i (I_eff - I_eff_init) Delta + 0.5 rho_w C0 Delta^2
+
+        for any state. `C0` depends on the prescribed `SL_init` only, so no
+        frozen copy of the solution is made, and `derivative(E_sl, solution)`
+        equals the written residual exactly.
 
         **Rotation.** With rotation on, `Delta` contains `psi_rot / g_s`, and
         the `m_i` variation of this energy duplicates the sheet term that
@@ -3996,25 +3856,14 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             return -self._sea_level_scale() * G * self._sea_level_ds()
         frozen = self.solution.copy(deepcopy=True)
         SL_f = self._sea_level_expression(split(frozen))
-        if sl.sheet == "softplus":
-            eps = ensure_constant(sl.softplus_width)
-            # The water fraction `d sigma / d SL / rho_w` at the frozen state.
-            W_f = water_fraction(sl.I, SL_f, eps, sl.rho_w, sl.rho_i)
-            # The tangent of the sheet at the frozen state, evaluated at
-            # `SL_init` (that is, at `Delta = 0`).
-            sigma_0 = (self._softplus_sheet(SL_f)
-                       + sl.rho_w * W_f * (sl.SL_init - SL_f))
-            delta = self.sea_level() - sl.SL_init
-            G = sigma_0 * delta + 0.5 * sl.rho_w * W_f * delta * delta
-            return -self._sea_level_scale() * G * self._sea_level_ds()
-        k = self._sea_level_steepness()
-        B_f = grounded_ice_function(sl.I, SL_f, k, sl.rho_w, sl.rho_i)
-        C_f = ocean_function(SL_f, k)
+        eps = ensure_constant(sl.softplus_width)
+        # The water fraction `d sigma / d SL / rho_w` at the frozen state.
+        W_f = water_fraction(sl.I, SL_f, eps, sl.rho_w, sl.rho_i)
+        # The tangent of the sheet at the frozen state, evaluated at `SL_init`
+        # (that is, at `Delta = 0`).
+        sigma_0 = self._sheet_of(SL_f) + sl.rho_w * W_f * (sl.SL_init - SL_f)
         delta = self.sea_level() - sl.SL_init
-        # sigma at Delta = 0 with the frozen masks, and the quadratic
-        # coefficient of the water column.
-        sigma_0 = self._sheet_of(sl.SL_init, mask_SL=SL_f)
-        G = sigma_0 * delta + 0.5 * sl.rho_w * B_f * C_f * delta * delta
+        G = sigma_0 * delta + 0.5 * sl.rho_w * W_f * delta * delta
         return -self._sea_level_scale() * G * self._sea_level_ds()
 
     def sea_level_residual(self) -> Form:
@@ -4024,10 +3873,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             delta Delta = avg(v) / g_s - (w . n) + s
 
         The `u`, `psi` and `Shift` rows of the variation of `sea_level_energy`,
-        with `sigma` evaluated at the live masks, or at the fixed ocean
-        function `C0` when `SeaLevel.fixed_ocean` is true. The Jacobian of
-        these rows is symmetric with live masks too, because `sigma` depends on
-        the unknowns only through `Delta`. With the fixed ocean the rows are
+        with `sigma` the live sheet, or the sheet of the fixed ocean function
+        `C0` when `SeaLevel.fixed_ocean` is true. The Jacobian of these rows is
+        symmetric with the live sheet too, because `sigma` depends on the
+        unknowns only through `Delta`. With the fixed ocean the rows are
         linear in the unknowns.
 
         **Why it is written out and not `derivative(E, solution)`**: the energy
@@ -5334,20 +5183,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self._attach_condensation_context(solver_extras)
         self.register_update_callback(self.set_solver)
 
-    def _live_ocean_masks(self) -> bool:
-        """True when the surface load sheet carries masks that follow the state.
+    def _live_coastline(self) -> bool:
+        """True when the surface load sheet has a coastline that follows the state.
 
-        With `SeaLevel(fixed_ocean=False)` the sheet is a nonlinear function of
-        the *current* sea level `SL = SL_init + dN - du_r + Shift`
-        (`_sheet_of`, `gadopt.sea_level_masks`): with `sheet="masks"` through
-        the ocean function `C` and the grounded-ice function `B`, smooth steps
-        of `SL`, and with `sheet="softplus"` through the rounded maximum of the
-        water and ice columns. Either way the sheet is not affine in the
-        unknowns, and the Jacobian of the sea-level rows moves inside one
-        nonlinear solve. With `fixed_ocean=True` the sheet uses
-        `C0 = C(SL_init)`, a frozen field, and the rows are linear. The
-        softplus sheet refuses `fixed_ocean=True`, so it always gives True
-        here.
+        With `SeaLevel(fixed_ocean=False)` the sheet is the rounded maximum of
+        the water and ice columns of the *current* sea level
+        `SL = SL_init + dN - du_r + Shift` (`_sheet_of`,
+        `gadopt.sea_level_sheet`). It is not affine in the unknowns, and the
+        Jacobian of the sea-level rows moves inside one nonlinear solve. With
+        `fixed_ocean=True` the sheet uses `C0 = H(r SL_init / eps)`, a frozen
+        field, and the rows are linear.
 
         `fixed_ocean` is a fixed boolean on the `SeaLevel` dataclass, identical
         on every rank and unchanged for the life of the solver, so an answer
@@ -5368,12 +5213,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         - the rheology, which is what the base class tests: a power-law
           exponent puts the solution into the mechanics tangent;
-        - live ocean masks, where the smooth steps `B` and `C` of the surface
-          load sheet follow the sea level and so follow the unknowns
-          (`_live_ocean_masks`).
+        - a live coastline, where the surface load sheet follows the sea level
+          and so follows the unknowns (`_live_coastline`).
 
         The second cause reaches more blocks than the first. `Shift` is a
-        `Real` unknown, so the masks sit in `A01`, `A10` and `A11` as well as
+        `Real` unknown, so the sheet sits in `A01`, `A10` and `A11` as well as
         in `A00`, and every cached factor of the two-block Schur
         preconditioner describes a state the solve has already left.
 
@@ -5387,19 +5231,19 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         This does **not** change `condensed_operator_symmetric`, which reads
         the rheology alone. The sea-level rows keep a symmetric Jacobian with
-        live masks, because the sheet depends on the unknowns only through the
+        a live coastline, because the sheet depends on the unknowns only through the
         one scalar `Delta = dN - du_r + Shift`, so one energy `E_sl` generates
         all three rows (`NOTES/DESIGN-SEA-LEVEL.md` section 3). Block 0 is
-        `(u, psi)` and the masks enter it through that same energy, so the
-        condensed block-0 operator is as symmetric with live masks as without
-        them.
+        `(u, psi)` and the sheet enters it through that same energy, so the
+        condensed block-0 operator is as symmetric with a live coastline as
+        without one.
 
         Returns:
             True when a Newton method is required and no operator version can
             describe the Jacobian; False when the residual is linear in the
             unknowns.
         """
-        return super()._jacobian_depends_on_solution() or self._live_ocean_masks()
+        return super()._jacobian_depends_on_solution() or self._live_coastline()
 
     def _refuse_ksponly_on_a_nonlinear_residual(self) -> None:
         """Refuse `snes_type ksponly` when the Jacobian depends on the state.
@@ -5413,9 +5257,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         power-law run.
 
         **Two causes, and the message names whichever applies.** A power-law
-        exponent is one. Live ocean masks are the other: with
-        `SeaLevel(fixed_ocean=False)` the smooth steps `B` and `C` of the
-        surface load sheet follow the sea level, so the sea-level rows are
+        exponent is one. A live coastline is the other: with
+        `SeaLevel(fixed_ocean=False)` the surface load sheet follows the sea
+        level, so the sea-level rows are
         nonlinear even on a Newtonian Earth, and a message that named only the
         exponent would send the reader to look at a rheology that is already
         correct. A configuration can carry both.
@@ -5442,11 +5286,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             causes.append(f"the power-law factor of exponent={exponent!r}")
             remedies.append(
                 "set exponent=1 if the rheology is meant to be Newtonian")
-        if self._live_ocean_masks():
+        if self._live_coastline():
             causes.append(
-                "the live sea-level sheet of SeaLevel(fixed_ocean=False) (the "
-                "ocean and grounded-ice masks, or the softplus sheet), which "
-                "follows the sea level and so follows the unknowns,")
+                "the live sea-level sheet of SeaLevel(fixed_ocean=False), "
+                "which follows the sea level and so follows the unknowns,")
             remedies.append(
                 "set SeaLevel(fixed_ocean=True) if the coastline is meant to "
                 "be frozen")
@@ -5518,7 +5361,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           "rebuild once per solve" into a test a preconditioner can make
           without knowing about Newton at all.
         - `gia_jacobian_depends_on_solution`: a `bool`, fixed for the life of
-          the solver, true for a power law and true for live ocean masks
+          the solver, true for a power law and true for a live coastline
           (`_jacobian_depends_on_solution`). `operator_version` carries the same
           fact from the first `solve` onwards, by going `None`, and this key
           carries it **before** that: at construction the version is still the
@@ -5987,7 +5830,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         for idx in getattr(self.layout, "centre_of_mass", ()):
             by_index[idx] = 0.0
         # The sea-level Shift row. Its assembled diagonal is
-        # `-c B_mu g_s rho_w int B C dS` plus mask derivatives, which depends
+        # `-c B_mu g_s rho_w int (1 - H(f / eps)) dS`, the water fraction of the
+        # softplus sheet (or `C0` for a fixed coastline), which depends
         # on the state. No assembly is allowed here, so the entry is zero, as
         # for a Lagrange multiplier. `DtNMultiplierDiagPC` is therefore not
         # suitable for a space with sea level.

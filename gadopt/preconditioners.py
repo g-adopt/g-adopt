@@ -1117,7 +1117,7 @@ class _SchurAinvBCache:
     values and the same meaning they have on `DtNMultiplierDenseSchurPC`.
     `per_solve`, the default, rebuilds when `_RebuildRule` says the operator
     moved. `always` rebuilds at every `update`, which is what a moving
-    coastline needs, because there the ocean masks follow the unknowns and the
+    coastline needs, because there the sea-level sheet follows the unknowns and the
     complement is stale before the solve that built it ends. `update` below
     carries the reasoning for each branch. Which value is cheaper at
     production scale is a measurement, which is why the rule is an option.
@@ -1335,7 +1335,7 @@ class _SchurAinvBCache:
         and, for a state-dependent Jacobian, once per nonlinear solve. The
         value `always` rebuilds at every call, which is one build per outer
         linear solve and per Newton iteration; it exists for a moving
-        coastline, where the ocean masks follow the unknowns and so sit in
+        coastline, where the sea-level sheet follows the unknowns and so sits in
         `A01`, `A10` and `A11` as well as in `A00`, and a complement formed at
         the start of a solve is stale before the solve ends.
 
@@ -2245,8 +2245,8 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     above. The value
     `always` rebuilds the complement at every `update`, which is one build per
     linear solve. It exists for the configuration a moving coastline creates:
-    with `SeaLevel(fixed_ocean=False)` the ocean masks follow the unknowns and
-    sit in `A01`, `A10` and `A11` as well as in `A00`, because the sea-level
+    with `SeaLevel(fixed_ocean=False)` the sea-level sheet follows the unknowns
+    and sits in `A01`, `A10` and `A11` as well as in `A00`, because the sea-level
     `Shift` is a `Real` row, so every factor of a complement built at the
     start of a solve is stale in a way a power law does not make it. Which
     value is cheaper at production scale is what job G4-rule measures. The
@@ -2385,7 +2385,7 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
         default `per_solve` is the pair of triggers above. `always` rebuilds
         at every call, which is one build per Newton iteration and per outer
         linear solve, and is worth its cost only where the operator moves fast
-        inside a solve - a moving coastline, where the masks sit in every
+        inside a solve - a moving coastline, where the sheet sits in every
         block of the `Real` row and column. Both rules leave the complement
         alone when the context carries neither marker, because that context is
         an adjoint sweep and not a new state. The value `lagged` takes the
@@ -3293,7 +3293,7 @@ def single_domain_slate_form(form):
     needs no restriction of its own, so a restriction there comes from a field
     of the parent mesh evaluated on the parent's interior facet, through a
     measure intersected with the parent's `dS`. The sea-level load is such a
-    term: its displacement block contains `avg(psi)` through the masks. Slate
+    term: its displacement block contains `avg(psi)` through the sheet. Slate
     merges the kernels of one mesh and fails on that facet map with
     `KeyError: 'facet_1'`, and in a pytest process the same failure has been
     seen as a segmentation fault.
