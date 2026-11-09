@@ -1057,8 +1057,9 @@ def test_always_rebuilds_more_often_than_per_solve(rebuild_rule_arms):
     This is the whole point of the option on this class. `per_solve` freezes
     the complement at the state the solve starts from; `always` rebuilds it at
     every `update`, which is once per Newton iteration and per outer linear
-    solve, and that is what a moving coastline needs, where the ocean masks
-    follow the unknowns and sit in every block of the `Real` row and column.
+    solve, and that is what a moving coastline needs, where the sea-level
+    sheet follows the unknowns and sits in every block of the `Real` row and
+    column.
 
     CATCHES the defect this test was written for: the option reaching
     `DtNMultiplierDenseSchurPC` alone and being inert on the class the preset

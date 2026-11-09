@@ -440,7 +440,7 @@ def marine_fields(sub):
 def assert_mass_conserved(solver, z, layout, initial_norm):
     """`|int sigma dS|` is bounded by the frame multipliers and Newton.
 
-    The bound of `test_sea_level.TestLiveMaskSolve.
+    The bound of `test_sea_level.TestLiveCoastlineSolve.
     test_mass_is_conserved_to_order_lambda`, which derives it from the `Shift`
     row: at convergence `int sigma = sum_i lambda_i int x_i dsigma/dShift / g_s`
     plus what Newton leaves.
