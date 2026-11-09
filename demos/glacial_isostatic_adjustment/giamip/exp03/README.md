@@ -155,7 +155,7 @@ the earlier solver used.
 
 | file | content |
 |---|---|
-| `inputs_exp03.h5` | the input file (mesh, earth fields, observed sea level, slope of the ocean mask, ice of every step, record) |
+| `inputs_exp03.h5` | the input file (mesh, earth fields, observed sea level, ice of every step, record) |
 | `inputs_exp03.json` | the record of the prepare job |
 | `inputs_exp03_earth.pvd` | ParaView: the earth fields in SI units |
 | `inputs_exp03_ice.pvd` | ParaView: the ice at the first, middle and last step, m |

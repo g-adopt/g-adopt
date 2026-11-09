@@ -2,27 +2,23 @@
 # GIAMIP Exp01: a branch run (forward_exp01.py, A BRANCH RUN) on Gadi.
 #
 # The run starts from checkpoint CHECKPOINT of a finished forward run and
-# marches to step LAST_STEP with the sea-level sheet SHEET. The state file of
-# the finished run (its forward_state.h5, with the checkpoints) is only read.
+# marches to step LAST_STEP with the softplus sea-level sheet of width EPS_M.
+# The state file of the finished run (its forward_state.h5, with the
+# checkpoints) is only read.
 # The outputs (surface file, parameter log, summary) go to the directory of
 # submission. The job must have the rank count of the finished run: 624 ranks
 # on 6 nodes for the r2 production of Exp01. The job needs jobfs: with the
 # Gadi default of 100 MB per node the run is killed while it reads the
 # forcing. The default here is that of run_forward.pbs, 400 GB per node.
 #
-# Two branch runs from the same checkpoint, one with SHEET=masks and one with
-# SHEET=softplus, compare the two sheets over the same steps. The masks run
-# also repeats the steps of the finished run, which checks the branch: its
-# Shift agrees with the finished run's log to the tolerance of the outer
-# solve. The two do not agree bit for bit, because the branch builds the
-# preconditioner at its first solve and the finished run had built it
-# earlier. The finished r2 run used REBUILD_EVERY=100, the default here.
+# Two branch runs from the same checkpoint with different EPS_M compare two
+# widths of the sheet over the same steps.
 #
 # Submit from a new run directory:
-#   B=/scratch/xd2/$USER/giamip/exp01/softplus-branch/masks
+#   B=/scratch/xd2/$USER/giamip/exp01/softplus-branch/eps1m
 #   mkdir -p $B && cd $B
 #   qsub -l ncpus=624,mem=3000GB,walltime=02:00:00 \
-#       -v SHEET=masks,ENV_FILE=/g/data/xd2/sg8812/giamip-software/env-softplus.sh \
+#       -v EPS_M=1,ENV_FILE=/g/data/xd2/sg8812/giamip-software/env-softplus.sh \
 #       $MY_GADOPT/demos/glacial_isostatic_adjustment/giamip/exp01/run_branch.pbs
 #
 # Variables (pass them with -v NAME=value,...):
@@ -31,7 +27,6 @@
 #   CHECKPOINT       the checkpoint index (default 2; in the r2 forward run of
 #                    Exp01 that is step 300, year -15200, from its log)
 #   LAST_STEP        the last step of the branch (default 306)
-#   SHEET            masks (default) or softplus
 #   EPS_M            eps of the softplus sheet in m of ice (default 1)
 #   REBUILD_EVERY    solves between preconditioner rebuilds (default 100)
 #   ENV_FILE         the environment file (must set MY_GADOPT)
@@ -58,7 +53,6 @@ OUT=${PBS_O_WORKDIR}
 STATE=${STATE:-/g/data/xd2/sg8812/gia-mip/exp01/r2/forward-protocol/forward_state.h5}
 CHECKPOINT=${CHECKPOINT:-2}
 LAST_STEP=${LAST_STEP:-306}
-SHEET=${SHEET:-masks}
 EPS_M=${EPS_M:-1}
 REBUILD_EVERY=${REBUILD_EVERY:-100}
 
@@ -70,7 +64,7 @@ fi
 ARGS="--state ${STATE} --output_path ${OUT} --schedule protocol"
 ARGS="${ARGS} --gia_rebuild_every ${REBUILD_EVERY}"
 ARGS="${ARGS} --branch_checkpoint ${CHECKPOINT} --steps ${LAST_STEP}"
-ARGS="${ARGS} --sheet ${SHEET} --softplus_width_m ${EPS_M}"
+ARGS="${ARGS} --softplus_width_m ${EPS_M}"
 ARGS="${ARGS} ${EXTRA:-}"
 
 echo "job ${PBS_JOBID}, ${PBS_NCPUS} ranks"

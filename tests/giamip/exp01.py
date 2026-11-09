@@ -158,9 +158,12 @@ from gadopt.gia_gravity import (FluidCore, SeaLevel,  # noqa: E402
                                 rigid_rotation_nullspace,
                                 self_gravitating_gia_space,
                                 selfgrav_dtn_iterative_solver_parameters)
-from gadopt.sea_level_masks import (DEFAULT_ALPHA_MASK,  # noqa: E402
-                                    DEFAULT_GRAD_FLOOR, grounded_ice_function,
-                                    ocean_function, surface_slope)
+from gadopt.sea_level_sheet import (ocean_fraction,  # noqa: E402
+                                    water_fraction)
+
+#: The width `eps` of the softplus sea-level sheet, in metres of ice; the
+#: solver takes it in units of D like the sea level.
+SOFTPLUS_WIDTH_M = 1.0
 from mpi4py import MPI  # noqa: E402
 from petsc4py import PETSc  # noqa: E402
 
@@ -734,8 +737,7 @@ def build_solver(parent, mantle, earth, scales, forcing, dt, args):
         boundary=SURF_RE, rho_w=rho_w, rho_i=rho_i, g_surface=g_surface,
         SL_init=forcing.SL_init, I=forcing.I, I_init=forcing.I_init,
         N_init=Constant(0.0), ur_init=Constant(0.0),
-        alpha_mask=DEFAULT_ALPHA_MASK, slope=surface_slope(forcing.SL_init),
-        grad_floor=DEFAULT_GRAD_FLOOR, fixed_ocean=False)
+        softplus_width=SOFTPLUS_WIDTH_M / D_SCALE, fixed_ocean=False)
 
     C_kg_m2 = C_OVER_MRE2 * scales.earth_mass_kg * scales.Re_m**2
     C_nd = C_kg_m2 / (scales.rho_bar * D_SCALE**5)
@@ -800,11 +802,13 @@ def build_solver(parent, mantle, earth, scales, forcing, dt, args):
 def state_row(solver, layout, forcing, scales, index, dt_yr, wall_s):
     """Every per-step number of one solved state. Collective."""
     dss = solver.sea_level_measure()(SURF_RE)
-    k = solver._sea_level_steepness()
     p = solver.sea_level_parameters
     SL = solver.sea_level()
-    C = ocean_function(SL, k)
-    B = grounded_ice_function(forcing.I, SL, k, p.rho_w, p.rho_i)
+    # The fractions of the softplus sheet: `C` where the sea level is
+    # positive, `B` over open water and floating ice.
+    eps = Constant(float(p.softplus_width))
+    C = ocean_fraction(SL, eps, p.rho_w, p.rho_i)
+    B = water_fraction(forcing.I, SL, eps, p.rho_w, p.rho_i)
     ice = forcing.I
     D3 = D_SCALE**3
     rho_i_kg = p.rho_i * scales.rho_bar

@@ -151,20 +151,15 @@ A BRANCH RUN
     from it, and nothing is appended. The rank count must be that of the
     finished run. The branch run writes no checkpoints, starts a new surface
     file and parameter log, and does not write step 0. `--steps` is the last
-    step, as in a run from the start. With `--sheet` a branch run continues
-    the same state with another sea-level sheet, which is how the masks and
-    the softplus sheet are compared over a few steps. The sheet is a function
-    of the current state and the reference state only, so it can change at a
-    checkpoint.
+    step, as in a run from the start. With `--softplus_width_m` a branch run
+    continues the same state with another width of the sea-level sheet. The
+    sheet is a function of the current state and the reference state only, so
+    it can change at a checkpoint.
 
 THE SEA-LEVEL SHEET
-    `--sheet masks` (the default) uses the masks `B` and `C` of
-    `gadopt.sea_level_masks` with the frozen slope. `--sheet softplus` uses
-    the softplus sheet, `rho_w SL + rho_i eps softplus((I - r SL) / eps)`,
-    with `eps = --softplus_width_m` (`gadopt.SeaLevel`). The surface fields
-    `ocean_function` and `ocean_without_grounded_ice` are then
-    `water_fraction(0, SL)` and `water_fraction(I, SL)`: 1 where the sea level
-    is positive, and 1 over open water and floating ice.
+    The load is the softplus sheet of `gadopt.SeaLevel`,
+    `rho_w SL + rho_i eps softplus((I - r SL) / eps)`, with
+    `eps = --softplus_width_m` (default `exp01_common.SOFTPLUS_WIDTH_M`).
 
 THE INITIAL SEA LEVEL
     The inversion wrote the control of each ROL iteration into the state
@@ -259,23 +254,23 @@ THE SURFACE FIELDS (`forward_exp01_surface.h5`)
     cell), restricted to the surface, and interpolated into surface CG1
     (the vertex values). Each step costs one CG2 field of work memory.
 
-    DG0 facet fractions. The masks of the solver contain the facet area
-    (`gadopt.sea_level_masks.mask_steepness`), so they have a value only
-    inside a facet integral. Each surface cell is a mantle facet on Re, and
-    the field holds the mean of the mask over that facet:
+    DG0 facet fractions. The fractions of the solver's sheet vary inside a
+    facet where a coast or a grounding line crosses it, so the field holds
+    their mean over each surface cell (a mantle facet on Re):
 
-        value(f) = int_f mask dS / int_f 1 dS
+        value(f) = int_f fraction dS / int_f 1 dS
 
     on the mantle facet measure, with the quadrature degree of the solver,
     assembled against a DG0 test function on the surface (a mixed-dimension
     form, mantle `ds` intersected with surface `dx`). The integral of the
-    field times the facet area is then the integral of the mask that the
-    solver sees. The sea level in the masks is built on the mantle from the
+    field times the facet area is then the integral of the fraction that the
+    solver sees. The sea level in the fractions is built on the mantle from the
     potential copied onto the mantle, which on Re equals the parent's trace.
 
-      ocean_function            C = H_k(SL), 1 where the sea level is
+      ocean_function            C = H(r SL / eps), 1 where the sea level is
                                 positive (ocean, also under grounded ice)
-      ocean_without_grounded_ice  B, 1 over open water and floating ice
+      ocean_without_grounded_ice  B = 1 - H((I - r SL) / eps), 1 over open
+                                water and floating ice
                                 (the ocean of the sea-level load; GIAMIP
                                 `ocean_area_fraction`)
       grounded_ice_fraction     (1 - B) * [I > 1 mm], the grounded ice
@@ -287,7 +282,8 @@ THE SCALARS (`params_forward_exp01.log`)
     One row per output, step 0 included, from UFL `assemble` on the solver's
     sea-level measure `dS` (curved mantle facets on Re, the solver's
     quadrature degree). `I` is the ice thickness, `SL` the sea level of the
-    solver, `B` and `C` the solver's masks (`gadopt.sea_level_masks`),
+    solver, `B` and `C` the fractions of the solver's sheet
+    (`sheet_fractions`, `gadopt.sea_level_sheet`),
     `rho_i` and `rho_w` the densities of the experiment (917 and 1025
     kg/m^3).
 
@@ -307,9 +303,7 @@ THE SCALARS (`params_forward_exp01.log`)
       total_ice_mass_kg      rho_i int I dS, kg: GIAMIP "grounded and
                              floating ice volume times ice density"
       ocean_area_m2          int B dS, m^2: GIAMIP "ocean area excluding
-                             marine regions covered by grounded ice". `int
-                             B` and not `int B C`, see
-                             `grounded_ice_function`
+                             marine regions covered by grounded ice"
       ocean_area_grdice_m2   int C dS, m^2: GIAMIP "ocean area including
                              marine regions covered by grounded ice" (the
                              sea level is positive there)
@@ -372,8 +366,8 @@ from gadopt import (COMM_WORLD, CheckpointFile, Constant,  # noqa: E402
                     VectorFunctionSpace, as_vector, assemble, conditional,
                     dot, ds, gt, max_value, sqrt)
 from gadopt.momentum_equation import rotational_potential  # noqa: E402
-from gadopt.sea_level_masks import (grounded_ice_function,  # noqa: E402
-                                    ocean_function, water_fraction)
+from gadopt.sea_level_sheet import (ocean_fraction,  # noqa: E402
+                                    water_fraction)
 from mpi4py import MPI  # noqa: E402
 from pyadjoint.tape import annotate_tape, pause_annotation  # noqa: E402
 
@@ -599,15 +593,14 @@ def rebuild_counts(solver):
 
 
 def sheet_fractions(solver, I, SL):
-    """`(C, B)` of the solver's sheet at the sea level `SL`.
+    """`(C, B)` of the solver's sea-level sheet at the sea level `SL`.
 
     `C` is 1 where the sea level is positive (ocean, also under grounded
-    ice), and `B` is 1 over open water and floating ice. For the masks these
-    are the masks themselves, with the solver's steepness (facet area, frozen
-    slope). For the softplus sheet they are the water fractions
-    `1 - H(f / eps)` of `gadopt.sea_level_masks.water_fraction`, with
-    `f = I - r SL` for `B` and `f = -r SL` (no ice) for `C`. The two sheets
-    agree on both wherever the masks are saturated.
+    ice), and `B` is 1 over open water and floating ice. They are the rounded
+    fractions of the softplus sheet with the solver's width `eps`:
+    `C = H(r SL / eps)` (`gadopt.sea_level_sheet.ocean_fraction`) and
+    `B = 1 - H((I_+ - r SL) / eps)` (`water_fraction`), with
+    `r = rho_w / rho_i`.
 
     Args:
       solver: the `SelfGravitatingGIASolver`.
@@ -618,13 +611,9 @@ def sheet_fractions(solver, I, SL):
       `(C, B)`, UFL expressions.
     """
     p = solver.sea_level_parameters
-    if p.sheet == "softplus":
-        eps = Constant(float(p.softplus_width))
-        return (water_fraction(Constant(0.0), SL, eps, p.rho_w, p.rho_i),
-                water_fraction(I, SL, eps, p.rho_w, p.rho_i))
-    k = solver._sea_level_steepness()
-    return (ocean_function(SL, k),
-            grounded_ice_function(I, SL, k, p.rho_w, p.rho_i))
+    eps = Constant(float(p.softplus_width))
+    return (ocean_fraction(SL, eps, p.rho_w, p.rho_i),
+            water_fraction(I, SL, eps, p.rho_w, p.rho_i))
 
 
 class SurfaceOutput:
@@ -738,7 +727,7 @@ class SurfaceOutput:
                        self.s_S, self.s_dg, self.s_SL, self.s_bed, self.s_ice,
                        self.s_C, self.s_B, self.s_grd, self.s_land)
 
-        # ---- DG0 facet means of the masks ----------------------------------
+        # ---- DG0 facet means of the fractions of the sheet ------------------
         # The sea level of the solver, written on the mantle only: the
         # potential copied onto the mantle, the rotation and Shift as
         # Constants, `u . n` with the facet normal of the mantle. On Re this
@@ -760,7 +749,7 @@ class SurfaceOutput:
         self.ds_sub = ds_sub(common.SURF_RE)
         v = TestFunction(self.V_s0)
         self.facet_area = assemble(v * self.ds_sub)
-        self.mask_forms = {self.s_C: C_m * v * self.ds_sub,
+        self.fraction_forms = {self.s_C: C_m * v * self.ds_sub,
                            self.s_B: B_m * v * self.ds_sub,
                            self.s_grd: (1 - B_m) * cover * v * self.ds_sub,
                            self.s_land: cover * v * self.ds_sub}
@@ -908,10 +897,10 @@ class SurfaceOutput:
         self.node_map.restrict(self.work_m, out=self.s_comp)
         self.s_ice.interpolate(self.s_comp)
         self.s_ice.dat.data[:] *= D
-        # The facet means of the masks.
+        # The facet means of the fractions of the sheet.
         area = self.facet_area.dat.data_ro
         sums = {}
-        for target, form in self.mask_forms.items():
+        for target, form in self.fraction_forms.items():
             integral = assemble(form)
             values = integral.dat.data_ro
             target.dat.data_wo[:] = values / area
@@ -1490,10 +1479,9 @@ def parse_args():
                    help="start a new run in --output_path from checkpoint N "
                         "of the finished run whose state file is --state "
                         "(read only; see A BRANCH RUN)")
-    p.add_argument("--sheet", choices=["masks", "softplus"], default="masks",
-                   help="the sea-level sheet (see THE SEA-LEVEL SHEET)")
-    p.add_argument("--softplus_width_m", type=float, default=1.0,
-                   help="eps of the softplus sheet, m of ice")
+    p.add_argument("--softplus_width_m", type=float,
+                   default=common.SOFTPLUS_WIDTH_M,
+                   help="eps of the softplus sea-level sheet, m of ice")
     p.add_argument("--ice_check_years", type=int, default=3,
                    help="fine schedules: compare the ice of this many "
                         "protocol years after the start with a fresh read "
@@ -1600,8 +1588,7 @@ def main():
         f"ranks, schedule {args.schedule}"
         f"{', RESTART' if args.restart else ''}"
         f"{f', BRANCH from checkpoint {args.branch_checkpoint}' if branch else ''}"
-        f", sheet {args.sheet}"
-        f"{f' (eps {args.softplus_width_m} m)' if args.sheet == 'softplus' else ''}")
+        f", softplus sheet eps {args.softplus_width_m} m")
     say(f"  annotation on: {annotate_tape()} (must be False)")
     say("=" * 78)
     if annotate_tape():

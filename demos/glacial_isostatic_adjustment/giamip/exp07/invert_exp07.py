@@ -27,7 +27,7 @@ THE PROBLEM
 THE INPUTS
     Everything that comes from data is in the input file of
     `prepare_exp07.py`: the meshes, the earth fields, the observed sea level,
-    the frozen slope of the ocean mask, the ice of every step and the record
+    the ice of every step and the record
     of the experiment. This script imports no data reader (`giamip`,
     `gdrift`, `h5netcdf`, `netCDF4`). It must run on the number of ranks of
     the prepare job; it stops with an error otherwise. After the load it
@@ -916,6 +916,9 @@ def parse_args():
                         "exp07_diagnostics); also removes the KSP converged-"
                         "reason lines from stdout")
     # The solver options.
+    p.add_argument("--softplus_width_m", type=float,
+                   default=common.SOFTPLUS_WIDTH_M,
+                   help="eps of the softplus sea-level sheet, m of ice")
     p.add_argument("--k_s", type=float, default=0.9422,
                    help="the fluid Love number of the bulge")
     p.add_argument("--gia_rebuild", choices=["per_solve", "lagged", "always"],

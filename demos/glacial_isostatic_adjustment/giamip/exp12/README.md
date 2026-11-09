@@ -252,7 +252,7 @@ or at 1 mm RMS bed misfit; a restart reads the last bed of `state.h5`.
 
 | file | content |
 |---|---|
-| `inputs_exp12.h5` | the input file (mesh, earth fields, the N element fields `shear_moduli` and `viscosities`, `exponent`, `transition_stress`, observed sea level, slope of the ocean mask, ice of every step, record) |
+| `inputs_exp12.h5` | the input file (mesh, earth fields, the N element fields `shear_moduli` and `viscosities`, `exponent`, `transition_stress`, observed sea level, ice of every step, record) |
 | `inputs_exp12.json` | the record of the prepare job |
 | `inputs_exp12_earth.pvd` | ParaView: the earth fields in SI units, dlnvs, dlnvp, the instant modulus ratio, the number of dropped elements, the exponent |
 | `inputs_exp12_ice.pvd` | ParaView: the ice at the first, middle and last step, m |

@@ -51,10 +51,8 @@ WHAT IS ON THE TAPE
       3. the misfit assemble.
 
     Everything else runs with annotation paused: the meshes, the earth
-    model, the solver construction, the frozen surface slope of the ocean
-    mask (`surface_slope` of the observed bed, never of the control), the
-    observed sea level, the initial ice, the output files and every logged
-    number. The ice of each step is read into a NEW Function with annotation
+    model, the solver construction, the observed sea level, the initial ice,
+    the output files and every logged number. The ice of each step is read into a NEW Function with annotation
     paused and then assigned to the solver's ice field on the tape: a reused
     source Function would be saved once, and the replay would use the first
     ice field at every step.
@@ -213,10 +211,7 @@ class Exp01Topography:
         self.SL_obs = Function(self.forcing.SL_init.function_space(),
                                name="SL_obs").assign(self.forcing.SL_init)
 
-        # The solver. `build_solver` freezes the surface slope of the ocean
-        # mask from the observed bed (`surface_slope` returns a Function made
-        # with annotation paused), so the mask width does not depend on the
-        # control.
+        # The solver.
         self.dt = Constant(1.0)
         tic = time.time()
         self.solver, self.layout, _, self.solver_record = driver.build_solver(

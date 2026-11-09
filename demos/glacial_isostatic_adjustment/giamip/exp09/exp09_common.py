@@ -67,8 +67,6 @@ from gadopt.gia_gravity import (FluidCore, SeaLevel,  # noqa: E402
                                 rigid_rotation_nullspace,
                                 self_gravitating_gia_space,
                                 selfgrav_dtn_iterative_solver_parameters)
-from gadopt.sea_level_masks import (DEFAULT_ALPHA_MASK,  # noqa: E402
-                                    DEFAULT_GRAD_FLOOR)
 from finat.ufl import BrokenElement  # noqa: E402
 from firedrake.adjoint_utils.checkpointing import \
     maybe_disk_checkpoint  # noqa: E402
@@ -147,13 +145,25 @@ MANTLE_FIELDS = {
     # Gravity of PREM-stable, CG2, in units of g_bar (continuous, because
     # the prestress terms take its gradient).
     "gravity": ("CG", 2),
-    # The observed sea level -bed_obs / D, CG2 (the mask width reads its
-    # slope). Only its values on Re are used.
+    # The observed sea level -bed_obs / D, CG2. Only its values on Re are
+    # used.
     "SL_obs": ("CG", 2),
-    # The frozen surface slope of the ocean mask, |grad_t SL_obs|, DG1
-    # (`gadopt.sea_level_masks.surface_slope`), dimensionless.
-    "slope": ("DG", 1),
 }
+
+#: Fields that the input files of the r2 production hold and that this code
+#: does not read: `slope`, a frozen surface slope of the observed sea level
+#: (DG1). `compare_statistics` skips them when the record lists them and the
+#: loaded fields do not.
+RETIRED_FIELDS = ("slope",)
+
+#: The width `eps` of the softplus sea-level sheet, in metres of ice
+#: (`gadopt.SeaLevel.softplus_width`, `--softplus_width_m`). The rounding of
+#: the load is at most `rho_i eps log(2)` at the coastline and the grounding
+#: line and zero in double precision a few `eps` away from them. Measured with
+#: 1 m on the r2 mesh of Exp01 over six 100 yr steps of the fast melt (15.2
+#: to 14.6 ka): 1 to 2 Newton iterations per step, 4 outer iterations per
+#: Newton iteration, about 30 s per step on 624 ranks.
+SOFTPLUS_WIDTH_M = 1.0
 #: The ice of each step: thickness in units of D, CG1 on the mantle. CG1,
 #: because a CG2 interpolant of a field that is zero next to a thick ice
 #: margin undershoots below zero between nodes, and a negative thickness is
@@ -1511,6 +1521,9 @@ def compare_statistics(expected, found, rtol=1e-10):
             compare_field(key, a, b)
 
     for key in expected:
+        if key not in found and key in RETIRED_FIELDS:
+            # A field of the input file that this code no longer loads.
+            continue
         walk(key, expected[key], found[key])
     return bad
 
@@ -2184,7 +2197,8 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
     The sea level is
 
         SL    = SL_init + (N - N_init) - (u_r - ur_init) + Shift
-        sigma = rho_w B C (SL - SL_init) + rho_i (1 - B) I - rho_i (1 - B0) I_init
+        sigma = S(I, SL) - S(I_init, SL_init),
+        S(I, SL) = rho_w SL + rho_i eps softplus((I_+ - r SL) / eps)
 
     in the form that `gadopt.SeaLevel` documents, with `N = (psi + psi_rot) /
     g_s` the geoid with the rotational potential. The run starts from the
@@ -2195,7 +2209,7 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
       parent: the parent mesh.
       mantle: the mantle mesh.
       fields: the mantle fields of `read_inputs` (`density`,
-        `shear_modulus`, `bulk_modulus`, `viscosity`, `gravity`, `slope`).
+        `shear_modulus`, `bulk_modulus`, `viscosity`, `gravity`).
       scales: the `Scales`.
       constants: the solver constants of the record
         (`record["solver_constants"]`): core density and gravity at the CMB,
@@ -2206,7 +2220,7 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
         `time_step`.
       options: the command line of the caller (`k_s`, `block0_max_it`,
         `outer_atol`, `outer_max_it`, `gia_rebuild`, `gia_rebuild_every`,
-        `gia_rebuild_max_outer`).
+        `gia_rebuild_max_outer`, and optionally `softplus_width_m`).
       record: the record of the input file. Required when `fields` holds
         the power-law fields: its `power_law` entry gives the background
         stress (`power_law_settings`).
@@ -2271,14 +2285,18 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
                            rho_core=constants["rho_core_nondim"],
                            g=Constant(constants["g_cmb_nondim"]))
 
+    # The width of the softplus sheet: metres of ice from the command line (or
+    # `SOFTPLUS_WIDTH_M` for a caller without the option), in units of D like
+    # the sea level and the ice of the solver.
+    softplus_width = (float(getattr(options, "softplus_width_m",
+                                    SOFTPLUS_WIDTH_M)) / D_SCALE)
     # g_s = g_bar by the choice of the gravity scale.
     sea_level = SeaLevel(
         boundary=SURF_RE, rho_w=constants["rho_w_nondim"],
         rho_i=constants["rho_i_nondim"], g_surface=1.0,
         SL_init=forcing["SL_init"], I=forcing["I"], I_init=forcing["I_init"],
         N_init=Constant(0.0), ur_init=Constant(0.0),
-        alpha_mask=DEFAULT_ALPHA_MASK, slope=fields["slope"],
-        grad_floor=DEFAULT_GRAD_FLOOR, fixed_ocean=False)
+        softplus_width=softplus_width, fixed_ocean=False)
 
     parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=layout.condensed, outer_rtol=OUTER_RTOL,

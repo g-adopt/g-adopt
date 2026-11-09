@@ -24,8 +24,8 @@ remain, and this test does not cover them:
   and the test passes the polar moment `C` only. The polar motion rows and
   the `k_s` route of production (`C - A = Q k_s`) are not exercised here;
   `test_sea_level.py::TestRotation` and the Spada benchmark cover them;
-- masks: production passes the frozen surface slope (`slope`, `grad_floor`)
-  and `alpha_mask = 1`; this test uses `alpha_mask = 0.5` and no slope;
+- sea-level sheet: production uses the softplus width `eps` of 1 m; this
+  test uses `eps = 0.05` in units of D, the width of `test_sea_level.py`;
 - stopping rule: production solves the outer FGMRES to 1e-6 and counts a
   capped solve as converged (`outer_accept_capped=True`); this test solves
   to 1e-11 and lets a capped solve fail, as the replay and Taylor
@@ -111,8 +111,9 @@ G_RE = FRAME.gravity_of_r(RE)
 #: Water and ice density in units of the mantle density (`test_sea_level.py`).
 RHO_W = 1000.0 / 4978.0
 RHO_I = 931.0 / 4978.0
-#: The mask steepness factor `k = alpha p / h` of the sea-level masks.
-ALPHA_MASK = 0.5
+#: The width `eps` of the softplus sea-level sheet, in units of D, as in
+#: `test_sea_level.py`.
+SOFTPLUS_WIDTH = 0.05
 #: Rotation of the shoreline state, so that it has no mirror symmetry.
 PHASE = 0.5
 
@@ -279,7 +280,7 @@ def build(meshes, SL_init, I_init, I, dt, *, power_law=True,
         boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I, g_surface=G_RE,
         SL_init=SL_init, I=I, I_init=I_init,
         N_init=fd.Constant(0.0), ur_init=fd.Constant(0.0),
-        alpha_mask=ALPHA_MASK, fixed_ocean=False)
+        softplus_width=SOFTPLUS_WIDTH, fixed_ocean=False)
 
     parameters = selfgrav_dtn_iterative_solver_parameters(
         condensed=False, outer_rtol=OUTER_RTOL, block0_rtol=1e-4,
@@ -379,7 +380,7 @@ def control_direction(sub):
 
     `sin(phi - PHASE)` is odd about the centre of the land, so it moves the
     coastline on one flank seaward and on the other landward, and the
-    derivative of the ocean mask enters the gradient.
+    derivative of the sea-level sheet at the coast enters the gradient.
     """
     V = fd.FunctionSpace(sub, "CG", 2)
     return fd.Function(V).interpolate(0.05 * fd.sin(polar_angle(sub) - PHASE))

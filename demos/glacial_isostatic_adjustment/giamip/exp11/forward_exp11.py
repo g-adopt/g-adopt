@@ -236,23 +236,23 @@ THE SURFACE FIELDS (`forward_exp11_surface.h5`)
     cell), restricted to the surface, and interpolated into surface CG1
     (the vertex values). Each step costs one CG2 field of work memory.
 
-    DG0 facet fractions. The masks of the solver contain the facet area
-    (`gadopt.sea_level_masks.mask_steepness`), so they have a value only
-    inside a facet integral. Each surface cell is a mantle facet on Re, and
-    the field holds the mean of the mask over that facet:
+    DG0 facet fractions. The fractions of the solver's sheet vary inside a
+    facet where a coast or a grounding line crosses it, so the field holds
+    their mean over each surface cell (a mantle facet on Re):
 
-        value(f) = int_f mask dS / int_f 1 dS
+        value(f) = int_f fraction dS / int_f 1 dS
 
     on the mantle facet measure, with the quadrature degree of the solver,
     assembled against a DG0 test function on the surface (a mixed-dimension
     form, mantle `ds` intersected with surface `dx`). The integral of the
-    field times the facet area is then the integral of the mask that the
-    solver sees. The sea level in the masks is built on the mantle from the
+    field times the facet area is then the integral of the fraction that the
+    solver sees. The sea level in the fractions is built on the mantle from the
     potential copied onto the mantle, which on Re equals the parent's trace.
 
-      ocean_function            C = H_k(SL), 1 where the sea level is
+      ocean_function            C = H(r SL / eps), 1 where the sea level is
                                 positive (ocean, also under grounded ice)
-      ocean_without_grounded_ice  B, 1 over open water and floating ice
+      ocean_without_grounded_ice  B = 1 - H((I - r SL) / eps), 1 over open
+                                water and floating ice
                                 (the ocean of the sea-level load; GIAMIP
                                 `ocean_area_fraction`)
       grounded_ice_fraction     (1 - B) * [I > 1 mm], the grounded ice
@@ -264,7 +264,8 @@ THE SCALARS (`params_forward_exp11.log`)
     One row per output, step 0 included, from UFL `assemble` on the solver's
     sea-level measure `dS` (curved mantle facets on Re, the solver's
     quadrature degree). `I` is the ice thickness, `SL` the sea level of the
-    solver, `B` and `C` the solver's masks (`gadopt.sea_level_masks`),
+    solver, `B` and `C` the fractions of the solver's sheet
+    (`sheet_fractions`, `gadopt.sea_level_sheet`),
     `rho_i` and `rho_w` the densities of the experiment (917 and 1025
     kg/m^3).
 
@@ -284,9 +285,7 @@ THE SCALARS (`params_forward_exp11.log`)
       total_ice_mass_kg      rho_i int I dS, kg: GIAMIP "grounded and
                              floating ice volume times ice density"
       ocean_area_m2          int B dS, m^2: GIAMIP "ocean area excluding
-                             marine regions covered by grounded ice". `int
-                             B` and not `int B C`, see
-                             `grounded_ice_function`
+                             marine regions covered by grounded ice"
       ocean_area_grdice_m2   int C dS, m^2: GIAMIP "ocean area including
                              marine regions covered by grounded ice" (the
                              sea level is positive there)
@@ -349,8 +348,8 @@ from gadopt import (COMM_WORLD, CheckpointFile, Constant,  # noqa: E402
                     VectorFunctionSpace, as_vector, assemble, conditional,
                     dot, ds, gt, max_value, sqrt)
 from gadopt.momentum_equation import rotational_potential  # noqa: E402
-from gadopt.sea_level_masks import (grounded_ice_function,  # noqa: E402
-                                    ocean_function)
+from gadopt.sea_level_sheet import (ocean_fraction,  # noqa: E402
+                                    water_fraction)
 from mpi4py import MPI  # noqa: E402
 from pyadjoint.tape import annotate_tape, pause_annotation  # noqa: E402
 
@@ -575,6 +574,30 @@ def rebuild_counts(solver):
 # --------------------------------------------------------------------------
 
 
+def sheet_fractions(solver, I, SL):
+    """`(C, B)` of the solver's sea-level sheet at the sea level `SL`.
+
+    `C` is 1 where the sea level is positive (ocean, also under grounded
+    ice), and `B` is 1 over open water and floating ice. They are the rounded
+    fractions of the softplus sheet with the solver's width `eps`:
+    `C = H(r SL / eps)` (`gadopt.sea_level_sheet.ocean_fraction`) and
+    `B = 1 - H((I_+ - r SL) / eps)` (`water_fraction`), with
+    `r = rho_w / rho_i`.
+
+    Args:
+      solver: the `SelfGravitatingGIASolver`.
+      I: the ice thickness.
+      SL: the sea level, a UFL expression.
+
+    Returns:
+      `(C, B)`, UFL expressions.
+    """
+    p = solver.sea_level_parameters
+    eps = Constant(float(p.softplus_width))
+    return (ocean_fraction(SL, eps, p.rho_w, p.rho_i),
+            water_fraction(I, SL, eps, p.rho_w, p.rho_i))
+
+
 class SurfaceOutput:
     """The surface fields of every step, and the scalars, of the forward run.
 
@@ -686,7 +709,7 @@ class SurfaceOutput:
                        self.s_S, self.s_dg, self.s_SL, self.s_bed, self.s_ice,
                        self.s_C, self.s_B, self.s_grd, self.s_land)
 
-        # ---- DG0 facet means of the masks ----------------------------------
+        # ---- DG0 facet means of the fractions of the sheet ------------------
         # The sea level of the solver, written on the mantle only: the
         # potential copied onto the mantle, the rotation and Shift as
         # Constants, `u . n` with the facet normal of the mantle. On Re this
@@ -695,10 +718,7 @@ class SurfaceOutput:
         n_m = FacetNormal(mantle)
         SL_m = (self.SL_init + (self.N_expr - p.N_init)
                 - (dot(u, n_m) - p.ur_init) + self.shift_const)
-        # The mask steepness of the solver (facet area, frozen slope).
-        k = solver._sea_level_steepness()
-        C_m = ocean_function(SL_m, k)
-        B_m = grounded_ice_function(self.I, SL_m, k, p.rho_w, p.rho_i)
+        C_m, B_m = sheet_fractions(solver, self.I, SL_m)
         cover = conditional(gt(self.I, ICE_COVER_MIN_M / D_SCALE), 1.0, 0.0)
         # The mantle facet measure on Re, intersected with the cells of the
         # surface submesh, at the solver's quadrature degree.
@@ -711,7 +731,7 @@ class SurfaceOutput:
         self.ds_sub = ds_sub(common.SURF_RE)
         v = TestFunction(self.V_s0)
         self.facet_area = assemble(v * self.ds_sub)
-        self.mask_forms = {self.s_C: C_m * v * self.ds_sub,
+        self.fraction_forms = {self.s_C: C_m * v * self.ds_sub,
                            self.s_B: B_m * v * self.ds_sub,
                            self.s_grd: (1 - B_m) * cover * v * self.ds_sub,
                            self.s_land: cover * v * self.ds_sub}
@@ -720,9 +740,7 @@ class SurfaceOutput:
         dss = solver.sea_level_measure()(common.SURF_RE)
         self.dss = dss
         SL = solver.sea_level()
-        k_s = solver._sea_level_steepness()
-        C = ocean_function(SL, k_s)
-        B = grounded_ice_function(self.I, SL, k_s, p.rho_w, p.rho_i)
+        C, B = sheet_fractions(solver, self.I, SL)
         u_split = solver.solution_split[layout.displacement]
         # N + Shift of the solver: SL - SL_init + (u . n - ur_init) + N_init.
         sea_surface = (SL - self.SL_init + (dot(u_split, n_m) - p.ur_init)
@@ -861,10 +879,10 @@ class SurfaceOutput:
         self.node_map.restrict(self.work_m, out=self.s_comp)
         self.s_ice.interpolate(self.s_comp)
         self.s_ice.dat.data[:] *= D
-        # The facet means of the masks.
+        # The facet means of the fractions of the sheet.
         area = self.facet_area.dat.data_ro
         sums = {}
-        for target, form in self.mask_forms.items():
+        for target, form in self.fraction_forms.items():
             integral = assemble(form)
             values = integral.dat.data_ro
             target.dat.data_wo[:] = values / area
@@ -1386,6 +1404,9 @@ def parse_args():
                    help="the J to compare with at year 0 (default: the last "
                         "J of the state file)")
     # The solver options of invert_exp11.py, with the same defaults.
+    p.add_argument("--softplus_width_m", type=float,
+                   default=common.SOFTPLUS_WIDTH_M,
+                   help="eps of the softplus sea-level sheet, m of ice")
     p.add_argument("--k_s", type=float, default=0.9422,
                    help="the fluid Love number of the bulge")
     p.add_argument("--gia_rebuild", choices=["per_solve", "lagged", "always"],

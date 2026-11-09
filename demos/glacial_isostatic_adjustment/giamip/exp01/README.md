@@ -160,7 +160,7 @@ the earlier solver used.
 
 | file | content |
 |---|---|
-| `inputs_exp01.h5` | the input file (mesh, earth fields, observed sea level, slope of the ocean mask, ice of every step, record) |
+| `inputs_exp01.h5` | the input file (mesh, earth fields, observed sea level, ice of every step, record) |
 | `inputs_exp01.json` | the record of the prepare job |
 | `inputs_exp01_earth.pvd` | ParaView: the earth fields in SI units |
 | `inputs_exp01_ice.pvd` | ParaView: the ice at the first, middle and last step, m |
@@ -208,9 +208,10 @@ The outputs:
 
 The module docstring of `forward_exp01.py` gives the definition of every
 field and every scalar. CG2 fields move to the surface through
-`SurfaceNodeMap.restrict`. The masks of the solver (ocean function,
-grounded and land ice) contain the facet area, so the file holds their mean
-over each facet (DG0) from a facet integral.
+`SurfaceNodeMap.restrict`. The fractions of the solver's sea-level sheet
+(ocean function, grounded and land ice) vary inside a facet where a coast or
+a grounding line crosses it, so the file holds their mean over each facet
+(DG0) from a facet integral.
 
 `paraview_exp01.py` reads the surface file on any rank count other than
 the writer's (1 is enough at L0) and writes two series with `time` = model year:

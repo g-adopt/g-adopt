@@ -35,8 +35,7 @@ model files `prem-glad-m25.json` and `gowan2021.json` of gia-mip (0cf5f39).
 | time stepping | backward Euler |
 
 Exp08 and Exp05 differ only in the shear and bulk modulus. The density, the
-viscosity, gravity, the observed sea level, the slope of the ocean mask and
-the ice are the same.
+viscosity, gravity, the observed sea level and the ice are the same.
 
 ## The GLAD-M25 elastic structure
 
@@ -229,7 +228,7 @@ the earlier solver used.
 
 | file | content |
 |---|---|
-| `inputs_exp08.h5` | the input file (mesh, earth fields, observed sea level, slope of the ocean mask, ice of every step, record) |
+| `inputs_exp08.h5` | the input file (mesh, earth fields, observed sea level, ice of every step, record) |
 | `inputs_exp08.json` | the record of the prepare job |
 | `inputs_exp08_earth.pvd` | ParaView: the earth fields in SI units, with `dlnvs` and `dlnvp` |
 | `inputs_exp08_ice.pvd` | ParaView: the ice at the first, middle and last step, m |

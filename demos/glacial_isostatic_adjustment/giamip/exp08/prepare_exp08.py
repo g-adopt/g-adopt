@@ -18,8 +18,7 @@ WHAT THIS SCRIPT DOES
        relative change of vs and vp): density, shear and bulk modulus (DG1),
        viscosity (DG0) and gravity (CG2), all non-dimensional.
     3. Make the forcing on the mantle from the GIAMIP files: the observed sea
-       level `SL_obs = -bed_obs / D` (CG2), the frozen surface slope of the
-       ocean mask (`surface_slope(SL_obs)`, DG1), and the ice of every step
+       level `SL_obs = -bed_obs / D` (CG2), and the ice of every step
        of the march from the start to year 0 (CG1, one entry per step).
     4. Write the input file with its JSON record, the same record as a JSON
        file next to it, and ParaView files of the earth fields and of the ice
@@ -177,7 +176,6 @@ import exp08_common as common  # noqa: E402
 from gadopt import (COMM_WORLD, Function, FunctionSpace,  # noqa: E402
                     SpatialCoordinate, VectorFunctionSpace, VTKFile, assemble,
                     conditional, dot, ds, dx, sqrt)
-from gadopt.sea_level_masks import surface_slope  # noqa: E402
 from mpi4py import MPI  # noqa: E402
 
 import gdrift  # noqa: E402
@@ -1187,7 +1185,7 @@ def topography_of(experiment):
 class SurfaceForcing:
     """The observed bed and the ice on the mantle mesh, from the GIAMIP files.
 
-    `SL_obs = -bed / D` is CG2, because the mask width reads its slope. The
+    `SL_obs = -bed / D` is CG2. The
     ice is CG1 (see `exp08_common.ICE_SPACE`). Every node of the mantle mesh
     takes the value of its direction, so the fields are defined in the whole
     mantle and are read only on Re.
@@ -1429,14 +1427,10 @@ def main():
             f"{row['mu_pa']['max']:.4g}] Pa, K [{row['K_pa']['min']:.4g}, "
             f"{row['K_pa']['max']:.4g}] Pa")
 
-    # The forcing: observed sea level, its frozen slope, and the ice.
+    # The forcing: observed sea level and the ice.
     tic = time.time()
     forcing = SurfaceForcing(mantle, experiment, args.step_years)
     fields["SL_obs"] = forcing.SL_obs
-    # The surface slope of the ocean mask, from the observed bed. It stays
-    # fixed in the inversion: the mask width does not depend on the control.
-    fields["slope"] = surface_slope(forcing.SL_obs)
-    fields["slope"].rename("slope")
     years = np.asarray(forcing.years, dtype=float)
     year0 = int(np.flatnonzero(np.isclose(years, 0.0))[0])
     # The march of the inversion runs from the first year to year 0; the
