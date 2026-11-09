@@ -424,8 +424,12 @@ class InterpolatedBaseDepth(BaseDepth):
         outside_source_range: np.ndarray,
         mesh: MeshConfig,
     ) -> np.ndarray | float:
-        thickness_km = interpolated["thickness"].copy()
-        thickness_km[outside_source_range] = self.fallback_thickness_km
+        # np.where builds a new array, so the interpolated input is not
+        # modified. Nodes outside the source range take the fallback thickness.
+        thickness_km = np.where(
+            outside_source_range, self.fallback_thickness_km, interpolated["thickness"]
+        )
+        # Convert the thickness in km to a nondimensional radius below the surface.
         return mesh.r_outer - thickness_km / mesh.depth_scale
 
 
@@ -536,9 +540,12 @@ class SourceLateralWeight(LateralWeight):
         interpolated: dict[str, np.ndarray],
         outside_source_range: np.ndarray,
     ) -> np.ndarray | float:
-        lateral_weight = interpolated["lateral_weight"].copy()
+        # np.clip returns a new array, so the in-place fallback assignment
+        # below does not modify the interpolated input. The fallback value
+        # 1.0 is inside [0, 1], so doing the clip first gives the same result.
+        lateral_weight = np.clip(interpolated["lateral_weight"], 0.0, 1.0)
         lateral_weight[outside_source_range] = 1.0
-        return np.clip(lateral_weight, 0.0, 1.0)
+        return lateral_weight
 
 
 class LayerIndicator(OutputStrategy):
@@ -760,11 +767,16 @@ class HalfSpaceCoolingGeotherm(OutputStrategy):
         outside_source_range: np.ndarray,
         mesh: MeshConfig,
     ) -> np.ndarray:
-        thickness_km = interpolated["thickness"].copy()
-        age_myr = interpolated["age"].copy()
-        thickness_km[outside_source_range] = self.fallback_thickness_km
-        age_myr[outside_source_range] = self.fallback_age_myr
+        # np.where builds new arrays, so the interpolated inputs are not
+        # modified. Nodes outside the source range take the fallback values.
+        age_myr = np.where(
+            outside_source_range, self.fallback_age_myr, interpolated["age"]
+        )
+        thickness_km = np.where(
+            outside_source_range, self.fallback_thickness_km, interpolated["thickness"]
+        )
 
+        # Depth below the surface and depth of the lithosphere base, both in m.
         depth_m = (mesh.r_outer - r_target) * mesh.depth_scale * 1e3
         z_lab_m = thickness_km * 1e3
         T_norm = self._geotherm(
@@ -878,6 +890,8 @@ class MembershipField(OutputStrategy):
         outside_source_range: np.ndarray,
         mesh: MeshConfig,
     ) -> np.ndarray:
-        frac = np.clip(interpolated["membership"].copy(), 0.0, 1.0)
+        # np.clip returns a new array, so the in-place assignment below does
+        # not modify the interpolated input.
+        frac = np.clip(interpolated["membership"], 0.0, 1.0)
         frac[outside_source_range] = 0.0
         return frac
