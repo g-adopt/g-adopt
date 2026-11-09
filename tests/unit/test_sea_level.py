@@ -6,17 +6,20 @@ is in `NOTES/DESIGN-SEA-LEVEL.md`, and the decisions behind it in
 
     SL      = SL_init + (N - N_init) - (u_r - ur_init) + Shift
     Delta   = SL - SL_init
-    sigma   = rho_w (B C SL - B_init C_init SL_init)
-              + rho_i ((1 - B) I - (1 - B_init) I_init)
+    sigma   = S(I, SL) - S(I_init, SL_init)
+    S(I, SL) = rho_w SL + rho_i eps softplus((I_+ - r SL) / eps)
     E_sl    = -c B_mu g_0 int_Re G(Delta) dS,   dG/dDelta = sigma
 
-with `C = smooth_step(SL, k)` the ocean function, `B = 1 -
-smooth_step(I - (rho_w/rho_i) SL, k)` the grounded-ice function and
-`k = alpha p / h`. The `Shift` row of the residual is mass conservation,
-`int sigma dS = 0`, up to the frame column `lambda . dD/dShift` that keeps the
-residual the gradient of one Lagrangian. At a converged state the net sheet
-mass is therefore of order `lambda`, which is discretisation error, and not
-zero to the solver tolerance (`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 2).
+with `r = rho_w / rho_i`, `I_+` the ice clipped at zero and `eps = EPS` the
+width of the rounded maximum of the water and ice columns
+(`gadopt.sea_level_sheet`). The `Shift` row of the residual is mass
+conservation, `int sigma dS = 0`, up to the frame column `lambda . dD/dShift`
+that keeps the residual the gradient of one Lagrangian. At a converged state
+the net sheet mass is therefore of order `lambda`, which is discretisation
+error, and not zero to the solver tolerance
+(`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 2). The functions of
+the sheet and the tests that need the rounding itself are in
+`test_sea_level_sheet.py`.
 
 The configuration is the one of `TestCentreOfMassFrame.build` in
 `test_gia_gravity.py`: the coarse P2-curved annulus (dr 0.2, 32 azimuthal
@@ -26,9 +29,10 @@ test says otherwise.
 
 ## Four surface states
 
-Most tests use one of four prescribed surface states. Three of them make every
-mask exactly 0 or 1 at every quadrature point, so that the answer of a test can
-be written without the mask functions:
+Most tests use one of four prescribed surface states. Three of them keep every
+quadrature point far from the coastline and the grounding line, so that the
+sheet is the sharp maximum there and the answer of a test can be written
+without the rounding:
 
 - `"ocean"`: a deep uniform ocean, `SL_init = DEEP`, no ice.
 - `"cap"`: the same ocean with grounded ice on the quarter circle
@@ -39,14 +43,13 @@ be written without the mask functions:
   `phi = 0` and `phi = pi`. The load has no degree-1 content, so the rigid
   translation of the frame does not enter the uplift.
 - `"shoreline"`: a smooth sea level `cos(phi - PHASE) + 0.2` with land and a
-  melting ice sheet on it. The masks are fractional over a wide arc, so this
-  state tests the live masks.
+  melting ice sheet on it. The coast lies inside facets, so this state tests
+  the live coastline and the rounding.
 
-`DEEP = 25` is chosen so that `0.5 k DEEP` is about 29 with
-`k = 0.5 * 2 / FacetArea` (about 2.3 on this mesh). `tanh(29)` is 1 to double
-precision, so `C = 1` exactly. The grounded ice is `GROUNDED = 100`, so
-`I - (rho_w/rho_i) SL = 73` under the ice and `-26.9` in the open ocean, which
-saturates `B` in the same way.
+`DEEP = 25` and `GROUNDED = 100` give `|I_+ - r SL|` of at least 26.9 at every
+quadrature point of the saturated states (73 under the ice, `-26.9` in the
+open ocean), which is 538 widths `EPS`. The rounding is `exp(-538)` there, zero
+in double precision.
 
 ## Two DtN representations
 
@@ -125,13 +128,22 @@ FRAME = test_gia_gravity.TestCentreOfMassFrame()
 G_RE = FRAME.gravity_of_r(RE)
 
 #: A deep uniform ocean and a thick grounded ice sheet, in units of the mantle
-#: thickness D. The values are not physical. They saturate the masks, see the
-#: module docstring.
+#: thickness D. The values are not physical. They keep every quadrature point
+#: far from the rounding of the sheet, see the module docstring.
 DEEP = 25.0
 GROUNDED = 100.0
 
-#: The mask steepness factor of the task, `k = alpha * p / h`.
-ALPHA_MASK = 0.5
+#: The width `eps` of the softplus sheet, in units of D like every length of
+#: the test. The sea level of the shoreline state is of order 1 and the facets
+#: of the coarse annulus are about 0.2 long, so with a shoreline slope of order
+#: 1 the band where the second derivative of the sheet is nonzero, about
+#: `eps / (r s)`, is a quarter of a facet wide.
+EPS = 0.05
+
+#: The steepness factor that Will Scott's `SeaLevelSolver` takes
+#: (`TestAgainstWillScott`). It sets that solver's own masks, on a state where
+#: they are saturated.
+WILL_ALPHA = 0.5
 
 #: Rotation of the smooth shoreline state, so that it has no mirror symmetry in
 #: `x` or `y` and every first-moment integral of the ocean is nonzero.
@@ -243,13 +255,13 @@ def solve_settings(representation):
     return dict(solver_parameters=parameters)
 
 
-def masks():
-    """The new masks module. Imported at call time and not at module level.
+def sheet():
+    """The sea-level sheet module, imported at call time and not at module level.
 
-    A module-level import of a module that does not exist yet stops collection
-    of the whole file. At call time each test fails on its own.
+    A module-level import of a module that does not exist stops collection of
+    the whole file. At call time each test fails on its own.
     """
-    return importlib.import_module("gadopt.sea_level_masks")
+    return importlib.import_module("gadopt.sea_level_sheet")
 
 
 def sea_level_class():
@@ -332,9 +344,9 @@ def surface_fields(sub, state, *, d_ice=0.0, sl_init=None):
             (GROUNDED + d_ice) * ice)
     elif state == "shoreline":
         # Ocean where cos(phi - PHASE) > -0.2, land around phi = PHASE + pi,
-        # and an ice sheet on the land that is 0.36 thick at its centre. With
-        # k about 2.3 the transition of C is about 0.43 wide in SL, so the
-        # masks are fractional on a wide arc, which is the point of this state.
+        # and an ice sheet on the land that is 0.36 thick at its centre. The
+        # coast lies inside facets, so the quadrature samples the rounding of
+        # the sheet there, which is the point of this state.
         SL_init = fd.Function(V).interpolate(fd.cos(phi - PHASE) + 0.2)
         I_init = fd.Function(V).interpolate(
             0.6 * fd.max_value(0.0, -fd.cos(phi - PHASE) - 0.4))
@@ -348,7 +360,7 @@ def surface_fields(sub, state, *, d_ice=0.0, sl_init=None):
 def make_sea_level(fields, **overrides):
     """A `SeaLevel` on the Re tag with the test's densities and gravity."""
     settings = dict(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
-                    g_surface=G_RE, alpha_mask=ALPHA_MASK)
+                    g_surface=G_RE, softplus_width=EPS)
     settings.update(fields)
     settings.update(overrides)
     return sea_level_class()(**settings)
@@ -477,166 +489,6 @@ def vector_norm(cofunction):
 def solver_converged(solver):
     """Whether the last nonlinear solve reported convergence."""
     return solver.solver.snes.getConvergedReason() > 0
-
-
-# ---------------------------------------------------------------------------
-# The masks module
-# ---------------------------------------------------------------------------
-
-class TestMasks:
-    """`gadopt.sea_level_masks`: the smooth step, the steepness and the masks.
-
-    The numbers are evaluated as integrals of a constant over the unit square,
-    whose area is 1, so an assembled value is the value of the expression.
-    """
-
-    @staticmethod
-    def value(expr):
-        mesh = fd.UnitSquareMesh(1, 1)
-        return float(fd.assemble(expr * fd.dx(domain=mesh)))
-
-    def test_smooth_step_is_one_half_at_zero(self):
-        # 1e-15 absolute: the quadrature weights of the unit square sum to 1
-        # only to round-off.
-        got = self.value(masks().smooth_step(fd.Constant(0.0), 3.0))
-        assert abs(got - 0.5) < 1e-15
-
-    def test_smooth_step_is_the_logistic_function(self):
-        """`0.5 (1 + tanh(k x / 2)) = 1 / (1 + exp(-k x))`, to round-off.
-
-        1e-14 absolute: both forms are O(1) and double precision gives 1e-16.
-        """
-        x, k = 0.3, 2.0
-        expected = 1.0 / (1.0 + np.exp(-k * x))
-        got = self.value(masks().smooth_step(fd.Constant(x), k))
-        assert abs(got - expected) < 1e-14
-
-    @pytest.mark.parametrize("x, expected", [(1e3, 1.0), (-1e3, 0.0)])
-    def test_smooth_step_saturates_exactly(self, x, expected):
-        """Far from the switch the mask is exactly 0 or 1, not close to it.
-
-        The saturated test states of this file depend on this. The tolerance
-        1e-15 absolute is the round-off of the unit-square quadrature weights.
-        The test also checks the side: positive arguments give the ocean.
-        """
-        got = self.value(masks().smooth_step(fd.Constant(x), 1.0))
-        assert abs(got - expected) < 1e-15
-
-    def test_smooth_step_derivative_is_finite_at_a_huge_argument(self):
-        """The clamp keeps the first derivative finite for any `k x`."""
-        mesh = fd.UnitSquareMesh(1, 1)
-        x = fd.Function(fd.FunctionSpace(mesh, "R", 0)).assign(1e6)
-        form = masks().smooth_step(x, 1e3) * fd.dx(domain=mesh)
-        derivative = fd.assemble(fd.derivative(form, x))
-        assert np.all(np.isfinite(derivative.dat.data_ro))
-
-    def test_the_clamp_is_inside_the_bounds_that_make_it_correct(self):
-        """`19 < SMOOTH_STEP_CLAMP < 177.8`.
-
-        This is the guard on the constant, because no unit test of
-        `smooth_step` alone can reproduce the failure it prevents. The failure
-        is in the second derivative of the mask, which the Jacobian of the
-        centre-of-mass frame column holds: UFL writes the derivative of
-        `tanh(z)` as `(2 cosh(z) / (1 + cosh(2 z)))^2`, so differentiating
-        again carries `cosh(2 z)^2`. Squared, that overflows above
-        `z = 177.8`; an infinite value there multiplies the exact zero
-        derivative of the clamped branch and gives a NaN, which stops the
-        solve. Whether a given kernel forms the square or divides twice in
-        sequence is a TSFC grouping decision, and the kernel of this unit test
-        divides twice, so it stays finite at every clamp up to 350 and cannot
-        fail. What the failure was measured on is the solver: at `grad_floor`
-        7e-5 on the 78 km shelf, clamp 350 fails and clamp 170 converges.
-
-        The lower bound is the value: `tanh` reaches exactly 1.0 in double
-        precision at an argument of 19, so a smaller clamp would make the
-        saturated masks inexact. Both bounds and the solver control are in
-        `NOTES/findings/FINDING-alpha-floor-mass.md`.
-        """
-        assert 19.0 < masks().SMOOTH_STEP_CLAMP < 177.8
-
-    def test_ocean_function_is_the_smooth_step_of_sea_level(self):
-        m = masks()
-        sl, k = 0.2, 2.0
-        assert self.value(m.ocean_function(fd.Constant(sl), k)) == \
-            pytest.approx(self.value(m.smooth_step(fd.Constant(sl), k)),
-                          abs=1e-15)
-
-    @pytest.mark.parametrize("ice, sl, expected", [
-        # Thick ice on land: grounded, B = 0. Argument 50 + 10.7 = 60.7.
-        (50.0, -10.0, 0.0),
-        # Ice thinner than the water depth times rho_w/rho_i: floating, B = 1.
-        # Argument 10 - 53.7 = -43.7.
-        (10.0, 50.0, 1.0),
-        # No ice in the open ocean: B = 1. Argument -53.7.
-        (0.0, 50.0, 1.0),
-    ])
-    def test_grounded_ice_function_is_zero_only_under_grounded_ice(
-            self, ice, sl, expected):
-        """`B = 1 - H(I - (rho_w/rho_i) SL)` in the three saturated cases.
-
-        `k = 1` and arguments of at least 40 in magnitude, so `|k x / 2|` is
-        at least 20 and the tanh is within 1e-17 of 1.
-        """
-        got = self.value(masks().grounded_ice_function(
-            fd.Constant(ice), fd.Constant(sl), 1.0, RHO_W, RHO_I))
-        # 1e-14 absolute: the saturated tanh plus the round-off of the
-        # unit-square quadrature weights.
-        assert abs(got - expected) < 1e-14
-
-    def test_grounded_ice_function_uses_the_density_ratio(self):
-        """At `I = (rho_w/rho_i) SL` the ice is at flotation and `B = 1/2`."""
-        sl = 3.0
-        ice = RHO_W / RHO_I * sl
-        got = self.value(masks().grounded_ice_function(
-            fd.Constant(ice), fd.Constant(sl), 5.0, RHO_W, RHO_I))
-        assert abs(got - 0.5) < 1e-12
-
-    def test_mask_steepness_is_alpha_p_over_the_facet_length(self, meshes):
-        """`k h = alpha p` at every point of Re, with `h = FacetArea` in 2-D.
-
-        Integrated against `FacetArea` over Re, so the check needs no facet
-        length of its own: `int k h ds = alpha p L`. 1e-12 relative, the
-        round-off of an assembled integral of a constant.
-        """
-        _, sub = meshes
-        dss = fd.Measure("ds", domain=sub)(CURVE_RE)
-        k = masks().mask_steepness(sub, 2, ALPHA_MASK)
-        length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(k * fd.FacetArea(sub) * dss)
-        assert got == pytest.approx(ALPHA_MASK * 2 * length, rel=1e-12)
-
-    def test_a_frozen_slope_divides_the_steepness(self, meshes):
-        """With a slope `s`, `k h s = alpha p`: the transition is fixed in space."""
-        _, sub = meshes
-        dss = fd.Measure("ds", domain=sub)(CURVE_RE)
-        slope = fd.Function(fd.FunctionSpace(sub, "DG", 0)).assign(2.0)
-        k = masks().mask_steepness(sub, 2, ALPHA_MASK, slope=slope)
-        length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(k * fd.FacetArea(sub) * slope * dss)
-        assert got == pytest.approx(ALPHA_MASK * 2 * length, rel=1e-12)
-
-    def test_a_zero_slope_is_floored(self, meshes):
-        """A flat region must give a finite steepness, not a division by zero."""
-        _, sub = meshes
-        dss = fd.Measure("ds", domain=sub)(CURVE_RE)
-        slope = fd.Function(fd.FunctionSpace(sub, "DG", 0))
-        k = masks().mask_steepness(sub, 2, ALPHA_MASK, slope=slope)
-        got = fd.assemble(k * dss)
-        assert np.isfinite(got) and got > 0.0
-
-    def test_a_live_slope_expression_is_refused(self, meshes):
-        """The slope must be a frozen `Function`.
-
-        A live `grad(SL)` on the tape adds a `1/|grad SL|^2` term to the
-        adjoint that is not physics (handover section 4.2).
-        """
-        _, sub = meshes
-        V = fd.FunctionSpace(sub, "CG", 1)
-        sl = fd.Function(V).interpolate(fd.SpatialCoordinate(sub)[0])
-        with pytest.raises((TypeError, ValueError)):
-            masks().mask_steepness(sub, 2, ALPHA_MASK,
-                                   slope=fd.sqrt(fd.dot(fd.grad(sl),
-                                                        fd.grad(sl))))
 
 
 # ---------------------------------------------------------------------------
@@ -796,9 +648,9 @@ class TestRefusals:
     def test_refuses_a_boundary_quadrature_degree_below_2p(self, meshes):
         """Degree 3 is below `2 p = 4` for the P2 displacement and potential.
 
-        The calibration (`NOTES/findings/FINDING-mask-steepness.md`) needs `q >= 2 p` for the gradient
-        through the masks. The factory's `quad_degree` sets the boundary
-        degree that the sea-level measure uses.
+        The sheet contains polynomials of degree `p` and their products, which
+        the surface quadrature must integrate. The factory's `quad_degree` sets
+        the boundary degree that the sea-level measure uses.
         """
         _, sub = meshes
         with pytest.raises((AssertionError, ValueError), match=r"(?i)degree"):
@@ -824,53 +676,25 @@ class TestRefusals:
 
 class TestSeaLevelDataclass:
 
-    @staticmethod
-    def default_sea_level(sub):
-        """A `SeaLevel` with every mask setting left at its default."""
-        fields = surface_fields(sub, "ocean")
-        return sea_level_class()(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
-                                 g_surface=G_RE, **fields)
-
-    def test_the_mask_defaults_are_the_ones_the_masks_module_carries(
-            self, meshes):
-        """The defaults live in `sea_level_masks`, so there is one copy of each.
-
-        The values are `alpha = 1` and `grad_floor = 1e-4`, from steps S1 and
-        S2 of `NOTES/findings/FINDING-alpha-floor-mass.md`. The reasons are in
-        the docstrings of the two constants.
-        """
+    @pytest.mark.parametrize("width", [0.0, -1.0])
+    def test_a_width_that_is_not_positive_is_refused(self, meshes, width):
         _, sub = meshes
-        m, sea_level = masks(), self.default_sea_level(meshes[1])
-        assert sea_level.alpha_mask == m.DEFAULT_ALPHA_MASK == 1.0
-        assert sea_level.grad_floor == m.DEFAULT_GRAD_FLOOR == 1e-4
+        with pytest.raises(ValueError, match="must be positive"):
+            make_sea_level(surface_fields(sub, "ocean"),
+                           softplus_width=width)
 
-    @pytest.mark.parametrize("floor", [1e-3, 1e-4])
-    def test_grad_floor_reaches_the_mask_steepness(self, meshes, floor):
-        """The `grad_floor` of `SeaLevel` reaches `mask_steepness`.
-
-        With a frozen slope that is zero everywhere, `max(s, grad_floor)` is
-        the floor, so `k = alpha p / (h grad_floor)` and
-        `int k h ds = alpha p L / grad_floor` over the surface of length `L`.
-        Two floors a factor of 10 apart are checked, so a steepness that
-        ignored the keyword could not pass both. 1e-12 relative: the round-off
-        of an assembled integral of a constant.
-
-        Without this keyword a caller cannot set the floor at all, which is why
-        the measurement scripts of step S2 had to reach it by scaling `alpha`
-        and the slope field together.
-        """
+    def test_the_width_is_required(self, meshes):
         _, sub = meshes
         fields = surface_fields(sub, "ocean")
-        # Zero everywhere, so the floor is what the steepness divides by.
-        slope = fd.Function(fd.FunctionSpace(sub, "DG", 0))
-        solver, _, _ = build(meshes, fields, sea_level_overrides=dict(
-            slope=slope, grad_floor=floor))
-        dss = fd.Measure("ds", domain=sub)(CURVE_RE)
-        length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(solver._sea_level_steepness() * fd.FacetArea(sub)
-                          * dss)
-        assert got == pytest.approx(ALPHA_MASK * 2 * length / floor,
-                                    rel=1e-12)
+        with pytest.raises(TypeError, match="softplus_width"):
+            sea_level_class()(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
+                              g_surface=G_RE, **fields)
+
+    def test_a_width_given_as_a_constant_is_accepted(self, meshes):
+        _, sub = meshes
+        sea_level = make_sea_level(surface_fields(sub, "ocean"),
+                                   softplus_width=fd.Constant(EPS))
+        assert float(sea_level.softplus_width) == EPS
 
 
 # ---------------------------------------------------------------------------
@@ -1047,31 +871,24 @@ class TestSurfaceLoadSheet:
         got = fd.assemble(solver.surface_load_sheet() * dss)
         assert got == pytest.approx(expected, rel=1e-10)
 
-    def test_the_sheet_is_the_kendall_form_at_a_shoreline(self, meshes):
-        """Live masks: the sheet is equations (2)-(3) of the handover, pointwise.
+    def test_the_sheet_is_the_softplus_column_difference_at_a_shoreline(
+            self, meshes):
+        """The live sheet is `S(I, SL) - S(I_init, SL_init)`, pointwise.
 
-        The expected sheet is built from the masks module with
-        `k = mask_steepness(sub, 2, 0.5)`, where 2 is the highest degree of
-        the displacement and the potential. A random pointwise weight makes
-        the comparison pointwise instead of a single mean. 1e-11 relative: the
-        two sides are the same algebra evaluated by two kernels.
+        The expected sheet is built from `gadopt.sea_level_sheet` with the
+        same width. A random pointwise weight makes the comparison pointwise
+        instead of a single mean. 1e-11 relative: the two sides are the same
+        algebra evaluated by two kernels.
         """
         _, sub = meshes
-        m = masks()
+        m = sheet()
         fields = surface_fields(sub, "shoreline")
         solver, z, layout = build(meshes, fields)
         shift = 0.05
         z.subfunctions[layout.sea_level].assign(shift)
-        k = m.mask_steepness(sub, 2, ALPHA_MASK)
         SL0, I, I0 = fields["SL_init"], fields["I"], fields["I_init"]
-        SL = SL0 + shift
-
-        def B(ice, sl):
-            return m.grounded_ice_function(ice, sl, k, RHO_W, RHO_I)
-
-        expected = (RHO_W * (B(I, SL) * m.ocean_function(SL, k) * SL
-                             - B(I0, SL0) * m.ocean_function(SL0, k) * SL0)
-                    + RHO_I * ((1 - B(I, SL)) * I - (1 - B(I0, SL0)) * I0))
+        expected = (m.softplus_column(I, SL0 + shift, EPS, RHO_W, RHO_I)
+                    - m.softplus_column(I0, SL0, EPS, RHO_W, RHO_I))
         weight = fd.Function(fd.FunctionSpace(sub, "CG", 2))
         weight.dat.data[:] = np.random.default_rng(7).uniform(
             0.5, 1.5, weight.dat.data.shape)
@@ -1358,13 +1175,14 @@ def jacobian(meshes, state, rotation=False):
     the transpose tests read many blocks of it. With `rotation=True` the space
     carries the rotation scalar `m3`, and the perturbation also sets it.
 
-    `"cap"`: masks saturated, so the mask derivatives vanish (below 1e-40) and
-    the Jacobian is the fixed-mask one. `"shoreline"`: live masks. The sheet
-    depends on `(u, psi, Shift)` only through the one scalar `Delta`, so the
-    exact Jacobian is still symmetric (`NOTES/DESIGN-SEA-LEVEL.md`).
+    `"cap"`: every quadrature point far from the rounding, so the second
+    derivative of the sheet vanishes and the Jacobian is that of the sharp
+    maximum. `"shoreline"`: a live coastline. The sheet depends on
+    `(u, psi, Shift)` only through the one scalar `Delta`, so the exact
+    Jacobian is still symmetric (`NOTES/DESIGN-SEA-LEVEL.md`).
 
-    The perturbation is 1e-3, so the shoreline masks stay fractional and the
-    saturated masks stay saturated.
+    The perturbation is 1e-3, so the shoreline coast stays inside its facets
+    and the saturated states stay saturated.
     """
     key = (state, rotation)
     if key not in _JACOBIANS:
@@ -1421,7 +1239,7 @@ class TestTransposes:
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
 class TestRotationTransposes:
-    """The rotation row against the sheet, on the live-mask shoreline state.
+    """The rotation row against the sheet, on the live-coastline shoreline state.
 
     With rotation on, the sheet enters `inertia_form`, so the closure row of
     `m3` depends on `(u, psi, Shift)` through `Delta`. Its transpose partner is
@@ -1470,7 +1288,7 @@ class TestRotationTransposes:
 class TestResidualIsTheVariationOfTheEnergy:
 
     def test_written_residual_equals_the_derivative_of_the_energy(self, meshes):
-        """At saturated masks, `sea_level_residual() = derivative(E_sl)`.
+        """At a saturated sheet, `sea_level_residual() = derivative(E_sl)`.
 
         The residual is written term by term for the Slate reason of handover
         B trap 3.4.2. This pins that it is still the variation of the energy,
@@ -1544,7 +1362,7 @@ _SHORELINE = {}
 
 
 def solve_shoreline(meshes, representation):
-    """One live-mask solve of the shoreline state on one representation, cached.
+    """One live-coastline solve of the shoreline state on one representation, cached.
 
     `solve_settings(representation)` gives the tolerances. The residual norm
     at the zero state is recorded before the solve, for the Newton part of the
@@ -1565,7 +1383,7 @@ def solve_shoreline(meshes, representation):
         initial_norm = vector_norm(fd.assemble(solver.F))
         solver.solve()
         iterations = solver.solver.snes.getIterationNumber()
-        print(f"shoreline live-mask solve, {representation}: {iterations} "
+        print(f"shoreline live-coastline solve, {representation}: {iterations} "
               f"Newton iterations, reason "
               f"{solver.solver.snes.getConvergedReason()}")
         _SHORELINE[representation] = (solver, z, layout, initial_norm)
@@ -1585,7 +1403,7 @@ class TestLiveMaskSolve:
         assert solver_converged(solver)
 
     def test_newton_takes_at_most_five_iterations(self, shoreline_solved):
-        """`NOTES/DECISIONS.md`: more than 4 to 5 means the exact live-mask Jacobian is wrong.
+        """`NOTES/DECISIONS.md`: more than 4 to 5 means the exact live-coastline Jacobian is wrong.
 
         Logged as well, by the fixture.
         """
@@ -1616,10 +1434,9 @@ class TestLiveMaskSolve:
         same factor 10 as `test_the_shift_row_converges`. It is 1e-11 here and
         does not set the bound.
 
-        `C = 2`. Calibration on this fixture: `lambda = (4.45e-9, 2.43e-9)`,
-        `int |x_i dsigma/dShift| = (2.34, 2.27)`, `int sigma = 7.36e-9`, which
-        the identity above reproduces to four digits and which is 0.74 of the
-        first term with `C = 1`. A missing `Shift` row or a wrong scale on
+        `C = 2`. On this fixture with the softplus sheet,
+        `lambda = (4.27e-9, 2.33e-9)` and `int sigma = 5.82e-9`, of the same
+        size as the frame term. A missing `Shift` row or a wrong scale on
         either term gives a net mass of order the ice change, 1e-2 of the sheet
         scale, far above the bound. A flipped sign on one term alone stays
         inside the bound; `TestTransposes` and
@@ -1634,7 +1451,7 @@ class TestLiveMaskSolve:
         dss = re_measure(solver)
         sigma = solver.surface_load_sheet()
         # `dsigma/dShift`: the Gateaux derivative of the sheet in the direction
-        # of the unit `Shift`, with live masks.
+        # of the unit `Shift`, with a live coastline.
         direction = fd.Function(z.function_space())
         direction.subfunctions[layout.sea_level].assign(1.0)
         dsigma_dshift = expand_derivatives(
@@ -1705,16 +1522,16 @@ class TestRepresentationParity:
     mass and the degree-1 trace coefficients of the exterior DtN boundary,
     which carry the degree-1 response that the frame fixes.
 
-    The probe of `NOTES/PLAN-LOWRANK-SEA-LEVEL.md` section 1 gave, on both
-    paths, `Shift` 3.891462130337e-03, frame multipliers (4.4485e-09,
-    2.4261e-09), net sheet mass 7.361e-09 and exterior degree-1 coefficients
-    (-4.159e-10, -2.269e-10). Each path is also checked against the probe
-    `Shift`, so that the two paths cannot agree on a wrong value.
+    A probe of the shoreline state with the softplus sheet (`EPS` = 0.05) gave,
+    on both paths, `Shift` 5.178121256074e-03, frame multipliers
+    (4.274742e-09, 2.333784e-09) and net sheet mass 5.822e-09. Each path is
+    also checked against the probe `Shift`, so that the two paths cannot agree
+    on a wrong value.
     """
 
     #: The probe values of the shoreline state.
-    PROBE_SHIFT = 3.891462130337e-03
-    PROBE_MULTIPLIERS = (4.4485e-09, 2.4261e-09)
+    PROBE_SHIFT = 5.178121256074e-03
+    PROBE_MULTIPLIERS = (4.274742e-09, 2.333784e-09)
 
     @pytest.fixture(scope="class")
     def states(self, meshes):
@@ -1925,7 +1742,7 @@ class TestAgainstWillScott:
         Ih = fd.Function(caps_c.function_space()).interpolate(
             (GROUNDED + d_ice) * caps_c)
         SL = fd.Function(V).assign(DEEP)
-        will_solver = will.SeaLevelSolver(SL, Ih, Ih0, du_r, dphi, ALPHA_MASK)
+        will_solver = will.SeaLevelSolver(SL, Ih, Ih0, du_r, dphi, WILL_ALPHA)
         will_solver.update_shorelines()
         shift_will = float(will_solver.shift)
 
@@ -1961,8 +1778,8 @@ class TestNestedCondensation:
     def test_internal_variable_scpc_builds_and_solves(self, meshes):
         """The iterative preset condenses `(u, M)` in Slate with sea level on.
 
-        With live masks the `(u, u)` block carries parent-mesh coefficients
-        through the masks. `InternalVariableSCPC` compiles that block with
+        With a live coastline the `(u, u)` block carries parent-mesh coefficients
+        through the sheet. `InternalVariableSCPC` compiles that block with
         Slate, which needs a single mesh (`NOTES/DESIGN-SEA-LEVEL.md`), so this is
         where a residual that is not written term by term fails.
         """
@@ -2040,7 +1857,7 @@ def rebuild_parameters(preset=None, **overrides):
     """The iterative preset on the low-rank path, for the cache-rule tests.
 
     The same dictionary `solve_settings("lowrank")` builds, so the tolerances
-    and the converged state are those every other live-mask test of this file
+    and the converged state are those every other live-coastline test of this file
     reads. It is built here rather than taken from `solve_settings` because
     each of these tests needs its own copy to write an option into, and
     because they all name the low-rank representation: that is the path whose
@@ -2106,9 +1923,9 @@ def block1_context(solver):
 class TestLiveMaskRebuildRules:
     """W4: the moving coastline makes the Jacobian state-dependent.
 
-    With `SeaLevel(fixed_ocean=False)` the ocean function `C` and the
-    grounded-ice function `B` are smooth steps of the current sea level, so
-    the surface load sheet follows the unknowns and the Jacobian moves inside
+    With `SeaLevel(fixed_ocean=False)` the sheet is the rounded maximum of the
+    water and ice columns of the current sea level, so the surface load sheet
+    follows the unknowns and the Jacobian moves inside
     one nonlinear solve, exactly as it does for a power law.
     `SelfGravitatingGIASolver._jacobian_depends_on_solution` says so, which has
     one correctness consequence and one cost consequence.
@@ -2119,7 +1936,7 @@ class TestLiveMaskRebuildRules:
 
     The cost one is that `operator_version` is published as `None`, so every
     cache keyed on it rebuilds instead of holding the state the march started
-    from for the whole run. `Shift` is a `Real` unknown, so the masks sit in
+    from for the whole run. `Shift` is a `Real` unknown, so the sheet sits in
     `A01`, `A10` and `A11` as well as in `A00` and every cached factor is
     stale together. Two options let a run trade accuracy of those caches
     against their cost: `lowrank_reuse_rtol` and `gia_rebuild`. Which
@@ -2129,7 +1946,7 @@ class TestLiveMaskRebuildRules:
 
     @pytest.fixture(scope="class")
     def live_exact(self, meshes):
-        """One live-mask shoreline solve that rebuilds block 0 at every update.
+        """One live-coastline shoreline solve that rebuilds block 0 at every update.
 
         `gia_rebuild = always`, so the condensed blocks and with them the
         low-rank columns follow the coastline at every Newton iteration, which
@@ -2150,21 +1967,21 @@ class TestLiveMaskRebuildRules:
         return solver, z, layout
 
     def test_the_jacobian_is_declared_state_dependent(self, live_exact):
-        """The predicate is true with live masks on a Newtonian Earth.
+        """The predicate is true with a live coastline on a Newtonian Earth.
 
         Both the method itself and the copy of its answer that
         `_attach_condensation_context` publishes for the preconditioners to
         read before the first solve.
         """
         solver, _, _ = live_exact
-        assert solver._live_ocean_masks()
+        assert solver._live_coastline()
         assert solver._jacobian_depends_on_solution()
         assert solver.appctx["gia_jacobian_depends_on_solution"] is True
-        # The rheology is Newtonian, so the masks are the whole of the reason.
+        # The rheology is Newtonian, so the coastline is the whole of the reason.
         assert solver._newtonian_rheology()
 
     def test_block_zero_symmetry_is_unchanged(self, meshes, live_exact):
-        """Live masks do not make the condensed block-0 operator nonsymmetric.
+        """A live coastline does not make the condensed block-0 operator nonsymmetric.
 
         This is the check the design rests on. The two predicates read the
         same rheology today, so separating them could have moved the Krylov
@@ -2174,7 +1991,7 @@ class TestLiveMaskRebuildRules:
         It cannot, and the reason is physical.  The sheet depends on the
         unknowns only through the one scalar `Delta = dN - du_r + Shift`, so
         one energy `E_sl` generates all three sea-level rows and its second
-        variation is symmetric whatever the masks do
+        variation is symmetric whatever the sheet does
         (`NOTES/DESIGN-SEA-LEVEL.md` section 3).
         `condensed_operator_symmetric` reads `_newtonian_rheology` directly
         and not `_jacobian_depends_on_solution`, so the override reaches it by
@@ -2201,7 +2018,7 @@ class TestLiveMaskRebuildRules:
         assert truncated.condensed_operator_symmetric()
         assert truncated.solver_parameters[key] == "cg"
         # And solve it. Without this the test pins the code path and not the
-        # mathematics: every assertion above would hold if the live-mask
+        # mathematics: every assertion above would hold if the live-coastline
         # block-0 operator were in fact nonsymmetric, which is the failure the
         # docstring says cannot happen. CG on a nonsymmetric operator does not
         # raise, so the evidence is that the solve converges.
@@ -2225,9 +2042,9 @@ class TestLiveMaskRebuildRules:
         solver, _, _ = live_exact
         block0, _ = block0_and_potential(solver)
         iterations = solver.solver.snes.getIterationNumber()
-        print(f"live masks: {iterations} Newton iterations, "
+        print(f"a live coastline: {iterations} Newton iterations, "
               f"assembly_count {block0.assembly_count}")
-        assert iterations > 1, "the live-mask solve must take Newton steps"
+        assert iterations > 1, "the live-coastline solve must take Newton steps"
         assert block0.assembly_count == iterations
 
     def test_a_fixed_coastline_assembles_once_over_two_solves(self, meshes):
@@ -2238,7 +2055,7 @@ class TestLiveMaskRebuildRules:
         nothing in the Jacobian moves between two solves at the same time
         step, so the condensed operator and the low-rank columns are built
         once and serve both solves. That is what the reuse rule exists for,
-        and it must survive the change that switches it off under live masks.
+        and it must survive the change that switches it off under a live coastline.
         """
         _, sub = meshes
         solver, _, _ = build(meshes, surface_fields(sub, "shoreline"),
@@ -2256,9 +2073,9 @@ class TestLiveMaskRebuildRules:
         assert block0.assembly_count == 1
         assert potential.column_builds == 1
 
-    def test_ksponly_with_live_masks_is_refused_and_the_message_says_why(
+    def test_ksponly_with_a_live_coastline_is_refused_and_the_message_says_why(
             self, meshes):
-        """The guard fires on the masks, and names them rather than the exponent.
+        """The guard fires on the live sheet, and names it rather than the exponent.
 
         Without this, a Newtonian Earth with a moving coastline accepts
         `ksponly`: one linear solve at the initial state reports `CONVERGED`
@@ -2277,7 +2094,7 @@ class TestLiveMaskRebuildRules:
                   solver_parameters=rebuild_parameters(snes_type="ksponly"))
         message = str(raised.value)
         assert "fixed_ocean" in message
-        assert "mask" in message
+        assert "sea-level sheet" in message
         assert "exponent" not in message
 
     def test_the_reuse_tolerance_holds_the_low_rank_columns(
@@ -2285,7 +2102,7 @@ class TestLiveMaskRebuildRules:
         """`lowrank_reuse_rtol = 1e-3` builds `Z` once and changes no answer.
 
         `gadopt.LowRankPotentialPC` keys the columns `Z = A_psipsi^-1 U` on the
-        Frobenius norm of `A_psipsi`. With live masks that block moves at every
+        Frobenius norm of `A_psipsi`. With a live coastline that block moves at every
         Newton iteration, because the ocean load carries `psi` through the
         geoid, so the exact-equality rule rebuilds the columns at each one: one
         accurate solve per DtN mode, thrown away one iteration later.
@@ -2363,12 +2180,12 @@ def taylor_forward(control, meshes, *, rotation, representation,
     """Tape one solve of the shoreline state with ice thickness `control`.
 
     The functional reads the degree-1 radial displacement at Re and `Shift`,
-    so that it depends on the masks through mass conservation and through the
+    so that it depends on the sheet through mass conservation and through the
     ocean load. The weights make the two parts of similar size.
 
     Args:
       fixed_ocean: the `SeaLevel.fixed_ocean` setting. `False` tapes the
-        live-mask solve.
+        live-coastline solve.
     """
     parent, sub = meshes
     with stop_annotating():
@@ -2425,9 +2242,15 @@ def run_taylor(meshes, rotation, representation, fixed_ocean=False):
             h = fd.Function(V).interpolate(-0.1 * fd.cos(phi - PHASE))
         else:
             # Thickening on one flank and thinning on the other, of 0.1 at
-            # most, so the grounding line moves and the B mask derivative is
-            # exercised.
-            h = fd.Function(V).interpolate(0.1 * fd.sin(phi - PHASE))
+            # most, scaled by the ice thickness over its maximum. The sheet
+            # clips the ice at zero, and a direction that thinned ice-free
+            # ground would make the ice negative there and put a kink into the
+            # functional (Taylor rate 1, `nonnegative_ice`). Scaled by the ice,
+            # `I + h dm` keeps the sign of `I`; the coast still moves through
+            # `Shift`.
+            peak = control.dat.data_ro.max()
+            h = fd.Function(V).interpolate(
+                0.1 * fd.sin(phi - PHASE) * control / peak)
     continue_annotation()
     try:
         m = Control(control)
@@ -2445,7 +2268,7 @@ def run_taylor(meshes, rotation, representation, fixed_ocean=False):
 
 class TestTaylor:
 
-    def test_live_mask_taylor_rate_with_ice_thickness_control(
+    def test_live_coastline_taylor_rate_with_ice_thickness_control(
             self, meshes, representation):
         run_taylor(meshes, rotation=False, representation=representation)
 
@@ -2477,7 +2300,7 @@ def coastline_fields(sub, land, *, d_ice=0.0, ocean_ice=0.0):
     The fields are DG0, so a sector edge sits on mesh vertices and no
     quadrature point sees a transition (`indicator`). `SL_init` is `+DEEP` in
     the ocean and `-DEEP` on the land, so both the fixed ocean function
-    `C0 = C(SL_init)` and the live masks are saturated. This is what makes a
+    `C0 = C(SL_init)` and the a live coastline are saturated. This is what makes a
     fixed and a live coastline the same problem: the ice rests on land, so
     the live grounded-ice function is 0 there, and the ocean is deep and free
     of grounded ice, so the live `B C` is 1 there.
@@ -2488,7 +2311,7 @@ def coastline_fields(sub, land, *, d_ice=0.0, ocean_ice=0.0):
       d_ice: the ice thickness change on the land, in units of D.
       ocean_ice: the ice thickness that grows over the whole ocean from zero,
         in units of D. A value above `(rho_w / rho_i) DEEP = 26.9` grounds
-        that ice on the sea floor under live masks. A fixed coastline removes
+        that ice on the sea floor under a live coastline. A fixed coastline removes
         it through `1 - C0`.
 
     Returns:
@@ -2614,7 +2437,7 @@ class TestFixedOcean:
 
         The state is one land sector (`"cap"`) with a grounded ice change of
         1e-2 in a deep ocean, the default Earth and the full `Lambda`. The
-        masks are saturated, so both sheets are `rho_w Delta` in the ocean and
+        sheet is saturated, so both sheets are `rho_w Delta` in the ocean and
         `rho_i dI` on the land, and the load has degree-1 content, so the frame
         rows are active. The design names the `"cap"` state of this module, but
         that state puts its ice on the ocean floor (`SL_init = DEEP` under the
@@ -2662,7 +2485,7 @@ class TestFixedOcean:
 
         Guard: the ice grown over the ocean is 3e4 times the mass of the land
         ice change, so a sheet that kept it would move `Shift` by orders of
-        magnitude. Under live masks that ice rests on the sea floor
+        magnitude. Under a live coastline that ice rests on the sea floor
         (`GROUNDED > (rho_w / rho_i) DEEP`) and would load the Earth.
         """
         _, sub = meshes
@@ -2691,10 +2514,10 @@ class TestFixedOcean:
         """The fixed-coastline residual is linear: one Newton step from zero.
 
         The shoreline state, whose `C0` is fractional over a wide arc, so the
-        test does not depend on saturated masks. `newtonls` from the zero
+        test does not depend on a saturated sheet. `newtonls` from the zero
         initial guess with the tolerances of `solve_settings`. The outer
         Krylov solve reduces the residual by 1e-12, below `snes_rtol = 1e-10`,
-        so a linear residual stops at iteration 1. A live-mask solve of the
+        so a linear residual stops at iteration 1. A live-coastline solve of the
         same state takes more (`TestLiveMaskSolve`).
         """
         _, sub = meshes
@@ -2749,8 +2572,8 @@ class TestFixedOcean:
         formula and the fixed sheet both remove. The load has no degree-1
         content, so the frame does not translate the Earth under the ocean.
         `Lambda = 1e-6`, and shear and bulk moduli of 1e8 with the viscosity
-        of `stiff`. `C0` is built with the solver's own steepness, so the
-        formula reads the same mask as the sheet.
+        of `stiff`. `C0` is built with the solver's own width, so the
+        formula reads the same `C0` as the sheet.
 
         Tolerance 1e-6 relative. `Shift` differs from the formula by the
         ocean mean of `du_r - dN`. Measured on the multiplier path
@@ -2775,8 +2598,7 @@ class TestFixedOcean:
         solver.solve()
         assert solver_converged(solver)
         dss = re_measure(solver)
-        C0 = masks().ocean_function(fields["SL_init"],
-                                    solver._sea_level_steepness())
+        C0 = sheet().ocean_fraction(fields["SL_init"], EPS, RHO_W, RHO_I)
         dI = fields["I"] - fields["I_init"]
         eustatic = (-RHO_I * fd.assemble((1 - C0) * dI * dss)
                     / (RHO_W * fd.assemble(C0 * dss)))
