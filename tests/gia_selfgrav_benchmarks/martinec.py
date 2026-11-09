@@ -33,9 +33,9 @@ THE SEA-LEVEL EQUATION AS THIS CODE SOLVES IT
         SL    = SL_init + (N - N_init) - (u_r - ur_init) + Shift
         sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
 
-    for a fixed coastline (cases B and C, `C0 = C(SL_init)`, Martinec eq. 7
-    and 8), and with the live ocean and grounded-ice masks for a moving
-    coastline (case D). `N = psi / g_s` is the geoid height and `u_r = u . n`
+    for a fixed coastline (cases B and C, `C0 = H(r SL_init / eps)`, Martinec
+    eq. 7 and 8), and with the live softplus sheet of `gadopt.SeaLevel` for a
+    moving coastline (case D). `N = psi / g_s` is the geoid height and `u_r = u . n`
     the uplift. The `Shift` row is the conservation of the mass of water and
     ice. The centre-of-mass multipliers hold the first mass moment of mantle,
     core and load at zero, which is the frame of the benchmark. Rotation is
@@ -82,7 +82,7 @@ DISCRETISATION
               grows from zero.
     Solver    Cases B and C have a fixed coastline, so the residual is linear
               in the unknowns and one linear solve per step is exact
-              (`ksponly`). Case D has live masks and runs Newton.
+              (`ksponly`). Case D has a live coastline and runs Newton.
 
 RUN
     mpiexec -np <N> python3 martinec.py --case B
@@ -142,11 +142,14 @@ from gadopt.gia_gravity import (SeaLevel,  # noqa: E402
                                 SelfGravitatingGIASolver,
                                 rigid_rotation_nullspace,
                                 self_gravitating_gia_space)
-from gadopt.sea_level_masks import (DEFAULT_ALPHA_MASK,  # noqa: E402
-                                    DEFAULT_GRAD_FLOOR, grounded_ice_function,
-                                    ocean_function, surface_slope)
+from gadopt.sea_level_sheet import (ocean_fraction,  # noqa: E402
+                                    water_fraction)
 
 import selfgrav_common as common  # noqa: E402
+
+#: The width `eps` of the softplus sea-level sheet, in metres of ice
+#: (`gadopt.SeaLevel.softplus_width`), as in the GIAMIP runs.
+SOFTPLUS_WIDTH_M = 1.0
 
 # --------------------------------------------------------------------------
 # Settings of the benchmark
@@ -318,8 +321,7 @@ def basin_sea_level(mesh, case):
 
     with psi the angular distance from the basin centre. The topography is
     measured up from the geoid, so the initial sea level is -zeta0: positive
-    (water) inside the coastline, negative (land) outside. The field is
-    continuous because the mask steepness reads its slope.
+    (water) inside the coastline, negative (land) outside.
 
     Args:
       mesh: the mantle mesh.
@@ -476,10 +478,7 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
     z.subfunctions[layout.displacement].rename("displacement")
     z.subfunctions[layout.potential].rename("potential")
 
-    # The initial topography and its frozen slope. The slope sets the width
-    # of the mask in arc length. Without it the width is fixed in sea level,
-    # and it spreads over many facets on the gentle B1 shelf (slope 2.51e-4)
-    # while it falls inside one facet on the steep B2 one (1.26e-3).
+    # The initial topography.
     SL_init = basin_sea_level(mantle, case)
     ice = cap_thickness(mantle, case, t_kyr)
     g_surface = surface_gravity(parent)
@@ -490,8 +489,8 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
         # The run starts from the undeformed state, so the initial ice, geoid
         # and uplift are all zero.
         I_init=Constant(0.0), N_init=Constant(0.0), ur_init=Constant(0.0),
-        alpha_mask=DEFAULT_ALPHA_MASK, slope=surface_slope(SL_init),
-        grad_floor=DEFAULT_GRAD_FLOOR, fixed_ocean=is_fixed_ocean(case))
+        softplus_width=SOFTPLUS_WIDTH_M / common.D_SCALE,
+        fixed_ocean=is_fixed_ocean(case))
 
     # A rigid rotation of the mantle stays in the kernel with sea level on:
     # its u . n is zero, so it moves no water, and its mass moment is zero
@@ -499,7 +498,8 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
     nullspace = rigid_rotation_nullspace(Z, layout)
 
     # With a fixed coastline the sheet is affine in the unknowns and one
-    # linear solve is exact. With live masks (case D) Newton is the method.
+    # linear solve is exact. With a live coastline (case D) Newton is the
+    # method.
     snes_type = "ksponly" if is_fixed_ocean(case) else "newtonls"
     solver = SelfGravitatingGIASolver(
         z, common.maxwell_approximation(mantle, bulk_shear_ratio),
@@ -522,21 +522,21 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
 def ocean_and_ice(solver, case, pieces):
     """The ocean areas and the ice masses of the current state.
 
-    The masks are the solver's own, with its own steepness, so these
-    numbers read the same masks that the sheet integrates.
+    The fractions are those of the solver's sheet, with its own width, so
+    these numbers read the same fractions that the sheet integrates.
 
     Three areas are returned, because with a moving coastline three
     integrals count three different regions:
 
     * int B dS, the ocean area of the benchmark (Martinec eq. 23): the
       points with water and no grounded ice, floating ice counted as ocean.
-      B = 1 - H_k(I - (rho_w / rho_i) SL) is 1 in open water and under
-      floating ice, and 0 under grounded ice and on land.
+      B = 1 - H((I - (rho_w / rho_i) SL) / eps) is 1 in open water and
+      under floating ice, and 0 under grounded ice and on land.
     * int C dS, every point where the sea level is positive. It also counts
       the bed under grounded marine ice as ocean.
-    * int B C dS, the product that multiplies the sea level in the water
-      term of the sheet. It loses a strip of about 1 / k along every
-      ice-free coast, which holds almost no water.
+    * int B C dS, the water area of the sheet. For the softplus sheet the
+      water fraction `B` is already the rounded product of the ocean and the
+      grounded-ice functions, so this area equals int B dS.
 
     With a fixed coastline B does not exist and all three are int C0 dS.
     With a fixed coastline the ice over the initial ocean is removed by
@@ -552,18 +552,18 @@ def ocean_and_ice(solver, case, pieces):
       as fractions of the sphere, and the two ice masses in kg.
     """
     dss = solver.sea_level_measure()(common.SURF_RE)
-    k = solver._sea_level_steepness()
     ice = pieces["ice"]
     if is_fixed_ocean(case):
-        C = ocean_function(pieces["SL_init"], k)
+        C = solver._fixed_ocean_mask()
         B, water, floating = C, C, None
         grounded = (1 - C) * ice
     else:
         SL = solver.sea_level()
-        C = ocean_function(SL, k)
-        B = grounded_ice_function(ice, SL, k, rho_water_nondim(case),
-                                  rho_ice_nondim(case))
-        water = B * C
+        eps = Constant(float(solver.sea_level_parameters.softplus_width))
+        rho_w, rho_i = rho_water_nondim(case), rho_ice_nondim(case)
+        C = ocean_fraction(SL, eps, rho_w, rho_i)
+        B = water_fraction(ice, SL, eps, rho_w, rho_i)
+        water = B
         grounded, floating = (1 - B) * ice, B * ice
     sphere = 4.0 * np.pi * common.RE**2
     # A non-dimensional mass times rho_bar D^3 is kilograms: the densities
