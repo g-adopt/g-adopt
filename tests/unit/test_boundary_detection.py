@@ -1,5 +1,4 @@
 import firedrake as fd
-from firedrake.petsc import PETSc
 from gadopt.utility import get_boundary_ids
 import pytest
 import tempfile
@@ -154,18 +153,23 @@ def test_extruded_mesh_no_unlabelled_boundary():
 
 def test_unlabelled_faces_are_not_a_boundary():
     # Faces without a "Face Sets" value must not map to a boundary name.
-    # Edit the label before fd.Mesh distributes the plex, so this runs in parallel.
-    plex = PETSc.DMPlex().createBoxMesh((4, 4), simplex=False, interpolate=True, comm=fd.COMM_WORLD)
-    # DMPlex numbers the sides bottom 1, right 2, top 3, left 4
+    # get_boundary_ids reads the label from the DMPlex of the mesh, so remove
+    # the value from one side of a Firedrake mesh to make unlabelled faces.
+    # Each rank clears the label on its own part of the mesh, so this also
+    # runs in parallel. The mesh is not used for anything else, so it does
+    # not matter that its cached boundary data no longer matches the label.
+    mesh = fd.UnitSquareMesh(4, 4, quadrilateral=True)
+    plex = mesh.topology_dm
+    # Firedrake numbers the sides x=0 as 1, x=1 as 2, y=0 as 3, y=1 as 4
     label = plex.getLabel("Face Sets")
-    # The stratum IS is null on ranks without a left face
-    if label.getStratumSize(4) > 0:
-        for point in label.getStratumIS(4).getIndices():
-            label.clearValue(point, 4)
-    boundary = get_boundary_ids(fd.Mesh(plex))
+    # The stratum IS is null on ranks without a face on the x=0 side
+    if label.getStratumSize(1) > 0:
+        for point in label.getStratumIS(1).getIndices():
+            label.clearValue(point, 1)
+    boundary = get_boundary_ids(mesh)
     assert not hasattr(boundary, "left")
     assert -1 not in boundary
-    assert (boundary.right, boundary.bottom, boundary.top) == (2, 1, 3)
+    assert (boundary.right, boundary.bottom, boundary.top) == (2, 3, 4)
 
 
 geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*/mesh/*.geo")
