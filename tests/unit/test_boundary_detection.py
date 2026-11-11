@@ -142,6 +142,36 @@ def test_extruded_mesh_cubed_sphere_to_sphere():
     assert not hasattr(boundary, "back")
 
 
+def test_extruded_mesh_no_unlabelled_boundary():
+    # On ranks without cells, top and bottom still come from mesh.extruded.
+    mesh = fd.ExtrudedMesh(fd.UnitIntervalMesh(2), 2)
+    boundary = get_boundary_ids(mesh)
+    assert boundary.top == "top"
+    assert boundary.bottom == "bottom"
+    assert -1 not in boundary
+
+
+def test_unlabelled_faces_are_not_a_boundary():
+    # Faces without a "Face Sets" value must not map to a boundary name.
+    # get_boundary_ids reads the label from the DMPlex of the mesh, so remove
+    # the value from one side of a Firedrake mesh to make unlabelled faces.
+    # Each rank clears the label on its own part of the mesh, so this also
+    # runs in parallel. The mesh is not used for anything else, so it does
+    # not matter that its cached boundary data no longer matches the label.
+    mesh = fd.UnitSquareMesh(4, 4, quadrilateral=True)
+    plex = mesh.topology_dm
+    # Firedrake numbers the sides x=0 as 1, x=1 as 2, y=0 as 3, y=1 as 4
+    label = plex.getLabel("Face Sets")
+    # The stratum IS is null on ranks without a face on the x=0 side
+    if label.getStratumSize(1) > 0:
+        for point in label.getStratumIS(1).getIndices():
+            label.clearValue(point, 1)
+    boundary = get_boundary_ids(mesh)
+    assert not hasattr(boundary, "left")
+    assert -1 not in boundary
+    assert (boundary.right, boundary.bottom, boundary.top) == (2, 3, 4)
+
+
 geo_files = (Path(__file__).parents[1] / "multi_material" / "benchmarks").glob("*/mesh/*.geo")
 
 
