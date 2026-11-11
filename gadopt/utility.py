@@ -13,6 +13,7 @@ import pyop3 as op3
 import ufl
 import time
 from ufl.corealg.traversal import traverse_unique_terminals
+from ufl.indexed import Indexed
 from firedrake.petsc import PETSc
 from firedrake.utils import get_device_type as fd_get_device_type
 from functools import cached_property
@@ -767,3 +768,21 @@ def initialise_background_field(
             conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
                                     background_values[i], f), f))
+
+
+def function_name(field: Function | Indexed) -> str:
+    """Returns the name of a field or of one component of a split field.
+
+    Args:
+      field:
+        Firedrake function or an indexed component of one
+
+    Returns:
+      The name of the field, with an underscore and the component index appended for
+      indexed components.
+
+    """
+    if isinstance(field, Indexed):
+        return f"{field.ufl_operands[0].name()}_{field.ufl_operands[1].indices()[0]}"
+
+    return field.name()
