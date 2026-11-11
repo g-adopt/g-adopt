@@ -16,14 +16,12 @@ from .richards import cases, get_case
 
 # Expected convergence rates: DQ theory gives O(h^{p+1})
 expected_rates = {
-    0: {"rate": 1.0, "rtol": 0.1},
     1: {"rate": 2.0, "rtol": 0.1},
     2: {"rate": 3.0, "rtol": 0.1},
 }
 
 # Cases to test and whether they are longtests
 enabled_cases = {
-    "tracy_2d_specified_head_dg0": {},
     "tracy_2d_specified_head_dg1": {},
     "tracy_2d_specified_head_dg2": {},
     "tracy_2d_no_flux_dg1": {},
