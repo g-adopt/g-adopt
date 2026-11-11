@@ -23,7 +23,11 @@ from ufl.core.expr import Expr
 
 from .approximations import BaseApproximation, BaseGIAApproximation
 from .equations import Equation
-from .free_surface_equation import free_surface_option_keys, free_surface_terms
+from .free_surface_equation import (
+    free_surface_option_keys,
+    free_surface_terms,
+    free_surface_volume_multiplier,
+)
 from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
 from .scalar_equation import mass_term, sink_term, source_term
 from .solver_options_manager import ConfigType, SolverConfigurationMixin
@@ -32,7 +36,6 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
-    free_surface_volume_multiplier,
     get_device_type,
     is_cartesian,
     is_continuous,
@@ -88,11 +91,13 @@ offload_parameters: Mapping[str, str | Mapping[str, str]] = MappingProxyType(
     }
 )
 
-iterative_cuda_ksp_workarounds_inner: Mapping[str, bool] = MappingProxyType({
-    "pc_gamg_square_0_mat_product_algorithm_backend_cpu": True,
-    "pc_gamg_square_1_mat_product_algorithm_backend_cpu": True,
-    "pc_gamg_square_2_mat_product_algorithm_backend_cpu": True,
-})
+iterative_cuda_ksp_workarounds_inner: Mapping[str, bool] = MappingProxyType(
+    {
+        "pc_gamg_square_0_mat_product_algorithm_backend_cpu": True,
+        "pc_gamg_square_1_mat_product_algorithm_backend_cpu": True,
+        "pc_gamg_square_2_mat_product_algorithm_backend_cpu": True,
+    }
+)
 
 # Missing parameter: "fieldsplit_0"
 iterative_outer_stokes_solver_parameters: Mapping[
@@ -192,11 +197,7 @@ Note:
   new pairs of keys and values to extend the default ones.
 """
 gia_outer_solver_parameters: Mapping[str, str | float] = MappingProxyType(
-    {
-        "mat_type": "matfree",
-        "snes_type": "ksponly",
-        **spd_pc_parameters
-    }
+    {"mat_type": "matfree", "snes_type": "ksponly", **spd_pc_parameters}
 )
 
 coupled_gia_solver_parameters: Mapping[str, str | float | Mapping[str, str | float]] = (
@@ -359,7 +360,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         self.set_boundary_conditions()
         self.set_equations()
         self.set_form()
-        self.set_solver_options(solver_parameters, solver_parameters_extra, gpu_extra_parameters)
+        self.set_solver_options(
+            solver_parameters, solver_parameters_extra, gpu_extra_parameters
+        )
         self.set_solver()
 
     def set_boundary_conditions(self) -> None:
@@ -541,7 +544,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             odb.setValue("matptap_backend_cpu", True)
             odb.setValue("inner_C_loc_mat_product_algorithm_backend_cpu", True)
             odb.setValue("inner_C_oth_mat_product_algorithm_backend_cpu", True)
-            self._add_to_offloaded_solver(iterative_cuda_ksp_workarounds_inner, device_type, gpu_telescope_factor)
+            self._add_to_offloaded_solver(
+                iterative_cuda_ksp_workarounds_inner, device_type, gpu_telescope_factor
+            )
         return offload_conf
 
     def _set_monitoring_config(
@@ -573,7 +578,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
             1 if gpu_extras is None else int(gpu_extras.get("telescope_factor", 1))
         )
         if DEBUG >= log_level:
-            self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
+            self._add_to_offloaded_solver(
+                {"ksp_converged_reason": None}, device_type, gpu_telescope_factor
+            )
             if self.solver_parameters.get("pc_type") == "fieldsplit":
                 self.add_to_solver_config({"fieldsplit_1": {"ksp_monitor": None}})
             else:
@@ -584,7 +591,9 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
                     {"fieldsplit_1": {"ksp_converged_reason": None}}
                 )
             else:
-                self._add_to_offloaded_solver({"ksp_converged_reason": None}, device_type, gpu_telescope_factor)
+                self._add_to_offloaded_solver(
+                    {"ksp_converged_reason": None}, device_type, gpu_telescope_factor
+                )
 
     def _configure_iterative_solver(
         self, device_type: str | None, gpu_extras: ConfigType
@@ -1013,9 +1022,10 @@ class ViscoelasticStokesSolver(StokesSolverBase):
     ) -> None:
 
         warn(
-            '''This solver is being phased out of G-ADOPT. We recommend using
+            """This solver is being phased out of G-ADOPT. We recommend using
         `InternalVariableSolver` for viscoelastic applications in G-ADOPT.
-        ''')
+        """
+        )
 
         self.stress_old = stress_old  # Deviatoric stress from previous time step
         self.displacement = displacement  # Total displacement
@@ -1025,7 +1035,9 @@ class ViscoelasticStokesSolver(StokesSolverBase):
         # Scaling factor for the previous stress
         self.stress_scale = self.approximation.prefactor_prestress(self.dt)
 
-    def set_free_surface_boundary(self, params_fs: dict[str, int | bool], bc_id: int | str) -> Expr:
+    def set_free_surface_boundary(
+        self, params_fs: dict[str, int | bool], bc_id: int | str
+    ) -> Expr:
         # First, make the displacement term implicit by incorporating the unknown
         # `incremental displacement' (u) that we are solving for. Then, calculate the
         # free surface stress term. This is also referred to as the Hydrostatic
@@ -1192,15 +1204,16 @@ class InternalVariableSolver(StokesSolverBase):
         normal_stress = params_fs.get("normal_stress", 0.0)
         # Add free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
-        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
-            vertical_component(self.solution)
+        combined_normal_stress = (
+            normal_stress
+            + self.approximation.hydrostatic_prestress_advection(
+                vertical_component(self.solution)
+            )
         )
 
         return combined_normal_stress
 
-    def update_m(
-        self, m: fd.Function, maxwell_time: fd.Function | Expr
-    ) -> Expr:
+    def update_m(self, m: fd.Function, maxwell_time: fd.Function | Expr) -> Expr:
         """Calculates updated internal variable using Backward Euler formula
 
         Args:
@@ -1213,7 +1226,9 @@ class InternalVariableSolver(StokesSolverBase):
         Returns:
             UFL expression for the updated internal variable using Backward Euler
         """
-        m_new = (m + self.dt / maxwell_time * self.strain) / (1 + self.dt / maxwell_time)
+        m_new = (m + self.dt / maxwell_time * self.strain) / (
+            1 + self.dt / maxwell_time
+        )
         return m_new
 
     def solve(self) -> None:
@@ -1303,8 +1318,7 @@ class CoupledInternalVariableSolver(StokesSolverBase):
 
     def set_equations(self) -> None:
         u, *internal_variables = self.solution_split
-        stress = self.approximation.stress(
-            u, internal_variables=internal_variables)
+        stress = self.approximation.stress(u, internal_variables=internal_variables)
         source = self.approximation.buoyancy(u) * self.k
         strain = self.approximation.deviatoric_strain(u)
         dev_stress = self.approximation.deviatoric_stress(u, internal_variables)
@@ -1327,13 +1341,15 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         for i, maxwell_time in enumerate(maxwell_times):
             residual_terms.append(internal_variable_terms)
             scaling_factors.append(-self._theta * self.scaling_factor)
-            eqs_attrs.append({
-                "source": strain / maxwell_time,
-                "sink_coeff": 1 / maxwell_time,
-                "dt": self.dt,
-                "trial_old": self.solution_old_split[i+1],
-                "use_irksome": False,
-            })
+            eqs_attrs.append(
+                {
+                    "source": strain / maxwell_time,
+                    "sink_coeff": 1 / maxwell_time,
+                    "dt": self.dt,
+                    "trial_old": self.solution_old_split[i + 1],
+                    "use_irksome": False,
+                }
+            )
 
         for i in range(len(self.tests)):
             self.equations.append(
@@ -1354,8 +1370,10 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         solver_preset: ConfigType | str | None,
         solver_extras: ConfigType | None,
         gpu_extras: ConfigType | None,
-        iterative_preset: ConfigType = coupled_gia_solver_parameters | newton_stokes_solver_parameters,
-        direct_preset: ConfigType = direct_stokes_solver_parameters | newton_stokes_solver_parameters
+        iterative_preset: ConfigType = coupled_gia_solver_parameters
+        | newton_stokes_solver_parameters,
+        direct_preset: ConfigType = direct_stokes_solver_parameters
+        | newton_stokes_solver_parameters,
     ) -> None:
         """Sets PETSc solver options for the coupled GIA system.
 
@@ -1382,8 +1400,11 @@ class CoupledInternalVariableSolver(StokesSolverBase):
         normal_stress = params_fs.get("normal_stress", 0.0)
         # Add free surface stress term. This is also referred to as the Hydrostatic
         # Prestress advection term in the GIA literature.
-        combined_normal_stress = normal_stress + self.approximation.hydrostatic_prestress_advection(
-            vertical_component(self.solution_split[0])
+        combined_normal_stress = (
+            normal_stress
+            + self.approximation.hydrostatic_prestress_advection(
+                vertical_component(self.solution_split[0])
+            )
         )
 
         return combined_normal_stress
@@ -1499,7 +1520,9 @@ class BoundaryNormalStressSolver(SolverConfigurationMixin):
                 "BoundaryNormalStressSolver: Pressure field is discontinuous. Using an equivalent continous lagrange element."
             )
             Q = fd.FunctionSpace(
-                self.p.function_space().mesh(), "Lagrange", self.p.function_space().ufl_element().degree()
+                self.p.function_space().mesh(),
+                "Lagrange",
+                self.p.function_space().ufl_element().degree(),
             )
         else:
             Q = fd.FunctionSpace(self.p.function_space().mesh(), self.p.ufl_element())

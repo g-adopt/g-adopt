@@ -71,7 +71,7 @@ boundary = get_boundary_ids(mesh)  # Boundary IDs
 V = VectorFunctionSpace(mesh, "CG", 2)  # Velocity function space (vector)
 W = FunctionSpace(mesh, "CG", 1)  # Pressure and free surface function space (scalar)
 Q = FunctionSpace(mesh, "CG", 2)  # Temperature function space (scalar)
-Z = MixedFunctionSpace([V, W, W])  # Mixed function space for velocity, pressure and eta.
+Z = MixedFunctionSpace([V, W, W])  # Mixed function space for velocity, pressure and eta
 
 z = Function(Z)  # A field over the mixed function space Z.
 u, p, eta = split(z)  # Returns symbolic UFL expression for u, p and eta
@@ -130,15 +130,14 @@ T.interpolate((1.0 - X[1]) + (0.05 * cos(pi * X[0]) * sin(pi * X[1])))
 # physically consistent description for a closed box like this one, and is required for
 # open or periodic domains, where topography must be allowed to cross lateral
 # boundaries.
-# * *volume_multiplier*: With horizontal transport enabled, topography converges towards
-# regions of convergent flow beneath the surface, which drifts the mean height upwards
-# over time. Because a uniform shift of the height is dynamically inert (it is absorbed
-# by a uniform pressure shift, and only height gradients load the interior), we remove
-# it through a uniform correction to the surface's normal speed. For this closed box,
-# evaluating the multiplier as the surface's mean height tendency, with the previous
-# step's fields, renders the mean height stationary; the G-ADOPT function
-# *free_surface_volume_multiplier* automates the calculation. The multiplier is a
-# `Constant`, so it can be updated between solves without rebuilding the solver.
+# * *auto_volume_multiplier*: With horizontal transport enabled, topography converges
+# towards regions of convergent flow beneath the surface, which drifts the mean height
+# upwards over time. Because a uniform shift of the height is dynamically inert (it is
+# absorbed by a uniform pressure shift, and only height gradients load the interior),
+# we remove it through a uniform correction to the surface's normal speed. With this
+# option, the Stokes solver automates the calculation, updating the multiplier before
+# each solve with the surface's mean height tendency, evaluated with the previous
+# step's fields, which renders the mean height stationary for this closed box.
 
 # +
 Bfs = 10.0  # Free surface buoyancy number
@@ -150,7 +149,7 @@ stokes_bcs = {
         "free_surface": {
             "RaFS": Ra * Bfs,
             "exact_normal": True,
-            "volume_multiplier": volume_multiplier,
+            "auto_volume_multiplier": True,
         }
     },
     boundary.left: {"ux": 0},

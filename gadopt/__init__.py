@@ -1,5 +1,6 @@
 from firedrake import *
 
+from .adaptive_simulation import AdaptiveSimulation
 from .approximations import (
     AnelasticLiquidApproximation,
     BoussinesqApproximation,
@@ -10,8 +11,11 @@ from .approximations import (
     QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
-from .adaptive_simulation import AdaptiveSimulation
 from .diagnostics import *
+from .free_surface_equation import (
+    free_surface_normal,
+    free_surface_volume_multiplier,
+)
 from .level_set_tools import (
     LevelSetSolver,
     assign_level_set_values,
@@ -46,9 +50,6 @@ from .utility import (
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
-    free_surface_normal,
-    free_surface_volume_multiplier,
-    function_name,
     get_boundary_ids,
     interpolate_1d_profile,
     log,
