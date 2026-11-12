@@ -11,7 +11,8 @@ functions to calculate useful simulation diagnostics.
 
 import operator
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 from warnings import warn
 
 import firedrake as fd
@@ -646,19 +647,21 @@ class LevelSetSolver(SolverConfigurationMixin):
           disable_reinitialisation:
             A boolean to disable the reinitialisation solve.
         """
+        apply_reinitialisation = self.reinitialisation and not disable_reinitialisation
 
         if self.advection and not disable_advection:
             for _ in range(self.adv_kwargs["subcycles"]):
                 self.adv_solver.solve()
                 self.step += 1
 
-                if self.reinitialisation and not disable_reinitialisation:
-                    if self.step % self.reini_kwargs["frequency"] == 0:
-                        self.reinitialise()
+                if (
+                    apply_reinitialisation
+                    and self.step % self.reini_kwargs["frequency"] == 0
+                ):
+                    self.reinitialise()
 
-        elif self.reinitialisation and not disable_reinitialisation:
-            if self.step % self.reini_kwargs["frequency"] == 0:
-                self.reinitialise()
+        elif apply_reinitialisation and self.step % self.reini_kwargs["frequency"] == 0:
+            self.reinitialise()
 
 
 def material_interface(

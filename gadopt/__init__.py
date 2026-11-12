@@ -24,7 +24,8 @@ from .level_set_tools import (
     material_field,
     min_max_height,
 )
-from .limiter import VertexBasedP1DGLimiter
+
+# from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import create_stokes_nullspace, rigid_body_modes
 from .preconditioners import (
     FreeSurfaceMassInvPC,
@@ -50,6 +51,7 @@ from .utility import (
     LayerAveraging,
     ParameterLog,
     TimestepAdaptor,
+    function_name,
     get_boundary_ids,
     interpolate_1d_profile,
     log,

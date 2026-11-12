@@ -100,13 +100,12 @@ else:  # Initialise mesh and key functions
     match simulation.mesh_gen:  # Generate mesh
         case "gmsh":
             mesh_file = mesh_path / "mesh.msh"
-            if not mesh_file.exists():
-                if MPI.COMM_WORLD.rank == 0:
-                    if mesh_file.with_suffix(".geo").exists():
-                        run(["gmsh", "-2", str(mesh_file.with_suffix(".geo"))])
-                    else:
-                        mesh_path.mkdir(exist_ok=True)
-                        simulation.generate_mesh(mesh_path)
+            if not mesh_file.exists() and MPI.COMM_WORLD.rank == 0:
+                if mesh_file.with_suffix(".geo").exists():
+                    run(["gmsh", "-2", str(mesh_file.with_suffix(".geo"))], check=False)
+                else:
+                    mesh_path.mkdir(exist_ok=True)
+                    simulation.generate_mesh(mesh_path)
             mesh = fd.Mesh(str(mesh_file))
         case "firedrake":
             mesh = fd.RectangleMesh(
@@ -161,7 +160,7 @@ else:  # Initialise mesh and key functions
     dump_counter = 0
 
 # Annotate mesh to inform other G-ADOPT objects
-mesh.cartesian = False if simulation.mesh_gen == "extruded_annulus" else True
+mesh.cartesian = simulation.mesh_gen != "extruded_annulus"
 boundary = ga.get_boundary_ids(mesh)  # Extract boundary id mapping
 
 # Rename Firedrake functions for velocity and pressure
@@ -234,7 +233,7 @@ if hasattr(simulation, "initialise_temperature"):
 # Set up Stokes solver
 stokes_nullspace = ga.create_stokes_nullspace(
     stokes_function.function_space(),
-    rotational=True if benchmark == "davies_2022" else False,
+    rotational=benchmark == "davies_2022",
 )
 # Update line search algorithm to ensure convergence
 upd_ls_type = {"snes_linesearch_type": "cp"} if benchmark == "schmalholz_2011" else None
@@ -292,7 +291,7 @@ geo_diag = ga.GeodynamicalDiagnostics(
 
 # Level-set reinitialisation must be excluded for Trim et al. (2023), as the level-set
 # field acts as the composition field, which is purely advected.
-disable_reinitialisation = True if benchmark == "trim_2023" else False
+disable_reinitialisation = benchmark == "trim_2023"
 
 # Perform the time loop
 has_end_time = hasattr(simulation, "time_end")

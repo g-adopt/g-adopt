@@ -13,11 +13,13 @@ from types import SimpleNamespace
 
 import firedrake as fd
 import numpy as np
-import pyop3 as op3
+
+# import pyop3 as op3
 import ufl
 from mpi4py import MPI
 from scipy.linalg import solveh_banded
 from ufl.corealg.traversal import traverse_unique_terminals
+from ufl.indexed import Indexed
 
 try:
     MeshSequenceGeometry = fd.MeshSequenceGeometry
@@ -86,11 +88,11 @@ class TimestepAdaptor:
         self.maximum_timestep = maximum_timestep
         self.mesh = V.mesh()
 
-        # J^-1 u is a discontinuous expression, using op3.MAX_RW it takes the maximum value
+        # J^-1 u is a discontinuous expression, using op2.MAX it takes the maximum value
         # in all adjacent elements when interpolating it to a continuous function space
         # We do need to ensure we reset ref_vel to zero, as it also takes the max with any previous values
         self.ref_vel_interpolate = fd.interpolate(
-            abs(fd.dot(fd.JacobianInverse(self.mesh), self.u)), V, access=fd.op3.MAX_RW
+            abs(fd.dot(fd.JacobianInverse(self.mesh), self.u)), V, access=fd.op2.MAX
         )
 
     def compute_timestep(self):
@@ -281,101 +283,102 @@ def tensor_jump(v, n):
     return fd.outer(v("+"), n("+")) + fd.outer(v("-"), n("-"))
 
 
-def extend_function_to_3d(func, mesh_extruded):
-    """Returns a view of a `Function` on the base mesh as a `Function` on the extruded mesh.
+# def extend_function_to_3d(func, mesh_extruded):
+#     """Returns a view of a `Function` on the base mesh as a `Function` on the extruded mesh.
 
-    The extended function lives in the V x R space, where V is the space of
-    `func`. Its horizontal element is the element of `func`, and it shares its
-    data with `func`: a change to one shows in the other. The source must be a
-    scalar or vector continuous (H1) function on the base mesh of `mesh_extruded`.
-    Mixed spaces, their subspaces and restricted spaces are not supported.
+#     The extended function lives in the V x R space, where V is the space of
+#     `func`. Its horizontal element is the element of `func`, and it shares its
+#     data with `func`: a change to one shows in the other. The source must be a
+#     scalar or vector continuous (H1) function on the base mesh of `mesh_extruded`.
+#     Mixed spaces, their subspaces and restricted spaces are not supported.
 
-    Arguments:
-      func: Source `Function` on the base mesh.
-      mesh_extruded: Mesh extruded from the mesh of `func`.
+#     Arguments:
+#       func: Source `Function` on the base mesh.
+#       mesh_extruded: Mesh extruded from the mesh of `func`.
 
-    Returns:
-      The extended `Function`. Its `source` attribute is `func`.
+#     Returns:
+#       The extended `Function`. Its `source` attribute is `func`.
 
-    Raises:
-      ValueError: If `func` does not satisfy the conditions above.
-    """
-    fs = func.function_space()
-    ufl_elem = fs.ufl_element()
-    is_vector = isinstance(ufl_elem, fd.VectorElement)
-    scalar_elem = ufl_elem.sub_elements[0] if is_vector else ufl_elem
+#     Raises:
+#       ValueError: If `func` does not satisfy the conditions above.
+#     """
+#     fs = func.function_space()
+#     ufl_elem = fs.ufl_element()
+#     is_vector = isinstance(ufl_elem, fd.VectorElement)
+#     scalar_elem = ufl_elem.sub_elements[0] if is_vector else ufl_elem
 
-    # These conditions depend only on the function space, so they are the same on every rank.
-    # A subspace of a mixed space shares the buffer of the whole mixed function, and a
-    # restricted space numbers its nodes differently from the unrestricted V x R space.
-    if len(fs) != 1 or fs.parent is not None or fs.boundary_set:
-        raise ValueError(
-            "extend_function_to_3d: the source must not be a mixed, sub or restricted space"
-        )
-    if fs.mesh().topology is not mesh_extruded.topology._base_mesh:
-        raise ValueError(
-            "extend_function_to_3d: the source mesh must be the base mesh of mesh_extruded"
-        )
-    # The V x R space numbers its nodes in the same order as V only for continuous elements.
-    if ufl_elem.sobolev_space != ufl.H1:
-        raise ValueError(
-            f"extend_function_to_3d: unsupported element {ufl_elem}; use a continuous element"
-        )
+#     # These conditions depend only on the function space, so they are the same on every rank.
+#     # A subspace of a mixed space shares the buffer of the whole mixed function, and a
+#     # restricted space numbers its nodes differently from the unrestricted V x R space.
+#     if len(fs) != 1 or fs.parent is not None or fs.boundary_set:
+#         raise ValueError(
+#             "extend_function_to_3d: the source must not be a mixed, sub or restricted space"
+#         )
+#     if fs.mesh().topology is not mesh_extruded.topology._base_mesh:
+#         raise ValueError(
+#             "extend_function_to_3d: the source mesh must be the base mesh of mesh_extruded"
+#         )
+#     # The V x R space numbers its nodes in the same order as V only for continuous elements.
+#     if ufl_elem.sobolev_space != ufl.H1:
+#         raise ValueError(
+#             f"extend_function_to_3d: unsupported element {ufl_elem}; use a continuous element"
+#         )
 
-    # Use the source element itself in the horizontal, so that both spaces have the same dofs.
-    r0 = fd.FiniteElement("R", mesh_extruded.ufl_cell().sub_cells[1], 0)
-    elem = fd.TensorProductElement(scalar_elem, r0)
-    if is_vector:
-        fs_extended = fd.VectorFunctionSpace(
-            mesh_extruded, elem, dim=ufl_elem.num_sub_elements
-        )
-    else:
-        fs_extended = fd.FunctionSpace(mesh_extruded, elem)
+#     # Use the source element itself in the horizontal, so that both spaces have the same dofs.
+#     r0 = fd.FiniteElement("R", mesh_extruded.ufl_cell().sub_cells[1], 0)
+#     elem = fd.TensorProductElement(scalar_elem, r0)
+#     if is_vector:
+#         fs_extended = fd.VectorFunctionSpace(
+#             mesh_extruded, elem, dim=ufl_elem.num_sub_elements
+#         )
+#     else:
+#         fs_extended = fd.FunctionSpace(mesh_extruded, elem)
 
-    # The buffer of the source must have the size and the halo exchange pattern (star forest) of
-    # the extended space. Both can differ between ranks, so all ranks agree before any raises.
-    # The size test comes first, and np.array_equal is used, because StarForest.__eq__ fails on
-    # arrays of different lengths.
-    sf, sf_extended = func.dat.buffer.sf, fs_extended.axes.unindexed.sf
-    ok = func.dat.buffer.size == fs_extended.axes.unindexed.local_max_size and type(
-        sf
-    ) is type(sf_extended)
-    if ok and isinstance(sf, op3.sf.StarForest) and sf is not sf_extended:
-        ok = np.array_equal(sf.ilocal, sf_extended.ilocal) and np.array_equal(
-            sf.iremote, sf_extended.iremote
-        )
-    if not mesh_extruded.comm.allreduce(ok, op=MPI.LAND):
-        raise ValueError(
-            "extend_function_to_3d: the source and extended spaces have different data layouts"
-        )
+#     # The buffer of the source must have the size and the halo exchange pattern (star forest) of
+#     # the extended space. Both can differ between ranks, so all ranks agree before any raises.
+#     # The size test comes first, and np.array_equal is used, because StarForest.__eq__ fails on
+#     # arrays of different lengths.
+#     sf, sf_extended = func.dat.buffer.sf, fs_extended.axes.unindexed.sf
+#     ok = func.dat.buffer.size == fs_extended.axes.unindexed.local_max_size and type(
+#         sf
+#     ) is type(sf_extended)
+#     if ok and isinstance(sf, op3.sf.StarForest) and sf is not sf_extended:
+#         ok = np.array_equal(sf.ilocal, sf_extended.ilocal) and np.array_equal(
+#             sf.iremote, sf_extended.iremote
+#         )
+#     if not mesh_extruded.comm.allreduce(ok, op=MPI.LAND):
+#         raise ValueError(
+#             "extend_function_to_3d: the source and extended spaces have different data layouts"
+#         )
 
-    # A view with the axes of the extended space on the buffer of the source.
-    func_extended = fd.Function(
-        fs_extended, name=func.name(), val=func.dat.with_axes(fs_extended.axes)
-    )
-    func_extended.source = func
-    return func_extended
+#     # A view with the axes of the extended space on the buffer of the source.
+#     func_extended = fd.Function(
+#         fs_extended, name=func.name(), val=func.dat.with_axes(fs_extended.axes)
+#     )
+#     func_extended.source = func
+
+#     return func_extended
 
 
-class ExtrudedFunction(fd.Function):
-    """A 2D `Function` that provides a 3D view on the extruded domain.
+# class ExtrudedFunction(fd.Function):
+#     """A 2D `Function` that provides a 3D view on the extruded domain.
 
-    The 3D function can be accessed as `ExtrudedFunction.view_3d`.
-    The 3D function resides in V x R function space, where V is the function
-    space of the source function. The 3D function shares the data of the 2D
-    function.
+#     The 3D function can be accessed as `ExtrudedFunction.view_3d`.
+#     The 3D function resides in V x R function space, where V is the function
+#     space of the source function. The 3D function shares the data of the 2D
+#     function.
 
-    Arguments:
-      mesh_3d: Extruded 3D mesh where the function will be extended to.
+#     Arguments:
+#       mesh_3d: Extruded 3D mesh where the function will be extended to.
 
-    """
+#     """
 
-    def __init__(self, *args, mesh_3d=None, **kwargs):
-        # create the 2d function
-        super().__init__(*args, **kwargs)
-        print(*args)
-        if mesh_3d is not None:
-            self.view_3d = extend_function_to_3d(self, mesh_3d)
+#     def __init__(self, *args, mesh_3d=None, **kwargs):
+#         # create the 2d function
+#         super().__init__(*args, **kwargs)
+#         print(*args)
+#         if mesh_3d is not None:
+#             self.view_3d = extend_function_to_3d(self, mesh_3d)
 
 
 def get_functionspace(
@@ -584,11 +587,12 @@ class InteriorBC(fd.DirichletBC):
     """DirichletBC applied to anywhere that is *not* on the specified boundary"""
 
     @cached_property
-    def _nodes(self):
-        # `node_count` includes the block size for vector and tensor spaces,
-        # so take the local size (with ghosts) of the node axis.
-        num_nodes = self._function_space.nodes.local_size
-        return np.setdiff1d(np.arange(num_nodes), super()._nodes)
+    def nodes(self):
+        # Firedrake only consults the public `nodes` property when applying
+        # boundary conditions, so the complement must be taken here rather
+        # than in `_nodes`. `node_count` includes halo nodes, matching the
+        # scope of the node indices returned by the base class.
+        return np.setdiff1d(np.arange(self._function_space.node_count), super().nodes)
 
 
 def absv(u):
@@ -823,3 +827,21 @@ def initialise_background_field(
                 f,
             )
         )
+
+
+def function_name(field: fd.Function | Indexed) -> str:
+    """Returns the name of a field or of one component of a split field.
+
+    Args:
+      field:
+        Firedrake function or an indexed component of one
+
+    Returns:
+      The name of the field, with an underscore and the component index appended for
+      indexed components.
+
+    """
+    if isinstance(field, Indexed):
+        return f"{field.ufl_operands[0].name()}_{field.ufl_operands[1].indices()[0]}"
+
+    return field.name()

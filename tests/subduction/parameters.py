@@ -102,7 +102,7 @@ eta_bounds = {
     "maximum": {"mantle": 1e25, "weak layer": 1e25},
 }
 plastic_deformation_params = {
-    "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.15},
+    "mantle": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.25},
     "weak layer": {"surf_strength": 2e6, "max_strength": 1e10, "friction_coeff": 0.015},
 }
 viscous_creep_params = {
@@ -157,8 +157,8 @@ checkpoint_frequency = 5.0 * myr_to_seconds
 output_frequency = 0.4 * myr_to_seconds
 
 # Field initialisation
-age_plate = 140.0 * myr_to_seconds
-age_overriding = 50.0 * myr_to_seconds
+age_plate = 100.0 * myr_to_seconds
+age_overriding = 20.0 * myr_to_seconds
 plate_extremity_coords = (0.0, domain_dims[1])
 trench_coords = (domain_dims[0] / 2.0, domain_dims[1])
 weak_layer_thickness = 6e3 / distance_scale
