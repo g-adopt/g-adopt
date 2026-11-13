@@ -1,0 +1,3 @@
+firedrake
+numpy
+scipy

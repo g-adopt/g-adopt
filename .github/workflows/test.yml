@@ -47,6 +47,9 @@ jobs:
       # Prefer specific branch, then PR base, then actual branch
       image: firedrakeproject/firedrake-vanilla-default:${{ inputs.target_container || (github.event_name == 'pull_request' && case(contains(github.event.pull_request.labels.*.name, 'container:main'), 'dev-main', contains(github.event.pull_request.labels.*.name, 'container:release'), 'dev-release', format('dev-{0}', github.base_ref))) || format('dev-{0}', github.ref_name) }}
 
+    env:
+      UV_EXCLUDE: ${{ github.workspace}}/.uv-exclude.txt
+
     needs: check_commit
     if: ${{ needs.check_commit.outputs.skip != 'true' }}
 
@@ -91,6 +94,7 @@ jobs:
 
     env:
       OMP_NUM_THREADS: 1
+      UV_EXCLUDE: ${{ github.workspace}}/.uv-exclude.txt
 
     steps:
       - name: Install prerequisites
