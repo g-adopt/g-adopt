@@ -70,9 +70,10 @@ jobs:
       - name: Run smoke test
         run: |
           uv venv --system-site-packages
-          uv pip install .
+          uv pip install --exclude <(echo firedrake) .
           . .venv/bin/activate
           make -C demos/mantle_convection/base_case check
+        shell: bash
 
   build:
     name: Benchmark regression test
@@ -150,10 +151,11 @@ jobs:
         run: |
           uv venv --system-site-packages
           uv pip install ./gplates
-          uv pip install .[demos,optimisation,gplates]
+          uv pip install --exclude <(echo firedrake) .[demos,optimisation,gplates]
           # Clear gplates otherwise pytest picks up the tests from
           # its source tree
           rm -rf ./gplates
+        shell: bash
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v5
