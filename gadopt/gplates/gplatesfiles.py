@@ -25,7 +25,8 @@ reconstructions: ReconstructionMetadataType = {
     "Muller 2022 SE v1.2": {
         "plate_files": _default_muller2022_plate_files,
         "directory": "Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2",
-        "url": "https://earthbyte.org/webdav/ftp/Data_Collections/Muller_etal_2022_SE/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip",
+        # The same file as on EarthByte, stored on the G-ADOPT data server.
+        "url": "https://data.gadopt.org/github-actions/Muller_etal_2022_SE_1Ga_Opt_PlateMotionModel_v1.2.zip",
     },
     "Muller 2022 SE v1.2.4": {
         "plate_files": _default_muller2022_plate_files,
