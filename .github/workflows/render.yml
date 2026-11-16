@@ -26,6 +26,7 @@ jobs:
     env:
       OMP_NUM_THREADS: 1
       GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+      UV_EXCLUDE: .uv-exclude.txt
 
     steps:
       - name: Install Git LFS
