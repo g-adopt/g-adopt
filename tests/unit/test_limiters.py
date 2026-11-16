@@ -3,7 +3,6 @@ import numpy as np
 import gadopt
 import ufl
 import pytest
-from mpi4py import MPI
 
 # Meshes for the limiter tests. Each value is (constructor, number of cells across x),
 # and every mesh has a vertex column at x = 0.5 so that the hat function peaks at a vertex.
@@ -29,30 +28,10 @@ def p1dg_element(mesh):
     return fd.FiniteElement(family, cell, 1, variant="equispaced")
 
 
-# Reductions over all ranks, so that every rank takes the same branch of each assertion.
-# A rank-local assertion can fail on one rank only, which then leaves while the other
-# ranks wait in the next collective call.
-def global_min(comm, values):
-    return comm.allreduce(np.min(values, initial=np.inf), MPI.MIN)
-
-
-def global_max(comm, values):
-    return comm.allreduce(np.max(values, initial=-np.inf), MPI.MAX)
-
-
-def assert_allclose_global(comm, actual, desired, rtol=1e-7, atol=0.0):
-    """Assert `np.allclose(actual, desired)` on every rank, with the tolerances of `assert_allclose`."""
-    actual, desired = np.asarray(actual), np.asarray(desired)
-    excess = np.abs(actual - desired) - (atol + rtol*np.abs(desired))
-    worst = global_max(comm, excess)
-    assert worst <= 0.0, f"values differ by {worst} more than the tolerance on some rank"
-
-
 @pytest.mark.parametrize("cell", MESHES)
 def test_slope_limiters(cell):
     make_mesh, n = MESHES[cell]
     mesh = make_mesh()
-    comm = mesh.comm
     X = fd.SpatialCoordinate(mesh)
     x = X[0]
     elt = p1dg_element(mesh)
@@ -66,7 +45,7 @@ def test_slope_limiters(cell):
         u.interpolate(xi)
         v = u.copy(deepcopy=True)
         limiter.apply(u)
-        assert_allclose_global(comm, u.dat.data_ro, v.dat.data_ro)
+        np.testing.assert_allclose(u.dat.data_ro, v.dat.data_ro)
 
     # Cells with a vertex at x = 0.5 are limited to the largest cell average next to that vertex.
     # The largest average comes from cells with the most vertices at x = 0.5: two of three
@@ -81,12 +60,12 @@ def test_slope_limiters(cell):
     u.interpolate(0.5 - abs(x - 0.5))
     vol0 = fd.assemble(u*fd.dx)
     np.testing.assert_allclose(vol0, 0.25)
-    np.testing.assert_allclose(global_max(comm, u.dat.data_ro), 0.5)
+    np.testing.assert_allclose(u.dat.data_ro.max(), 0.5)
     limiter = gadopt.VertexBasedP1DGLimiter(P1DG)
     limiter.apply(u)
     # The limiter conserves the cell averages, so the volume does not change
     np.testing.assert_allclose(fd.assemble(u*fd.dx), vol0)
-    np.testing.assert_allclose(global_max(comm, u.dat.data_ro), limited_max)
+    np.testing.assert_allclose(u.dat.data_ro.max(), limited_max)
 
     # Repeat for a vector function space
     P1DG = fd.VectorFunctionSpace(mesh, elt)
@@ -95,10 +74,10 @@ def test_slope_limiters(cell):
     u = fd.Function(P1DG).interpolate(fd.as_vector(hat))
     vol0 = fd.assemble(u[0]*fd.dx)
     np.testing.assert_allclose(vol0, 0.25)
-    np.testing.assert_allclose(global_max(comm, u.dat.data_ro), 0.5)
+    np.testing.assert_allclose(u.dat.data_ro.max(), 0.5)
     limiter.apply(u)
     np.testing.assert_allclose(fd.assemble(u[0]*fd.dx), vol0)
-    np.testing.assert_allclose(global_max(comm, u.dat.data_ro), limited_max)
+    np.testing.assert_allclose(u.dat.data_ro.max(), limited_max)
 
 
 @pytest.mark.parametrize("cell", ["triangle", "quadrilateral", "prism"])
@@ -127,14 +106,13 @@ def test_vector_limiter_matches_components(cell):
         assert fd.assemble((u[i] - u_initial[i])**2*fd.dx) > 1e-6
         u_i = fd.Function(V_scalar).interpolate(expr)
         scalar_limiter.apply(u_i)
-        assert_allclose_global(mesh.comm, u.dat.data_ro[:, i], u_i.dat.data_ro, atol=1e-12)
+        np.testing.assert_allclose(u.dat.data_ro[:, i], u_i.dat.data_ro, atol=1e-12)
 
 
 @pytest.mark.parametrize("cell", MESHES)
 def test_limiter_clip_bounds(cell):
     """Clipped bounds keep the limited field within [clip_min, clip_max]."""
     mesh = MESHES[cell][0]()
-    comm = mesh.comm
     x = fd.SpatialCoordinate(mesh)[0]
     P1DG = fd.FunctionSpace(mesh, p1dg_element(mesh))
 
@@ -142,14 +120,28 @@ def test_limiter_clip_bounds(cell):
     # which the limiter needs to bring every nodal value into the clipped bounds
     u = fd.Function(P1DG).interpolate(0.5 + 1.05*(x - 0.5))
 
-    assert global_min(comm, u.dat.data_ro) < 0 and global_max(comm, u.dat.data_ro) > 1
+    assert u.dat.data_ro.min() < 0 and u.dat.data_ro.max() > 1
     vol0 = fd.assemble(u*fd.dx)
 
     limiter = gadopt.VertexBasedP1DGLimiter(P1DG, clip_min=0.0, clip_max=1.0)
     limiter.apply(u)
 
-    assert global_min(comm, limiter.min_field.dat.data_ro) >= 0.0
-    assert global_max(comm, limiter.max_field.dat.data_ro) <= 1.0
-    assert global_min(comm, u.dat.data_ro) >= -1e-12
-    assert global_max(comm, u.dat.data_ro) <= 1.0 + 1e-12
+    assert limiter.min_field.dat.data_ro.min() >= 0.0
+    assert limiter.max_field.dat.data_ro.max() <= 1.0
+    assert u.dat.data_ro.min() >= -1e-12
+    assert u.dat.data_ro.max() <= 1.0 + 1e-12
     np.testing.assert_allclose(fd.assemble(u*fd.dx), vol0)
+
+
+def test_limiter_rejects_other_function_space():
+    """compute_bounds refuses a field from a space other than the one it was built for."""
+    mesh = fd.UnitSquareMesh(4, 4)
+    limiter = gadopt.VertexBasedP1DGLimiter(fd.FunctionSpace(mesh, p1dg_element(mesh)))
+
+    # The boundary loops index the field with the limiter's own node layout, so a field
+    # on another space must raise instead of being read with the wrong layout.
+    # `apply` is not used here because Firedrake's `VertexBasedLimiter.apply` makes the
+    # same check with an assert first.
+    other = fd.Function(fd.FunctionSpace(fd.UnitSquareMesh(5, 5), p1dg_element(mesh)))
+    with pytest.raises(ValueError, match="function space"):
+        limiter.compute_bounds(other)
