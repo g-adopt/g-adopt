@@ -11,6 +11,7 @@ from firedrake.functionspaceimpl import WithGeometry
 import numpy as np
 from firedrake.petsc import PETSc
 import pyop3 as op3
+from functools import cached_property
 from typing import Optional
 from firedrake.adjoint import annotate_tape
 
@@ -151,9 +152,9 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
 
         self.clip_min = clip_min
         self.clip_max = clip_max
-        # Boundary loops of compute_bounds are built on first use on this placeholder
+        # Placeholder field that the loops in `bound_loops` read. `compute_bounds`
+        # passes the Dat of the field being limited in its place.
         self._bound_field = Function(self.P1DG, name="gadopt_limiter_bound_field")
-        self._bound_loops = None
 
     def _construct_centroid_solver(self) -> LinearSolver:
         """Constructs a linear problem to compute centroids.
@@ -192,19 +193,21 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         Arguments:
           field: Firedrake function onto which the limiter is applied
 
+        Raises:
+          ValueError: The field does not belong to the limiter's P1DG function space
+
         """
-        assert field.function_space() == self.P1DG, "Given field does not belong to this objects function space"
+        if field.function_space() != self.P1DG:
+            raise ValueError("Given field does not belong to this objects function space")
 
         # Call general-purpose bound computation.
         super(VertexBasedP1DGLimiter, self).compute_bounds(field)
 
-        # Building a pyop3 loop is far more expensive than running it, so build the
-        # loops once on a placeholder field. Each call passes the current field's Dat
-        # in place of the placeholder, by the placeholder's Dat name (pyop3 makes
-        # Dat names unique, so it can differ from the Function name).
-        if self._bound_loops is None:
-            self._bound_loops = self._build_bound_loops(self._bound_field)
-        for loop in self._bound_loops:
+        # The loops read the placeholder field. pyop3 replaces a loop argument with the
+        # Dat passed under that argument's name, so pass the Dat of the field being
+        # limited under the placeholder's Dat name. pyop3 makes Dat names unique, so
+        # this name can differ from the Function name.
+        for loop in self.bound_loops:
             loop(**{self._bound_field.dat.name: field.dat})
 
         if self.clip_min is not None:
@@ -212,11 +215,14 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
         if self.clip_max is not None:
             self.max_field.interpolate(min_value(self.max_field, self.clip_max))
 
-    def _build_bound_loops(self, field: Function) -> list[op3.Loop]:
-        """Builds the loops that add boundary facet means to the min/max fields.
+    @cached_property
+    def bound_loops(self) -> list[op3.Loop]:
+        """Loops that add boundary facet means to the min/max fields.
 
-        Arguments:
-          field: Function that the loops read as the limited field
+        Building a pyop3 loop costs far more than running it, so the loops are built
+        once, on first access, and kept for the lifetime of the limiter. They read the
+        placeholder field `_bound_field`. `compute_bounds` passes the Dat of the field
+        being limited in place of the placeholder each time it runs them.
 
         Returns:
           The lateral facet loop and, on extruded meshes, the bottom and top loops.
@@ -268,7 +274,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
             bnd_kernel(
                 pack(self.max_field, f),
                 pack(self.min_field, f),
-                pack(field, f),
+                pack(self._bound_field, f),
                 facet_number[f],
                 local_facet_idx,
             ),
@@ -307,7 +313,7 @@ class VertexBasedP1DGLimiter(VertexBasedLimiter):
                     kernel(
                         pack(self.max_field, f),
                         pack(self.min_field, f),
-                        pack(field, f),
+                        pack(self._bound_field, f),
                         idx,
                     ),
                 ))
