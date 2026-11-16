@@ -2349,6 +2349,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         condensed_near_nullspace: str = "incompressible",
         dtn_representation: str | None = None,
         sea_level: "SeaLevel | None" = None,
+        time_scheme: str = "backward_euler",
         **kwargs,
     ) -> None:
         # `None` follows the space: the layout records what it was built for,
@@ -2377,6 +2378,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 f"dtn_representation={dtn_representation!r}), or\n"
                 f"  - the solver, via SelfGravitatingGIASolver("
                 f"dtn_representation={layout.dtn_representation!r}).")
+        if time_scheme not in ("backward_euler", "bdf2"):
+            raise ValueError("time_scheme must be 'backward_euler' or 'bdf2'")
+        if time_scheme == "bdf2" and kwargs.get("constant_jacobian", False):
+            raise ValueError("BDF2 changes the startup Jacobian; constant_jacobian must be False")
+        self.time_scheme = time_scheme
+        self.time_integrator = None
         self.layout = layout
         self._check_fluid_core_matches_layout(fluid_core)
         self._check_sea_level_matches_layout(sea_level)
@@ -4520,6 +4527,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         u = self.solution_split[self.layout.displacement]
         psi = self.solution_split[self.layout.potential]
 
+        if self.time_scheme == "bdf2":
+            from .viscoelastic_timestepping import BDF2History
+            histories = (list(self.internal_variables) if isinstance(self.internal_variables, (list, tuple))
+                         else [self.internal_variables]) if self.layout.condensed else [
+                             self.solution_old.subfunctions[self.layout.internal_variable_field]]
+            self.time_integrator = BDF2History(histories, self.dt)
+
         if self.layout.condensed:
             # `CoupledInternalVariableSolver.__init__` configures the
             # approximation for the mixed formulation, where the displacement
@@ -4532,8 +4546,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             # `PointwiseHistoryFormulation.configure_approximation` makes for
             # the substituted solver). Set it here, before the momentum terms
             # read `approximation.mu` below.
-            self.approximation.mu = self.approximation.effective_viscosity(
-                self.dt)
+            alpha = self.time_integrator.alpha if self.time_integrator else 1
+            self.approximation.mu = sum(
+                mu * alpha / (alpha + self.dt / tau)
+                for mu, tau in zip(self.approximation.shear_modulus,
+                                   self.approximation.maxwell_times))
             # This legacy path substitutes the backward-Euler update into the
             # stress before differentiation:
             #   m_new = (m_old + (dt/tau) d(u)) / (1 + dt/tau)
@@ -4556,9 +4573,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                     "stress, hence on m, and substituting m(u) changes the "
                     "Newton linearisation rather than merely eliminating a "
                     "block.")
+            histories = (self.time_integrator.combinations() if self.time_integrator
+                         else [self.internal_variables])
             internal_variables = [
-                (m + self.dt / mt * strain_u) / (1 + self.dt / mt)
-                for m, mt in zip(history_slices(self.internal_variables),
+                (m + self.dt / mt * strain_u) / (alpha + self.dt / mt)
+                for m, mt in zip(history_slices(histories),
                                  self.approximation.maxwell_times)]
         else:
             # One `(d, d)` slice per Maxwell element of the combined field.
@@ -4618,7 +4637,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                         "maxwell_times": maxwell_times,
                         "displacement": u,
                         "dt": self.dt,
-                        "trial_old": self.solution_old_split[i],
+                        "trial_old": (self.time_integrator.combinations()[0]
+                                      if self.time_integrator else self.solution_old_split[i]),
+                        "time_alpha": self.time_integrator.alpha if self.time_integrator else 1,
                     },
                     approximation=self.approximation,
                     bcs=self.weak_bcs,
@@ -5887,6 +5908,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
     def solve(self) -> None:
         """Refreshes the enclosed mass, solves, then projects out the kernel."""
+        if self.time_integrator:
+            self.time_integrator.prepare()
         self.update_total_mass()
         # Count the solve BEFORE it runs, so that every preconditioner setup
         # inside it sees one index and a preconditioner built during this solve
@@ -5930,6 +5953,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.solution_old.assign(self.solution)
         if self.layout.condensed:
             self.recover_internal_variables()
+        if self.time_integrator:
+            histories = (list(self.internal_variables) if isinstance(self.internal_variables, (list, tuple))
+                         else [self.internal_variables]) if self.layout.condensed else [
+                             self.solution.subfunctions[self.layout.internal_variable_field]]
+            self.time_integrator.accept(histories)
+
+    def restart_time_integration(self) -> None:
+        """Request BE startup on the next step after a resolved forcing event."""
+        if self.time_integrator:
+            self.time_integrator.restart()
 
     def require_controls_reach_residual(self, *controls) -> None:
         """D1: raise if a control never enters the low-rank solve's residual.
@@ -5971,9 +6004,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         u = self.solution.subfunctions[self.layout.displacement]
         strain = self.approximation.deviatoric_strain(u)
         stored = self.internal_variables
+        histories = self.time_integrator.combinations() if self.time_integrator else [stored]
+        alpha = self.time_integrator.alpha if self.time_integrator else 1
         updates = [
-            (m + self.dt / mt * strain) / (1 + self.dt / mt)
-            for m, mt in zip(history_slices(stored),
+            (m + self.dt / mt * strain) / (alpha + self.dt / mt)
+            for m, mt in zip(history_slices(histories),
                              self.approximation.maxwell_times)]
         # Into a temporary of the same layout first: every stored field
         # appears on the right-hand side, and interpolating a function into

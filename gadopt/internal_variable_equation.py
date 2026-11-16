@@ -166,7 +166,7 @@ def history_mass_term(eq: Equation, trial: Any) -> fd.Form:
     coefficient for every element. `trial_old` is the field at the previous
     time level.
     """
-    return inner(eq.test, (trial - eq.trial_old) / eq.dt) * eq.dx
+    return inner(eq.test, (getattr(eq, "time_alpha", 1) * trial - eq.trial_old) / eq.dt) * eq.dx
 
 
 def history_relaxation_term(eq: Equation, trial: Any) -> fd.Form:
@@ -274,7 +274,7 @@ def history_strain_term(eq: Equation, trial: Any) -> fd.Form:
 
 
 history_mass_term.required_attrs = {"dt", "trial_old"}
-history_mass_term.optional_attrs = {"maxwell_times", "displacement"}
+history_mass_term.optional_attrs = {"maxwell_times", "displacement", "time_alpha"}
 history_relaxation_term.required_attrs = {"maxwell_times"}
 history_relaxation_term.optional_attrs = {"dt", "trial_old", "displacement"}
 history_strain_term.required_attrs = {"maxwell_times", "displacement"}
