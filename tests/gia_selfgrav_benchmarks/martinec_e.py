@@ -67,6 +67,7 @@ def configuration(args, bulk_shear_ratio, step_yr):
             "time_step_yr": step_yr,
             "norm": "area-normalised whole-surface RMS", "sea_level_sheet": "softplus_1m", "time_scheme": args.time_scheme,
             "material_solver": args.material_solver, "material_quad_degree": args.material_quad_degree,
+            "bdf2_safe_ladder": args.bdf2_safe_ladder,
             "initial_guess": "terminal target basin", "control_scale_m": CONTROL_SCALE_M}
 
 
@@ -564,6 +565,7 @@ def run(args, driver):
                                           case.terminal_time_kyr, driver.T1_DT_YR)
             written = {"time_step_yr": legacy_step_yr, "time_scheme": "backward_euler",
                        "material_solver": "coupled", "material_quad_degree": 4,
+                       "bdf2_safe_ladder": False,
                        "sea_level_sheet": "legacy_unspecified", **written}
             if written != config:
                 raise ValueError(f"E restart settings differ: stored {written}, requested {config}")

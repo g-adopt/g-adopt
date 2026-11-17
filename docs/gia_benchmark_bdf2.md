@@ -102,6 +102,58 @@ history values per cell than DG1. Removing global unknowns primarily reduces
 matrix, preconditioner and differentiated-solve costs; it does not guarantee
 smaller checkpoint files or a particular total memory saving.
 
+## Benchmark ladders without later BE restarts
+
+Spada and Martinec accept `--bdf2_safe_ladder`. This opt-in planner subdivides
+steps until every timestep increase is at most a factor of two. It preserves
+every original step endpoint and all loading/output times; the new substeps
+also evaluate the load at their own endpoints. No original step becomes larger.
+Only the normal initial BE startup remains; the planned time changes need no
+later BE restart. The general driver restart guard remains available for other
+schedules. This option also works with BE for comparisons on the same time grid.
+
+For the standard Spada ladder, the transitions become:
+
+| Time interval, years | Actual step, years |
+|---|---:|
+| 0–100 | 10 |
+| 100–120 | 20 |
+| 120–150 | 30 |
+| 150–1000 | 50 |
+| 1000–10000 | 100 |
+| 10000–10200 | 200 |
+| 10200–10500 | 300 |
+| 10500–20000 | 500 |
+
+This gives 140 physical steps instead of 138. Cost includes the extra steps
+and preconditioner rebuilds at the additional timestep changes; runtime has not
+been measured. The planner also handles scaled
+ladders and nondivisible epoch cuts; it checks the actual generated steps,
+rather than relying on the nominal ladder ratios. Extra Spada output epochs
+only mark already-solved states and do not replan this grid.
+
+```bash
+python tests/gia_selfgrav_benchmarks/spada.py --case cap \
+    --time_scheme bdf2 --material_solver eliminated --bdf2_safe_ladder \
+    --output_path /path/to/new-safe-spada-output
+
+python tests/gia_selfgrav_benchmarks/martinec.py --case B \
+    --time_scheme bdf2 --material_solver eliminated --bdf2_safe_ladder \
+    --time_step_ladder 100:10 1000:50 10000:100 \
+    --output_path /path/to/new-safe-martinec-output
+```
+
+The Martinec B example has 119 physical steps instead of 118. Its default
+uniform 10-year schedule and the uniform C/D/E schedules already obey the ratio
+guard and are unchanged. The option does not introduce a graded E schedule.
+Legacy schedules remain the default. The choice is recorded in restart settings;
+start a fresh run to switch an existing run to the refined grid.
+
+The planner has endpoint, growth-ratio, scaled-ladder, output and restart-setting
+checks. Its full 140-step Spada grid passes the actual BDF2 coefficient/ratio
+logic without a restart after startup. This establishes the time-grid property;
+benchmark solution accuracy still requires timestep-convergence comparisons.
+
 ## Benchmark provenance and physics
 
 The selectively ported benchmark sources come from `w3168/martinec-E` at

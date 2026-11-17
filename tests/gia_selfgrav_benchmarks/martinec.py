@@ -756,7 +756,10 @@ def time_schedule(args, epochs):
         if step_yr is None:
             step_yr = T0_DT_YR if args.case == "B" else T1_DT_YR
         ladder = ((t_end_yr, step_yr),)
-    return ladder, common.time_segments(epochs, ladder)
+    segments = common.time_segments(epochs, ladder)
+    if args.bdf2_safe_ladder:
+        segments = common.bdf2_safe_segments(segments)
+    return ladder, segments
 
 
 def checkpoint_run_settings(written):
@@ -764,7 +767,7 @@ def checkpoint_run_settings(written):
     default_step = T0_DT_YR if written["case"] == "B" else T1_DT_YR
     return {"material_solver": "coupled", "material_quad_degree": 4,
             "sea_level_sheet": "legacy_unspecified", "time_scheme": "backward_euler", "time_step_yr": default_step,
-            "time_step_ladder_yr": None, **written}
+            "time_step_ladder_yr": None, "bdf2_safe_ladder": False, **written}
 
 
 def run_settings(args, bulk_shear_ratio, ladder):
@@ -774,7 +777,7 @@ def run_settings(args, bulk_shear_ratio, ladder):
             "time_scheme": args.time_scheme,
             "material_solver": args.material_solver,
             "material_quad_degree": args.material_quad_degree, "sea_level_sheet": "softplus_1m",
-            "smoke": args.smoke,
+            "smoke": args.smoke, "bdf2_safe_ladder": args.bdf2_safe_ladder,
             "time_step_yr": None if graded else ladder[0][1],
             "time_step_ladder_yr": [list(pair) for pair in ladder] if graded else None}
 
@@ -809,6 +812,7 @@ def parse_args(argv=None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     common.add_time_arguments(p)
+    common.add_bdf2_ladder_argument(p)
     p.add_argument("--case", choices=["B", "C", "D", "E"], default="B",
                    help="the benchmark case")
     p.add_argument("--bulk_shear_ratio", type=float, default=None,

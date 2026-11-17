@@ -1,7 +1,8 @@
 > The current workflow selectively ports benchmark sources from
 > `w3168/martinec-E` at `a7e64589`. Both drivers, including Martinec E,
 > accept `--time_scheme bdf2 --material_solver eliminated`; the defaults remain
-> coupled backward Euler. Spada now enables centre-of-mass constraints by
+> coupled backward Euler. Add `--bdf2_safe_ladder` to subdivide benchmark
+> timestep jumps and avoid BE restarts after startup. Spada now enables centre-of-mass constraints by
 > default; use `--no_centre_of_mass` for unconstrained comparisons or legacy
 > restarts. Martinec uses the current 1 m softplus sea-level sheet.
 >

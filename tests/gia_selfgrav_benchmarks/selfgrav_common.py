@@ -1126,6 +1126,71 @@ def time_segments(epochs_kyr, ladder):
     return out
 
 
+def bdf2_safe_segments(segments, max_growth=2.):
+    """Subdivide prescribed steps to cap growth, preserving every old endpoint.
+
+    This changes the time grid, rather than restarting BE. No step exceeds
+    its original size. A rising step uses a short geometric ramp, with the
+    final remainder balanced to avoid a tiny step just before the next rise.
+    The first physical step still needs the solver's normal BE startup.
+    """
+    if not np.isfinite(max_growth) or not 1 < max_growth < 1 + np.sqrt(2):
+        raise ValueError("max_growth must be between 1 and 1+sqrt(2)")
+    out = []
+    previous = None
+
+    def append(start, end, h, epoch):
+        if out and not out[-1][4] and out[-1][1] == start and out[-1][2] == h:
+            first, _, _, count, _ = out[-1]
+            out[-1] = (first, end, h, count + 1, epoch)
+        else:
+            out.append((start, end, h, 1, epoch))
+
+    for t0, t1, h, count, epoch in segments:
+        if not np.isfinite(h) or h <= 0 or count < 1:
+            raise ValueError("segments require positive finite steps and counts")
+        for k in range(count):
+            start = t0 + k*h
+            end = t1 if k == count-1 else t0 + (k+1)*h
+            remaining = h
+            while previous is not None and remaining > max_growth*previous:
+                part = min(max_growth*previous, remaining/2)
+                append(start, start+part, part, False)
+                start += part
+                remaining -= part
+                previous = part
+            append(start, end, remaining, epoch and k == count-1)
+            previous = remaining
+    return out
+
+
+def mark_output_epochs(segments, epochs_kyr):
+    """Mark extra already-solved states as output epochs without replanning steps."""
+    out = []
+    wanted = sorted(set(1000.*epoch for epoch in epochs_kyr if epoch > 0))
+    for t0, t1, h, count, epoch in segments:
+        cuts = []
+        for when in wanted:
+            if t0 < when < t1:
+                k = int(round((when-t0)/h))
+                if not 0 < k < count or not np.isclose(t0+k*h, when, rtol=0, atol=1e-8):
+                    raise ValueError("output epochs must coincide with existing solved timesteps")
+                cuts.append(k)
+        first = 0
+        for k in sorted(set(cuts)):
+            out.append((t0+first*h, t0+k*h, h, k-first, True))
+            first = k
+        final_epoch = epoch or any(np.isclose(t1, when, rtol=0, atol=1e-8) for when in wanted)
+        out.append((t0+first*h, t1, h, count-first, final_epoch))
+    return out
+
+
+def add_bdf2_ladder_argument(parser):
+    parser.add_argument("--bdf2_safe_ladder", action="store_true",
+                        help="subdivide steps to limit timestep increases to x2, "
+                             "preserving loading/output endpoints and avoiding later BE restarts")
+
+
 # ---------------------------------------------------------------------------
 # 5. Solver settings, time loop and output
 # ---------------------------------------------------------------------------

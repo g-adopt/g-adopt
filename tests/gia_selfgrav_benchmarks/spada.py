@@ -961,6 +961,7 @@ def run_settings(args):
             "extra_epochs_kyr": list(args.extra_epochs_kyr),
             "outer_rtol": args.outer_rtol, "block0_rtol": args.block0_rtol,
             "timestep_scale": args.timestep_scale,
+            "bdf2_safe_ladder": args.bdf2_safe_ladder,
             "mesh_h_km": args.mesh_h_km, "litho_layers": args.litho_layers}
 
 
@@ -987,6 +988,7 @@ def checkpoint_run_settings(record, mesh_info=None):
     written.setdefault("extra_epochs_kyr", [])
     mesh = mesh_info or common.MESHES["smoke" if written["smoke"] else "spada"]
     written.setdefault("timestep_scale", 1.0)
+    written.setdefault("bdf2_safe_ladder", False)
     written.setdefault("mesh_h_km", mesh["h_km"])
     written.setdefault("litho_layers", mesh["litho_layers"])
     if "load_representation" not in written:
@@ -1015,6 +1017,12 @@ def positive_integer(value):
 def time_segments(args, epochs):
     """Scale the step ladder, retaining exact solved states at output epochs."""
     ladder = tuple((end, dt * args.timestep_scale) for end, dt in common.STEP_LOAD_LADDER_YR)
+    if args.bdf2_safe_ladder:
+        # Extra outputs are notifications on the planned grid, not new time cuts.
+        base_epochs = SMOKE_EPOCHS_KYR if args.smoke else EPOCHS_KYR
+        segments = common.time_segments(
+            base_epochs, common.truncated_ladder(ladder, max(base_epochs)*1000.))
+        return common.mark_output_epochs(common.bdf2_safe_segments(segments), epochs)
     return common.time_segments(epochs, common.truncated_ladder(ladder, max(epochs) * 1000.))
 
 
@@ -1029,6 +1037,7 @@ def parse_args(argv=None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     common.add_time_arguments(p)
+    common.add_bdf2_ladder_argument(p)
     p.add_argument("--case", choices=["cap", "polar-motion"], default="cap",
                    help="cap: the selected load on the pole, U, V and N against TABOO. "
                         "polar-motion: the selected load at colatitude 25, longitude "
