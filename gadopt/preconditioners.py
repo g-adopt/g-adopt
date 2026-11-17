@@ -3931,6 +3931,10 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         self._displacement_nullspaces = {}
         self._set_displacement_nullspaces()
 
+        self._initialise_kept_solve(pc, prefix)
+
+    def _initialise_kept_solve(self, pc, prefix):
+        """Build the retained u/psi nest, low-rank potential PC and KSP."""
         # -- the low-rank DtN update, when the solver carries one -----------
         # `SelfGravitatingGIASolver.build_dtn_operator` publishes this key on
         # the low-rank representation and never on the multiplier one, so its
@@ -4197,3 +4201,139 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
             "gadopt.CondensedBlockPC has no transpose application. An adjoint "
             "solve reaches the forward apply, because pyadjoint solves "
             "adjoint(J) with the forward solver options.")
+
+
+class _ProjectedRetainedOperator:
+    """Apply a retained MatNest with the outer solver's kernel convention.
+
+    On curved facets a declared rigid rotation can be only an approximate
+    kernel. Project the action's output just as AugmentedImplicitMatrixContext
+    does, while leaving the assembled nest available to PCFieldSplit.
+    """
+
+    def __init__(self, assembled):
+        self.assembled = assembled
+
+    def mult(self, mat, x, y):
+        from .dtn_coupled import _remove_declared_space
+        self.assembled.mult(x, y)
+        _remove_declared_space(mat.getTransposeNullSpace(), y)
+
+    def multTranspose(self, mat, x, y):
+        from .dtn_coupled import _remove_declared_space
+        self.assembled.multTranspose(x, y)
+        _remove_declared_space(mat.getNullSpace(), y)
+
+
+class ReducedGIABlockPC(CondensedBlockPC):
+    """Precondition the retained (u, psi) block after material elimination.
+
+    Assemble the four consistent tangent blocks directly, without Slate or
+    constitutive derivative-matrix products. Reuse the coupled preconditioner's
+    retained-field solve, low-rank potential correction and rebuild rules.
+    Adjoint solves supply the transposed UFL form and use this forward apply.
+    """
+
+    DISPLACEMENT, POTENTIAL = 0, 1
+
+    def initialize(self, pc):
+        from firedrake.formmanipulation import ExtractSubBlock
+        from firedrake.matrix_free.operators import ImplicitMatrixContext
+
+        _, P = pc.getOperators()
+        self.cxt = P.getPythonContext()
+        if not isinstance(self.cxt, ImplicitMatrixContext):
+            raise ValueError("ReducedGIABlockPC requires a matrix-free operator")
+        self.bilinear_form = self.cxt.a
+        W = self.bilinear_form.arguments()[0].function_space()
+        if len(W) != 2 or W[0].ufl_element().value_shape() != (W.mesh()[0].geometric_dimension,):
+            raise ValueError("ReducedGIABlockPC requires the two-field (displacement, potential) layout")
+        self.displacement_space = fd.FunctionSpace(W.mesh()[0], W[0].ufl_element())
+        self.potential_space = fd.FunctionSpace(W.mesh()[1], W[1].ufl_element())
+        self.residual = fd.Cofunction(W.dual())
+        self.solution = fd.Function(W)
+        self._bcs = []
+        for bc in self.cxt.row_bcs:
+            space = bc.function_space()
+            component = space.component
+            field = space.parent.index if component is not None else space.index
+            if field != self.DISPLACEMENT:
+                raise NotImplementedError("ReducedGIABlockPC currently supports strong conditions on displacement only")
+            target = self.displacement_space if component is None else self.displacement_space.sub(component)
+            self._bcs.append(fd.DirichletBC(target, 0, bc.sub_domain))
+        self._constrained_rows = self._bc_rows(self._bcs)
+        splitter = ExtractSubBlock()
+        fcp = self.cxt.fc_params
+        u_form = splitter.split(self.bilinear_form, (0, 0))
+        assembler = get_assembler(u_form, bcs=self._bcs, mat_type="aij", form_compiler_parameters=fcp)
+        self.S_uu = assembler.allocate()
+        self._assemble_S_uu = assembler.assemble
+        self._sub_forms = {name: splitter.split(self.bilinear_form, indices)
+                           for name, indices in (("A_upsi", (0, 1)), ("A_psiu", (1, 0)),
+                                                 ("A_psipsi", (1, 1)))}
+        for name, form in self._sub_forms.items():
+            setattr(self, name, fd.assemble(form, mat_type="aij", form_compiler_parameters=fcp))
+        self._assemble_blocks()
+        self._displacement_nullspaces = {}
+        self._set_displacement_nullspaces()
+        self._initialise_kept_solve(pc, (pc.getOptionsPrefix() or "") + "condensed_")
+        self._initialise_projected_operator(pc)
+
+    def _initialise_projected_operator(self, pc):
+        # Keep the operator and PC matrices separate: fieldsplit must see the
+        # assembled nest, while Krylov must see the same declared left kernel
+        # as the outer augmented operator. A nullspace declaration alone only
+        # projects the RHS and cannot repair an approximate curved-mesh kernel.
+        self._retained_nullspaces = {}
+        for key in ("condensed_field_nullspace", "condensed_field_transpose_nullspace"):
+            if key not in self._displacement_nullspaces:
+                continue
+            _, space = self._displacement_nullspaces[key]
+            vectors = []
+            modes = list(space.getVecs())
+            if space.hasConstant():
+                constant = self.S_uu.petscmat.createVecRight()
+                constant.set(1.)
+                constant.normalize()
+                modes.append(constant)
+            for u in modes:
+                psi = self.A_psipsi.petscmat.createVecRight()
+                psi.set(0.)
+                vectors.append(PETSc.Vec().createNest([u, psi], comm=pc.comm))
+            # Embed any displacement constant as an explicit vector: a
+            # retained implicit constant would incorrectly include potential.
+            basis = PETSc.NullSpace().create(vectors=vectors, comm=pc.comm)
+            self._retained_nullspaces[key] = (vectors, basis)
+        self.projected_operator = None
+        if not self._retained_nullspaces:
+            return
+        self.projected_operator = PETSc.Mat().createPython(
+            self.condensed_operator.getSizes(),
+            _ProjectedRetainedOperator(self.condensed_operator), comm=pc.comm)
+        self.projected_operator.setUp()
+        for key, setter in (
+                ("condensed_field_nullspace", self.projected_operator.setNullSpace),
+                ("condensed_field_transpose_nullspace", self.projected_operator.setTransposeNullSpace)):
+            if key in self._retained_nullspaces:
+                setter(self._retained_nullspaces[key][1])
+        self.condensed_ksp.setOperators(self.projected_operator, self.condensed_operator)
+
+    def update(self, pc):
+        super().update(pc)
+        if self.projected_operator is not None:
+            # The parent refreshes the assembled PC matrix in place.
+            self.condensed_ksp.setOperators(self.projected_operator, self.condensed_operator)
+
+    def apply(self, pc, x, y):
+        with self.residual.dat.vec_wo as residual:
+            x.copy(residual)
+        for source, target in zip(self.residual.subfunctions, self._rhs_blocks):
+            with source.dat.vec_ro as vector:
+                vector.copy(target)
+        self._solution_vec.set(0.)
+        self.condensed_ksp.solve(self._rhs, self._solution_vec)
+        for source, target in zip(self._solution_blocks, self.solution.subfunctions):
+            with target.dat.vec_wo as vector:
+                source.copy(vector)
+        with self.solution.dat.vec_ro as solution:
+            solution.copy(y)

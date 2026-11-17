@@ -455,11 +455,11 @@ def test_the_preset_refuses_the_nested_block_zero_on_the_low_rank_path():
             condensed=False, block0="pair", dtn_representation="lowrank")
 
 
-def test_the_preset_refuses_the_condensed_layout_on_the_low_rank_path():
-    """The condensed layout's block 0 has no potential split to put it in."""
-    with pytest.raises(ValueError, match="needs the full layout"):
-        selfgrav_dtn_iterative_solver_parameters(
-            condensed=True, dtn_representation="lowrank")
+def test_the_preset_supports_the_eliminated_layout_on_the_low_rank_path():
+    """The retained u/psi nest carries the low-rank potential correction."""
+    options = selfgrav_dtn_iterative_solver_parameters(condensed=True, dtn_representation="lowrank")
+    assert options["dtn_fieldsplit_0_pc_python_type"] == "gadopt.ReducedGIABlockPC"
+    assert options["dtn_fieldsplit_0_condensed_fieldsplit_1_pc_python_type"] == "gadopt.LowRankPotentialPC"
 
 
 def test_the_preset_refuses_an_unknown_representation():

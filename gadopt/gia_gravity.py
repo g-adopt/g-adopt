@@ -509,8 +509,8 @@ def resolve_dtn_representation(dtn_representation, *, condensed: bool) -> str:
     """The representation a caller left unset, decided by the layout.
 
     The default is `"lowrank"` on the full layout and `"multiplier"` on the
-    condensed layout, because the low-rank update lives on the potential rows
-    of a block-0 operator that only the full layout assembles. Decided on the
+    condensed layout for compatibility. Explicit low-rank selection also works
+    after material elimination through `ReducedGIABlockPC`. Decided on the
     3-D scan of 2026-09-17 (`NOTES/HANDOVER-2026-09-17.md` section 3.4): the
     low-rank arm reproduces the multiplier arm's state at every truncation,
     its warm step is 0.69 of the multiplier's at truncation 5 and does not
@@ -600,9 +600,11 @@ def selfgrav_dtn_iterative_solver_parameters(
         outer FGMRES
          +- DtNTwoBlockSchurPC, schur_fact_type full with the cached apply,
          |  which is the default on a narrow `Real` block; lower otherwise
-             +- block 0, condensed layout: FGMRES + multiplicative fieldsplit
+             +- block 0, condensed layout with multiplier DtN: FGMRES + multiplicative fieldsplit
              |   +- u  : one V-cycle of NearlyIncompressibleAssembledPC
              |   +- psi: SPDAssembledPC + GAMG   (GravitySolver's preset)
+             +- block 0, condensed layout with low-rank DtN:
+             |  ReducedGIABlockPC, assembled (u, psi) nest with low-rank potential PC
              +- block 0, full layout, block0="condensed" (the default):
              |  preonly + gadopt.CondensedBlockPC, which eliminates `M` once
              |  with Slate and solves the assembled (u, psi) system
@@ -1098,13 +1100,6 @@ def selfgrav_dtn_iterative_solver_parameters(
             "block0='condensed', whose potential split is a matrix this "
             "update can be added to, or name dtn_representation='multiplier' "
             "here and on the space and the solver to run the nested route.")
-    if dtn_representation == "lowrank" and condensed:
-        raise ValueError(
-            "dtn_representation='lowrank' needs the full layout: the "
-            "condensed layout's block 0 has no internal-variable field, so "
-            "gadopt.CondensedBlockPC is refused there and the potential split "
-            "the update belongs in does not exist. Pass condensed=False, "
-            "with a space built with condense_internal_variables=False.")
     if ainvb and multiplier_pc not in (None, "none"):
         raise ValueError(
             "ainvb=True solves block 1 with gadopt.DtNTwoBlockSchurPC's own "
@@ -1269,7 +1264,7 @@ def selfgrav_dtn_iterative_solver_parameters(
     # `(u, psi)` Krylov solve: leaving a reason line on a `preonly` KSP as
     # well would put a second line in the log for one block-0 application,
     # and `bench_dtn_baseline.parse_counts` counts an application per line.
-    new_block0 = not condensed and block0 == "condensed"
+    new_block0 = block0 == "condensed" and (not condensed or dtn_representation == "lowrank")
     if outer_atol < 0 or outer_max_it < 1:
         raise ValueError(
             f"outer_atol must be >= 0 and outer_max_it >= 1; they are "
@@ -1311,7 +1306,8 @@ def selfgrav_dtn_iterative_solver_parameters(
 
         **({"dtn_fieldsplit_0_ksp_type": "preonly",
             "dtn_fieldsplit_0_pc_type": "python",
-            "dtn_fieldsplit_0_pc_python_type": "gadopt.CondensedBlockPC"}
+            "dtn_fieldsplit_0_pc_python_type": ("gadopt.ReducedGIABlockPC" if condensed
+                                                    else "gadopt.CondensedBlockPC")}
            if new_block0 else
            {"dtn_fieldsplit_0_ksp_type": "fgmres",
             "dtn_fieldsplit_0_ksp_rtol": block0_rtol,
@@ -1363,11 +1359,15 @@ def selfgrav_dtn_iterative_solver_parameters(
     # the load enters through `u`. With the internal variable condensed away
     # the space has no `m` field and the indices shift, which is why this list
     # is built rather than written out.
-    if condensed:
+    if condensed and not new_block0:
         sweep = [("0", {**inner(u_pc), **displacement_krylov}),
                  ("1", inner("gadopt.SPDAssembledPC"))]
     else:
-        if u_pc != DEFAULT_DISPLACEMENT_PC:
+        if condensed and new_block0 and u_pc != DEFAULT_DISPLACEMENT_PC:
+            raise ValueError(
+                "The reduced low-rank block uses GAMG directly on the assembled displacement tangent; "
+                "configure dtn_fieldsplit_0_condensed_fieldsplit_0_ rather than u_pc.")
+        if not condensed and u_pc != DEFAULT_DISPLACEMENT_PC:
             raise ValueError(
                 "u_pc has no meaning on the uncondensed layout: the "
                 "displacement operator there is the condensed matrix that "
@@ -1932,8 +1932,8 @@ def self_gravitating_gia_space(
         always has degree-1 content. It works on both DtN representations.
         With no named representation it resolves to the layout default:
         `"lowrank"` on the full layout, `"multiplier"` on the condensed
-        layout, which has no low-rank route. The solver must receive a
-        matching `SeaLevel` object.
+        layout. Either layout accepts explicit low-rank selection. The solver
+        must receive a matching `SeaLevel` object.
 
     Returns:
       `(Z, layout)`.
@@ -1963,8 +1963,8 @@ def self_gravitating_gia_space(
         # layout that the 3-D sea-level runs use. The multiplier path costs a
         # dense complement of one block-0 solve per multiplier at every build,
         # which does not fit one node at a truncation of 20. The condensed
-        # layout has no low-rank route (`selfgrav_dtn_iterative_solver_parameters`
-        # refuses it), so there the default stays the multiplier path.
+        # layout keeps its existing multiplier default; callers can now
+        # explicitly select low-rank DtN after material elimination too.
         #
         # This rule comes before the centre-of-mass rule below on purpose.
         # Sea level requires the frame, so the frame rule would otherwise see
@@ -2211,7 +2211,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
       `constitutive_method="pointwise"` is linear only. The opt-in `"direct"`
       method solves the implicit nonlinear constitutive equation at quadrature
       points and directly assembles its consistent tangent and reverse adjoint.
-      It currently requires natural boundaries and explicit DtN multipliers.
+      It requires natural displacement boundaries and supports both DtN representations.
     - **Uncondensed layout, `dtn_representation="lowrank"`: supported.** The
       update `B` does not depend on the rheology, the forward Newton solve
       reinstalls it after every Jacobian assembly through `augment_jacobian`,
@@ -2266,7 +2266,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         BDF2 uses BE startup and stores two accepted material history levels.
       constitutive_method: "pointwise" retains the legacy linear substitution;
         "direct" uses nonlinear quadrature integration and a first-reverse
-        timestep block on the condensed, explicit-multiplier layout. Weak
+        timestep block on the condensed layout with either DtN representation. Weak
         displacement boundaries are not yet supported by the direct path.
       rotation_moments: `{"C": ..., "C_minus_A": ..., "k_s": ...}`, the
         reference hydrostatic figure. `C_minus_A` is required only in 3-D,
@@ -2399,8 +2399,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if constitutive_method not in ("pointwise", "direct"):
             raise ValueError("constitutive_method must be 'pointwise' or 'direct'")
         if constitutive_method == "direct":
-            if not layout.condensed or dtn_representation != "multiplier":
-                raise ValueError("Direct constitutive integration requires the condensed multiplier layout")
+            if not layout.condensed:
+                raise ValueError("Direct constitutive integration requires the condensed layout")
             if kwargs.get("constant_jacobian", False) or kwargs.get("J") is not None:
                 raise ValueError("Direct constitutive integration supplies its own changing Jacobian")
             if any(bc.keys() & {"u", "un"} for bc in (kwargs.get("bcs") or {}).values()):
@@ -2575,7 +2575,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             block0_class = solver_parameters.get(
                 "dtn_fieldsplit_0_pc_python_type",
                 solver_parameters.get("pc_python_type"))
-            if block0_class != "gadopt.CondensedBlockPC":
+            if block0_class not in ("gadopt.CondensedBlockPC", "gadopt.ReducedGIABlockPC"):
                 self._refuse_block0_without_potential_split(solver_parameters)
                 return
         if preset_is_lowrank:
@@ -5214,12 +5214,19 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         self.add_to_solver_config(newton_stokes_solver_parameters)
         if (self.dtn_representation == "lowrank"
                 and not self.layout.real_fields):
-            # The low-rank path with rotation and fluid core off has no `Real`
-            # sub-field, so the two-block Schur presets have nothing to split
-            # and refuse. Both requests map to the single-block LU preset here.
-            # A core-pressure or rotation field selects the two-block preset.
-            self.add_to_solver_config(
-                selfgrav_dtn_lowrank_direct_solver_parameters)
+            # With no global scalars the retained u/psi block is the whole
+            # system. Keep the outer FGMRES and remove only the Real split.
+            if self.layout.condensed and solver_preset == "iterative":
+                options = selfgrav_dtn_iterative_solver_parameters(
+                    condensed=True, dtn_representation="lowrank", n_real=0)
+                reduced = {key: value for key, value in options.items() if not key.startswith("dtn_")}
+                prefix = "dtn_fieldsplit_0_condensed_"
+                reduced.update({"condensed_"+key[len(prefix):]: value for key, value in options.items()
+                                if key.startswith(prefix)})
+                reduced.update(pc_type="python", pc_python_type="gadopt.ReducedGIABlockPC")
+                self.add_to_solver_config(reduced)
+            else:
+                self.add_to_solver_config(selfgrav_dtn_lowrank_direct_solver_parameters)
         elif solver_preset == "direct":
             # The low-rank path keeps block 1 unpreconditioned: its adjoint and
             # tangent solves reuse these parameters on an assembled matrix,
@@ -5495,6 +5502,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         Args:
           extras: the caller's `solver_parameters_extra`, or `None`.
         """
+        if (self.constitutive_method == "direct" and self.dtn_representation == "lowrank"
+                and self._live_coastline() and "gia_rebuild" not in self.solver_parameters):
+            # A moving coastline can defeat a tangent frozen at the replay's
+            # zero initial guess. Honour any explicitly chosen lag policy.
+            self.add_to_solver_config({"gia_rebuild": "always"})
         if getattr(self, "appctx", None) is None:
             self.appctx = {"mu": self.approximation.mu / self.rho_continuity}
         self.appctx["approximation"] = self.approximation
@@ -5771,6 +5783,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self.solver = self._direct_backend.solver
             self.problem = self._direct_backend.problem
             self.J = self._direct_backend.J
+            return  # The direct block owns low-rank replay and reverse hooks.
         if self.dtn_representation != "lowrank":
             return
         if self.constant_jacobian:
@@ -5915,8 +5928,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         for k, name in enumerate(self.layout.rotation_names):
             idx = self.layout.rotation.get(name)
             if idx is not None:
-                by_index[idx] = (float(self._theta_rot(k))
-                                 * float(self._closure_constant(k)))
+                by_index[idx] = (self.CLOSURE_SIGNS[k] * scalar_value(self.scaling_factor)
+                                 * scalar_value(self._row_scale_B_mu) * scalar_value(self.Omega_sq)
+                                 * scalar_value(self._closure_constant(k)))
         # The centre-of-mass multipliers are Lagrange multipliers, like the
         # core pressure, so their diagonal is exactly zero. `getattr` keeps a
         # layout that predates the field working.
@@ -5998,7 +6012,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # count BEFORE the solve; `update_total_mass` has already added its own
         # block, and `project_out_nullspace` adds more after, so the block is
         # found by output identity among what the solve itself added.
-        adopt = self.dtn_representation == "lowrank" and annotate_tape()
+        adopt = (self.dtn_representation == "lowrank" and self._direct_backend is None
+                 and annotate_tape())
         if adopt:
             tape = get_working_tape()
             n0 = len(tape.get_blocks())

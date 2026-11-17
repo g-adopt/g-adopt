@@ -56,7 +56,7 @@ current mixed state; the existing BE-only restart file is not sufficient.
 
 Create the usual mixed GIA space with the material histories outside the global
 unknown vector. Their quadrature degree must match the residual integration
-degree. For example, retaining the explicit exterior-potential multipliers:
+degree. For example, combining material elimination with low-rank DtN:
 
 ```python
 Z, layout = self_gravitating_gia_space(
@@ -66,7 +66,7 @@ Z, layout = self_gravitating_gia_space(
     condense_internal_variables=True,
     internal_variable_family="Quadrature",
     internal_variable_degree=4,
-    dtn_representation="multiplier",
+    dtn_representation="lowrank",
     # Include the existing rotation, fluid-core, COM and sea-level options.
 )
 state = Function(Z)
@@ -144,9 +144,10 @@ stress parameter.
 
 ## Current limits
 
-- Direct elimination requires explicit DtN multipliers. The existing coupled
-  DG solver supports BDF2 with low-rank DtN and a moving coastline; combining
-  low-rank DtN with direct elimination remains outstanding.
+- Direct elimination supports both explicit DtN multipliers and low-rank DtN.
+  See [the combined solver and block investigation](gia_eliminated_lowrank.md).
+  Condensed spaces keep their existing multiplier default; select low-rank
+  explicitly for the reduced potential preconditioner.
 - Direct elimination supports natural displacement boundaries, including fluid
   core coupling. Strong and weak/Nitsche displacement boundaries, extra forcing
   callbacks and user-supplied Jacobians are refused. Backstress also requires
@@ -158,7 +159,8 @@ stress parameter.
 - The custom block implements first reverse derivatives for Function inputs;
   tangent-linear and Hessian actions are not implemented. Material Constants
   should be fixed; use Function controls for differentiated material parameters.
-- The direct path conservatively rebuilds preconditioners during replay.
+- The direct path binds low-rank scaling and cache inputs per replay/reverse
+  step and uses a deterministic zero guess for replay.
   Production driver CLI/restart formats, automatic adaptivity and 3D validation
   are not part of this port.
 
@@ -190,6 +192,21 @@ Validation on 17 November 2026, using Firedrake 2026.10:
 | Maxwell and backstress RAM adjoints on 4 MPI ranks | 2 passed on each rank |
 | Maxwell disk-checkpoint adjoint on 2 MPI ranks | 1 passed on each rank |
 
+The combined eliminated/low-rank suite adds 13 passing serial checks, including
+nonlinear Maxwell/backstress RAM and disk adjoints, moving coastlines, a gravity
+control and constant-step replay. Fixed-coastline Maxwell/backstress RAM adjoints
+also pass on four MPI ranks. On two ranks, moving-coastline, Maxwell disk and
+gravity-control adjoints pass with the retained-kernel projection; constant-step
+replay also passed in the preceding validation run.
+The existing low-rank block suite has 30 passing serial checks, with its two-rank
+multiplier comparison passing when launched explicitly. The automatic MPMD test
+launcher failed in this environment; the explicit command is:
+
+```bash
+mpiexec -n 2 env _PYTEST_MPI_CHILD_PROCESS=1 python -m pytest \
+  tests/unit/test_gia_lowrank_block0.py::test_two_ranks_match_the_multiplier_path -q
+```
+
 The direct-suite skip is the intentionally unsupported spatial backstress
 exponent. MPI tests verify replay and guarded Taylor convergence on each
 partition; this is not a performance-scaling or memory benchmark.
@@ -198,11 +215,24 @@ Reproduce the serial checks in the Firedrake 2026.10 environment:
 
 ```bash
 source /data/will/codex_sbx/firedrake-2026.10/activate.sh
-python -m pytest tests/unit/test_gia_bdf2.py tests/unit/test_gia_direct_bdf2.py -q
+python -m pytest tests/unit/test_gia_bdf2.py tests/unit/test_gia_direct_bdf2.py \
+  tests/unit/test_gia_eliminated_lowrank.py -q
 mpiexec -n 2 python -m pytest \
   'tests/unit/test_gia_direct_bdf2.py::test_full_mixed_direct_adjoint[memory-maxwell]' \
   'tests/unit/test_gia_direct_bdf2.py::test_full_mixed_direct_adjoint[memory-backstress]' -q
 # Repeat the MPI command with -n 4 for four ranks.
+```
+
+Reproduce the combined low-rank MPI checks:
+
+```bash
+mpiexec -n 2 python -m pytest \
+  tests/unit/test_gia_eliminated_lowrank.py::test_lowrank_moving_coastline_adjoint \
+  'tests/unit/test_gia_eliminated_lowrank.py::test_lowrank_adjoint[disk-maxwell]' \
+  tests/unit/test_gia_eliminated_lowrank.py::test_lowrank_gravity_control_adjoint -q
+mpiexec -n 4 python -m pytest \
+  'tests/unit/test_gia_eliminated_lowrank.py::test_lowrank_adjoint[memory-maxwell]' \
+  'tests/unit/test_gia_eliminated_lowrank.py::test_lowrank_adjoint[memory-backstress]' -q
 ```
 
 An existing separate regression,

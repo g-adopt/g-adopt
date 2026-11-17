@@ -4,6 +4,8 @@ The mechanics/sea-level residual remains owned by SelfGravitatingGIASolver.
 Only the material update and its implicit scalar sensitivity are supplied here.
 No external operator is embedded in a form or used by the numerical root solver.
 """
+from contextlib import contextmanager
+
 import numpy as np
 import firedrake as fd
 import ufl
@@ -118,6 +120,9 @@ class ConstitutiveStepBlock(Block):
 
     def prepare_recompute_component(self, inputs, relevant_outputs):
         self.restore(inputs)
+        # A shared workspace may hold an unrelated later step after reverse.
+        # Use a deterministic gauge-free guess for this algebraic solve.
+        self.backend.work.assign(0)
         self.backend.forward()
 
     def recompute_component(self, inputs, block_variable, idx, prepared=None):
@@ -136,8 +141,8 @@ class ConstitutiveStepBlock(Block):
 class DirectConstitutiveBackend:
     """Direct derivatives of the FULL mixed residual, not just displacement.
 
-    The first port supports the explicit DtN multiplier representation and
-    natural displacement boundaries. Strong and weak displacement boundary
+    Both DtN representations are supported with natural displacement boundaries.
+    Strong and weak displacement boundary
     conditions are not implemented for this path and are refused explicitly.
     """
 
@@ -154,6 +159,10 @@ class DirectConstitutiveBackend:
         self.private_inputs = tuple(c.copy(deepcopy=True) for c in self.inputs)
         self.work = owner.solution.copy(deepcopy=True)
         mapping = dict(zip(self.inputs, self.private_inputs)) | {owner.solution: self.work}
+        self.lowrank = owner.dtn_representation == "lowrank"
+        self._mapping = mapping
+        self._solve_epoch = 0
+        self._theta_factors = (owner.scaling_factor, owner._row_scale_B_mu, owner.Lambda)
         self.F = ufl.replace(owner.F, mapping)
         material.equation = ufl.replace(material.equation, mapping)
         material.diagonal = ufl.replace(material.diagonal, mapping)
@@ -169,7 +178,9 @@ class DirectConstitutiveBackend:
         self.solver = fd.NonlinearVariationalSolver(self.problem, solver_parameters=owner.solver_parameters,
             options_prefix=owner.name, appctx=owner.appctx, nullspace=owner.nullspace,
             transpose_nullspace=owner.transpose_nullspace, near_nullspace=owner.near_nullspace,
-            pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector)
+            pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector,
+            **(dict(post_function_callback=owner.augment_residual,
+                    post_jacobian_callback=owner.augment_jacobian) if self.lowrank else {}))
         self.buffers = [fd.Function(m.function_space()) for m in owner.time_integrator.current]
         self.outputs = [owner.solution, *self.buffers]
         self.numeric_outputs = [self.work, *self.buffers]
@@ -192,6 +203,41 @@ class DirectConstitutiveBackend:
         self.gradient_forms = {}
         self.matrix = self.linear_solver = None
 
+    def _theta_values(self):
+        from .gia_gravity import scalar_value
+        return tuple(scalar_value(self._mapping.get(c, c)) for c in self._theta_factors)
+
+    @contextmanager
+    def bound_lowrank(self):
+        """Bind the operator and PC cache to this step's private coefficients."""
+        if not self.lowrank:
+            yield
+            return
+        from .gia_gravity import scalar_value
+        op, ctx = self.owner.dtn_operator, self.owner.appctx
+        saved_theta = op.theta
+        sf, bmu, lam = self._theta_values()
+        op.theta = sf*bmu/lam
+        missing = object()
+        self._solve_epoch += 1
+        values = {"gia_dt": scalar_value(self._mapping.get(self.owner.dt, self.owner.dt)),
+                  "gia_time_alpha": scalar_value(self._mapping[self.owner.time_integrator.alpha]),
+                  # A replay can change controls at the same h/alpha. Its
+                  # private operator is a fresh solve even when the live
+                  # forward counter has not moved since the original march.
+                  "gia_solve_index": self._solve_epoch}
+        saved = {key: ctx.get(key, missing) for key in values}
+        ctx.update(values)
+        try:
+            yield
+        finally:
+            op.theta = saved_theta
+            for key, value in saved.items():
+                if value is missing:
+                    ctx.pop(key, None)
+                else:
+                    ctx[key] = value
+
     def refresh_from_vector(self, vector):
         with stop_annotating():
             with self.work.dat.vec_wo as target:
@@ -200,7 +246,8 @@ class DirectConstitutiveBackend:
 
     def forward(self):
         self.owner.appctx["operator_version"] = None
-        self.solver.solve()
+        with self.bound_lowrank():
+            self.solver.solve()
         # Projection is part of this recorded map: replay must return the same
         # gauge as the original forward solve, not an arbitrary rigid rotation.
         if self.owner.nullspace is not None:
@@ -226,6 +273,10 @@ class DirectConstitutiveBackend:
         self.owner.solution_old.assign(self.owner.solution)
 
     def reverse(self, seeds):
+        with self.bound_lowrank():
+            self._reverse(seeds)
+
+    def _reverse(self, seeds):
         self.owner.appctx["operator_version"] = None
         for density, seed, weights in zip(self.densities, seeds[1:], self.weights):
             if seed is None:
@@ -242,14 +293,20 @@ class DirectConstitutiveBackend:
                 if isinstance(basis, fd.VectorSpaceBasis):
                     basis.orthogonalize(rhs.subfunctions[i])
         if self.matrix is None:
-            self.matrix = fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, mat_type='matfree')
+            self.matrix = fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, mat_type='matfree',
+                                      appctx=self.owner.appctx)
+            if self.lowrank:
+                self.owner.augment_jacobian(None, self.matrix.petscmat)
             options = {k: v for k, v in self.owner.solver_parameters.items() if not k.startswith('snes_')}
             self.linear_solver = fd.LinearSolver(self.matrix, solver_parameters=options,
                 nullspace=self.owner.transpose_nullspace or self.owner.nullspace,
                 transpose_nullspace=self.owner.nullspace, near_nullspace=self.owner.near_nullspace,
                 appctx=self.owner.appctx)
         else:
-            fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, tensor=self.matrix, mat_type='matfree')
+            fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, tensor=self.matrix, mat_type='matfree',
+                        appctx=self.owner.appctx)
+            if self.lowrank:
+                self.owner.augment_jacobian(None, self.matrix.petscmat)
             self.linear_solver.invalidate_jacobian()
         for bc in self.owner.strong_bcs:
             bc.zero(rhs)
@@ -268,4 +325,22 @@ class DirectConstitutiveBackend:
             coefficient = self.private_inputs[index]
             self.gradient_forms[index] = fd.derivative(self.reverse_functional, coefficient,
                 fd.TestFunction(coefficient.function_space()))
-        return fd.assemble(self.gradient_forms[index])
+        gradient = fd.assemble(self.gradient_forms[index])
+        if self.lowrank:
+            # The factored DtN term is outside UFL: add its scalar scaling
+            # derivative explicitly. Fixed geometry/mode rows have no inputs.
+            original = self.inputs[index]
+            sf, bmu, lam = self._theta_values()
+            dtheta = sum(value for factor, value in zip(
+                self._theta_factors, (bmu/lam, sf/lam, -sf*bmu/lam**2)) if original is factor)
+            if dtheta:
+                if original.ufl_shape or original.function_space().ufl_element().family() != "Real":
+                    raise ValueError("DtN row-scaling controls must be scalar Real Functions")
+                with self.work.dat.vec_ro as x, self.adjoint.dat.vec_ro as adjoint:
+                    b = x.duplicate()
+                    b.set(0.)
+                    self.owner.dtn_operator.apply_local(x.array_r, b.array_w, theta=1.)
+                    pairing = adjoint.dot(b)
+                    b.destroy()
+                gradient.dat.data[:] -= dtheta*pairing
+        return gradient

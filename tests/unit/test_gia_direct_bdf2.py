@@ -42,14 +42,16 @@ def clean_tape():
     get_working_tape().clear_tape()
 
 
-def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False, model='maxwell'):
+def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False, model='maxwell',
+          representation='multiplier', gravity_control=None, moving_coastline=False,
+          options_extra=None, constitutive_method=None):
     parent, sub = meshes
     Z, layout = gadopt.self_gravitating_gia_space(
         sub, parent, gravity_bcs=base.gravity_bcs(parent, sheet=False), rotation=True,
         fluid_core=True, centre_of_mass=True, sea_level=True,
         n_internal_variables=2, condense_internal_variables=direct,
         internal_variable_family='Quadrature', internal_variable_degree=4,
-        self_gravity_number=base.LAMBDA, dtn_representation='multiplier')
+        self_gravity_number=base.LAMBDA, dtn_representation=representation)
     state = fd.Function(Z)
     dt = fd.Function(fd.FunctionSpace(sub, 'R', 0)).assign(STEPS[0])
     Q = fd.FunctionSpace(sub, 'CG', 2)
@@ -63,7 +65,8 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
             fd.conditional(fd.SpatialCoordinate(sub)[0] > 0, 3., 1.))
     material = base.approximation(shear_modulus=[.4, .6],
         viscosity=[.12*fd.exp(control), .6*fd.exp(control)],
-        exponent=power, transition_stress=.003)
+        exponent=power, transition_stress=.003,
+        B_mu=base.B_MU if gravity_control is None else gravity_control)
     if model == 'backstress':
         material = gadopt.BackstressApproximation(
             bulk_modulus=1., density=1., shear_modulus=1., viscosity=.3*fd.exp(control),
@@ -72,14 +75,16 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
             self_gravity_number=base.LAMBDA)
     sea = SeaLevel(boundary=base.CURVE_RE, rho_w=.1, rho_i=.09, g_surface=1.,
         SL_init=initial_sea, I=ice, I_init=initial_ice,
-        N_init=fd.Constant(0.), ur_init=fd.Constant(0.), fixed_ocean=True, softplus_width=.001)
+        N_init=fd.Constant(0.), ur_init=fd.Constant(0.), fixed_ocean=not moving_coastline, softplus_width=.001)
     X = fd.SpatialCoordinate(sub)
     measure = fd.Measure('dx', domain=sub, intersect_measures=(fd.dx(domain=parent),))
     options = dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11,
         ksp_error_if_not_converged=True)
+    if options_extra:
+        options.update(options_extra)
     nullspace = gadopt.rigid_rotation_nullspace(Z, layout)
     solver = gadopt.SelfGravitatingGIASolver(state, material, layout=layout, dt=dt,
-        time_scheme=scheme, constitutive_method='direct' if direct else 'pointwise',
+        time_scheme=scheme, constitutive_method=constitutive_method or ('direct' if direct else 'pointwise'),
         bcs={}, fluid_core=FluidCore(boundary=base.CURVE_RC, rho_core=1.2, g=1.),
         sea_level=sea, rotation_moments={'C': fd.assemble(fd.dot(X, X)*measure)},
         nullspace=nullspace, transpose_nullspace=nullspace, quad_degree=4,
