@@ -44,7 +44,7 @@ def clean_tape():
 
 def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False, model='maxwell',
           representation='multiplier', gravity_control=None, moving_coastline=False,
-          options_extra=None, constitutive_method=None):
+          options_extra=None, constitutive_method=None, timestep=None, initial_sea_level=None):
     parent, sub = meshes
     Z, layout = gadopt.self_gravitating_gia_space(
         sub, parent, gravity_bcs=base.gravity_bcs(parent, sheet=False), rotation=True,
@@ -53,10 +53,12 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
         internal_variable_family='Quadrature', internal_variable_degree=4,
         self_gravity_number=base.LAMBDA, dtn_representation=representation)
     state = fd.Function(Z)
-    dt = fd.Function(fd.FunctionSpace(sub, 'R', 0)).assign(STEPS[0])
+    dt = (fd.Function(fd.FunctionSpace(sub, 'R', 0)).assign(STEPS[0])
+          if timestep is None else timestep)
     Q = fd.FunctionSpace(sub, 'CG', 2)
     theta = fd.atan2(fd.SpatialCoordinate(sub)[1], fd.SpatialCoordinate(sub)[0])
-    initial_sea = fd.Function(Q).interpolate(.005*fd.cos(theta))
+    initial_sea = (fd.Function(Q).interpolate(.005*fd.cos(theta))
+                   if initial_sea_level is None else initial_sea_level)
     initial_ice = fd.Function(Q)
     ice = fd.Function(Q)
     power = exponent

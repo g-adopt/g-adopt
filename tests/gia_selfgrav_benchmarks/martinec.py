@@ -1,4 +1,4 @@
-r"""The Martinec et al. (2018) sea-level benchmark in 3-D, cases B, C and D.
+r"""The Martinec et al. (2018) sea-level benchmark in 3-D, cases B to E.
 
 THE BENCHMARK
     Martinec, Z., et al. (2018), A benchmark study of numerical
@@ -16,9 +16,12 @@ THE BENCHMARK
         B      fixed coastline  L1, 1500 m     T0, step    B1, far from the ice
         C      fixed coastline  L2, 500 m      T1, growth  B2, under the ice
         D      moving coastline L2, 500 m      T1, growth  B2
+        E      as D, but B2 is prescribed at 15 kyr; initial topography is fitted
 
     Case A has no ocean, and the Spada driver covers it. Case E prescribes
     the topography at the end and is an inverse problem.
+    `--case E` uses Picard by default (`--topography_method rol` selects
+    adjoint/ROL). See `CASE_E.md` for its target, norm, restart and run commands.
 
     Every physical constant of a case comes from the PyPI package `giamip`
     (`giamip.case("martinec2018-<case>")`), never from this file, because
@@ -33,9 +36,8 @@ THE SEA-LEVEL EQUATION AS THIS CODE SOLVES IT
         SL    = SL_init + (N - N_init) - (u_r - ur_init) + Shift
         sigma = rho_w C0 (SL - SL_init) + rho_i (1 - C0) (I - I_init)
 
-    for a fixed coastline (cases B and C, `C0 = H(r SL_init / eps)`, Martinec
-    eq. 7 and 8), and with the live softplus sheet of `gadopt.SeaLevel` for a
-    moving coastline (case D). `N = psi / g_s` is the geoid height and `u_r = u . n`
+    for a fixed coastline (cases B and C), and with the current GIAMIP
+    softplus sheet for a moving coastline (cases D and E). `N = psi / g_s` is the geoid height and `u_r = u . n`
     the uplift. The `Shift` row is the conservation of the mass of water and
     ice. The centre-of-mass multipliers hold the first mass moment of mantle,
     core and load at zero, which is the frame of the benchmark. Rotation is
@@ -70,6 +72,8 @@ DISCRETISATION
     Mesh      `selfgrav_common.MESHES["martinec"]`, generated in the job:
               250 km lateral size with two 35 km lithosphere layers, refined
               to 78 km in the ice cap and along both initial coastlines.
+              `--cap_h_km` changes cap spacing only; `--litho_layers`
+              changes the subdivisions of the 70 km lithosphere only.
     Unknowns  As the Spada driver, plus the three centre-of-mass rows and
               the `Shift` row.
     Elastic   K / mu = 1000 for case B and 100 for cases C and D
@@ -77,12 +81,13 @@ DISCRETISATION
               geoid criterion: the error of the compressible model at
               K / mu = 100 adds to the time error of backward Euler.
     Time      Case B: the elastic solve at t = 0, then uniform 10 yr steps
-              to 10 kyr (1000 steps, `T0_DT_YR`). Cases C and D: 50 yr steps
-              from 0 to 15 kyr, with no elastic solve, because the load
-              grows from zero.
+              to 10 kyr (1000 steps, `T0_DT_YR`). `--time_step_ladder`
+              selects an experimental graded schedule for B. Cases C and D:
+              50 yr steps from 0 to 15 kyr, with no elastic solve, because
+              the load grows from zero.
     Solver    Cases B and C have a fixed coastline, so the residual is linear
               in the unknowns and one linear solve per step is exact
-              (`ksponly`). Case D has a live coastline and runs Newton.
+              (`ksponly`). Case D has live masks and runs Newton.
 
 RUN
     mpiexec -np <N> python3 martinec.py --case B
@@ -91,6 +96,8 @@ RUN
     checks that the code runs; its numbers are not results. Case D needs the
     10 steps: at the end of the first 50 yr step the load is still too small
     to assemble to a nonzero sheet.
+    Case E smoke runs instead cover the full 15 kyr in six coarse 2500 yr
+    steps, so the terminal-topography fit can be exercised.
 
     The run writes a checkpoint every `--checkpoint_every` steps (default
     50) into `checkpoint_<case>.h5`. To continue a run that stopped, run the
@@ -142,21 +149,18 @@ from gadopt.gia_gravity import (SeaLevel,  # noqa: E402
                                 SelfGravitatingGIASolver,
                                 rigid_rotation_nullspace,
                                 self_gravitating_gia_space)
-from gadopt.sea_level_sheet import (ocean_fraction,  # noqa: E402
-                                    water_fraction)
+from gadopt.sea_level_sheet import ocean_fraction, water_fraction
+
+SOFTPLUS_WIDTH_M = 1.0
 
 import selfgrav_common as common  # noqa: E402
-
-#: The width `eps` of the softplus sea-level sheet, in metres of ice
-#: (`gadopt.SeaLevel.softplus_width`), as in the GIAMIP runs.
-SOFTPLUS_WIDTH_M = 1.0
 
 # --------------------------------------------------------------------------
 # Settings of the benchmark
 # --------------------------------------------------------------------------
 
 #: K / mu of each case. Case B fails its geoid criterion at 100.
-BULK_SHEAR_RATIO = {"B": 1000.0, "C": 100.0, "D": 100.0}
+BULK_SHEAR_RATIO = {"B": 1000.0, "C": 100.0, "D": 100.0, "E": 100.0}
 
 #: Output epochs in kyr, per time scenario. The time of the published
 #: profiles is added to the list in `main`.
@@ -239,7 +243,7 @@ def is_fixed_ocean(case):
     """Whether the coastline is fixed (sea-level equation level 1).
 
     Level 1 (cases B and C) keeps the initial ocean function C0 for the whole
-    run. Level 2 (case D) moves the coastline with the sea level and lets ice
+    run. Level 2 (cases D and E) moves the coastline with the sea level and lets ice
     float.
     """
     return int(case.sea_level_equation) == 1
@@ -321,7 +325,8 @@ def basin_sea_level(mesh, case):
 
     with psi the angular distance from the basin centre. The topography is
     measured up from the geoid, so the initial sea level is -zeta0: positive
-    (water) inside the coastline, negative (land) outside.
+    (water) inside the coastline, negative (land) outside. The field is
+    continuous, matching the initial-topography control space.
 
     Args:
       mesh: the mantle mesh.
@@ -445,7 +450,9 @@ def surface_gravity(parent):
     return float(value)
 
 
-def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
+def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio,
+                 initial_sea_level=None, time_scheme="backward_euler",
+                 material_solver="coupled", material_quad_degree=4):
     """The coupled self-gravitating sea-level solver of one case.
 
     Args:
@@ -466,11 +473,13 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
         common.SURF_OUTER: {"dtn": SphericalDtN(L=common.DTN_DEGREE)},
         common.SURF_INNER: {"dtn": SphericalDtN(L=common.DTN_DEGREE)},
     }
+    space_options, equation_options = common.material_solver_options(
+        material_solver, material_quad_degree, common.INTERNAL_VARIABLE_DEGREE)
     Z, layout = self_gravitating_gia_space(
         mantle, parent, gravity_bcs=gravity_bcs, rotation=False,
         fluid_core=True, self_gravity_number=common.LAMBDA,
         displacement_degree=common.DISPLACEMENT_DEGREE,
-        internal_variable_degree=common.INTERNAL_VARIABLE_DEGREE,
+        **space_options,
         potential_degree=common.POTENTIAL_DEGREE,
         centre_of_mass=True, sea_level=True,
         dtn_representation=common.DTN_REPRESENTATION)
@@ -478,8 +487,10 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
     z.subfunctions[layout.displacement].rename("displacement")
     z.subfunctions[layout.potential].rename("potential")
 
-    # The initial topography.
-    SL_init = basin_sea_level(mantle, case)
+    # Use the current GIAMIP softplus sheet, including for the E inversion.
+    # This differs from the legacy mask regularisation on martinec-E.
+    SL_init = (basin_sea_level(mantle, case) if initial_sea_level is None
+               else initial_sea_level)
     ice = cap_thickness(mantle, case, t_kyr)
     g_surface = surface_gravity(parent)
     sea_level = SeaLevel(
@@ -498,12 +509,11 @@ def build_solver(case, parent, mantle, dt, t_kyr, bulk_shear_ratio):
     nullspace = rigid_rotation_nullspace(Z, layout)
 
     # With a fixed coastline the sheet is affine in the unknowns and one
-    # linear solve is exact. With a live coastline (case D) Newton is the
-    # method.
+    # linear solve is exact. With live masks (case D) Newton is the method.
     snes_type = "ksponly" if is_fixed_ocean(case) else "newtonls"
     solver = SelfGravitatingGIASolver(
         z, common.maxwell_approximation(mantle, bulk_shear_ratio),
-        layout=layout, dt=dt,
+        **equation_options, layout=layout, dt=dt, time_scheme=time_scheme,
         # No normal stress on Re: the ice is inside the sea-level sheet.
         bcs={}, fluid_core=common.fluid_core(), sea_level=sea_level,
         dtn_representation=common.DTN_REPRESENTATION,
@@ -723,18 +733,104 @@ def write_profiles(path, solver, layout, samplers, profiles, g_surface,
 # --------------------------------------------------------------------------
 
 
-def parse_args():
+def ladder_segment(value):
+    """Read one END_YR:STEP_YR pair for the case B timestep ladder."""
+    try:
+        end_yr, step_yr = map(float, value.split(":"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected END_YR:STEP_YR") from None
+    if not all(np.isfinite(v) and v > 0 for v in (end_yr, step_yr)):
+        raise argparse.ArgumentTypeError("ladder end times and steps must be finite and positive")
+    return end_yr, step_yr
+
+
+def time_schedule(args, epochs):
+    """Build a uniform or graded schedule ending exactly on every output epoch."""
+    t_end_yr = max(epochs) * 1000.0
+    if args.time_step_ladder is not None:
+        if args.time_step_ladder[-1][0] < t_end_yr:
+            raise ValueError(f"--time_step_ladder must cover the terminal time ({t_end_yr:g} yr)")
+        ladder = common.truncated_ladder(args.time_step_ladder, t_end_yr)
+    else:
+        step_yr = args.time_step_yr
+        if step_yr is None:
+            step_yr = T0_DT_YR if args.case == "B" else T1_DT_YR
+        ladder = ((t_end_yr, step_yr),)
+    return ladder, common.time_segments(epochs, ladder)
+
+
+def checkpoint_run_settings(written):
+    """Interpret pre-ladder checkpoints as uniform runs with their original step."""
+    default_step = T0_DT_YR if written["case"] == "B" else T1_DT_YR
+    return {"material_solver": "coupled", "material_quad_degree": 4,
+            "sea_level_sheet": "legacy_unspecified", "time_scheme": "backward_euler", "time_step_yr": default_step,
+            "time_step_ladder_yr": None, **written}
+
+
+def run_settings(args, bulk_shear_ratio, ladder):
+    """Record the effective schedule in the same JSON layout as checkpoints."""
+    graded = args.time_step_ladder is not None
+    return {"case": args.case, "bulk_shear_ratio": bulk_shear_ratio,
+            "time_scheme": args.time_scheme,
+            "material_solver": args.material_solver,
+            "material_quad_degree": args.material_quad_degree, "sea_level_sheet": "softplus_1m",
+            "smoke": args.smoke,
+            "time_step_yr": None if graded else ladder[0][1],
+            "time_step_ladder_yr": [list(pair) for pair in ladder] if graded else None}
+
+
+def mesh_overrides(args):
+    """Per-run mesh changes; cap spacing is independent of coastline spacing."""
+    overrides = {}
+    if args.litho_layers is not None:
+        overrides["litho_layers"] = args.litho_layers
+    if args.cap_h_km is not None:
+        overrides["refinement"] = {**common.MESHES["martinec"]["refinement"],
+                                   "cap_h_km": args.cap_h_km}
+    return overrides
+
+
+def check_mesh_restart(args, mesh_info):
+    """Explicit mesh requests must agree with the saved mesh; omissions inherit it."""
+    if args.litho_layers is not None and args.litho_layers != mesh_info["litho_layers"]:
+        raise ValueError(f"Checkpoint has {mesh_info['litho_layers']} lithosphere layers; "
+                         f"--litho_layers requests {args.litho_layers}")
+    if args.cap_h_km is not None:
+        refinement = mesh_info["refinement"]
+        cap_h_km = refinement.get("cap_h_km", refinement["h_fine_km"])
+        if args.cap_h_km != cap_h_km:
+            raise ValueError(f"Checkpoint cap spacing is {cap_h_km:g} km; "
+                             f"--cap_h_km requests {args.cap_h_km:g} km")
+
+
+def parse_args(argv=None):
     """The command line."""
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--case", choices=["B", "C", "D"], default="B",
+    common.add_time_arguments(p)
+    p.add_argument("--case", choices=["B", "C", "D", "E"], default="B",
                    help="the benchmark case")
     p.add_argument("--bulk_shear_ratio", type=float, default=None,
                    help="K / mu in every layer; default 1000 for case B and "
-                        "100 for cases C and D")
+                        "100 for cases C, D and E")
+    p.add_argument("--cap_h_km", type=float,
+                   help="target surface spacing in the 12 degree cap-refinement region, km "
+                        "(default 78); coastline bands retain 78 km; not available with --smoke")
+    p.add_argument("--litho_layers", type=int,
+                   help="cell layers across the 70 km lithosphere (default 2; smoke 1)")
+    timesteps = p.add_mutually_exclusive_group()
+    timesteps.add_argument(
+        "--time_step_yr", type=float, default=None,
+        help="time step in years; defaults: B 10, C/D/E 50, E smoke 2500. "
+             "Adjusted to land exactly on output times (E: terminal time).")
+    timesteps.add_argument(
+        "--time_step_ladder", type=ladder_segment, nargs="+", metavar="END_YR:STEP_YR",
+        help="case B only: increasing segment end times and steps in years, "
+             "e.g. 100:10 1000:50 10000:100; must cover 10 kyr. "
+             "Experimental: accuracy must be checked against VEGA.")
     p.add_argument("--smoke", action="store_true",
-                   help=f"run {SMOKE_STEPS} steps on a very coarse mesh, to "
+                   help=f"run {SMOKE_STEPS} steps (E: six steps to 15 kyr) on a very coarse mesh, to "
                         "check that the code runs; the numbers are not "
                         "results")
     p.add_argument("--write_output", action="store_true",
@@ -748,12 +844,45 @@ def parse_args():
     p.add_argument("--restart", default=None, metavar="FILE",
                    help="continue the run after the last checkpoint in FILE, "
                         "on the same number of ranks")
-    return p.parse_args()
+    # Case E has an outer inverse problem, separate from the moving-coastline
+    # Newton solve inside each time step. Importing its driver is lazy so B/C/D
+    # retain their existing dependencies and forward-only execution.
+    from martinec_e import add_arguments
+    add_arguments(p)
+    args = p.parse_args(argv)
+    if args.cap_h_km is not None:
+        if not np.isfinite(args.cap_h_km) or args.cap_h_km <= 0:
+            p.error("--cap_h_km must be finite and positive")
+        if args.smoke:
+            p.error("--cap_h_km is not available with --smoke (no local refinement)")
+    if args.litho_layers is not None and args.litho_layers <= 0:
+        p.error("--litho_layers must be a positive integer")
+    if args.time_step_yr is not None and (
+            not np.isfinite(args.time_step_yr) or args.time_step_yr <= 0):
+        p.error("--time_step_yr must be finite and positive")
+    if args.time_step_ladder is not None:
+        if args.case != "B":
+            p.error("--time_step_ladder requires --case B")
+        ends = [end for end, step in args.time_step_ladder]
+        if any(right <= left for left, right in zip(ends, ends[1:])):
+            p.error("--time_step_ladder end times must be strictly increasing")
+        try:
+            time_schedule(args, (read_case(args.case).terminal_time_kyr,))
+        except ValueError as error:
+            p.error(str(error))
+    if args.case != "E" and (
+            args.topography_restart or args.topography_one_pass
+            or args.check_topography_gradient or args.write_gradients):
+        p.error("topography restart/one-pass/gradient options require --case E")
+    return args
 
 
 def main():
     """Run one Martinec case."""
     args = parse_args()
+    if args.case == "E":
+        from martinec_e import run
+        return run(args, sys.modules[__name__])
     tic_run = time.time()
     os.makedirs(args.output_path, exist_ok=True)
     letter = args.case
@@ -763,6 +892,8 @@ def main():
     profiles = profile_grid(case)
     epochs = sorted(set(EPOCHS_KYR[case.time_scenario])
                     | {entry["time_kyr"] for entry in profiles.values()})
+    ladder, segments = time_schedule(args, epochs)
+    settings = run_settings(args, bulk_shear_ratio, ladder)
 
     log("=" * 78)
     log(f"Martinec et al. (2018) sea-level benchmark, case {letter}"
@@ -778,37 +909,33 @@ def main():
     restart = None
     if args.restart is None:
         parent, mantle, mesh_info = common.build_meshes(
-            mesh_kind, args.output_path, f"martinec_{letter}")
+            mesh_kind, args.output_path, f"martinec_{letter}", mesh_overrides=mesh_overrides(args))
     else:
         parent, mantle, mesh_info, restart = common.load_checkpoint(
             args.restart, mesh_kind)
         # The record says what run wrote the file. A restart with another
         # case or another K / mu would continue a different problem from
         # this state without any error.
-        written = restart.record["run"]
-        this = {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
-                "smoke": args.smoke}
-        if written != this:
+        written = checkpoint_run_settings(restart.record["run"])
+        if written != settings:
             raise RuntimeError(f"{args.restart} was written by the run "
-                               f"{written}; this run is {this}")
+                               f"{written}; this run is {settings}")
+        check_mesh_restart(args, mesh_info)
 
     # Scenario T0 (case B) is a load switched on at t = 0: the elastic solve
-    # and then uniform steps of `T0_DT_YR`, which the time error of backward
-    # Euler on a held load needs (see `T0_DT_YR`). A growing load (T1) has no
-    # fast early response and takes uniform steps of `T1_DT_YR`.
-    t_end_yr = max(epochs) * 1000.0
-    if case.time_scenario == "T0":
-        ladder = ((t_end_yr, T0_DT_YR),)
-    else:
-        ladder = ((t_end_yr, T1_DT_YR),)
-    segments = common.time_segments(epochs, ladder)
+    # and then uniform steps of `T0_DT_YR` by default (see `T0_DT_YR`). An
+    # explicit ladder permits experiments with graded steps. A growing load
+    # (T1) has no fast early response and takes uniform steps of `T1_DT_YR`.
+    log(f"  timestep ladder (end yr, step yr): {ladder}")
     log(f"  epochs (kyr) {epochs}, {sum(s[3] for s in segments)} steps")
 
     dt = Constant(common.DT_ELASTIC)
     t_kyr = Constant(0.0)
     tic = time.time()
     solver, layout, pieces = build_solver(case, parent, mantle, dt, t_kyr,
-                                          bulk_shear_ratio)
+                                          bulk_shear_ratio, time_scheme=args.time_scheme,
+                                          material_solver=args.material_solver,
+                                          material_quad_degree=args.material_quad_degree)
     log(f"  solver built ({time.time() - tic:.1f} s): "
         f"{solver.solution.function_space().dim()} unknowns, "
         f"{len(layout.real_fields)} Real rows, {pieces['snes_type']}")
@@ -901,8 +1028,7 @@ def main():
 
     def record():
         """The driver's part of a checkpoint: enough to continue the outputs."""
-        return {"run": {"case": letter, "bulk_shear_ratio": bulk_shear_ratio,
-                        "smoke": args.smoke},
+        return {"run": settings,
                 "rows": rows, "profile_files": profile_files,
                 "restarts": restarts,
                 "wall_s": wall_before_s + time.time() - tic_run}
@@ -930,6 +1056,9 @@ def main():
         os.path.join(args.output_path, f"summary_{letter}.json"),
         {"benchmark": "Martinec et al. (2018)", "case": letter,
          "smoke": args.smoke, "bulk_shear_ratio": bulk_shear_ratio,
+         "time_scheme": args.time_scheme,
+            "material_solver": args.material_solver,
+            "material_quad_degree": args.material_quad_degree, "sea_level_sheet": "softplus_1m",
          "dtn_degree": common.DTN_DEGREE, "ranks": parent.comm.size,
          "mesh": mesh_info,
          # The wall time of every leg together, so that a restarted run
@@ -940,6 +1069,10 @@ def main():
          "profile_files": profile_files,
          "timeseries_file": os.path.basename(timeseries_path),
          "terminal_time_kyr": case.terminal_time_kyr,
+         "requested_time_step_yr": args.time_step_yr,
+         "time_step_yr": settings["time_step_yr"],
+         "time_step_ladder_yr": settings["time_step_ladder_yr"],
+         "time_segments_yr": segments,
          "giamip_version": giamip.__version__,
          "cap_volume_error": cap_volume_error,
          "profile_points_found": {

@@ -161,8 +161,10 @@ stress parameter.
   should be fixed; use Function controls for differentiated material parameters.
 - The direct path binds low-rank scaling and cache inputs per replay/reverse
   step and uses a deterministic zero guess for replay.
-  Production driver CLI/restart formats, automatic adaptivity and 3D validation
-  are not part of this port.
+  The GIAMIP and benchmark drivers now expose coupled and direct eliminated
+  BE/BDF2 with application restart history; see the
+  [driver guide](gia_benchmark_bdf2.md). Automatic adaptivity and full 3D
+  production validation remain outstanding.
 
 ## Validation
 

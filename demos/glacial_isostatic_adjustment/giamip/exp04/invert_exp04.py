@@ -433,7 +433,9 @@ class BedInversion:
             # `dt` on the tape when it changes: a change made with annotation
             # paused would leave the replay with the first value.
             if dt_yr != previous_dt:
-                self.dt.assign(dt_yr / common.T_BAR_YR)
+                from gadopt.viscoelastic_timestepping import assign_timestep
+                if assign_timestep(solver, self.dt, dt_yr / common.T_BAR_YR):
+                    say("  BDF2: BE restart at prescribed timestep increase")
                 previous_dt = dt_yr
             # The ice of the step, its own Function from the input file, in
             # one assignment on the tape (backward Euler: the load at the end
@@ -859,6 +861,10 @@ def parse_args():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    from gadopt.viscoelastic_timestepping import add_material_solver_arguments
+    add_material_solver_arguments(p)
+    p.add_argument("--time_scheme", choices=["backward_euler", "bdf2"],
+                   default="backward_euler", help="Material-history time integration")
     p.add_argument("--inputs", required=True,
                    help="the input file of prepare_exp04.py")
     p.add_argument("--output_path", default="./")

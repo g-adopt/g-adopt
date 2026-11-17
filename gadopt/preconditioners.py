@@ -3986,6 +3986,7 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         ksp.setOperators(self.condensed_operator, self.condensed_operator)
         ksp.setFromOptions()
         self.condensed_ksp = ksp
+        self._initialise_projected_operator(pc)
 
         #: Assemblies of the four blocks, including the one above: a Newtonian
         #: march at fixed `dt` must stay at 1; a state-dependent Jacobian
@@ -4000,6 +4001,45 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         # Recorded after the build above, which it then describes.
         self._rule = _RebuildRule.from_options(pc)
         self._rule.record(pc)
+
+    def _initialise_projected_operator(self, pc):
+        # Keep the operator and PC matrices separate: fieldsplit must see the
+        # assembled nest, while Krylov must see the same declared left kernel
+        # as the outer augmented operator. A nullspace declaration alone only
+        # projects the RHS and cannot repair an approximate curved-mesh kernel.
+        self._retained_nullspaces = {}
+        for key in ("condensed_field_nullspace", "condensed_field_transpose_nullspace"):
+            if key not in self._displacement_nullspaces:
+                continue
+            _, space = self._displacement_nullspaces[key]
+            vectors = []
+            modes = list(space.getVecs())
+            if space.hasConstant():
+                constant = self.S_uu.petscmat.createVecRight()
+                constant.set(1.)
+                constant.normalize()
+                modes.append(constant)
+            for u in modes:
+                psi = self.A_psipsi.petscmat.createVecRight()
+                psi.set(0.)
+                vectors.append(PETSc.Vec().createNest([u, psi], comm=pc.comm))
+            # Embed any displacement constant as an explicit vector: a
+            # retained implicit constant would incorrectly include potential.
+            basis = PETSc.NullSpace().create(vectors=vectors, comm=pc.comm)
+            self._retained_nullspaces[key] = (vectors, basis)
+        self.projected_operator = None
+        if not self._retained_nullspaces:
+            return
+        self.projected_operator = PETSc.Mat().createPython(
+            self.condensed_operator.getSizes(),
+            _ProjectedRetainedOperator(self.condensed_operator), comm=pc.comm)
+        self.projected_operator.setUp()
+        for key, setter in (
+                ("condensed_field_nullspace", self.projected_operator.setNullSpace),
+                ("condensed_field_transpose_nullspace", self.projected_operator.setTransposeNullSpace)):
+            if key in self._retained_nullspaces:
+                setter(self._retained_nullspaces[key][1])
+        self.condensed_ksp.setOperators(self.projected_operator, self.condensed_operator)
 
     def _assemble_blocks(self):
         """Reassemble the four blocks in place, keeping their `PETSc.Mat`s.
@@ -4130,8 +4170,9 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         # that PETSc rebuilds the GAMG hierarchies on the new entries instead
         # of preconditioning with the ones of the previous Jacobian.
         self.condensed_operator.assemble()
-        self.condensed_ksp.setOperators(self.condensed_operator,
-                                        self.condensed_operator)
+        self.condensed_ksp.setOperators(
+            self.projected_operator if self.projected_operator is not None else self.condensed_operator,
+            self.condensed_operator)
 
     @PETSc.Log.EventDecorator("CondensedBlockPCApply")
     def apply(self, pc, x, y):
@@ -4277,52 +4318,6 @@ class ReducedGIABlockPC(CondensedBlockPC):
         self._displacement_nullspaces = {}
         self._set_displacement_nullspaces()
         self._initialise_kept_solve(pc, (pc.getOptionsPrefix() or "") + "condensed_")
-        self._initialise_projected_operator(pc)
-
-    def _initialise_projected_operator(self, pc):
-        # Keep the operator and PC matrices separate: fieldsplit must see the
-        # assembled nest, while Krylov must see the same declared left kernel
-        # as the outer augmented operator. A nullspace declaration alone only
-        # projects the RHS and cannot repair an approximate curved-mesh kernel.
-        self._retained_nullspaces = {}
-        for key in ("condensed_field_nullspace", "condensed_field_transpose_nullspace"):
-            if key not in self._displacement_nullspaces:
-                continue
-            _, space = self._displacement_nullspaces[key]
-            vectors = []
-            modes = list(space.getVecs())
-            if space.hasConstant():
-                constant = self.S_uu.petscmat.createVecRight()
-                constant.set(1.)
-                constant.normalize()
-                modes.append(constant)
-            for u in modes:
-                psi = self.A_psipsi.petscmat.createVecRight()
-                psi.set(0.)
-                vectors.append(PETSc.Vec().createNest([u, psi], comm=pc.comm))
-            # Embed any displacement constant as an explicit vector: a
-            # retained implicit constant would incorrectly include potential.
-            basis = PETSc.NullSpace().create(vectors=vectors, comm=pc.comm)
-            self._retained_nullspaces[key] = (vectors, basis)
-        self.projected_operator = None
-        if not self._retained_nullspaces:
-            return
-        self.projected_operator = PETSc.Mat().createPython(
-            self.condensed_operator.getSizes(),
-            _ProjectedRetainedOperator(self.condensed_operator), comm=pc.comm)
-        self.projected_operator.setUp()
-        for key, setter in (
-                ("condensed_field_nullspace", self.projected_operator.setNullSpace),
-                ("condensed_field_transpose_nullspace", self.projected_operator.setTransposeNullSpace)):
-            if key in self._retained_nullspaces:
-                setter(self._retained_nullspaces[key][1])
-        self.condensed_ksp.setOperators(self.projected_operator, self.condensed_operator)
-
-    def update(self, pc):
-        super().update(pc)
-        if self.projected_operator is not None:
-            # The parent refreshes the assembled PC matrix in place.
-            self.condensed_ksp.setOperators(self.projected_operator, self.condensed_operator)
 
     def apply(self, pc, x, y):
         with self.residual.dat.vec_wo as residual:

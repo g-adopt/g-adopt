@@ -1896,11 +1896,15 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
         if ("power_law" in record) != ("exponent" in fields):
             raise ValueError("build_solver: the record and the fields "
                              "disagree on the power law")
+    from gadopt.viscoelastic_timestepping import material_solver_options
+    space_options, equation_options = material_solver_options(
+        getattr(options, "material_solver", "coupled"),
+        getattr(options, "material_quad_degree", 4), 1)
     Z, layout = self_gravitating_gia_space(
         mantle, parent, gravity_bcs=gravity_bcs, rotation=True,
         fluid_core=True, self_gravity_number=scales.Lambda,
         n_internal_variables=n_elements,
-        displacement_degree=2, internal_variable_degree=1,
+        displacement_degree=2, **space_options,
         potential_degree=2, centre_of_mass=True, sea_level=True,
         dtn_representation=DTN_REPRESENTATION)
     z = Function(Z)
@@ -1911,8 +1915,8 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
     # exponent (exactly 1.0 where the rheology is linear) and the DG0
     # transition stress. `gadopt` treats a `Function` exponent as a power
     # law, so Newton stays on and block 0 runs GMRES (the power-law operator
-    # is not symmetric); the layout stays uncondensed, which is the layout
-    # that supports a power law. Without the record entry the approximation
+    # is not symmetric). The eliminated path solves the nonlinear material
+    # law locally at quadrature points instead of adding global DG unknowns. Without the record entry the approximation
     # gets no power-law argument and the Maxwell experiments build the
     # solver they always built.
     power_law = {}
@@ -1985,6 +1989,8 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
     nullspace = rigid_rotation_nullspace(Z, layout)
     solver = SelfGravitatingGIASolver(
         z, approximation, layout=layout, dt=dt, bcs={},
+        **equation_options,
+        time_scheme=getattr(options, "time_scheme", "backward_euler"),
         fluid_core=fluid_core, sea_level=sea_level,
         dtn_representation=DTN_REPRESENTATION,
         rotation_moments={"C": constants["C_nondim"], "k_s": options.k_s},
@@ -1993,6 +1999,9 @@ def build_solver(parent, mantle, fields, scales, constants, forcing, dt,
         solver_parameters=parameters)
     record = {
         "n_elements": n_elements,
+        "time_scheme": getattr(options, "time_scheme", "backward_euler"),
+        "material_solver": getattr(options, "material_solver", "coupled"),
+        "material_quad_degree": getattr(options, "material_quad_degree", 4),
         "power_law_active": bool(power_law),
         "k_s": options.k_s,
         "C_minus_A_nondim": float(

@@ -1,3 +1,15 @@
+> The current workflow selectively ports benchmark sources from
+> `w3168/martinec-E` at `a7e64589`. Both drivers, including Martinec E,
+> accept `--time_scheme bdf2 --material_solver eliminated`; the defaults remain
+> coupled backward Euler. Spada now enables centre-of-mass constraints by
+> default; use `--no_centre_of_mass` for unconstrained comparisons or legacy
+> restarts. Martinec uses the current 1 m softplus sea-level sheet.
+>
+> See the [BDF2 and elimination driver guide](../../docs/gia_benchmark_bdf2.md)
+> for commands, history/restart requirements, provenance and validation limits,
+> and [CASE_E.md](CASE_E.md) for the E workflow. Historical mask-based outputs
+> and backward-Euler error factors are not BDF2 acceptance criteria.
+
 # Self-gravitating GIA benchmarks in 3-D
 
 This directory holds two published benchmarks for glacial isostatic

@@ -616,6 +616,11 @@ def sheet_fractions(solver, I, SL):
             water_fraction(I, SL, eps, p.rho_w, p.rho_i))
 
 
+from gadopt.viscoelastic_timestepping import (
+    assign_timestep, time_history_fields, time_history_metadata,
+    restore_time_history_metadata,
+)
+
 class SurfaceOutput:
     """The surface fields of every step, and the scalars, of the forward run.
 
@@ -1246,31 +1251,24 @@ class Checkpoints:
     def __init__(self, path, parent, solver, layout, output):
         self.path, self.parent = path, parent
         self.solver, self.layout, self.output = solver, layout, output
-        if layout.internal_variable_field is None:
-            raise RuntimeError("the checkpoint needs the uncondensed layout "
-                               "(the internal variables in the solution)")
         z = solver.solution.subfunctions
 
-        def parent_copy(f, name):
-            return Function(FunctionSpace(parent, f.function_space()
-                                          .ufl_element()), name=name)
+        from gadopt.viscoelastic_checkpointing import CheckpointField
+        internal = (solver.internal_variables if layout.condensed else
+                    z[layout.internal_variable_field])
+        fields = [(CHECKPOINT_DISPLACEMENT, z[layout.displacement]),
+                  (CHECKPOINT_INTERNAL, internal),
+                  (CHECKPOINT_SEA_SURFACE0, output.S0_m)]
+        fields += time_history_fields(solver)
+        self.fields = [CheckpointField(name, field, parent, broken=False) for name, field in fields]
 
-        # (mantle or parent Function of the solution, parent copy) pairs.
-        self.mantle_pairs = [
-            (z[layout.displacement],
-             parent_copy(z[layout.displacement], CHECKPOINT_DISPLACEMENT)),
-            (z[layout.internal_variable_field],
-             parent_copy(z[layout.internal_variable_field],
-                         CHECKPOINT_INTERNAL)),
-            (output.S0_m, parent_copy(output.S0_m, CHECKPOINT_SEA_SURFACE0)),
-        ]
+        def parent_copy(f, name):
+            return Function(FunctionSpace(parent, f.function_space().ufl_element()), name=name)
+
         self.potential = z[layout.potential]
         # A plain Function on the parent (not a Function on the indexed
         # subspace of the mixed space, which `CheckpointFile` does not take).
         self.potential_copy = parent_copy(self.potential, CHECKPOINT_POTENTIAL)
-        # Work fields of the round-trip check in `save`.
-        self.scratch = [Function(source.function_space())
-                        for source, _ in self.mantle_pairs]
         self.real_indices = [i for i, f in enumerate(z)
                              if f.function_space().ufl_element().family()
                              == "Real"]
@@ -1285,20 +1283,16 @@ class Checkpoints:
         # `CheckpointFile` stores timestepping values as floats only; the
         # integers (step, output index, leg) are exact as floats.
         values = {key: float(value) for key, value in info.items()}
+        if self.solver.time_integrator is not None:
+            values.update(time_history_metadata(self.solver))
         for i in self.real_indices:
             values[f"real_{i}"] = float(z[i].dat.data_ro[0])
-        for (source, copy), scratch in zip(self.mantle_pairs, self.scratch):
-            copy.assign(source, allow_missing_dofs=True)
-            # The copy must be exact in both directions: assign it back and
-            # compare, so a restart restores exactly what was saved.
-            scratch.assign(copy)
-            if max_abs_diff(scratch, source) != 0.0:
-                raise RuntimeError(f"the parent copy of {copy.name()} is "
-                                   "not exact")
+        for field in self.fields:
+            field.encode()
         self.potential_copy.assign(self.potential)
         with CheckpointFile(self.path, "a") as chk:
-            for _, copy in self.mantle_pairs:
-                chk.save_function(copy, idx=int(index),
+            for field in self.fields:
+                chk.save_function(field.stored, idx=int(index),
                                   timestepping_info=values)
             chk.save_function(self.potential_copy, idx=int(index),
                               timestepping_info=values)
@@ -1363,12 +1357,13 @@ class Checkpoints:
         Collective. After the load `solution_old` equals the solution, which
         is the state at the end of the checkpointed step.
         """
+        restore_time_history_metadata(self.solver, info)
         index = int(info["index"])
         z = self.solver.solution.subfunctions
         with CheckpointFile(self.path, "r") as chk:
-            for target, copy in self.mantle_pairs:
-                stored = chk.load_function(self.parent, copy.name(), idx=index)
-                target.assign(stored)
+            for field in self.fields:
+                stored = chk.load_function(self.parent, field.stored.name(), idx=index)
+                field.restore(stored)
             stored = chk.load_function(self.parent, CHECKPOINT_POTENTIAL,
                                        idx=index)
             self.potential.assign(stored)
@@ -1412,6 +1407,10 @@ def parse_args():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    from gadopt.viscoelastic_timestepping import add_material_solver_arguments
+    add_material_solver_arguments(p)
+    p.add_argument("--time_scheme", choices=["backward_euler", "bdf2"],
+                   default="backward_euler", help="Material-history time integration")
     p.add_argument("--state", required=True,
                    help="the state.h5 of an inversion (the input file with "
                         "the bed of every ROL iteration)")
@@ -2123,9 +2122,10 @@ def main():
         if dt_yr != previous_dt:
             # The time step in units of t_bar. The preconditioner rebuilds
             # at the next solve (see the module docstring).
-            dt.assign(dt_yr / common.T_BAR_YR)
+            if assign_timestep(solver, dt, dt_yr / common.T_BAR_YR):
+                say("  BDF2: BE restart at prescribed timestep increase")
             previous_dt = dt_yr
-        # Backward Euler: the load at the end of the step. In the protocol
+        # BE and BDF2: evaluate the load at the new endpoint. In the protocol
         # schedule the callable reads and transfers the ice of this step
         # now; in the fine schedules it combines the two bracketing slices,
         # or (schedule C with a schedule-C file, steps to year 0) copies the

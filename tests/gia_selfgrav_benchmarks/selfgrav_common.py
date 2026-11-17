@@ -10,7 +10,7 @@ module holds everything that the two drivers share:
    moments of the rotation equations.
 3. The mesh: the four-region gmsh sphere, the local refinement of the
    Martinec mesh, the P2 curving and the checks of a generated mesh. The
-   resolution of each mesh is fixed in `MESHES`.
+   defaults are in `MESHES`, with per-run overrides recorded in the outputs.
 4. The time steps: the elastic step at t = 0 and the graded time-step
    sequence that ends on every output epoch.
 5. The solver settings, the time loop and the output helpers.
@@ -58,7 +58,6 @@ from gadopt import (COMM_WORLD, CheckpointFile,
 from gadopt.gia_gravity import (FluidCore,
                                 selfgrav_dtn_iterative_solver_parameters)
 from gadopt.utility import initialise_background_field
-from finat.ufl import BrokenElement
 from mpi4py import MPI
 from petsc4py import PETSc
 
@@ -423,7 +422,7 @@ def _gmsh_number(value):
 
 
 def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
-                         grade_lateral, depth_km):
+                         grade_lateral, depth_km, cap_h_km=None):
     """The local refinement of the Martinec mesh, as a gmsh size-field hook.
 
     For a region centre c, the angular distance of a point X from the centre
@@ -434,7 +433,8 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
 
         h_region = h_fine + grade_lateral r d_ang,
 
-    and the refinement fades with the distance from Re over `depth`:
+    with h_cap in place of h_fine for the cap when cap_h_km is supplied.
+    The refinement fades with the distance from Re over `depth`:
 
         t = tanh(|r - Re| / depth),
         h = (1 - t) h_region + t h_graded,
@@ -456,6 +456,8 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
       grade_lateral: the growth of the size per unit arc length outside a
         region, dimensionless.
       depth_km: the radial fade length, km.
+      cap_h_km: optional lateral size in the cap region only, km. The
+        coastline bands retain h_fine_km. Defaults to h_fine_km.
 
     Returns:
       A callable that receives the gmsh module, adds one `MathEval` field per
@@ -463,6 +465,7 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
     """
     n = _gmsh_number
     h_fine, depth = h_fine_km / D_KM, depth_km / D_KM
+    h_cap = h_fine if cap_h_km is None else cap_h_km / D_KM
     regions = [(MARTINEC_CAP_CENTRE, "cap", np.radians(cap_deg), 0.0),
                (MARTINEC_B1_CENTRE, "band", np.radians(MARTINEC_COAST_PSI_DEG),
                 np.radians(band_deg)),
@@ -489,7 +492,7 @@ def martinec_size_fields(h_base, grade, h_fine_km, cap_deg, band_deg,
             else:
                 d_ang = (f"max(0, abs({psi} - {n(radius)})"
                          f" - {n(half_width)})")
-            h_region = f"({n(h_fine)} + {n(grade_lateral)}*{r}*{d_ang})"
+            h_region = f"({n(h_cap if kind == 'cap' else h_fine)} + {n(grade_lateral)}*{r}*{d_ang})"
             field = gmsh.model.mesh.field.add("MathEval")
             gmsh.model.mesh.field.setString(
                 field, "F", f"(1 - {fade})*{h_region} + {fade}*{h_graded}")
@@ -876,7 +879,9 @@ class PointSampler:
     A `VertexOnlyMesh` keeps only the points that its parent mesh contains,
     in the order of the mesh partition. The sampler evaluates into the
     `input_ordering` mesh, which restores the order the points were given in,
-    so that the output stays aligned with the published colatitudes.
+    so that the output stays aligned with the published colatitudes. The
+    input points are redundant across ranks; broadcast the ordered values
+    from rank 0 so every rank receives the full profile.
 
     A missing point reads back as zero and not as an error. The constructor
     therefore interpolates the constant 1, which is exactly 1.0 at a located
@@ -897,6 +902,7 @@ class PointSampler:
         # "warn" and not "error": a missing point is counted in the output,
         # and `test_benchmarks.py` refuses a profile with one.
         self.vom = VertexOnlyMesh(mesh, points,
+                                  redundant=True,
                                   missing_points_behaviour="warn")
         self._space = FunctionSpace(self.vom, "DG", 0)
         self._ordered = FunctionSpace(self.vom.input_ordering, "DG", 0)
@@ -907,7 +913,8 @@ class PointSampler:
         at_points = assemble(interpolate(expression, self._space))
         ordered = Function(self._ordered)
         ordered.interpolate(at_points)
-        return np.array(ordered.dat.data_ro, dtype=float)
+        values = np.array(ordered.dat.data_ro, dtype=float)
+        return self.vom.comm.bcast(values if self.vom.comm.rank == 0 else None, root=0)
 
     def __call__(self, expression):
         """A scalar UFL expression at the points, `nan` at a missing point."""
@@ -923,7 +930,7 @@ def md5sum(filename):
     return digest.hexdigest()
 
 
-def build_meshes(kind, directory, stem):
+def build_meshes(kind, directory, stem, *, mesh_overrides=None):
     """Generate the mesh of `kind` in the job, check it, and curve it.
 
     Rank 0 writes the gmsh file and counts the flat cells while the other
@@ -950,6 +957,8 @@ def build_meshes(kind, directory, stem):
         needs its own name, because the cases of one benchmark can run at
         the same time in one directory, and one job must not read a file
         that another job is writing.
+      mesh_overrides: optional mesh specification overrides, local to this
+        call; the shared MESHES defaults are not changed.
 
     Returns:
       `(parent, mantle, info)`: the two curved meshes, and a dictionary with
@@ -960,7 +969,7 @@ def build_meshes(kind, directory, stem):
       RuntimeError: if every seed tried gives a flat cell, or the curved
         mesh has a folded cell.
     """
-    spec = MESHES[kind]
+    spec = {**MESHES[kind], **(mesh_overrides or {})}
     filename = os.path.join(directory, f"{stem}.msh")
     h = spec["h_km"] / D_KM
     info = {"kind": kind, "file": filename, **{k: v for k, v in spec.items()}}
@@ -1145,7 +1154,8 @@ OUTER_RTOL = 1.0e-6
 BLOCK0_RTOL = 1.0e-4
 
 
-def solver_parameters(layout, snes_type):
+def solver_parameters(layout, snes_type, *, outer_rtol=OUTER_RTOL,
+                      block0_rtol=BLOCK0_RTOL, ainvb=None):
     """The solver settings of both benchmarks.
 
     The library preset `selfgrav_dtn_iterative_solver_parameters` with its
@@ -1160,20 +1170,28 @@ def solver_parameters(layout, snes_type):
       snes_type: `"ksponly"` when the residual is linear in the unknowns (one
         linear solve is exact to the outer tolerance), `"newtonls"` when it is
         not (moving coastline).
+      outer_rtol, block0_rtol: relative tolerances for a sensitivity run.
+      ainvb: explicit choice of the cached Schur apply, or None for the preset.
 
     Returns:
       The PETSc options dictionary.
     """
     return selfgrav_dtn_iterative_solver_parameters(
-        condensed=layout.condensed, outer_rtol=OUTER_RTOL,
-        block0_rtol=BLOCK0_RTOL, snes_type=snes_type,
+        condensed=layout.condensed, outer_rtol=outer_rtol,
+        block0_rtol=block0_rtol, snes_type=snes_type, ainvb=ainvb,
         dtn_representation=DTN_REPRESENTATION,
         n_real=len(layout.real_fields))
 
 
+from gadopt.viscoelastic_timestepping import (
+    assign_timestep, time_history_fields, time_history_metadata,
+    restore_time_history_metadata, add_material_solver_arguments, material_solver_options,
+)
+
+
 def march(solver, dt, segments, *, elastic, on_step, on_epoch,
           before_step=None, max_steps=None, checkpoint=None, start_step=0):
-    """Backward-Euler time loop over `segments`, with callbacks.
+    """BE or prescribed variable-step BDF2 loop, with callbacks.
 
     The time step is one live `Constant`. The forms read its value, and the
     preconditioners rebuild the operators they cache when the value changes,
@@ -1230,6 +1248,15 @@ def march(solver, dt, segments, *, elastic, on_step, on_epoch,
         on_epoch(0.0)
         solver.solution.assign(0.0)
         solver.solution_old.assign(0.0)
+        if getattr(solver, "internal_variables", None) is not None:
+            fields = solver.internal_variables
+            for field in fields if isinstance(fields, (list, tuple)) else [fields]:
+                field.assign(0.)
+        history = getattr(solver, "time_integrator", None)
+        if history is not None:
+            for field in history.current + history.previous:
+                field.assign(0.)
+            solver.restart_time_integration()
 
     previous_dt_yr = None
     for t0, t1, dt_yr, nsteps, is_epoch in segments:
@@ -1239,7 +1266,8 @@ def march(solver, dt, segments, *, elastic, on_step, on_epoch,
             step += nsteps
             continue
         if dt_yr != previous_dt_yr:
-            dt.assign(dt_yr / T_BAR_YR)
+            if assign_timestep(solver, dt, dt_yr / T_BAR_YR):
+                log("  BDF2: BE restart at prescribed timestep increase")
             previous_dt_yr = dt_yr
         log(f"\n  {t0 / 1000:7.3f} -> {t1 / 1000:7.3f} kyr   dt "
             f"{dt_yr:7.2f} yr ({float(dt):.6g} Maxwell times)   "
@@ -1376,6 +1404,10 @@ def _stored_fields(solver):
     if stored is not None:
         seq = stored if isinstance(stored, (list, tuple)) else [stored]
         fields += [(f"internal_variables_{j}", f) for j, f in enumerate(seq)]
+    # Case E must resume with the same unknown initial topography as well as
+    # the dynamic state. Ordinary forward runs leave this tuple empty.
+    fields += time_history_fields(solver)
+    fields += list(getattr(solver, "benchmark_checkpoint_fields", ()))
     return fields
 
 
@@ -1469,7 +1501,7 @@ class RunCheckpoint:
     def _parent_copy(self, name, f):
         """The function that stores `f` on the parent mesh, named `name`.
 
-        A field on the parent is stored as a view of its own data. A field on
+        A field on the parent is copied with its checkpoint name. A field on
         the mantle submesh is first interpolated into the broken (cell-wise
         discontinuous) version of its element on the mantle, which is exact
         because the broken space contains the original one. That broken
@@ -1481,23 +1513,13 @@ class RunCheckpoint:
         order one at those nodes). A broken space has no shared node, so
         every stored value comes from its own mantle cell.
         `allow_missing_dofs` leaves the parent cells outside the mantle at
-        zero; nothing reads them.
+        zero; nothing reads them. Quadrature histories instead use lossless
+        cell records; no polynomial projection is defined for those values.
         """
-        space = f.function_space()
-        element = space.ufl_element()
-        if space.mesh() is self.parent:
-            return Function(FunctionSpace(self.parent, element), val=f.dat,
-                            name=name)
+        from gadopt.viscoelastic_checkpointing import CheckpointField
         if name not in self._copies:
-            broken = BrokenElement(element)
-            self._copies[name] = (
-                Function(FunctionSpace(space.mesh(), broken)),
-                Function(FunctionSpace(self.parent, broken), name=name))
-        local, copy = self._copies[name]
-        local.interpolate(f)
-        copy.assign(assemble(interpolate(local, copy.function_space(),
-                                         allow_missing_dofs=True)))
-        return copy
+            self._copies[name] = CheckpointField(name, f, self.parent)
+        return self._copies[name].encode()
 
     def save(self, step, t_kyr):
         """Append the state after `step` to the file, as entry `next_index`."""
@@ -1513,11 +1535,13 @@ class RunCheckpoint:
                                      "ranks": COMM_WORLD.size,
                                      "fields": [name for name, _ in fields]})
             info = {"step": float(step), "t_kyr": float(t_kyr)}
+            if getattr(self.solver, "time_integrator", None) is not None:
+                info.update(time_history_metadata(self.solver))
             for name, f in fields:
                 chk.save_function(self._parent_copy(name, f), idx=index,
                                   timestepping_info=info)
             _write_json_dataset(chk, f"{_RESTART_GROUP}/{index}/record",
-                                self.record())
+                                {**self.record(), "time_integration": time_history_metadata(self.solver)})
         self.next_index = index + 1
         log(f"  checkpoint {index}: step {step}, t {t_kyr:.4f} kyr, "
             f"{self.path} ({time.time() - tic:.1f} s)")
@@ -1621,7 +1645,8 @@ def restore_checkpoint(state, solver, parent):
     mantle submesh is interpolated from its broken copy on the parent across
     the submesh map. At a node shared by several mantle cells every cell
     holds the same value, because the stored field was continuous, so the
-    interpolation back into the continuous space copies nodal values too. A `Real` row takes its
+    interpolation back into the continuous space copies nodal values too.
+    Quadrature histories are unpacked from exact cell records. A `Real` row takes its
     stored value. `solution_old` is then set equal to `solution`, as it is
     after every solve.
 
@@ -1639,10 +1664,14 @@ def restore_checkpoint(state, solver, parent):
         raise RuntimeError(
             f"the solver stores {names}; {state.path} holds "
             f"{sorted(state.fields)}")
+    from gadopt.viscoelastic_checkpointing import CheckpointField
+    restore_time_history_metadata(solver, state.record.get("time_integration", {}))
     for name, f in fields:
-        stored = state.fields[name]
-        if f.function_space().ufl_element().family() == "Real":
-            f.assign(float(stored.dat.data_ro[0]))
-        else:
-            f.interpolate(stored)
+        CheckpointField(name, f, parent).restore(state.fields[name])
     solver.solution_old.assign(solver.solution)
+
+
+def add_time_arguments(parser):
+    add_material_solver_arguments(parser)
+    parser.add_argument("--time_scheme", choices=["backward_euler", "bdf2"],
+                        default="backward_euler", help="BE (default) or variable-step BDF2")

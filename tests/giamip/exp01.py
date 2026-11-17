@@ -705,10 +705,12 @@ def build_solver(parent, mantle, earth, scales, forcing, dt, args):
     """
     gravity_bcs = {SURF_OUTER: {"dtn": SphericalDtN(L=DTN_DEGREE)},
                    SURF_INNER: {"dtn": SphericalDtN(L=DTN_DEGREE)}}
+    space_options, equation_options = common.material_solver_options(
+        args.material_solver, args.material_quad_degree, 1)
     Z, layout = self_gravitating_gia_space(
         mantle, parent, gravity_bcs=gravity_bcs, rotation=True,
         fluid_core=True, self_gravity_number=scales.Lambda,
-        displacement_degree=2, internal_variable_degree=1,
+        displacement_degree=2, **space_options,
         potential_degree=2, centre_of_mass=True, sea_level=True,
         dtn_representation=common.DTN_REPRESENTATION)
     z = Function(Z)
@@ -768,6 +770,8 @@ def build_solver(parent, mantle, earth, scales, forcing, dt, args):
     nullspace = rigid_rotation_nullspace(Z, layout)
     solver = SelfGravitatingGIASolver(
         z, approximation, layout=layout, dt=dt, bcs={},
+        **equation_options,
+        time_scheme=getattr(args, "time_scheme", "backward_euler"),
         fluid_core=fluid_core, sea_level=sea_level,
         dtn_representation=common.DTN_REPRESENTATION,
         rotation_moments={"C": C_nd, "k_s": args.k_s},
@@ -1281,6 +1285,7 @@ def parse_args():
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
+    common.add_time_arguments(p)
     p.add_argument("--mesh", required=True,
                    help="the coarse giamsh .msh file; its .json sidecar must "
                         "be beside it")
@@ -1467,7 +1472,8 @@ def main():
     for index in range(start + 1, last + 1):
         dt_yr = float(forcing.years[index] - forcing.years[index - 1])
         if dt_yr != previous_dt:
-            dt.assign(dt_yr / T_BAR_YR)
+            if common.assign_timestep(solver, dt, dt_yr / T_BAR_YR):
+                log("  BDF2: BE restart at prescribed timestep increase")
             previous_dt = dt_yr
         # Backward Euler: the load is the one at the end of the step.
         forcing.set_ice(forcing.I, index)
