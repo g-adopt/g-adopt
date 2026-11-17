@@ -5,7 +5,8 @@ import ufl
 import pytest
 
 # Meshes for the limiter tests. Each value is (constructor, number of cells across x),
-# and every mesh has a vertex column at x = 0.5 so that the hat function peaks at a vertex.
+# and every mesh has vertices at 0.5 in each coordinate direction, so that a hat function
+# with its peak at 0.5 peaks at a vertex.
 # The meshes are built inside the tests, so that a deselected case builds nothing.
 MESHES = {
     "quadrilateral": (lambda: fd.UnitSquareMesh(10, 10, quadrilateral=True), 10),
@@ -80,19 +81,17 @@ def test_slope_limiters(cell):
     np.testing.assert_allclose(u.dat.data_ro.max(), limited_max)
 
 
-@pytest.mark.parametrize("cell", ["triangle", "quadrilateral", "prism"])
+@pytest.mark.parametrize("cell", MESHES)
 def test_vector_limiter_matches_components(cell):
     """Limiting a vector field gives the same result as limiting each component."""
-    if cell == "prism":
-        mesh = fd.ExtrudedMesh(fd.UnitSquareMesh(6, 5), 3, layer_height=1/3)
-    else:
-        mesh = fd.UnitSquareMesh(6, 5, quadrilateral=(cell == "quadrilateral"))
+    mesh = MESHES[cell][0]()
     elt = p1dg_element(mesh)
 
     X = fd.SpatialCoordinate(mesh)
-    # One hat per component, each peaking at a mesh vertex, so the limiter changes every component
-    peaks = [0.5, 0.4, 1/3]
-    exprs = [peaks[i] - abs(X[i] - peaks[i]) for i in range(mesh.geometric_dimension)]
+    # One hat per component, each peaking at a mesh vertex, so the limiter changes every
+    # component. Each hat varies along a different coordinate, so the components are
+    # different fields and a mix-up between components changes the result.
+    exprs = [0.5 - abs(X[i] - 0.5) for i in range(mesh.geometric_dimension)]
 
     V_vec = fd.VectorFunctionSpace(mesh, elt)
     V_scalar = fd.FunctionSpace(mesh, elt)
@@ -128,8 +127,10 @@ def test_limiter_clip_bounds(cell):
 
     assert limiter.min_field.dat.data_ro.min() >= 0.0
     assert limiter.max_field.dat.data_ro.max() <= 1.0
-    assert u.dat.data_ro.min() >= -1e-12
-    assert u.dat.data_ro.max() <= 1.0 + 1e-12
+    # The limiter reduces the slope until the boundary nodes reach the clipped bounds
+    # exactly, so the limited field spans [clip_min, clip_max]
+    assert u.dat.data_ro.min() == pytest.approx(0.0)
+    assert u.dat.data_ro.max() == pytest.approx(1.0)
     np.testing.assert_allclose(fd.assemble(u*fd.dx), vol0)
 
 
