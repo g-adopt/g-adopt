@@ -636,7 +636,7 @@ def _published_dt(pc):
       pc: PETSc preconditioner.
 
     Returns:
-      The time step as a float, or `None` when the context carries none or it
+      The effective history step h/alpha (h for BE) as a float, or `None` when the context carries none or it
       cannot be read as one number.
     """
     ctx = _solver_appctx(pc)
@@ -644,7 +644,7 @@ def _published_dt(pc):
     if dt is None:
         return None
     try:
-        return float(dt)
+        return float(dt) / float(ctx.get("gia_time_alpha", ctx.get("time_alpha", 1.)))
     except (TypeError, ValueError):
         return None
 

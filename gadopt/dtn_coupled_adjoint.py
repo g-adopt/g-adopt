@@ -412,10 +412,26 @@ class _ThetaPsiTerms:
         saved_dt = [ctx.get("gia_dt", missing) for ctx in dt_contexts]
         for ctx in dt_contexts:
             ctx["gia_dt"] = dt
+        integrator = getattr(self.gia_solver, "time_integrator", None)
+        alpha = None
+        if integrator is not None:
+            for dep in self.get_dependencies():
+                if dep.output is integrator.alpha:
+                    alpha = _scalar(dep.saved_output)
+                    break
+        alpha_contexts = [] if alpha is None else all_contexts
+        saved_alpha = [ctx.get("gia_time_alpha", missing) for ctx in alpha_contexts]
+        for ctx in alpha_contexts:
+            ctx["gia_time_alpha"] = alpha
         try:
             yield op
         finally:
             op.theta = saved
+            for ctx, value in zip(alpha_contexts, saved_alpha):
+                if value is missing:
+                    ctx.pop("gia_time_alpha", None)
+                else:
+                    ctx["gia_time_alpha"] = value
             for ctx, value in zip(contexts, saved_index):
                 if value is missing:
                     ctx.pop("gia_solve_index", None)

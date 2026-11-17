@@ -22,8 +22,7 @@ def clean_tape():
     get_working_tape().clear_tape()
 
 
-def build(meshes, *, scheme='bdf2', condensed=False, exponent=1, control=None,
-          iterative=False):
+def build(meshes, *, scheme='bdf2', condensed=False, exponent=1, control=None):
     parent, sub = meshes
     Z, layout = gadopt.self_gravitating_gia_space(
         sub, parent, gravity_bcs=base.gravity_bcs(parent), rotation=True,
@@ -39,8 +38,6 @@ def build(meshes, *, scheme='bdf2', condensed=False, exponent=1, control=None,
     measure = fd.Measure('dx', domain=sub, intersect_measures=(fd.dx(domain=parent),))
     options = dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11,
                    ksp_error_if_not_converged=True)
-    if iterative:
-        options.update(ksp_type='fgmres', pc_type='lu', pc_factor_mat_solver_type='mumps')
     solver = gadopt.SelfGravitatingGIASolver(z, material, layout=layout, dt=dt,
         bcs=base.mechanics_bcs(sub), time_scheme=scheme,
         rotation_moments={'C': fd.assemble(fd.dot(X, X)*measure)},
@@ -100,3 +97,44 @@ def test_default_and_bdf_startup_match(meshes):
     bdf.solve()
     for a, b in zip(be.solution.subfunctions, bdf.solution.subfunctions):
         np.testing.assert_allclose(a.dat.data_ro, b.dat.data_ro, rtol=1e-8, atol=1e-10)
+
+
+def test_bdf2_lowrank_moving_coastline_adjoint(meshes, monkeypatch):
+    """Existing production-style gate: rotation, fluid core, COM, live ocean."""
+    import test_gia_transient_power_law_gate as gate
+    import gadopt.preconditioners as pcs
+    events = []
+    original_due = pcs._RebuildRule.due
+    def due(rule, pc):
+        ctx = pcs._solver_appctx(pc)
+        events.append((ctx.get('gia_solve_index'), pcs._published_dt(pc)))
+        return original_due(rule, pc)
+    monkeypatch.setattr(pcs._RebuildRule, 'due', due)
+    _, sub = meshes
+    with stop_annotating():
+        initial_sea, initial_ice, ice_steps = gate.shoreline_state(sub)
+        ice = initial_ice.copy(deepcopy=True)
+        dt = fd.Function(fd.FunctionSpace(sub, 'R', 0)).assign(STEPS[0])
+        solver, _, _ = gate.build(meshes, initial_sea, initial_ice, ice, dt, time_scheme='bdf2')
+    continue_annotation()
+    control = Control(initial_sea)
+    for k, h in enumerate(STEPS[:3], 1):
+        dt.assign(h)
+        ice.assign(ice_steps[k])
+        solver.solve()
+    with stop_annotating():
+        target = initial_sea.copy(deepcopy=True)
+        target.interpolate(initial_sea+.1*fd.sin(gate.polar_angle(sub)-gate.PHASE))
+    J = fd.assemble((solver.sea_level()-target)**2*solver.sea_level_measure()(gate.CURVE_RE))
+    rf = ReducedFunctional(J, control)
+    pause_annotation()
+    assert_taylor_with_guards(rf, initial_sea, gate.control_direction(sub), J, min_rate=1.9)
+
+    expected = [STEPS[0]]
+    for k in (1, 2):
+        r = STEPS[k]/STEPS[k-1]
+        expected.append(STEPS[k]*(1+r)/(1+2*r))
+    assert events
+    for index, effective_dt in events:
+        assert effective_dt == pytest.approx(expected[index-1])
+    assert 'gia_time_alpha' not in solver.appctx

@@ -240,7 +240,7 @@ def transition_stress_value():
 
 
 def build(meshes, SL_init, I_init, I, dt, *, power_law=True,
-          maxwell_times=MAXWELL_TIMES):
+          maxwell_times=MAXWELL_TIMES, time_scheme="backward_euler"):
     """The coupled solver of the gate case.
 
     Args:
@@ -304,7 +304,7 @@ def build(meshes, SL_init, I_init, I, dt, *, power_law=True,
                       intersect_measures=(fd.Measure("dx", domain=parent),))
     nullspace = rigid_rotation_nullspace(Z, layout)
     solver = SelfGravitatingGIASolver(
-        z, approximation, layout=layout, dt=dt, bcs={},
+        z, approximation, layout=layout, dt=dt, bcs={}, time_scheme=time_scheme,
         fluid_core=FluidCore(boundary=CURVE_RC, rho_core=FRAME.RHO_CORE,
                              g=fd.Constant(FRAME.gravity_of_r(RC))),
         sea_level=sea_level, dtn_representation="lowrank",
