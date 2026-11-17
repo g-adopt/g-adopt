@@ -11,6 +11,7 @@ from .approximations import (
     QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
+from .backstress import BackstressApproximation
 from .diagnostics import *
 from .dtn_form import DtNGravityForm
 from .gia_gravity import (

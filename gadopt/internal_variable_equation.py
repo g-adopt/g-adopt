@@ -56,6 +56,7 @@ def internal_variable_space(
     n_maxwell: int,
     degree: int = 1,
     symmetric: bool = True,
+    family: str = "DG",
 ) -> fd.functionspaceimpl.WithGeometry:
     r"""Build the discontinuous tensor space for all internal variables.
 
@@ -78,6 +79,9 @@ def internal_variable_space(
       degree: polynomial degree of the discontinuous element. The default, 1,
         matches the P2 displacement the GIA drivers use.
       symmetric: store only the independent components of each `(d, d)` block.
+      family: "DG" (default), or "Quadrature" for pointwise material storage.
+        For Quadrature, degree selects the integration rule rather than a
+        polynomial approximation order.
 
     Returns:
       A `TensorFunctionSpace` with the shape above.
@@ -90,14 +94,14 @@ def internal_variable_space(
     # "DG" selects the discontinuous Lagrange family on simplices and the
     # tensor-product ("DQ") family on quadrilaterals and hexahedra alike.
     if not symmetric:
-        return TensorFunctionSpace(mesh, "DG", degree, shape=shape)
+        return TensorFunctionSpace(mesh, family, degree, shape=shape)
     symmetry = {
         (element, j, i): (element, i, j)
         for element in range(n_maxwell)
         for i in range(dim)
         for j in range(i + 1, dim)
     }
-    return TensorFunctionSpace(mesh, "DG", degree, shape=shape, symmetry=symmetry)
+    return TensorFunctionSpace(mesh, family, degree, shape=shape, symmetry=symmetry)
 
 
 def history_slices(internal_variables: Any) -> list[Expr]:

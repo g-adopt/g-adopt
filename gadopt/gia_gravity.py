@@ -1851,6 +1851,7 @@ def self_gravitating_gia_space(
     self_gravity_number: Number | Constant | None = None,
     displacement_degree: int = 2,
     internal_variable_degree: int = 1,
+    internal_variable_family: str = "DG",
     potential_degree: int = 2,
     quad_degree: int | None = None,
     alpha: Number | Constant | None = None,
@@ -1909,6 +1910,9 @@ def self_gravitating_gia_space(
         `G = 1`, which is right only for a configuration with no sheets.
       displacement_degree, internal_variable_degree, potential_degree:
         element degrees; the defaults are the CG2 / DG1 / CG2 of road-map §5.1.
+      internal_variable_family: "DG" (default) or "Quadrature". Quadrature
+        histories are intended for direct constitutive elimination; their degree
+        must match the solver's volume quadrature degree.
       quad_degree: boundary quadrature degree for the DtN treatment; `None`
         takes `DtNGravityForm`'s mesh-aware calibrated default.
       alpha: the Robin shift, `None` for the form's default of 1.
@@ -2004,8 +2008,11 @@ def self_gravitating_gia_space(
     # One field for every Maxwell element, shape (n, d, d), symmetric on the
     # last two indices. Static condensation then always eliminates field 1,
     # whatever `n`, and the `Real` fields keep one fixed offset.
+    if internal_variable_family not in ("DG", "Quadrature"):
+        raise ValueError("internal_variable_family must be 'DG' or 'Quadrature'")
     S = internal_variable_space(
-        mechanics_mesh, n_internal_variables, internal_variable_degree)
+        mechanics_mesh, n_internal_variables, internal_variable_degree,
+        family=internal_variable_family)
     R = FunctionSpace(potential_mesh, "R", 0)
 
     n_rot = 0
@@ -2200,11 +2207,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
       3: the nested preset reproduces the direct route at every Newton step
       and `gadopt.InternalVariableSCPC` rebuilds once per Newton iteration
       (`NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2).
-    - **Condensed layout (`condense_internal_variables=True`): refused**, with
-      a `NotImplementedError` from `set_equations`. Pointwise substitution
-      writes `m(u)` into the stress before differentiation, which makes the
-      power-law factor a function of `u` alone and changes the Newton
-      linearisation rather than eliminating a block.
+    - **Condensed layout (`condense_internal_variables=True`):** the legacy
+      `constitutive_method="pointwise"` is linear only. The opt-in `"direct"`
+      method solves the implicit nonlinear constitutive equation at quadrature
+      points and directly assembles its consistent tangent and reverse adjoint.
+      It currently requires natural boundaries and explicit DtN multipliers.
     - **Uncondensed layout, `dtn_representation="lowrank"`: supported.** The
       update `B` does not depend on the rheology, the forward Newton solve
       reinstalls it after every Jacobian assembly through `augment_jacobian`,
@@ -2254,7 +2261,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
       approximation: a `BaseGIAApproximation` carrying `B_mu`, `density`, `g`
         and `self_gravity_number`.
       layout: the `GIASpaceLayout` from the factory.
-      dt: time step.
+      dt: time step. A Real-space Function supports taped step changes.
+      time_scheme: "backward_euler" (default) or prescribed variable-step "bdf2".
+        BDF2 uses BE startup and stores two accepted material history levels.
+      constitutive_method: "pointwise" retains the legacy linear substitution;
+        "direct" uses nonlinear quadrature integration and a first-reverse
+        timestep block on the condensed, explicit-multiplier layout. Weak
+        displacement boundaries are not yet supported by the direct path.
       rotation_moments: `{"C": ..., "C_minus_A": ..., "k_s": ...}`, the
         reference hydrostatic figure. `C_minus_A` is required only in 3-D,
         where it is the dynamical ellipticity and *cannot* be computed from a
@@ -2350,6 +2363,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         dtn_representation: str | None = None,
         sea_level: "SeaLevel | None" = None,
         time_scheme: str = "backward_euler",
+        constitutive_method: str = "pointwise",
         **kwargs,
     ) -> None:
         # `None` follows the space: the layout records what it was built for,
@@ -2382,6 +2396,31 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             raise ValueError("time_scheme must be 'backward_euler' or 'bdf2'")
         if time_scheme == "bdf2" and kwargs.get("constant_jacobian", False):
             raise ValueError("BDF2 changes the startup Jacobian; constant_jacobian must be False")
+        if constitutive_method not in ("pointwise", "direct"):
+            raise ValueError("constitutive_method must be 'pointwise' or 'direct'")
+        if constitutive_method == "direct":
+            if not layout.condensed or dtn_representation != "multiplier":
+                raise ValueError("Direct constitutive integration requires the condensed multiplier layout")
+            if kwargs.get("constant_jacobian", False) or kwargs.get("J") is not None:
+                raise ValueError("Direct constitutive integration supplies its own changing Jacobian")
+            if any(bc.keys() & {"u", "un"} for bc in (kwargs.get("bcs") or {}).values()):
+                raise NotImplementedError(
+                    "Quadrature integration does not yet implement weak displacement boundary traces; "
+                    "use the coupled DG formulation, or natural boundaries with a fluid core")
+            if kwargs.get("additional_forcing_term") is not None:
+                raise NotImplementedError("Direct integration currently requires forcing in the GIA residual")
+        from .backstress import BackstressApproximation
+        self._backstress_model = isinstance(approximation, BackstressApproximation)
+        if self._backstress_model:
+            if layout.internal_variable_space.ufl_element().value_shape()[0] != 2:
+                raise ValueError("Backstress requires n_internal_variables=2")
+            if layout.condensed and constitutive_method != "direct":
+                raise ValueError("Eliminated backstress requires constitutive_method='direct'")
+            if any(bc.keys() & {"u", "un"} for bc in (kwargs.get("bcs") or {}).values()):
+                raise NotImplementedError("Backstress currently requires natural displacement boundaries")
+        self.constitutive_method = constitutive_method
+        self._direct_backend = None
+        self._quadrature_update = None
         self.time_scheme = time_scheme
         self.time_integrator = None
         self.layout = layout
@@ -2402,10 +2441,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 internal_variables = Function(
                     layout.internal_variable_space, name="internal_variables")
             n_stored = len(history_slices(internal_variables))
-            if n_stored != len(approximation.maxwell_times):
+            n_expected = getattr(approximation, "n_history_tensors", len(approximation.maxwell_times))
+            if n_stored != n_expected:
                 raise ValueError(
-                    f"{n_stored} stored internal variable(s) for "
-                    f"{len(approximation.maxwell_times)} Maxwell times.")
+                    f"{n_stored} stored history tensor(s), expected {n_expected} "
+                    f"for {type(approximation).__name__}.")
         elif internal_variables is not None:
             raise ValueError(
                 "`internal_variables` is only meaningful when the space was "
@@ -4519,7 +4559,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         was the internal-variable source term, not either coupling term.
         """
         assert self._theta == 1.0, (
-            "SelfGravitatingGIASolver assumes backward Euler. A theta-weighted "
+            "SelfGravitatingGIASolver requires new-time algebraic coupling (BE/BDF2). A theta-weighted "
             "psi against an unweighted u in the Poisson source would break the "
             "(u, psi)/(psi, u) transposition by exactly theta, and a symmetry "
             "test would report it as a sign error.")
@@ -4527,12 +4567,25 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         u = self.solution_split[self.layout.displacement]
         psi = self.solution_split[self.layout.potential]
 
-        if self.time_scheme == "bdf2":
+        if self.time_scheme == "bdf2" or self.constitutive_method == "direct":
             from .viscoelastic_timestepping import BDF2History
             histories = (list(self.internal_variables) if isinstance(self.internal_variables, (list, tuple))
                          else [self.internal_variables]) if self.layout.condensed else [
                              self.solution_old.subfunctions[self.layout.internal_variable_field]]
-            self.time_integrator = BDF2History(histories, self.dt)
+            self.time_integrator = BDF2History(
+                histories, self.dt, order=2 if self.time_scheme == "bdf2" else 1)
+        if self.constitutive_method == "direct":
+            histories = self.time_integrator.current
+            for history in histories:
+                if history.function_space().ufl_element().family() != "Quadrature":
+                    raise ValueError("Direct integration requires Quadrature history Functions")
+                if history.function_space().ufl_element().degree() != self.quad_degree:
+                    raise ValueError("History quadrature degree must equal solver quad_degree")
+                if history.function_space().mesh() is not self.mesh:
+                    raise ValueError("Direct integration histories must be on the mechanics mesh")
+            from .constitutive_integrators import MaxwellQuadratureUpdate, BackstressQuadratureUpdate
+            update = BackstressQuadratureUpdate if self._backstress_model else MaxwellQuadratureUpdate
+            self._quadrature_update = update(self)
 
         if self.layout.condensed:
             # `CoupledInternalVariableSolver.__init__` configures the
@@ -4561,11 +4614,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             # `sum_i eta_i/(tau_i + dt) = effective_viscosity(dt)`, which is why
             # the assignment above hands the Nitsche pair
             # that coefficient rather than `mu0` in this configuration. And the
-            # power-law factor would become a function of `u` alone rather than
-            # of an independent `m`, which is a different Newton linearisation,
-            # so pointwise substitution is refused for `exponent != 1`.
+            # legacy explicit update is insufficient for stress-dependent
+            # viscosity. The direct constitutive path below supplies the
+            # implicit local solve and consistent tangent instead.
             strain_u = self.approximation.deviatoric_strain(u)
-            if float(getattr(self.approximation, "exponent", 1)) != 1:
+            if self.constitutive_method != "direct" and float(getattr(self.approximation, "exponent", 1)) != 1:
                 raise NotImplementedError(
                     "Pointwise substitution of the internal variables is "
                     "implemented for Newtonian rheology only (exponent = 1). "
@@ -4579,6 +4632,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 (m + self.dt / mt * strain_u) / (alpha + self.dt / mt)
                 for m, mt in zip(history_slices(histories),
                                  self.approximation.maxwell_times)]
+            if self._quadrature_update:
+                internal_variables = [self._quadrature_update.on_mixed_state(g)
+                                      for g in self._quadrature_update.updates]
         else:
             # One `(d, d)` slice per Maxwell element of the combined field.
             internal_variables = history_slices(
@@ -4628,13 +4684,19 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             # factor, so the relaxation is nonlinear in `u` for `exponent != 1`
             # exactly as the old per-field equations were.
             i = self.layout.internal_variable_field
+            history_terms = internal_variable_history_terms
+            history_attrs = {"maxwell_times": maxwell_times}
+            if self._backstress_model:
+                from .backstress import backstress_history_term
+                history_terms = [backstress_history_term]
+                history_attrs = {}
             self.equations.append(
                 Equation(
                     self.tests[i],
                     self.solution_space[i],
-                    internal_variable_history_terms,
+                    history_terms,
                     eq_attrs={
-                        "maxwell_times": maxwell_times,
+                        **history_attrs,
                         "displacement": u,
                         "dt": self.dt,
                         "trial_old": (self.time_integrator.combinations()[0]
@@ -5698,7 +5760,17 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         the derivative solves carry the same two callbacks, this application
         context and `snes_type: ksponly`.
         """
+        if self.time_integrator:
+            self.appctx["time_alpha"] = self.time_integrator.alpha
         super().set_solver()
+        if self._quadrature_update:
+            if self.strong_bcs:
+                raise NotImplementedError("Direct GIA adjoint currently requires natural boundary conditions")
+            from .constitutive_integrators import DirectConstitutiveBackend
+            self._direct_backend = DirectConstitutiveBackend(self, self._quadrature_update)
+            self.solver = self._direct_backend.solver
+            self.problem = self._direct_backend.problem
+            self.J = self._direct_backend.J
         if self.dtn_representation != "lowrank":
             return
         if self.constant_jacobian:
@@ -5930,7 +6002,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if adopt:
             tape = get_working_tape()
             n0 = len(tape.get_blocks())
-        super().solve()
+        if self._direct_backend:
+            self._refresh_operator_version()
+            self._direct_backend.solve()
+        else:
+            super().solve()
         # Publish the outer linear iterations and the Newton iterations of
         # this solve. `gia_rebuild = lagged` reads their ratio at the
         # next solve to decide whether its lagged complement of the `Real`
@@ -6001,6 +6077,14 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         The sub-function is a genuine `Function` on the mechanics mesh and
         carries one domain, so the same algebra interpolates.
         """
+        if self._direct_backend:
+            # Rigid-kernel projection leaves strain and material updates invariant.
+            stored = self.internal_variables
+            sources = self._direct_backend.buffers
+            targets = list(stored) if isinstance(stored, (list, tuple)) else [stored]
+            for target, source in zip(targets, sources):
+                target.assign(source)
+            return
         u = self.solution.subfunctions[self.layout.displacement]
         strain = self.approximation.deviatoric_strain(u)
         stored = self.internal_variables

@@ -1,7 +1,7 @@
 """Recorded BE/variable-BDF2 coefficients and accepted constitutive history.
 
 Algebraic GIA fields are always evaluated at the new time. Only material
-histories receive a time derivative. A prescribed schedule is differentiated;
+histories receive a time derivative. A prescribed schedule is recorded;
 this module does not implement adaptive error control or step rejection.
 """
 import math
@@ -17,8 +17,9 @@ class BDF2History:
     Python counters are used only during the original forward march.
     """
 
-    def __init__(self, histories, dt):
+    def __init__(self, histories, dt, order=2):
         self.dt = dt
+        self.order = order
         self.current = [m.copy(deepcopy=True) for m in histories]
         self.previous = [m.copy(deepcopy=True) for m in histories]
         R = fd.FunctionSpace(histories[0].function_space().mesh(), "R", 0)
@@ -32,7 +33,7 @@ class BDF2History:
         h = float(self.dt)
         if not math.isfinite(h) or h <= 0:
             raise ValueError("BDF2 dt must be finite and positive")
-        if self.previous_dt is None:
+        if self.order == 1 or self.previous_dt is None:
             alpha, beta, gamma = 1., 1., 0.
         else:
             r = h / self.previous_dt
