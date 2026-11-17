@@ -77,8 +77,8 @@
 
 source /etc/profile
 module use /g/data/fp50/modules
-# `firedrake/main` is an alias of the newest weekly build `main-YYYYMMDD`.
-module load firedrake/main
+# Use the same stable release as the benchmark study.
+module load firedrake/2026.10.0 || exit 1
 ulimit -s unlimited 2>/dev/null || true
 
 # This directory and the repository root. The root comes first on PYTHONPATH,
