@@ -410,7 +410,8 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
         prior_wall_bc: ``"none"`` builds the metric with no boundary condition (a
             Neumann stiffness matrix). ``"dirichlet"`` puts a homogeneous Dirichlet
             condition on the top and bottom walls into the operator, see
-            ``make_inner_product``. Needs ``inner_product="regularisation"``.
+            ``make_inner_product``. Needs ``inner_product="regularisation"`` and
+            ``wall_treatment="pinned"``.
         initial_guess_walls: set the wall nodes of the first guess to the wall
             values, without pinning them.
         checkpointing_schedule: a ``checkpoint_schedules`` schedule, or None to hold
@@ -541,6 +542,15 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
     if prior_wall_bc == "dirichlet" and inner_product != "regularisation":
         raise ValueError("prior_wall_bc='dirichlet' needs the 'regularisation' "
                          "inner product")
+    if prior_wall_bc == "dirichlet" and wall_treatment != "pinned":
+        # The Dirichlet operator maps every wall entry of a dual vector to zero, so
+        # as a preconditioner it is singular on the wall nodes. That is harmless only
+        # when the wall nodes never enter the Krylov system, which is the case when
+        # they are pinned and BNK holds them in its fixed set. With free walls the
+        # Krylov solve would see a preconditioner with a null space.
+        raise ValueError("prior_wall_bc='dirichlet' needs wall_treatment='pinned': "
+                         "with free walls the Dirichlet operator is a singular "
+                         "preconditioner on the wall nodes")
     with stop_annotating():
         # The wall values of the temperature, the same as ``temp_bcs`` and T0_bcs.
         wall_value_bcs = [DirichletBC(Q1, 1.0, boundary.bottom),

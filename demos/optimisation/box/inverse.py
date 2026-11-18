@@ -80,7 +80,9 @@ def parse_args(argv=None):
     parser.add_argument("--prior-wall-bc", default="none", choices=("none", "dirichlet"),
                         help="'dirichlet' puts a homogeneous Dirichlet condition on "
                              "the top and bottom walls into the regularisation "
-                             "operator (Riesz map and preconditioner); 'none' keeps "
+                             "operator (Riesz map and preconditioner); needs "
+                             "--wall-treatment pinned, because with free walls the "
+                             "operator is a singular preconditioner. 'none' keeps "
                              "the Neumann operator (default)")
     parser.add_argument("--initial-guess-walls", action="store_true",
                         help="set the wall nodes of the first guess to the wall "
