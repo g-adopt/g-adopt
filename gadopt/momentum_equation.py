@@ -45,7 +45,12 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    mu = eq.approximation.mu
+    # The shear coefficient of the penalty and symmetrising terms. A solver
+    # that must not write `approximation.mu` (two solvers can share one
+    # approximation) passes its own coefficient as the equation attribute
+    # `mu`; every other solver leaves it out and the approximation's value
+    # is used, as before.
+    mu = eq.mu if hasattr(eq, "mu") else eq.approximation.mu
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
@@ -131,7 +136,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 * sigma_exterior
                 * inner(
                     outer(eq.n, eq.test),
-                    eq.approximation.stress_from_grad(jump_gradient),
+                    eq.approximation.stress_from_grad(jump_gradient, mu=mu),
                 )
                 * eq.ds(bc_id)
             )
@@ -164,7 +169,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
                 * sigma_exterior
                 * inner(
                     outer(eq.n, eq.test),
-                    eq.approximation.stress_from_grad(jump_gradient),
+                    eq.approximation.stress_from_grad(jump_gradient, mu=mu),
                 )
                 * eq.ds(bc_id)
             )
@@ -382,7 +387,7 @@ def rotational_potential(rotation, mesh, *, Omega_sq=1) -> Expr:
 
 
 viscosity_term.required_attrs = {"stress"}
-viscosity_term.optional_attrs = {"interior_penalty"}
+viscosity_term.optional_attrs = {"interior_penalty", "mu"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
 divergence_term.required_attrs = {"u", "rho_continuity"}

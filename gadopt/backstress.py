@@ -64,6 +64,15 @@ class BackstressApproximation(CompressibleInternalVariableApproximation):
         from .internal_variable_equation import internal_variable_space
         return internal_variable_space(mesh, 2, degree, symmetric)
 
+    def history_terms(self):
+        """The creep strain and backstress equation, `backstress_history_term`."""
+        return [backstress_history_term]
+
+    def quadrature_update(self, owner):
+        """One scalar fluidity root per quadrature point for creep and backstress."""
+        from .constitutive_integrators import BackstressQuadratureUpdate
+        return BackstressQuadratureUpdate(owner)
+
 
 def backstress_history_term(eq, trial):
     from .internal_variable_equation import history_slices
@@ -79,4 +88,6 @@ def backstress_history_term(eq, trial):
 
 
 backstress_history_term.required_attrs = {'displacement', 'trial_old', 'time_alpha', 'dt'}
-backstress_history_term.optional_attrs = set()
+# `maxwell_times` is accepted and not read, so that a solver can build the
+# history equation of every rheology with one set of attributes.
+backstress_history_term.optional_attrs = {'maxwell_times'}

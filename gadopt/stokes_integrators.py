@@ -1243,10 +1243,23 @@ class HistoryFormulation(abc.ABC):
         self._solver = solver
 
     @abc.abstractmethod
+    def shear_coefficient(
+        self, approximation: BaseGIAApproximation, dt: float
+    ) -> Expr:
+        """The shear coefficient of the displacement block at fixed history.
+
+        This is the coefficient of the Nitsche penalty and of the
+        preconditioner scale. A solver either writes it into the
+        approximation (`configure_approximation`) or passes it to the
+        momentum terms as the equation attribute `mu`, which leaves the
+        approximation untouched and lets two solvers share it.
+        """
+
     def configure_approximation(
         self, approximation: BaseGIAApproximation, dt: float
     ) -> None:
-        """Set the shear coefficient the Nitsche terms and preconditioners use."""
+        """Write `shear_coefficient` into `approximation.mu`."""
+        approximation.mu = self.shear_coefficient(approximation, dt)
 
     @abc.abstractmethod
     def displacement(self, solver: "StokesSolverBase") -> fd.Function | Expr:
@@ -1314,12 +1327,12 @@ class PointwiseHistoryFormulation(HistoryFormulation):
         self.history = history_slices(internal_variables)
         self.internal_variables_update: list[Expr] = []
 
-    def configure_approximation(
+    def shear_coefficient(
         self, approximation: BaseGIAApproximation, dt: float
-    ) -> None:
+    ) -> Expr:
         # The substituted displacement operator has this effective shear
         # coefficient, which also supplies its penalty and preconditioner scale.
-        approximation.mu = approximation.effective_viscosity(dt)
+        return approximation.effective_viscosity(dt)
 
     def bind(self, solver: "StokesSolverBase") -> None:
         if solver.is_mixed_space:
@@ -1405,12 +1418,12 @@ class MixedHistoryFormulation(HistoryFormulation):
     #: Index of the internal-variable field in the mixed space.
     history_index = 1
 
-    def configure_approximation(
+    def shear_coefficient(
         self, approximation: BaseGIAApproximation, dt: float
-    ) -> None:
+    ) -> Expr:
         # At fixed internal variables, the displacement block is elastic. Use
         # `mu0` for its Nitsche penalty and preconditioner scale.
-        approximation.mu = approximation.mu0
+        return approximation.mu0
 
     def bind(self, solver: "StokesSolverBase") -> None:
         if not solver.is_mixed_space or len(solver.solution_space) != 2:
@@ -1514,6 +1527,9 @@ class InternalVariableMechanics:
             raise TypeError("history_formulation must be a HistoryFormulation.")
         self.history_formulation = history_formulation
         self._solver: StokesSolverBase | None = None
+        #: What `set_equations` passed to the momentum equation as
+        #: `intersect_measures`; the history equations read it.
+        self.intersect_measures = None
         self.displacement: fd.Function | Expr | None = None
         self.strain: Expr | None = None
         #: One `(d, d)` expression per Maxwell element, as they enter the stress.
@@ -1530,9 +1546,31 @@ class InternalVariableMechanics:
         self.history_formulation.bind(solver)
         self._solver = solver
 
-    def set_equations(self, solver: "StokesSolverBase") -> None:
-        """Append the displacement equation, then the history equations."""
+    def set_equations(
+        self,
+        solver: "StokesSolverBase",
+        *,
+        extra_terms: list | tuple = (),
+        extra_attrs: dict[str, Any] | None = None,
+        intersect_measures: Any = None,
+    ) -> None:
+        """Append the displacement equation, then the history equations.
+
+        Args:
+          solver: the solver whose `equations` list receives the equations.
+          extra_terms: momentum terms added after the viscoelastic ones, for
+            example the self-gravity and rotational body forces of a coupled
+            solver.
+          extra_attrs: equation attributes those terms read, and `mu`, the
+            shear coefficient of the penalty terms, for a solver that does
+            not write it into the approximation.
+          intersect_measures: passed to every `Equation`, for a solver whose
+            mixed space spans a submesh and its parent. Kept on this object
+            so that the history formulation applies it to the history
+            equations as well.
+        """
         self.bind(solver)
+        self.intersect_measures = intersect_measures
         formulation = self.history_formulation
         self.displacement = formulation.displacement(solver)
         self.strain = solver.approximation.deviatoric_strain(self.displacement)
@@ -1546,12 +1584,13 @@ class InternalVariableMechanics:
             Equation(
                 formulation.displacement_test(solver),
                 formulation.displacement_space(solver),
-                compressible_viscoelastic_terms,
-                eq_attrs={"stress": stress, "source": source},
+                list(compressible_viscoelastic_terms) + list(extra_terms),
+                eq_attrs={"stress": stress, "source": source, **(extra_attrs or {})},
                 approximation=solver.approximation,
                 bcs=solver.weak_bcs,
                 quad_degree=solver.quad_degree,
                 scaling_factor=getattr(solver, "scaling_factor", 1),
+                intersect_measures=intersect_measures,
             )
         )
         formulation.add_history_equations(self, solver)

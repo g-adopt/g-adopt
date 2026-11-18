@@ -139,7 +139,9 @@ class DeviatoricStressMixin:
             deviatoric_tensor -= 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
         return deviatoric_tensor
 
-    def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def stress_from_grad(
+        self, gradient: ufl.core.expr.Expr, mu: ufl.core.expr.Expr | None = None
+    ) -> ufl.core.expr.Expr:
         r"""The stress a gradient-like tensor produces, including any bulk part.
 
         For a gradient-like tensor $G$ this returns $\mu\,A(G)$, with
@@ -152,11 +154,19 @@ class DeviatoricStressMixin:
         penalty term pairs against the test function, which is how the penalty
         picks up the same material coefficients as the stress it penalises.
 
+        Args:
+          gradient: the gradient-like tensor $G$.
+          mu: the shear coefficient. `None` takes `self.mu`. A solver that
+            passes its own coefficient through the equation attribute `mu`
+            (`gadopt.momentum_equation.viscosity_term`) passes it on here, so
+            the approximation is never written.
+
         Returns:
           A UFL expression for the stress produced by `gradient`.
 
         """
-        return self.mu * self.deviatoric_tensor_from_grad(gradient)
+        mu = self.mu if mu is None else mu
+        return mu * self.deviatoric_tensor_from_grad(gradient)
 
 
 class BaseApproximation(DeviatoricStressMixin, abc.ABC):
@@ -961,6 +971,52 @@ class InternalVariableApproximation(BaseGIAApproximation):
             mesh, len(self.maxwell_times), degree=degree, symmetric=symmetric
         )
 
+    @property
+    def n_history_tensors(self) -> int:
+        """The number of `(d, d)` history tensors this rheology carries.
+
+        One internal variable per Maxwell element. A rheology with another
+        history, such as `gadopt.BackstressApproximation`, overrides this.
+        """
+        return len(self.maxwell_times)
+
+    def history_terms(self) -> list:
+        """The residual terms of the weak history equation of this rheology.
+
+        A solver that keeps the history as a discontinuous unknown builds one
+        `Equation` from these terms. The approximation supplies them, so a
+        solver does not test for the type of the rheology: the Maxwell
+        relaxation of `gadopt.internal_variable_equation` here, the creep and
+        backstress equation of `gadopt.BackstressApproximation` there.
+
+        Returns:
+          A list of term functions.
+        """
+        # Imported here: `internal_variable_equation` imports `equations`,
+        # which imports this module.
+        from .internal_variable_equation import internal_variable_history_terms
+
+        return internal_variable_history_terms
+
+    def quadrature_update(self, owner):
+        """The local constitutive update of this rheology at quadrature points.
+
+        A solver that eliminates the history at quadrature points solves one
+        scalar equation per point (`gadopt.constitutive_integrators`). Which
+        equation is a property of the rheology, so the approximation builds
+        the update object.
+
+        Args:
+          owner: the solver that owns the mixed solution, the time step and
+            the `BDF2History` of the stored history.
+
+        Returns:
+          A `gadopt.constitutive_integrators.MaxwellQuadratureUpdate`.
+        """
+        from .constitutive_integrators import MaxwellQuadratureUpdate
+
+        return MaxwellQuadratureUpdate(owner)
+
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         r"""The deviatoric strain $\mathrm{dev}(\mathrm{sym}(\nabla u))$.
 
@@ -1009,7 +1065,9 @@ class InternalVariableApproximation(BaseGIAApproximation):
             eta_eff += eta / (maxwell_time + dt)
         return eta_eff
 
-    def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def stress_from_grad(
+        self, gradient: ufl.core.expr.Expr, mu: ufl.core.expr.Expr | None = None
+    ) -> ufl.core.expr.Expr:
         r"""The stress a gradient-like tensor produces, deviatoric plus bulk.
 
         This approximation is compressible with a finite bulk modulus, so the
@@ -1025,10 +1083,16 @@ class InternalVariableApproximation(BaseGIAApproximation):
         normal displacement must feel for the same reason the interior
         divergence does.
 
-        The solver assigns $\mu$ before assembly. `InternalVariableSolver` uses
-        the effective shear coefficient of its substituted problem.
-        `CoupledInternalVariableSolver` uses $\mu_0$ to match its elastic
-        displacement block.
+        The solver chooses $\mu$: either it assigns `self.mu` before
+        assembly, or it passes the coefficient as `mu`.
+        `InternalVariableSolver` uses the effective shear coefficient of its
+        substituted problem. `CoupledInternalVariableSolver` uses $\mu_0$ to
+        match its elastic displacement block. `gadopt.gia_solver` passes its
+        coefficient and does not write the approximation.
+
+        Args:
+          gradient: the gradient-like tensor $G$.
+          mu: the shear coefficient $\mu$; `None` takes `self.mu`.
 
         Returns:
           A UFL expression for the stress produced by `gradient`.
@@ -1036,7 +1100,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
         """
         volumetric = self.bulk_shear_ratio * self.bulk_modulus * tr(gradient)
         return (
-            super().stress_from_grad(gradient)
+            super().stress_from_grad(gradient, mu=mu)
             + volumetric * Identity(gradient.ufl_shape[0])
         )
 
