@@ -70,6 +70,12 @@ class CheckpointField:
             # and is a ghost entry on the others.
             self.field.assign(float(stored.dat.data_ro_with_halos[0]))
         elif not self.broken:
-            self.field.assign(stored)
+            # A copy of the degrees of freedom, the inverse of `encode`. From
+            # the parent onto a submesh every target degree of freedom has a
+            # source, and the assignment needs the flag to map across meshes.
+            if self.field.function_space().mesh() is self.parent:
+                self.field.assign(stored)
+            else:
+                self.field.assign(stored, allow_missing_dofs=True)
         else:
             self.field.interpolate(stored)

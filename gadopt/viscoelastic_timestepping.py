@@ -15,13 +15,38 @@ class BDF2History:
     ``prepare`` precedes a solve; ``accept`` follows a successful solve and
     any nullspace projection. Function assignments are recorded by pyadjoint.
     Python counters are used only during the original forward march.
+
+    Args:
+      histories: the history Functions at the start of the march.
+      dt: the time step, a number, a `Constant` or a `Real` Function.
+      order: 2 for variable-step BDF2 with a backward-Euler first step, 1 for
+        backward Euler throughout.
+      own_current: `False` (the default) keeps private copies of `histories`
+        as the accepted level. `True` makes the given Functions the accepted
+        level itself, so that a solver can publish one history Function that
+        is also the state the next step reads, with no second copy to keep in
+        step.
+      keep_previous: whether to store the level before the accepted one.
+        `None` (the default) stores it always. A solver that knows it runs
+        backward Euler passes `order == 2`: at order 1 the previous level has
+        coefficient zero, and one level of a DG1 history is the largest field
+        of a GIA run.
     """
 
-    def __init__(self, histories, dt, order=2):
+    def __init__(self, histories, dt, order=2, *, own_current=False,
+                 keep_previous=None):
         self.dt = dt
         self.order = order
-        self.current = [m.copy(deepcopy=True) for m in histories]
-        self.previous = [m.copy(deepcopy=True) for m in histories]
+        self.current = (list(histories) if own_current
+                        else [m.copy(deepcopy=True) for m in histories])
+        if keep_previous is None:
+            keep_previous = True
+        if keep_previous:
+            self.previous = [m.copy(deepcopy=True) for m in histories]
+        elif order == 2:
+            raise ValueError("BDF2 needs the previous history level.")
+        else:
+            self.previous = None
         R = fd.FunctionSpace(histories[0].function_space().mesh(), "R", 0)
         self.alpha = fd.Function(R, name="bdf_alpha").assign(1)
         self.beta = fd.Function(R, name="bdf_beta").assign(1)
@@ -46,13 +71,25 @@ class BDF2History:
         self.prepared_dt = h
 
     def combinations(self):
+        """The history the next step relaxes from, one expression per level.
+
+        `beta m_n + gamma m_{n-1}`, the BDF2 combination, which is `m_n` on a
+        backward-Euler step. Without a stored previous level the accepted
+        level is returned itself.
+        """
+        if self.previous is None:
+            return list(self.current)
         return [self.beta*m + self.gamma*p
                 for m, p in zip(self.current, self.previous)]
 
     def accept(self, histories):
-        for previous, current, updated in zip(self.previous, self.current, histories):
-            previous.assign(current)
-            current.assign(updated)
+        if self.previous is None:
+            for current, updated in zip(self.current, histories):
+                current.assign(updated)
+        else:
+            for previous, current, updated in zip(self.previous, self.current, histories):
+                previous.assign(current)
+                current.assign(updated)
         self.previous_dt = self.prepared_dt
         self.prepared_dt = None
 
@@ -90,7 +127,7 @@ def time_history_fields(solver):
         return []
     return [(f"time_{level}_{i}", field)
             for level in ("current", "previous")
-            for i, field in enumerate(getattr(history, level))]
+            for i, field in enumerate(getattr(history, level) or ())]
 
 
 def time_history_metadata(solver):

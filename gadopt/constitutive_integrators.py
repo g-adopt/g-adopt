@@ -176,12 +176,7 @@ class DirectConstitutiveBackend:
         self.sensitivity_updates = [ufl.replace(g, {material.q: lifted}) for g in self.updates]
         self.J = fd.derivative(self.sensitivity_F, self.work)
         self.problem = fd.NonlinearVariationalProblem(self.F, self.work, bcs=owner.strong_bcs, J=self.J)
-        self.solver = fd.NonlinearVariationalSolver(self.problem, solver_parameters=owner.solver_parameters,
-            options_prefix=owner.name, appctx=owner.appctx, nullspace=owner.nullspace,
-            transpose_nullspace=owner.transpose_nullspace, near_nullspace=owner.near_nullspace,
-            pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector,
-            **(dict(post_function_callback=owner.augment_residual,
-                    post_jacobian_callback=owner.augment_jacobian) if self.lowrank else {}))
+        self.build_solver()
         self.buffers = [fd.Function(m.function_space()) for m in owner.time_integrator.current]
         self.outputs = [owner.solution, *self.buffers]
         self.numeric_outputs = [self.work, *self.buffers]
@@ -202,6 +197,26 @@ class DirectConstitutiveBackend:
         self.rhs_form = fd.derivative(self.H, self.work, fd.TestFunction(owner.solution_space))
         self.reverse_functional = self.H-fd.action(self.sensitivity_F, self.adjoint)
         self.gradient_forms = {}
+        self.matrix = self.linear_solver = None
+
+    def build_solver(self):
+        """Build the nonlinear solver of the step from the owner's options.
+
+        Separate from the constructor, so that an owner can rebuild the
+        solver after its options change without building a second backend.
+        A second backend would replace the coefficients of the shared
+        material expressions a second time, and the residual and the local
+        Newton solve would then read two different sets of private copies.
+        The cached transpose solver of `reverse` reads the same options, so
+        it is dropped and built again at the next reverse sweep.
+        """
+        owner = self.owner
+        self.solver = fd.NonlinearVariationalSolver(self.problem, solver_parameters=owner.solver_parameters,
+            options_prefix=owner.name, appctx=owner.appctx, nullspace=owner.nullspace,
+            transpose_nullspace=owner.transpose_nullspace, near_nullspace=owner.near_nullspace,
+            pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector,
+            **(dict(post_function_callback=owner.augment_residual,
+                    post_jacobian_callback=owner.augment_jacobian) if self.lowrank else {}))
         self.matrix = self.linear_solver = None
 
     def _theta_values(self):
