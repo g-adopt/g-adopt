@@ -1,0 +1,372 @@
+"""Work to reach a value of J, and the Hessian shift of BNK, for the box campaign runs.
+
+Step S2 of the prior-covariance campaign compared runs by ``initial_misfit`` at fixed
+work. That measure moved by a factor of 124 when the initial trust radius changed by
+10 percent, because some runs stall after one Krylov solve that stops on negative
+curvature. This script prints the measures of step S2b instead:
+
+1. For each threshold of ``J`` (default 1e-3, 1e-4, 1e-5 and 1e-6), the work at the
+   first iteration whose ``J`` is at or below it, and ``initial_misfit`` at that
+   iteration. ``J`` is the objective that the optimiser minimises, so the work to
+   reach a ``J`` compares the optimisers on their own objective, and
+   ``initial_misfit`` at that point shows how far the control is from the truth at
+   equal fit to the data. The minimiser is not unique (the objective carries no
+   regularisation), so two runs at equal ``J`` can hold different controls.
+2. The same work divided by the work of a reference run, by default the run called
+   ``a``.
+3. The number of Krylov solves that stop with ``CONVERGED_NEG_CURVE``.
+4. Per Krylov solve: the converged reason, the iteration count, ``ritz_min`` of the
+   preconditioned (shifted) Hessian, the step norm, and BNK's Hessian shift.
+
+The shift. BNK adds ``pert * I`` to the reduced Hessian before a Krylov solve. A
+record with the field ``hessian_shift`` in its Krylov solves holds the exact value
+per solve (see ``recording.py`` and ``riesz_hessian.py``). The records of steps S0
+and S2 do not hold it. For every record the script also replays the update rules of PETSc
+v3.25.0 (``TaoBNKSafeguardStep`` and ``TaoBNKPerformLineSearch`` in ``bnk.c``) from
+the recorded converged reasons and metric gradient norms, with the parameters of the
+run (the defaults of ``TaoCreate_BNK`` merged with the ``tao_options`` of the record):
+
+- after a solve that stops on negative curvature (or another indefinite reason):
+  ``pert = min(imax, max(imin, imfac * gnorm))`` when ``pert`` was zero
+  ("initialise"), else ``pert = min(pmax, max(pgfac * pert, pmgfac * gnorm))``
+  ("increase");
+- after any other solve: ``pert = min(psfac * pert, pmsfac * gnorm)``, and zero when
+  that is below ``pmin`` ("decrease");
+- a Newton step that is not a descent direction, or a failed line search on a Newton
+  step, applies "initialise" or "increase" as well. The record does not hold either
+  event, so the script names it only when the recorded shift matches that branch
+  and no other ("not descent or line search failed").
+
+``gnorm`` is ``bnk->gnorm``: the norm of the projected gradient in the metric of the
+control (``TaoGradientNorm``), at the iterate where the solve was computed. The
+record holds it as ``gradient_norm_metric`` of the iteration row before the row of
+the solve. Where a recorded shift exists, the replay is checked against it and then
+continues from the recorded value. Where none exists, the replayed value is an
+estimate, and the table says so.
+
+Work. Every run is re-priced with one Hessian-to-forward ratio,
+``work = forward + adjoint + ratio * hessian``, so that the speed of the node does
+not move the work axis. ``--common-ratio 2.4822`` is the pooled ratio of step S2.
+
+Usage:
+    python summarise_shift.py a=PATH d=PATH ... --common-ratio 2.4822 \\
+        [--thresholds 1e-3 1e-4 1e-5 1e-6] [--reference a] [--plot FILE]
+
+Only the standard library is used, except for ``--plot``, which needs matplotlib.
+"""
+
+import argparse
+import json
+import math
+from collections import Counter
+
+# The BNK perturbation parameters and their defaults in ``TaoCreate_BNK``, PETSc
+# v3.25.0 (``bnk.c:1265-1275``). The Setonix container prints the same defaults
+# under ``-help``.
+BNK_SHIFT_DEFAULTS = {
+    "sval": 0.0,     # starting perturbation
+    "imin": 1.0e-4,  # lower clamp of the initial perturbation
+    "imax": 1.0e+2,  # upper clamp of the initial perturbation
+    "imfac": 1.0e-1,  # initial perturbation per unit of gnorm
+    "pmin": 1.0e-12,  # a decreased perturbation below this becomes zero
+    "pmax": 1.0e+2,  # upper clamp of an increased perturbation
+    "pgfac": 1.0e+1,  # growth factor of an increase
+    "psfac": 4.0e-1,  # shrink factor of a decrease
+    "pmgfac": 1.0e-1,  # increased perturbation per unit of gnorm, lower clamp
+    "pmsfac": 1.0e-1,  # decreased perturbation per unit of gnorm, upper clamp
+}
+
+# The KSP reasons on which ``TaoBNKSafeguardStep`` treats the matrix or the
+# preconditioner as indefinite and increases the perturbation.
+INDEFINITE_REASONS = {"CONVERGED_NEG_CURVE", "DIVERGED_INDEFINITE_MAT",
+                      "DIVERGED_INDEFINITE_PC", "DIVERGED_BREAKDOWN",
+                      "DIVERGED_NANORINF"}
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("runs", nargs="+", metavar="NAME=PATH",
+                        help="a short name and the path of one record")
+    parser.add_argument("--common-ratio", default=None,
+                        help="re-price every run with one Hessian-to-forward ratio; "
+                             "without it, the work of each record is used as recorded")
+    parser.add_argument("--thresholds", nargs="+", type=float,
+                        default=[1e-3, 1e-4, 1e-5, 1e-6], help="values of J")
+    parser.add_argument("--reference", default="a",
+                        help="run whose work-to-J is the denominator of table 2")
+    parser.add_argument("--plot", default=None,
+                        help="write J, ritz_min and the shift against work to this file")
+    return parser.parse_args(argv)
+
+
+def shift_parameters(record):
+    """The perturbation parameters of one run: defaults, then the run's options.
+
+    Args:
+        record: a JSON record of ``inverse.py``.
+
+    Returns:
+        dict with the keys of ``BNK_SHIFT_DEFAULTS``.
+    """
+    params = dict(BNK_SHIFT_DEFAULTS)
+    for key, value in (record.get("tao_options") or {}).items():
+        name = key[len("tao_bnk_"):] if key.startswith("tao_bnk_") else None
+        if name in params and value is not None:
+            params[name] = float(value)
+    return params
+
+
+def _initialise(p, gnorm, params):
+    """BNK's first perturbation: ``min(imax, max(imin, imfac * gnorm))``."""
+    return min(params["imax"], max(params["imin"], params["imfac"] * gnorm))
+
+
+def _increase(p, gnorm, params):
+    """BNK's indefinite-case update: initialise from zero, otherwise grow."""
+    if p <= 0.0:
+        return _initialise(p, gnorm, params)
+    return min(params["pmax"], max(params["pgfac"] * p, params["pmgfac"] * gnorm))
+
+
+def _decrease(p, gnorm, params):
+    """BNK's update after a good solve: shrink, and drop to zero below ``pmin``."""
+    p = min(params["psfac"] * p, params["pmsfac"] * gnorm)
+    return 0.0 if p < params["pmin"] else p
+
+
+def _same(a, b):
+    """Equal to roundoff. The replay repeats BNK's arithmetic, so 1e-12 is ample."""
+    return abs(a - b) <= 1e-12 * max(abs(a), abs(b), 1e-300)
+
+
+def replay_shift(record):
+    """Per-solve shift: recorded, replayed, and the rule that set it.
+
+    The replay walks the solves in order. The value of solve ``j`` comes from the
+    value of solve ``j - 1``, its converged reason, and ``gnorm`` at the iterate
+    where solve ``j - 1`` was computed. The candidate branches of BNK are:
+
+    - ``decrease``: the solve was not indefinite, its step was a descent direction
+      and the line search accepted it;
+    - ``initialise`` or ``increase``: the solve was indefinite (negative
+      curvature), the step then a descent direction and accepted;
+    - the same two after an indefinite solve, followed by a second ``increase``
+      because the line search on the Newton step failed;
+    - ``decrease`` followed by ``initialise`` or ``increase``: a good solve whose
+      line search failed;
+    - ``initialise`` or ``increase`` alone after a good solve: the Newton step was
+      not a descent direction.
+
+    Without a recorded value the first branch that the reason allows is taken.
+
+    Args:
+        record: a JSON record of ``inverse.py``.
+
+    Returns:
+        list of dicts per solve: ``iteration``, ``solve``, ``reason``,
+        ``recorded`` (None when the record holds no shift), ``replayed`` (None when
+        the record has no metric gradient norm), ``rule`` (how the value came
+        about), ``match`` (recorded equals replayed, or None).
+    """
+    params = shift_parameters(record)
+    rows = record["iterations"]
+    gnorm_by_iteration = {row["iteration"]: row.get("gradient_norm_metric")
+                          for row in rows}
+    out = []
+    pert = params["sval"]
+    previous = None  # (reason, gnorm at the iterate of the previous solve)
+    for row in rows:
+        for solve in row.get("krylov_solves", []):
+            recorded = solve.get("hessian_shift")
+            replayed, rule = None, None
+            if previous is None:
+                replayed, rule = pert, "start (sval)"
+            elif previous[1] is not None:
+                reason, g = previous
+                if reason in INDEFINITE_REASONS:
+                    first = _increase(pert, g, params)
+                    branch = "initialise" if pert <= 0.0 else "increase"
+                    candidates = [
+                        (first, f"{branch} after {reason}"),
+                        (_increase(first, g, params),
+                         f"{branch} after {reason}, then increase (line search failed)"),
+                    ]
+                else:
+                    branch = "initialise" if pert <= 0.0 else "increase"
+                    down = _decrease(pert, g, params)
+                    candidates = [
+                        (down, "decrease after a good solve"),
+                        (_increase(down, g, params),
+                         "decrease, then increase (line search failed)"),
+                        (_increase(pert, g, params),
+                         f"{branch} (Newton step not descent)"),
+                    ]
+                replayed, rule = candidates[0]
+                if recorded is not None:
+                    for value, name in candidates:
+                        if _same(value, recorded):
+                            replayed, rule = value, name
+                            break
+                    else:
+                        rule = "no BNK branch matches"
+                if pert <= 0.0 and replayed == 0.0:
+                    # A decrease from zero stays zero: BNK made no shift at all.
+                    rule = "none (pert stays 0)"
+            match = None if recorded is None or replayed is None else _same(recorded, replayed)
+            out.append({"iteration": row["iteration"], "solve": solve.get("solve"),
+                        "reason": solve.get("reason_name"), "recorded": recorded,
+                        "replayed": replayed, "rule": rule, "match": match})
+            # The next solve starts from the recorded value when there is one, so
+            # one unexplained change does not spoil the rest of the replay.
+            if recorded is not None:
+                pert = recorded
+            elif replayed is not None:
+                pert = replayed
+            # gnorm at the iterate of this solve: the row before the row that holds
+            # the solve (the monitor of that row ran at the iterate the solve used).
+            previous = (solve.get("reason_name"),
+                        gnorm_by_iteration.get(row["iteration"] - 1))
+    return out
+
+
+def reprice(record, ratio):
+    """Replace ``work`` of every iteration row by the common-ratio work, in place."""
+    for row in record["iterations"]:
+        row["work_recorded"] = row["work"]
+        row["work"] = row["forward"] + row["adjoint"] + ratio * row["hessian"]
+
+
+def first_below(rows, threshold):
+    """The first iteration row with ``J <= threshold``, or None."""
+    for row in rows:
+        if row["J"] <= threshold:
+            return row
+    return None
+
+
+def _fmt(value, spec):
+    """Format a number, or a dash for None."""
+    return "-" if value is None else format(value, spec)
+
+
+def plot(records, shifts, path, title):
+    """J, ritz_min and the shift against work, one line per run."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8), sharex=True)
+    for name, record in records.items():
+        rows = record["iterations"]
+        line, = axes[0].semilogy([r["work"] for r in rows], [r["J"] for r in rows],
+                                 marker=".", label=name)
+        work_of = {r["iteration"]: r["work"] for r in rows}
+        solves = [(row["iteration"], s) for row in rows
+                  for s in row.get("krylov_solves", [])]
+        ritz = [(work_of[i], s["ritz_min"]) for i, s in solves if s.get("ritz_min")]
+        if ritz:
+            axes[1].semilogy(*zip(*ritz), marker=".", color=line.get_color())
+        values = [(work_of[e["iteration"]],
+                   e["recorded"] if e["recorded"] is not None else e["replayed"],
+                   e["recorded"] is not None) for e in shifts[name]]
+        values = [(w, v, exact) for w, v, exact in values if v]
+        if values:
+            exact = all(v[2] for v in values)
+            axes[2].semilogy([v[0] for v in values], [v[1] for v in values],
+                             marker="." if exact else "x",
+                             linestyle="-" if exact else ":", color=line.get_color())
+        for i, s in solves:
+            if s.get("reason_name") == "CONVERGED_NEG_CURVE":
+                axes[0].axvline(work_of[i], color=line.get_color(), alpha=0.3, lw=1)
+    axes[0].set_title("J")
+    axes[1].set_title("ritz_min of the preconditioned shifted Hessian")
+    axes[2].set_title("BNK shift (solid: recorded, dotted: replayed)")
+    for ax in axes:
+        ax.set_xlabel("work (forward-equivalents)")
+        ax.grid(True, which="both", alpha=0.3)
+    axes[0].legend(fontsize=8)
+    fig.suptitle(title + "; vertical lines: negative-curvature solves")
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    records = {}
+    for item in args.runs:
+        name, _, path = item.partition("=")
+        records[name] = json.load(open(path))
+    title = "work as recorded (each run's own measured ratio)"
+    if args.common_ratio is not None:
+        ratio = float(args.common_ratio)
+        for record in records.values():
+            reprice(record, ratio)
+        title = f"work re-priced with one ratio {ratio:.4f} (Hessian-vector product / forward)"
+    print(f"== {title}")
+
+    print("\n== shift parameters of each run (BNK defaults merged with tao_options)")
+    for name, record in records.items():
+        params = shift_parameters(record)
+        changed = {k: v for k, v in params.items() if v != BNK_SHIFT_DEFAULTS[k]}
+        print(f"{name:>8s} {changed if changed else 'defaults'}")
+
+    print("\n== work to reach J <= threshold (first iteration below), and initial_misfit there")
+    head = " ".join(f"{'J<=' + format(t, '.0e'):>26s}" for t in args.thresholds)
+    print(f"{'run':>8s} {head}   {'final J':>10s} {'final work':>10s}")
+    reached = {}
+    for name, record in records.items():
+        cells = []
+        for t in args.thresholds:
+            row = first_below(record["iterations"], t)
+            reached[(name, t)] = row
+            cells.append(f"{'not reached':>26s}" if row is None else
+                         f"{row['iteration']:3d} {row['work']:7.1f} {row['initial_misfit']:.3e}".rjust(26))
+        last = record["iterations"][-1]
+        print(f"{name:>8s} {' '.join(cells)}   {last['J']:10.3e} {last['work']:10.1f}")
+    print("   (each cell: iteration, work, initial_misfit)")
+
+    if args.reference in records:
+        print(f"\n== work to reach J, divided by the work of run {args.reference}")
+        print(f"{'run':>8s} " + " ".join(f"{'J<=' + format(t, '.0e'):>10s}" for t in args.thresholds))
+        for name in records:
+            cells = []
+            for t in args.thresholds:
+                mine, ref = reached[(name, t)], reached[(args.reference, t)]
+                cells.append(f"{'-':>10s}" if mine is None or ref is None else
+                             f"{mine['work'] / ref['work']:10.2f}")
+            print(f"{name:>8s} " + " ".join(cells))
+
+    shifts = {name: replay_shift(record) for name, record in records.items()}
+    print("\n== Krylov solves: count, negative-curvature solves, and the shift record")
+    for name, record in records.items():
+        solves = [s for row in record["iterations"] for s in row.get("krylov_solves", [])]
+        reasons = Counter(s["reason_name"] for s in solves)
+        exact = [e for e in shifts[name] if e["recorded"] is not None]
+        status = ("recorded" if exact and len(exact) == len(shifts[name])
+                  else "replayed (estimate)" if shifts[name] else "none")
+        mismatches = sum(1 for e in exact if e["match"] is False)
+        print(f"{name:>8s} solves {len(solves):3d}  neg-curve "
+              f"{reasons.get('CONVERGED_NEG_CURVE', 0)}  shift {status}"
+              + (f", replay mismatches {mismatches}" if exact else ""))
+
+    print("\n== per solve: iteration, work, reason, its, ritz_min, step norm, trust radius, "
+          "shift (recorded / replayed), rule")
+    for name, record in records.items():
+        print(f"-- {name}")
+        work_of = {r["iteration"]: r["work"] for r in record["iterations"]}
+        by_solve = {(e["iteration"], e["solve"]): e for e in shifts[name]}
+        for row in record["iterations"]:
+            for s in row.get("krylov_solves", []):
+                e = by_solve.get((row["iteration"], s.get("solve")), {})
+                print(f"   {row['iteration']:3d} {work_of[row['iteration']]:7.1f} "
+                      f"{s['reason_name']:>22s} {s['iterations']:3d} "
+                      f"{_fmt(s.get('ritz_min'), '11.4e')} {_fmt(s.get('step_norm'), '10.3e')} "
+                      f"{_fmt(s.get('trust_radius'), '9.3g')} "
+                      f"{_fmt(e.get('recorded'), '11.4e')} / {_fmt(e.get('replayed'), '11.4e')}"
+                      f"  {e.get('rule') or ''}")
+
+    if args.plot:
+        plot(records, shifts, args.plot, title)
+
+
+if __name__ == "__main__":
+    main()

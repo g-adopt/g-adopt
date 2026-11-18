@@ -18,6 +18,10 @@ The run outputs are not in git.
 | `smoke_pinned.slurm` | Runs the two pinned cases of S2 for two iterations and checks them. |
 | `check_pinned.py` | Checks that pinned wall nodes stay in BNK's fixed set and do not move. |
 | `summarise_walls.py` | Prints the S2 tables: misfit against work by wall row, Krylov counts, active sets, wall-node entries and exits. |
+| `submit_s2b.sh` | Submits step S2b, the Hessian shift of BNK: two smoke jobs and four long runs. Runs on a Setonix login node. |
+| `smoke_s2b.slurm` | Checks the shift recording and the shift options on short runs, and checks a default run bitwise against its S2 record. |
+| `check_shift.py` | Checks that every recorded shift follows the update rules of BNK. |
+| `summarise_shift.py` | Prints the S2b tables: work to reach values of `J`, `initial_misfit` there, negative-curvature solves, `ritz_min` and the shift per solve. |
 | `fetch.sh` | Copies the records of one step from Setonix to reunion. Runs on reunion. |
 | `compare_records.py` | Compares two JSON records row by row. |
 
@@ -78,7 +82,8 @@ Run `python compare_records.py <reference.json> <run.json>`.
 
 The default fields are `J`, `initial_misfit`, `gradient_norm` and the three sweep
 counts. Add `--all-fields` to compare every numeric field that both records hold.
-Add `--rows both` to compare the gradient rows as well as the iteration rows. The
+Add `--rows both` to compare the gradient rows as well as the iteration rows. Add
+`--solves` to compare the Krylov solve records of the shared iteration rows. The
 exit status is 0 only when every compared field is bitwise equal.
 
 The field `work` uses the measured wall time of a Hessian-vector product. Thus

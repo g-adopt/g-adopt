@@ -22,7 +22,13 @@ are printed.
 Usage:
     python compare_records.py A.json B.json [--rows iterations|gradients|both]
                               [--all-fields] [--fields J gradient_norm ...]
-                              [--quiet]
+                              [--solves] [--quiet]
+
+``--solves`` also compares the Krylov solve records that the iteration rows hold
+(``krylov_solves``), paired by position over the iteration rows that both records
+hold: every numeric field that both solve records hold, and the lists of residual
+norms and Ritz values entry by entry. A field that only one record holds, for
+example a field that a newer recording adds, is not compared.
 
 Exit status 0 when every compared field is bitwise equal in every paired row, 1
 otherwise. Only the standard library is used, so the script runs on any machine.
@@ -56,6 +62,9 @@ def parse_args(argv=None):
     parser.add_argument("--all-fields", action="store_true",
                         help="compare every numeric field that both rows hold, "
                              "except the wall-clock fields")
+    parser.add_argument("--solves", action="store_true",
+                        help="also compare the Krylov solve records of the paired "
+                             "iteration rows")
     parser.add_argument("--quiet", action="store_true",
                         help="print the summary table only, not one line per row")
     return parser.parse_args(argv)
@@ -170,6 +179,65 @@ def compare_table(name, rows_a, rows_b, args):
     return identical
 
 
+def solve_values(solve):
+    """The comparable entries of one Krylov solve record, as ``{name: number}``.
+
+    Scalars are kept under their own name; the lists ``residual_norms`` and
+    ``ritz_values`` are split into one entry per position, so that a difference
+    in one Krylov iteration shows with its index. Wall-clock fields are left out.
+    """
+    out = {}
+    for key, value in solve.items():
+        if key in TIMING_FIELDS:
+            continue
+        if is_number(value):
+            out[key] = value
+        elif isinstance(value, list) and all(is_number(v) for v in value):
+            out[f"{key}#len"] = len(value)
+            for k, v in enumerate(value):
+                out[f"{key}[{k}]"] = v
+    return out
+
+
+def compare_solves(rows_a, rows_b):
+    """Compare the Krylov solve records of the iteration rows that both records hold.
+
+    Args:
+        rows_a, rows_b: the iteration rows of the two records.
+
+    Returns:
+        True when every compared entry is bitwise equal.
+    """
+    solves_a, solves_b = [], []
+    for row_a, row_b in zip(rows_a, rows_b):
+        if row_a.get("iteration") != row_b.get("iteration"):
+            break
+        solves_a.extend(row_a.get("krylov_solves", []))
+        solves_b.extend(row_b.get("krylov_solves", []))
+    n = min(len(solves_a), len(solves_b))
+    print(f"== Krylov solves: {len(solves_a)} in A, {len(solves_b)} in B, {n} compared")
+    identical = True
+    worst = {}
+    compared = 0
+    for k in range(n):
+        a, b = solve_values(solves_a[k]), solve_values(solves_b[k])
+        for key in a.keys() & b.keys():
+            compared += 1
+            rel = relative_difference(a[key], b[key])
+            base = key.split("[")[0]
+            if rel > worst.get(base, (0.0, None))[0]:
+                worst[base] = (rel, k)
+            if a[key] != b[key]:
+                identical = False
+    for base, (rel, k) in sorted(worst.items()):
+        print(f"   {base:<34s} max rel diff {rel:12.3e} at solve {k}")
+    if len(solves_a) != len(solves_b):
+        identical = False
+        print("   the numbers of solves differ")
+    print(f"   {compared} entries compared; bitwise equal: {'yes' if identical else 'no'}")
+    return identical
+
+
 def main(argv=None):
     args = parse_args(argv)
     with open(args.a) as f:
@@ -191,6 +259,9 @@ def main(argv=None):
     for table in tables:
         identical &= compare_table(table, record_a.get(table, []),
                                    record_b.get(table, []), args)
+    if args.solves:
+        identical &= compare_solves(record_a.get("iterations", []),
+                                    record_b.get("iterations", []))
     return 0 if identical else 1
 
 
