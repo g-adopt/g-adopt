@@ -792,3 +792,28 @@ def test_the_adjoint_solve_carries_both_augmentations(meshes):
         assert adjoint_solver.snes.getIterationNumber() == 1
     finally:
         adjoint_solver.snes.setType("ksponly")
+
+
+def test_install_refuses_a_jacobian_that_is_not_matrix_free():
+    """A non-Python Jacobian is refused with a message, not a crash.
+
+    `install_augmented_context` swaps the Python context of a matrix-free
+    Jacobian. On any other matrix type `getPythonContext` reads invalid
+    memory, and the process dies. The pyop3 Firedrake produces such a matrix
+    (a nest matrix in place of the requested matrix-free one, for every mixed
+    form with a Real subspace), so the guard must turn it into an error that
+    names the cause.
+    """
+    from firedrake.petsc import PETSc
+    from gadopt.dtn_coupled import install_augmented_context
+
+    # A small assembled matrix stands for the wrong Jacobian. The DtN operator
+    # is never reached, so None is enough.
+    matrix = PETSc.Mat().createAIJ([2, 2], comm=PETSc.COMM_SELF)
+    matrix.setUp()
+    matrix.assemble()
+    try:
+        with pytest.raises(RuntimeError, match="matrix-free Jacobian"):
+            install_augmented_context(matrix, None)
+    finally:
+        matrix.destroy()

@@ -1776,7 +1776,7 @@ class TestBlockOneInThreeDimensions:
         this one, and without it "the two are pinned to agree" means somebody
         read two numbers off two screens.
 
-        The 24-cell case, so it costs a second, and it is the same case the
+        The case of 24 columns of two layers, so it costs a second, and it is the same case the
         script's own `--selfcheck` runs.
         """
         import sys
@@ -2284,6 +2284,33 @@ class TestNullCoupling:
             assert fd.norm(m - mr) / fd.norm(mr) < 1e-11
         # ... and psi is still driven, so the test is not vacuous.
         assert fd.norm(solver.potential) > 0.0
+
+
+class TestSolutionOldAfterAStep:
+    """`solution_old` holds the accepted state when `solve` returns.
+
+    `StokesSolverBase.solve` copies `solution` into `solution_old` before it
+    solves, so the forms see the right value with or without a later copy.
+    Code that reads `solution_old` between two steps (a checkpoint, a
+    diagnostic that assembles the residual) sees the accepted state only
+    because `SelfGravitatingGIASolver.solve` copies it again at the end. This
+    checks that copy on the non-direct path, with and without a declared
+    nullspace (the projection path and the path without it).
+    """
+
+    @pytest.mark.parametrize("declare_nullspace", [False, True])
+    def test_solution_old_is_the_accepted_state(self, meshes, declare_nullspace):
+        solver, z, layout = build(meshes, dtn_representation="multiplier",
+                                  declare_nullspace=declare_nullspace)
+        solver.solve()
+        # The solve moved away from the zero initial state, so equality is
+        # not the trivial one of two zero vectors.
+        with z.dat.vec_ro as current:
+            assert current.norm() > 0.0
+        with solver.solution_old.dat.vec_ro as old, z.dat.vec_ro as current:
+            difference = old.copy()
+            difference.axpy(-1.0, current)
+            assert difference.norm() == 0.0
 
 
 class TestRigidRotationNullspace:

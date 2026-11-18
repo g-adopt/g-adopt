@@ -1836,9 +1836,9 @@ def scalar_value(value) -> float:
     except (TypeError, NotImplementedError):
         pass
     # A `Real` `Function` holds its one number in `dat`, and reaching it that
-    # way works identically for a `Constant`. The value is owned by rank 0 and
-    # is a ghost entry on the other ranks, so read the array with ghosts: the
-    # owned array `data_ro` is empty above rank 0.
+    # way works identically for a `Constant`. The value is owned by one rank
+    # and is a ghost entry on the others, so read the array with ghosts: the
+    # owned array `data_ro` is empty on every rank but the owner.
     return float(np.asarray(value.dat.data_ro_with_halos, dtype=float).reshape(-1)[0])
 
 
@@ -6055,13 +6055,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # round-off, and its adjoint is applied twice as well, which is
         # correct. The second application is part of the forward map that the
         # GIA reference runs are compared against bit for bit.
-        if self.project_out_nullspace():
-            # `StokesSolverBase.solve` copies `solution` into `solution_old`
-            # before it solves, so the next solve starts from the projected
-            # state in any case. The copy here makes `solution_old` equal the
-            # accepted, projected solution as soon as this step ends, which is
-            # the state a checkpoint or a caller reads between two steps.
-            self.solution_old.assign(self.solution)
+        self.project_out_nullspace()
+        # `solution_old` holds the accepted state when `solve` returns, on
+        # every path: with or without a nullspace, and on the direct path,
+        # which does not go through `StokesSolverBase.solve`. The next solve
+        # does not need the copy, because `StokesSolverBase.solve` copies
+        # `solution` into `solution_old` before it solves. The copy is here
+        # for the code that reads `solution_old` between two steps: a
+        # checkpoint, or a diagnostic that assembles the residual. It comes
+        # after the projection, so it holds the projected state.
+        self.solution_old.assign(self.solution)
         if self.layout.condensed:
             self.recover_internal_variables()
         if self.time_integrator:

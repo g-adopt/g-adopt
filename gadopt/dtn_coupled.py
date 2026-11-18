@@ -29,6 +29,7 @@ cannot be corrected at replay time.
 
 import numpy as np
 from firedrake import Cofunction
+from firedrake.petsc import PETSc
 from firedrake.matrix_free.operators import ImplicitMatrixContext
 from pyadjoint import Block, AdjFloat, annotate_tape, get_working_tape, no_annotations
 
@@ -44,8 +45,8 @@ def psi_local_offset(mixed_space, psi_field: int) -> int:
     The owned sizes of the preceding fields, taken from the field index sets.
 
     **Do NOT sum `Z.subfunctions[i].dat` sizes.** A `Real` space holds one
-    entry with ghosts on every rank but owns 0 entries of the monolithic vector
-    on every rank above 0, so an offset built from the sizes with ghosts drifts
+    entry with ghosts on every rank but owns its entry of the monolithic vector
+    on one rank only, so an offset built from the sizes with ghosts drifts
     by one per preceding `Real` field. Measured on 2, 3 and 4 ranks and cross-mesh
     (`NOTES/fastdtn/REVIEW-FORWARD.md` section 3.2): with the layout
     `(u, psi, R, R, R)` on 4 ranks the true offsets on rank 1 are
@@ -316,6 +317,18 @@ def install_augmented_context(Jmat, dtn_operator):
     Returns:
       Whether an install happened on this call.
     """
+    # The augmentation replaces the Python context of a matrix-free Jacobian.
+    # Any other matrix type has no such context, and `getPythonContext` on it
+    # reads invalid memory and kills the process (a bus error or a
+    # segmentation fault), so refuse it with a message instead.
+    if Jmat.getType() != PETSc.Mat.Type.PYTHON:
+        raise RuntimeError(
+            "The low-rank DtN representation needs a matrix-free Jacobian "
+            f"(mat_type 'matfree'), but Firedrake assembled a '{Jmat.getType()}' "
+            "matrix. The pyop3 Firedrake replaces an explicit 'matfree' with "
+            "'nest' for every mixed form with a Real subspace "
+            "(`make_mat_spec` in firedrake/assemble.py). Use a Firedrake in "
+            "which that is fixed.")
     ctx = Jmat.getPythonContext()
     if isinstance(ctx, AugmentedImplicitMatrixContext):
         return False

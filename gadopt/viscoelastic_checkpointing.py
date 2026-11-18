@@ -66,8 +66,8 @@ class CheckpointField:
             self.field.dat.data_rw[self.nodes[:self.cells]] = (
                 self.local.dat.data_ro[self.local_nodes].reshape(shape))
         elif self.field.function_space().ufl_element().family() == "Real":
-            # The array with ghosts: a `Real` value is owned by rank 0 only
-            # and is a ghost entry on the other ranks.
+            # The array with ghosts: a `Real` value is owned by one rank
+            # and is a ghost entry on the others.
             self.field.assign(float(stored.dat.data_ro_with_halos[0]))
         elif not self.broken:
             self.field.assign(stored)

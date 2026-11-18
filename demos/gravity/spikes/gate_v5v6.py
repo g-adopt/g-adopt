@@ -327,7 +327,7 @@ class MechanicsStep:
     the driver was written.
 
     **`solution_old` is reset before every solve, and that is not optional.**
-    `StokesSolverBase.solve` ends with `solution_old.assign(self.solution)`, and
+    `StokesSolverBase.solve` starts with `solution_old.assign(self.solution)`, and
     the segregated `InternalVariableSolver.solve` additionally interpolates the
     internal variable forward. Both are time stepping. A Picard iteration is
     *within* one step, so without the reset each iteration would advance the

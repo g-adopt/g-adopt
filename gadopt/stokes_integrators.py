@@ -1464,7 +1464,7 @@ class MixedHistoryFormulation(HistoryFormulation):
 
     def advance(self, solver: "StokesSolverBase") -> None:
         # The history is part of the solution; the base class copies the
-        # solution into `solution_old` after every solve.
+        # solution into `solution_old` before every solve.
         return None
 
 

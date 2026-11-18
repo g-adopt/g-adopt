@@ -1023,10 +1023,10 @@ class GravitySolver(SolverConfigurationMixin):
     def _real_value(value) -> float:
         """A number from a `Constant`, a `Real` `Function` or a plain scalar.
 
-        `Real` data is owned by rank 0 and held as a ghost entry on every other
-        rank, so the owned array `data_ro` is empty above rank 0. The array with
-        ghosts holds the one value on every rank, so reading its entry 0 agrees
-        everywhere. A `Constant` holds its value the same way.
+        `Real` data is owned by one rank and held as a ghost entry on every
+        other rank, so the owned array `data_ro` is empty except on the owner.
+        The array with ghosts holds the one value on every rank, so reading its
+        entry 0 agrees everywhere. A `Constant` holds its value the same way.
         """
         try:
             return float(value)

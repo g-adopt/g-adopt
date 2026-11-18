@@ -275,7 +275,8 @@ def _scalar(value) -> float:
     try:
         return float(value)
     except (TypeError, NotImplementedError):
-        # The array with ghosts: a `Real` value is a ghost entry above rank 0.
+        # The array with ghosts: a `Real` value is a ghost entry on every
+        # rank but the one that owns it.
         return float(np.asarray(value.dat.data_ro_with_halos, dtype=float).reshape(-1)[0])
 
 

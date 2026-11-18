@@ -270,7 +270,6 @@ class DirectConstitutiveBackend:
             get_working_tape().add_block(block)
             for output in self.outputs:
                 block.add_output(output.create_block_variable())
-        self.owner.solution_old.assign(self.owner.solution)
 
     def reverse(self, seeds):
         with self.bound_lowrank():
