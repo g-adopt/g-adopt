@@ -909,8 +909,8 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     if not recorder.budget_hit:
         recorder.stop_reason = f"TAO converged reason {tao.getConvergedReason()}"
     # The output of ``-tao_view``, taken after the solve. It holds the counts of the
-    # step types and of the Krylov termination reasons, and the Newton shift is
-    # visible nowhere else.
+    # step types and of the Krylov termination reasons. It does not show the
+    # Newton shift; each Krylov solve record holds that as ``hessian_shift``.
     view_path = None if output is None else f"{os.path.splitext(str(output))[0]}.tao_view.txt"
     try:
         recorder.final_diagnostics["tao_view"] = tao_view_text(tao, view_path)

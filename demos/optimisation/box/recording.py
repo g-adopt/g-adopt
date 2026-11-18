@@ -9,6 +9,7 @@ priors needs on top of that, per Krylov solve and per outer iteration:
 - the trust radius, held apart from the step length of the line search;
 - three norms of the projected gradient: Euclidean, metric and Fischer-Burmeister;
 - the size of the active set, split into lower, upper and fixed bounds;
+- the Hessian perturbation (shift) that BNK added before each Krylov solve;
 - the text of ``-tao_view`` at the end of the run.
 
 Every function here reads state. None of them writes into a vector that TAO, the
@@ -344,7 +345,19 @@ class KrylovRecorder:
     a post-solve callback, which bracket one ``KSPSolve``, and a monitor, which STCG
     calls after each update of the iterate. When the preconditioning matrix comes
     from ``riesz_hessian.py``, it also registers as the observer of the Riesz
-    preconditioner, which hands it each residual and preconditioned residual.
+    preconditioner, which hands it each residual and preconditioned residual, and
+    as the observer of the ``MatShift`` calls on that matrix.
+
+    The Hessian perturbation. BNK adds ``pert * I`` to the reduced Hessian before a
+    Krylov solve when ``pert > 0`` (``TaoBNKComputeStep``, ``bnk.c:414-421`` at
+    v3.25.0), and it shifts the preconditioning matrix by the same ``pert`` in the
+    same place. ``riesz_hessian.py`` passes that value here. Each solve record then
+    holds ``hessian_shift``: the exact ``pert`` of BNK for that solve, or 0.0 when
+    BNK made no shift call, which in BNK means ``pert`` was zero. The value changes
+    between solves by the rules of ``TaoBNKSafeguardStep`` and
+    ``TaoBNKPerformLineSearch``; ``prior_campaign/summarise_shift.py`` names the
+    rule that each change followed. The recorded value is in the nodal (Euclidean)
+    units of the Hessian matrix, not in the metric of the control.
 
     BNK can call ``KSPSolve`` more than once in one outer iteration, so the record
     is per solve. ``pop_solves`` hands the solves since the last call to the TAO
@@ -380,6 +393,10 @@ class KrylovRecorder:
         self.enabled = True
         self._current = None
         self._solve_index = 0
+        # The values of the MatShift calls since the last solve opened. BNK makes
+        # at most one call per solve, just before ``KSPSolve``, so the list holds
+        # zero or one entry when the next solve opens.
+        self._pending_shifts = []
 
     def attach(self):
         """Install the hooks. Call once, after ``TAOSolver`` has set TAO up."""
@@ -388,6 +405,7 @@ class KrylovRecorder:
         self.ksp.setMonitor(self._guard(self._monitor))
         if self.pmat_context is not None:
             self.pmat_context.observer = self._guard(self._observe_preconditioner)
+            self.pmat_context.shift_observer = self._guard(self._observe_shift)
 
     def _guard(self, function):
         """Wrap a hook so that a failure disables the recorder and never propagates."""
@@ -419,8 +437,19 @@ class KrylovRecorder:
             "active": int(n_total - n_inactive),
         }
         record.update(self._active_split(pmat, n_total))
+        # BNK's perturbation for this solve. The shift call came before KSPSolve,
+        # so it is already in the pending list. No call means pert was zero
+        # (``bnk.c:414`` shifts only when ``pert > 0``). The call count is kept so
+        # that a second call in one solve, which BNLS never makes, would show.
+        shifts, self._pending_shifts = self._pending_shifts, []
+        record["hessian_shift"] = float(sum(shifts)) if shifts else 0.0
+        record["hessian_shift_calls"] = len(shifts)
         self._current = {"record": record, "rz": [], "z": [], "d": [], "rnorm": []}
         self._solve_index += 1
+
+    def _observe_shift(self, alpha):
+        """Store the value of one ``MatShift`` on the preconditioning matrix."""
+        self._pending_shifts.append(float(alpha))
 
     def _observe_preconditioner(self, r, z):
         """Store ``r^T z`` and ``z`` of one preconditioner application in a solve."""

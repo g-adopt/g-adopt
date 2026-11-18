@@ -43,14 +43,24 @@ positive definite whenever ``A`` is, so it is a valid preconditioner for the red
 Hessian ``Z^T H Z``. It is not the inverse of ``Z^T A Z``; a preconditioner does not
 have to be.
 
-The Newton types regularise an indefinite Hessian with ``MatShift`` (``bnk.c:416-419``),
-which lands on the preconditioning matrix as well. Both contexts here ignore that
-shift: the only operation PETSc ever performs on this matrix is the preconditioner,
-which applies ``A^{-1}``, and ``A^{-1}`` preconditions ``H + pert I`` as well as it
-preconditions ``H``. Recording the shift would be wrong as well as useless, because
-BNK shifts the preconditioning matrix once per iteration while pyadjoint's Hessian
-``update`` resets the shift of the Hessian matrix only (``tao_solver.py:227-232``),
-so an accumulated value would never be cleared.
+The Newton types regularise an indefinite Hessian with ``MatShift`` (``bnk.c:414-421``
+at PETSc v3.25.0): before each Krylov solve with a positive perturbation ``pert``, BNK
+calls ``MatShift(H_inactive, pert)`` and, because the preconditioning matrix is a
+different matrix here, ``MatShift(Hpre_inactive, pert)`` as well. Both contexts here
+leave their operator unchanged by that call: the only operation PETSc ever performs
+on this matrix is the preconditioner, which applies ``A^{-1}``, and ``A^{-1}``
+preconditions ``H + pert I`` as well as it preconditions ``H``. They do not
+accumulate the value either, because BNK shifts the preconditioning matrix once per
+solve while pyadjoint's Hessian ``update`` resets the shift of the Hessian matrix
+only (``tao_solver.py:227-232``), so an accumulated value would never be cleared.
+
+What the contexts do with the value is report it. ``MatShift`` on a Python matrix
+calls the ``shift`` method of its context with the exact ``pert`` of BNK, and BNK
+keeps that number in a private struct that petsc4py cannot read. So the call is the
+one exact view of the perturbation from Python: ``shift`` hands ``pert`` to the
+callable ``shift_observer`` of the full-space context, if one is set.
+``recording.KrylovRecorder`` sets it and stores the value with the next Krylov
+solve. No ``shift`` call before a solve means that BNK used no perturbation for it.
 
 Everything here is a local prototype on this branch. The upstream form of the same
 work is ``createSubMatrix`` on ``ReducedFunctionalHessianMat`` in
@@ -92,6 +102,12 @@ class InnerProductMat:
         # it to rebuild the conjugate gradient coefficients. It only reads the two
         # vectors, so the solve is the same with or without it.
         self.observer = None
+        # A callable ``shift_observer(alpha)`` that ``shift`` calls with the value
+        # of each ``MatShift`` that BNK applies to this matrix or to its masked
+        # sub-matrix, or None. ``recording.py`` sets it to record BNK's Hessian
+        # perturbation. It only receives a number, so the solve is the same with
+        # or without it.
+        self.shift_observer = None
 
     # -- sizes ---------------------------------------------------------------------
 
@@ -111,11 +127,21 @@ class InnerProductMat:
     # -- matrix operations ---------------------------------------------------------
 
     def shift(self, A, alpha):
-        """Ignore ``A <- A + alpha I`` from the Newton regularisation.
+        """Report ``A <- A + alpha I`` from the Newton regularisation, and do not apply it.
 
         See the module docstring: only ``A^{-1}`` is ever applied, and it is a
         preconditioner for the shifted Hessian as much as for the unshifted one.
+        BNK calls this with its perturbation ``pert`` just before a Krylov solve
+        when no bound is active, because the full matrix is then the
+        preconditioning matrix of the solve. The value goes to ``shift_observer``.
+
+        Args:
+            A: the PETSc ``Mat`` that carries this context.
+            alpha: the shift, BNK's ``pert``, in the nodal (Euclidean) units of the
+                Hessian matrix: ``MatShift`` adds ``alpha`` to every diagonal entry.
         """
+        if self.shift_observer is not None:
+            self.shift_observer(float(alpha))
 
     def mult(self, A, x, y):
         """``y = A x``, with ``x`` a primal control vector and ``y`` a dual one.
@@ -233,7 +259,12 @@ class MaskedInnerProductMat:
                              mode=PETSc.ScatterMode.FORWARD)
 
     def shift(self, A, alpha):
-        """Ignore the Newton shift, as the full matrix does."""
+        """Report the Newton shift to the full-space context, and do not apply it.
+
+        BNK shifts this masked sub-matrix instead of the full matrix whenever a
+        bound is active, so the value goes to the same observer as there.
+        """
+        self.parent.shift(None, alpha)
 
     def mult(self, A, x, y):
         """``y = Z^T A Z x`` on the inactive set, with no Newton shift."""
