@@ -1,0 +1,1130 @@
+r"""The self-gravitating GIA solver: viscoelastic mechanics, potential and couplings.
+
+`SelfGravitatingGIASolver` solves, in one Newton solve per time step, the
+compressible viscoelastic momentum equation of the mantle, the material
+history, the gravitational Poisson equation with its Dirichlet-to-Neumann
+boundary treatment, and the global scalar fields of the couplings (fluid
+core, rotation, centre-of-mass frame, sea level). A minimal script:
+
+    parent = Mesh("earth_with_buffer.msh"); parent.cartesian = False
+    mantle = Submesh(parent, 2, MANTLE)
+    u = Function(VectorFunctionSpace(mantle, "CG", 2), name="displacement")
+    psi = Function(FunctionSpace(parent, "CG", 2), name="potential")
+    dt = Function(FunctionSpace(mantle, "R", 0)).assign(dt0)
+    load = Function(FunctionSpace(mantle, "CG", 2))
+
+    solver = SelfGravitatingGIASolver(
+        u, psi, approximation, dt=dt, time_scheme="bdf2",
+        internal_variable_family="Quadrature", quad_degree=4,
+        gravity_bcs={OUTER: {"dtn": CylindricalDtN(8)},
+                     INNER: {"dtn": CylindricalDtN(8)}},
+        couplings=[FluidCore(boundary=RC, rho_core=rho_c),
+                   Rotation(C=C), CentreOfMass(),
+                   SurfaceLoad(boundary=RE, sigma=load, g_surface=1.0)],
+        nullspace="rigid_rotation")
+    for h, value in schedule:
+        dt.assign(h); load.assign(value)
+        solver.solve()                  # writes u and psi with assign
+        output.write(u, psi)
+
+The module docstring of `gadopt.gia_gravity` states the sign convention
+(`psi` is minus the Newtonian potential) and derives the three row
+scalings; this module uses both unchanged.
+
+## The parts
+
+The solver composes three parts and owns nothing they own:
+
+- the **mechanics**, `InternalVariableMechanics` with a `DGHistory` or a
+  `QuadratureHistory` (`gadopt.gia_history`) and one `BDF2History`;
+- the **potential**, `GravityPotential` (`gadopt.gravity_potential`): the DtN
+  form, the residual row, the 2-D monopole datum, the low-rank operator;
+- the **couplings** (`gadopt.gia_couplings`), run in three ordered stages.
+
+What it owns is the mixed space, the residual as the sum of the parts, the
+nullspace, the solver options and how one step is solved and recorded. The
+residual does not depend on how the step is solved; the step is one of
+three variants (`_StockStep`, `_LowRankStep`, `_QuadratureStep`), each of
+which puts one solve block on the tape.
+
+## The mixed space
+
+    [ u, (M, DG family only), psi, DtN multipliers (multiplier path),
+      core pressure, m1 m2 m3 (or m3), centre-of-mass multipliers, Shift ]
+
+The `Real` fields are contiguous and last, which `DtNTwoBlockSchurPC`
+requires, and their order is fixed by the couplings' `order`, not by the
+order of the `couplings` list. Field 1 is the history on the DG family
+(`CondensedBlockPC` reads it there), and the potential follows the
+displacement on the Quadrature family (`ReducedGIABlockPC`).
+
+## The contract of `u`, `psi` and the history
+
+The solver reads `u` and `psi` once, at construction, as the initial state.
+After every `solve` it writes the solved displacement and potential into
+them with recorded `assign`s, after the recorded kernel projection, so the
+recorded and the replayed values agree. To change the state between steps,
+use `restore`. `solver.internal_variables` is the accepted history level of
+the time integrator, the one history Function of the run.
+
+## State
+
+`state()` returns the named Functions that a restart needs, `restore` puts
+them back, `reset` returns to the undeformed state. `gadopt.gia_state`
+writes them to a `CheckpointFile`, reads them back, and converts the files
+of the earlier solver.
+"""
+
+from collections import defaultdict
+from collections.abc import Mapping
+from copy import deepcopy
+
+import numpy as np
+import ufl
+from firedrake import (DirichletBC, Function, FunctionSpace,
+                       MixedFunctionSpace, MixedVectorSpaceBasis,
+                       NonlinearVariationalProblem, NonlinearVariationalSolver,
+                       SpatialCoordinate, TestFunctions, VectorSpaceBasis,
+                       action, adjoint, as_vector, assemble, derivative, split,
+                       Constant)
+from mpi4py import MPI
+from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
+from ufl.algorithms import expand_derivatives, extract_coefficients
+
+from .gia_couplings import CouplingContext, ordered, scalar_value
+from .gia_gravity import (GIASpaceLayout, NULL_COUPLING_ROW_SCALE,
+                          selfgrav_dtn_iterative_solver_parameters,
+                          selfgrav_dtn_lowrank_direct_solver_parameters,
+                          selfgrav_dtn_schur_lowrank_solver_parameters,
+                          selfgrav_dtn_schur_solver_parameters)
+from .gia_history import history_formulation
+from .gravity_potential import GravityPotential
+from .momentum_equation import rotational_potential_term, self_gravity_term
+from .nullspaces import check_kernel_basis, project_out_kernel
+from .preconditioners import near_nullspace_basis
+from .solver_options_manager import SolverConfigurationMixin
+from .stokes_integrators import (InternalVariableMechanics, _basis_provider,
+                                 _displacement_basis,
+                                 newton_stokes_solver_parameters)
+from .utility import derivative_solve_keywords, is_cartesian, upward_normal
+
+__all__ = ["SelfGravitatingGIASolver"]
+
+
+class _StockStep:
+    """One step as Firedrake's own variational solve (multiplier DtN, DG history).
+
+    The residual is a plain UFL form, so the stock solve block on the tape
+    is exact. The derivative solves get the forward options without the
+    Newton loop (`SelfGravitatingGIASolver.adjoint_solve_keywords`).
+    """
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.problem = NonlinearVariationalProblem(
+            owner.F, owner.solution, bcs=owner.strong_bcs)
+        self.build()
+
+    def build(self):
+        """Build the variational solver from the owner's present options."""
+        owner = self.owner
+        self.solver = NonlinearVariationalSolver(
+            self.problem, solver_parameters=owner.solver_parameters,
+            nullspace=owner.nullspace,
+            transpose_nullspace=owner.transpose_nullspace,
+            appctx=owner.appctx, options_prefix=owner.name)
+
+    def solve(self):
+        """Solve, giving the derivative keywords to Firedrake on a taped solve."""
+        self.owner._refresh_operator_version()
+        keywords = self.owner.adjoint_solve_keywords()
+        solve_keywords = (derivative_solve_keywords(self.solver, keywords["adj_kwargs"])
+                          if keywords else {})
+        self.solver.solve(**solve_keywords)
+
+
+class _LowRankStep(_StockStep):
+    """One step with the low-rank DtN update on the Jacobian and the residual.
+
+    The update `theta_psi B` acts through two PETSc callbacks, which the tape
+    does not see. After an annotated solve the stock solve block is adopted
+    (`gadopt.dtn_coupled_adjoint.adopt_coupled_lowrank_block`) so that its
+    replay, adjoint and tangent carry `B` and the derivative of `theta_psi`.
+    """
+
+    def build(self):
+        from .dtn_coupled_adjoint import LowRankVariationalSolver
+        owner = self.owner
+        self.solver = LowRankVariationalSolver(
+            self.problem, solver_parameters=owner.solver_parameters,
+            nullspace=owner.nullspace,
+            transpose_nullspace=owner.transpose_nullspace,
+            appctx=owner.appctx, options_prefix=owner.name,
+            post_function_callback=owner.augment_residual,
+            post_jacobian_callback=owner.augment_jacobian)
+        self.solver.gia_solver = owner
+
+    def solve(self):
+        self.owner._refresh_operator_version()
+        adopt = annotate_tape()
+        if adopt:
+            tape = get_working_tape()
+            n0 = len(tape.get_blocks())
+        # `LowRankVariationalSolver.solve` supplies its own derivative keywords.
+        self.solver.solve()
+        if adopt:
+            from .dtn_coupled_adjoint import adopt_coupled_lowrank_block
+            adopt_coupled_lowrank_block(self.owner, tape, n0)
+
+
+class _QuadratureStep:
+    """One step with the history eliminated at quadrature points.
+
+    `DirectConstitutiveBackend` owns the nonlinear solve with the local
+    Newton callbacks, the kernel projection inside its map and the tape
+    block of the whole step. It is built once; an options change rebuilds
+    its variational solver only, so the residual and the local solve keep
+    one set of private coefficients.
+    """
+
+    def __init__(self, owner):
+        from .constitutive_integrators import DirectConstitutiveBackend
+        self.owner = owner
+        self.backend = DirectConstitutiveBackend(owner, owner.history.material)
+
+    @property
+    def solver(self):
+        return self.backend.solver
+
+    def build(self):
+        self.backend.build_solver()
+
+    def solve(self):
+        self.owner._refresh_operator_version()
+        self.backend.solve()
+
+
+class SelfGravitatingGIASolver(SolverConfigurationMixin):
+    r"""Viscoelastic GIA coupled in one solve to self-gravitation and the couplings.
+
+    The residual, with every term on the left-hand side and `c` the
+    `scaling_factor`:
+
+        F_u   = c [ mechanics - B_mu int rho_0 grad(psi + psi_rot) . w dx ]
+        F_M   = -c [ history equation ]                         (DG family)
+        F_psi = theta_psi [ int grad(psi) . grad(v) dx_g
+                            - Lambda int rho_0 u . grad(v) dx_m
+                            + DtN boundary rows ]
+        + the rows of each coupling
+
+    with `theta_psi = c B_mu / Lambda` (`B_mu` floored to one at zero).
+
+    Args:
+      u: the displacement, a vector Function on the mechanics mesh (usually
+        a `Submesh` of the potential's mesh). Read once as the initial
+        state; overwritten with the solution after every `solve`.
+      psi: the potential, a scalar Function on the parent mesh. Same rules.
+      approximation: a `BaseGIAApproximation` with an internal-variable
+        rheology, `B_mu`, `density`, `g` and `self_gravity_number`.
+      dt: the time step; a `Real` Function supports taped changes.
+      time_scheme: `"backward_euler"` or `"bdf2"` (variable step, backward
+        Euler first step).
+      internal_variable_family: `"DG"` (the history is an unknown, eliminated
+        cell by cell in the preconditioner) or `"Quadrature"` (eliminated at
+        quadrature points by a local Newton solve; natural displacement
+        boundaries only).
+      internal_variable_degree: the DG degree, default 1. The Quadrature
+        history takes `quad_degree` and refuses another value here.
+      quad_degree: the volume quadrature degree and the degree of the
+        Quadrature history. `None` gives 6 on the DG family and 4 on the
+        Quadrature family, where a degree-6 rule stores 23 values per
+        tetrahedron and component.
+      dtn_quad_degree: the boundary quadrature degree of the DtN rows and of
+        every coupling facet integral; `None` takes the DtN form's
+        calibrated default.
+      dtn_alpha: the Robin shift of the DtN form, `None` for its default.
+      gravity_bcs: the potential's conditions (`"dtn"`, `"psi"`, `"flux"`).
+      bcs: the displacement conditions (`"u"`, `"un"`, `"normal_stress"`,
+        ...), as for the other G-ADOPT momentum solvers.
+      couplings: a list of `gadopt.gia_couplings.Coupling` objects.
+      dtn_representation: `"lowrank"` (default; the DtN modes are a rank-n
+        update and the space does not grow with the truncation) or
+        `"multiplier"` (one `Real` unknown per mode).
+      nullspace: `None`, `"rigid_rotation"`, or a `VectorSpaceBasis` on the
+        displacement space. A declared mode is checked at construction: the
+        Jacobian applied to it must be small against the Jacobian applied to
+        a radial field of the same size, or the constructor raises. The same
+        basis is the transpose nullspace.
+      near_nullspace: the modes GAMG is given on the condensed displacement
+        operator: `"incompressible"` (default), `"rigid"` or `"none"`.
+      scaling_factor: `c`, a factor of the whole momentum residual.
+      solver_parameters: `None` (direct in 2-D, iterative in 3-D),
+        `"direct"`, `"iterative"`, or a complete dictionary.
+      preset_options: arguments of
+        `gadopt.gia_gravity.selfgrav_dtn_iterative_solver_parameters` for the
+        iterative preset, for example `{"outer_rtol": 1e-8}`. The solver
+        supplies `condensed`, `dtn_representation` and `n_real`.
+      solver_parameters_extra: options added last.
+      derivative_max_it: the iteration cap of the outer Krylov solve of the
+        adjoint and tangent solves. `None` keeps the forward cap. A derivative
+        solve that reaches its cap raises, so a long adjoint run needs a cap
+        that the adjoint sweep stays below.
+    """
+
+    name = "SelfGravitatingGIA"
+    #: Relative size, against a radial field of the same norm, below which a
+    #: declared nullspace mode counts as a kernel of the Jacobian. Measured on
+    #: the coarse test annulus (radial spacing 0.3, 16 cells around): 1.6e-5
+    #: with a rigid core (the Nitsche `un` term on curved facets), 3e-6 with a
+    #: fluid core, both falling with refinement; a density that varies
+    #: laterally by a fraction `a` gives about `0.1 a`, so 1e-4 refuses a
+    #: lateral variation of 0.1 percent.
+    KERNEL_RTOL = 1e-4
+
+    def __init__(
+        self,
+        u: Function,
+        psi: Function,
+        approximation,
+        /,
+        *,
+        dt,
+        gravity_bcs: dict,
+        time_scheme: str = "backward_euler",
+        internal_variable_family: str = "DG",
+        internal_variable_degree: int | None = None,
+        quad_degree: int | None = None,
+        dtn_quad_degree: int | None = None,
+        dtn_alpha=None,
+        bcs: dict | None = None,
+        couplings=(),
+        dtn_representation: str = "lowrank",
+        nullspace=None,
+        near_nullspace: str = "incompressible",
+        scaling_factor=1,
+        solver_parameters=None,
+        preset_options: dict | None = None,
+        solver_parameters_extra: dict | None = None,
+        derivative_max_it: int | None = None,
+    ) -> None:
+        if time_scheme not in ("backward_euler", "bdf2"):
+            raise ValueError("time_scheme must be 'backward_euler' or 'bdf2'.")
+        if internal_variable_family not in ("DG", "Quadrature"):
+            raise ValueError(
+                "internal_variable_family must be 'DG' or 'Quadrature'.")
+        if near_nullspace not in ("incompressible", "rigid", "none"):
+            raise ValueError(
+                "near_nullspace must be 'incompressible', 'rigid' or 'none'.")
+        self.family = internal_variable_family
+        if quad_degree is None:
+            quad_degree = 6 if self.family == "DG" else 4
+        if self.family == "Quadrature":
+            if internal_variable_degree not in (None, quad_degree):
+                raise ValueError(
+                    "The Quadrature history is stored at the volume quadrature "
+                    f"points, degree quad_degree={quad_degree}; got "
+                    f"internal_variable_degree={internal_variable_degree}.")
+            internal_variable_degree = quad_degree
+        elif internal_variable_degree is None:
+            internal_variable_degree = 1
+        self.u = u
+        self.psi = psi
+        self.approximation = approximation
+        self.dt = dt
+        self.time_scheme = time_scheme
+        self.quad_degree = quad_degree
+        self.scaling_factor = scaling_factor
+        self.bcs = dict(bcs or {})
+        self.near_nullspace_modes = near_nullspace
+        self.derivative_max_it = derivative_max_it
+        self.dtn_representation = dtn_representation
+
+        self.mesh = u.function_space().mesh()
+        self.potential_mesh = psi.function_space().mesh()
+        if not hasattr(self.potential_mesh, "cartesian"):
+            raise ValueError(
+                "The potential's mesh has no `cartesian` attribute; set "
+                "`mesh.cartesian = False` for an annulus or a shell.")
+        if not hasattr(self.mesh, "cartesian"):
+            # `Submesh` does not inherit it, and G-ADOPT reads it on every mesh.
+            self.mesh.cartesian = self.potential_mesh.cartesian
+        if approximation.self_gravity_number is None:
+            raise ValueError(
+                "The approximation carries no `self_gravity_number`; the solver "
+                "needs Lambda = 4 pi G rho_bar L / g_bar.")
+        self.Lambda = approximation.self_gravity_number
+        if self.family == "Quadrature":
+            if any({"u", "un", "ux", "uy", "uz"} & set(bc) for bc in self.bcs.values()):
+                raise NotImplementedError(
+                    "The Quadrature history supports natural displacement "
+                    "boundaries only; use the DG family, or a FluidCore.")
+            if any("psi" in bc for bc in gravity_bcs.values()):
+                raise NotImplementedError(
+                    "The Quadrature history does not support a strong 'psi' "
+                    "condition.")
+        self.couplings = ordered(couplings)
+
+        self.gravity = GravityPotential(
+            psi.function_space(), self.mesh, gravity_bcs, Lambda=self.Lambda,
+            quad_degree=dtn_quad_degree, alpha=dtn_alpha,
+            representation=dtn_representation)
+        self.form = self.gravity.form
+
+        order = 2 if time_scheme == "bdf2" else 1
+        self.history = history_formulation(
+            self.family, self, internal_variable_degree, order)
+        self.set_space()
+        self.set_boundary_conditions()
+        self.set_couplings()
+        self.set_equations()
+        self.set_form()
+        self.set_nullspace(nullspace)
+        self.set_lowrank_operator()
+        self.set_solver_options(solver_parameters, preset_options,
+                                solver_parameters_extra)
+        self.set_solver()
+
+    # -- Construction -----------------------------------------------------------
+
+    def set_space(self) -> None:
+        """Build the mixed space, the solution and the layout record.
+
+        The solution takes `u` and `psi` as its initial values, once.
+        """
+        dim = self.potential_mesh.geometric_dimension
+        R = FunctionSpace(self.potential_mesh, "R", 0)
+        spaces = [self.u.function_space()]
+        names = ["displacement"]
+        if self.family == "DG":
+            spaces.append(self.history.space)
+            names.append("history")
+        spaces.append(self.psi.function_space())
+        names.append("potential")
+        i_real = len(spaces)
+        n_mult = self.gravity.n_multipliers
+        names += [f"dtn_multiplier_{k}" for k in range(n_mult)]
+        for coupling in self.couplings:
+            names += list(coupling.real_field_names(dim))
+        spaces += [R] * (len(names) - len(spaces))
+        self.field_names = tuple(names)
+        self.field_index = {name: i for i, name in enumerate(names)}
+        self.solution = Function(MixedFunctionSpace(spaces), name="gia_solution")
+        # The space as the solution reports it: every argument of the
+        # residual is built on this one object, because two arguments of one
+        # number on spaces that compare unequal make the form invalid.
+        self.solution_space = self.solution.function_space()
+        self.solution.subfunctions[0].assign(self.u)
+        self.solution.subfunctions[self.field_index["potential"]].assign(self.psi)
+        self.solution_split = split(self.solution)
+        self.tests = TestFunctions(self.solution_space)
+        self.k = upward_normal(self.mesh)
+
+        index = self.field_index
+        rotation = {name: index[name] for name in ("m1", "m2", "m3")
+                    if name in index}
+        centre = tuple(index[name] for name in names
+                       if name.startswith("centre_of_mass_"))
+        self.layout = GIASpaceLayout(
+            displacement=0,
+            internal_variables=(1,) if self.family == "DG" else (),
+            internal_variable_space=self.history.space,
+            condensed=self.family == "Quadrature",
+            potential=index["potential"],
+            multipliers=tuple(range(i_real, i_real + n_mult)),
+            core_pressure=index.get("core_pressure"),
+            rotation=rotation,
+            centre_of_mass=centre,
+            sea_level=index.get("sea_level_shift"),
+            dtn_representation=self.dtn_representation,
+            gravity_form=self.form,
+            mechanics_mesh=self.mesh,
+            potential_mesh=self.potential_mesh,
+            self_gravity_number=self.Lambda,
+        )
+        if self.layout.real_fields != tuple(range(i_real, len(names))):
+            raise RuntimeError("The Real fields are not contiguous and last.")
+
+    def set_boundary_conditions(self) -> None:
+        """Sort the displacement conditions into strong and weak ones."""
+        self.strong_bcs = []
+        self.weak_bcs = {}
+        V = self.solution_space.sub(0)
+        bc_map = {"u": V}
+        if is_cartesian(self.mesh):
+            bc_map["ux"], bc_map["uy"] = V.sub(0), V.sub(1)
+            if self.mesh.geometric_dimension == 3:
+                bc_map["uz"] = V.sub(2)
+        for bc_id, bc in self.bcs.items():
+            weak = defaultdict(float)
+            for bc_type, value in bc.items():
+                if bc_type in ("u", "ux", "uy", "uz"):
+                    self.strong_bcs.append(DirichletBC(bc_map[bc_type], value, bc_id))
+                elif bc_type == "free_surface":
+                    raise ValueError(
+                        "A free surface is not a condition of this solver; the "
+                        "surface load is a SurfaceLoad or a SeaLevel coupling.")
+                else:
+                    weak[bc_type] += value
+            self.weak_bcs[bc_id] = weak
+        self.has_strong_displacement_bc = bool(self.strong_bcs)
+
+    @property
+    def row_scale_B_mu(self):
+        """`B_mu`, floored to one where it is exactly zero.
+
+        `theta_psi` and the rotation and frame rows scale whole rows by
+        `B_mu`; at `B_mu = 0` that would delete those rows instead of
+        decoupling them (`gadopt.gia_gravity.NULL_COUPLING_ROW_SCALE`).
+        """
+        B_mu = self.approximation.B_mu
+        if scalar_value(B_mu) == 0.0:
+            return NULL_COUPLING_ROW_SCALE
+        return B_mu
+
+    @property
+    def _row_scale_B_mu(self):
+        # The name the quadrature backend reads.
+        return self.row_scale_B_mu
+
+    @property
+    def theta_psi(self):
+        """`c B_mu / Lambda`, the scaling of the potential rows, UFL."""
+        return self.scaling_factor * self.row_scale_B_mu / self.Lambda
+
+    @property
+    def theta_psi_value(self) -> float:
+        """`theta_psi` as a number, from its factors."""
+        return (scalar_value(self.scaling_factor) * scalar_value(self.row_scale_B_mu)
+                / scalar_value(self.Lambda))
+
+    def set_couplings(self) -> None:
+        """Bind the couplings, check them, and run the potential and sheet stages."""
+        self.coupling_context = ctx = CouplingContext(
+            solution=self.solution,
+            fields=dict(zip(self.field_names, self.solution_split)),
+            tests=dict(zip(self.field_names, self.tests)),
+            approximation=self.approximation,
+            mesh=self.mesh,
+            potential_mesh=self.potential_mesh,
+            dx_m=self.gravity.dx_m,
+            boundary_quad_degree=self.form.quad_degree,
+            scaling_factor=self.scaling_factor,
+            row_scale_B_mu=self.row_scale_B_mu,
+            Lambda=self.Lambda,
+            four_pi_G=self.gravity.four_pi_G,
+            bcs=self.bcs,
+            field_names=self.field_names)
+        for coupling in self.couplings:
+            coupling.bind(self, ctx)
+        for coupling in self.couplings:
+            coupling.check(self.couplings)
+        # Stage 1, then stage 2, over every coupling: the order of the list
+        # does not matter, because no sheet is built before every potential.
+        for coupling in self.couplings:
+            coupling.potentials(ctx)
+        for coupling in self.couplings:
+            ctx.sheets.extend(coupling.sheets(ctx))
+        for coupling in self.couplings:
+            for bc_id, conditions in coupling.mechanics_bcs(ctx).items():
+                weak = self.weak_bcs.setdefault(bc_id, defaultdict(float))
+                for bc_type, value in conditions.items():
+                    weak[bc_type] += value
+
+    @property
+    def shear_coefficient(self):
+        """The penalty coefficient of the displacement block, from the history family."""
+        return self.history.shear_coefficient(self.approximation, self.dt)
+
+    def set_equations(self) -> None:
+        """The momentum equation with the body forces, and the history equation."""
+        self.equations = []
+        ctx = self.coupling_context
+        extra_terms = [self_gravity_term]
+        extra_attrs = {"psi": ctx.fields["potential"], "mu": self.shear_coefficient}
+        if ctx.rotational_potential is not None:
+            extra_terms.append(rotational_potential_term)
+            extra_attrs["psi_rot"] = ctx.rotational_potential(self.mesh)
+        self.mechanics = InternalVariableMechanics(self.history)
+        self.mechanics.set_equations(
+            self, extra_terms=extra_terms, extra_attrs=extra_attrs,
+            intersect_measures=self.potential_mesh if ctx.cross_mesh else None)
+
+    def set_form(self) -> None:
+        """The residual: mechanics, the potential row, then every coupling's rows."""
+        ctx = self.coupling_context
+        unknowns = [self.solution_split[0]]
+        if self.family == "DG":
+            unknowns.append(self.solution_split[1])
+        F = sum(eq.residual(sol) for eq, sol in zip(self.equations, unknowns, strict=True))
+        self._mechanics_form = F
+        multipliers = [(self.solution_split[i], self.tests[i])
+                       for i in self.layout.multipliers]
+        F += self.gravity.residual(
+            ctx.fields["potential"], ctx.tests["potential"],
+            ctx.fields["displacement"], density=self.approximation.density,
+            theta_psi=self.theta_psi, multipliers=multipliers)
+        for coupling in self.couplings:
+            F += coupling.residual(ctx)
+        self.F = self.gravity.restrict_parent_reals(F)
+        self.strong_bcs.extend(self.gravity.dirichlet_bcs(
+            self.solution_space.sub(self.layout.potential)))
+        self._detect_solution_dependence()
+
+    def _detect_solution_dependence(self) -> None:
+        """Decide from the forms whether the Jacobian moves inside one solve.
+
+        `jacobian_depends_on_solution` is true when the solution is a
+        coefficient of the Jacobian of the residual (a power law on the DG
+        family, a live coastline), or, on the Quadrature family, when the
+        local constitutive equation depends on the displacement (a power law
+        or a nonlinear backstress). `rheology_nonlinear` is the same test on
+        the material alone; it decides whether the condensed displacement
+        operator is symmetric. UFL folds a numeric exponent of one out of
+        the power-law factor, so a Newtonian rheology is detected; a
+        `Constant` exponent of value one is not folded and counts as a power
+        law, which is correct and costs a preconditioner rebuild per solve.
+        """
+        def depends(form, unknown):
+            jacobian = expand_derivatives(derivative(form, unknown))
+            return any(c is unknown for c in extract_coefficients(jacobian))
+
+        if self.family == "Quadrature":
+            material = self.history.material
+            rheology = any(c is material.u for c in extract_coefficients(material.equation))
+        else:
+            rheology = depends(self._mechanics_form, self.solution)
+        self.rheology_nonlinear = rheology
+        self.jacobian_depends_on_solution = rheology or depends(self.F, self.solution)
+        jacobian = expand_derivatives(derivative(self.F, self.solution))
+        self._jacobian_coefficients = [
+            *extract_coefficients(jacobian),
+            *ufl.algorithms.analysis.extract_type(jacobian, Constant)]
+        self._jacobian_fingerprint = self._current_fingerprint()
+        self._operator_version = 0
+
+    def set_nullspace(self, nullspace) -> None:
+        """Build the declared kernel on the mixed space and check it.
+
+        Each mode is applied to the Jacobian at the initial state, and to its
+        transpose; both actions must be below `KERNEL_RTOL` times the action
+        on a radial field of the same coefficient norm, which is not a
+        kernel of any configuration. A declared mode that is not a kernel
+        would be projected out of the answer after every solve with no
+        error, so it is refused here.
+        """
+        self.nullspace = self.transpose_nullspace = None
+        # The near-nullspace of the outer operator is not used: GAMG runs on
+        # the condensed displacement operator inside block 0, and gets its
+        # modes from `condensed_field_near_nullspace` (`near_nullspace`).
+        self.near_nullspace = None
+        if nullspace is None:
+            return
+        V = self.solution_space.sub(0)
+        if isinstance(nullspace, str):
+            if nullspace != "rigid_rotation":
+                raise ValueError(
+                    f"nullspace must be None, 'rigid_rotation' or a "
+                    f"VectorSpaceBasis, got {nullspace!r}.")
+            if self.has_strong_displacement_bc:
+                raise ValueError(
+                    "nullspace='rigid_rotation' with a strong displacement "
+                    "condition: a pinned boundary removes the rotation.")
+            X = SpatialCoordinate(self.mesh)
+            if len(X) == 2:
+                modes = [as_vector([-X[1], X[0]])]
+            else:
+                modes = [as_vector([Constant(0.0), -X[2], X[1]]),
+                         as_vector([X[2], Constant(0.0), -X[0]]),
+                         as_vector([-X[1], X[0], Constant(0.0)])]
+            vectors = [Function(V).interpolate(m) for m in modes]
+        elif isinstance(nullspace, VectorSpaceBasis):
+            # The vectors are Functions on the caller's displacement space,
+            # whose layout is the one of the displacement block here.
+            vectors = []
+            for vector in nullspace._vecs:
+                f = Function(V)
+                with vector.dat.vec_ro as source, f.dat.vec_wo as target:
+                    source.copy(target)
+                vectors.append(f)
+        else:
+            raise TypeError(
+                "nullspace must be None, 'rigid_rotation' or a VectorSpaceBasis "
+                "on the displacement space.")
+        basis = VectorSpaceBasis(vectors)
+        basis.orthonormalize()
+        entries = [self.solution_space.sub(i) for i in range(len(self.solution_space))]
+        entries[0] = basis
+        mixed = MixedVectorSpaceBasis(self.solution_space, entries)
+        check_kernel_basis(mixed)
+        self._check_kernel(basis)
+        self.nullspace = self.transpose_nullspace = mixed
+
+    def _check_kernel(self, basis) -> None:
+        """Refuse a declared mode that the Jacobian does not annihilate."""
+        J = derivative(self.F, self.solution)
+        X = SpatialCoordinate(self.mesh)
+        probe = Function(self.solution_space)
+        probe.subfunctions[0].interpolate(X)
+
+        def size(direction, transpose=False):
+            form = action(adjoint(J) if transpose else J, direction)
+            with assemble(form).dat.vec_ro as r:
+                return r.norm()
+
+        with probe.dat.vec_ro as p:
+            probe_norm = p.norm()
+        reference = size(probe)
+        reference_t = size(probe, transpose=True)
+        self.kernel_residuals = []
+        for vector in basis._vecs:
+            mode = Function(self.solution_space)
+            with vector.dat.vec_ro as source, \
+                    mode.subfunctions[0].dat.vec_wo as target:
+                source.copy(target)
+                target.scale(probe_norm)
+            ratio = size(mode) / reference
+            ratio_t = size(mode, transpose=True) / reference_t
+            self.kernel_residuals.append((ratio, ratio_t))
+            if max(ratio, ratio_t) > self.KERNEL_RTOL:
+                raise ValueError(
+                    f"A declared nullspace mode is not a kernel of the Jacobian: "
+                    f"|J e| / |J r| = {ratio:.3e} and |J^T e| / |J^T r| = "
+                    f"{ratio_t:.3e} against the radial field r, above "
+                    f"{self.KERNEL_RTOL:g}. A rigid rotation is a kernel only "
+                    "with no pinned displacement, 'un' on spheres about the "
+                    "origin, and a spherically symmetric density.")
+
+    def set_lowrank_operator(self) -> None:
+        """Build `theta_psi B` on the low-rank path; `None` on the multiplier path."""
+        self.dtn_operator = None
+        if self.dtn_representation == "lowrank":
+            self.dtn_operator = self.gravity.build_lowrank_operator(
+                self.solution_space, self.layout.potential,
+                lambda: self.theta_psi_value)
+
+    # -- Solver options ------------------------------------------------------------
+
+    def set_solver_options(self, solver_parameters, preset_options,
+                           solver_parameters_extra) -> None:
+        """The PETSc options, from a preset the solver calls or a complete dictionary.
+
+        `"direct"` is LU on block 0 of the two-block Schur split (2-D only).
+        `"iterative"` is `selfgrav_dtn_iterative_solver_parameters`, called
+        here with the counts this solver knows and the caller's
+        `preset_options`. A dictionary is used as given.
+        """
+        self.appctx = {"mu": self.shear_coefficient / self.approximation.rho_continuity()}
+        preset_options = dict(preset_options or {})
+        if isinstance(solver_parameters, Mapping):
+            if preset_options:
+                raise ValueError("preset_options needs a preset, not a dictionary.")
+            self._check_dictionary(solver_parameters)
+            self.add_to_solver_config(solver_parameters)
+        else:
+            if solver_parameters not in (None, "direct", "iterative"):
+                raise ValueError("solver_parameters must be 'direct', 'iterative', "
+                                 "None or a dictionary.")
+            preset = solver_parameters or (
+                "direct" if self.mesh.topological_dimension == 2 else "iterative")
+            reserved = {"condensed", "dtn_representation", "n_real"} & preset_options.keys()
+            if reserved:
+                raise ValueError(f"The solver supplies {sorted(reserved)}; remove "
+                                 "them from preset_options.")
+            if preset == "direct" and preset_options:
+                raise ValueError("preset_options belongs to the iterative preset.")
+            self.add_to_solver_config(newton_stokes_solver_parameters)
+            n_real = len(self.layout.real_fields)
+            quadrature = self.family == "Quadrature"
+            if self.dtn_representation == "lowrank" and n_real == 0:
+                if quadrature and preset == "iterative":
+                    # No `Real` block: the reduced (u, psi) block is the whole
+                    # system and `ReducedGIABlockPC` is the outer preconditioner.
+                    options = selfgrav_dtn_iterative_solver_parameters(
+                        condensed=True, dtn_representation="lowrank", n_real=0,
+                        **preset_options)
+                    prefix = "dtn_fieldsplit_0_condensed_"
+                    reduced = {k: v for k, v in options.items() if not k.startswith("dtn_")}
+                    reduced.update({"condensed_" + k[len(prefix):]: v
+                                    for k, v in options.items() if k.startswith(prefix)})
+                    reduced.update(pc_type="python",
+                                   pc_python_type="gadopt.ReducedGIABlockPC")
+                    self.add_to_solver_config(reduced)
+                else:
+                    if preset_options:
+                        raise ValueError(
+                            "This configuration (DG history, low-rank DtN, no "
+                            "Real field) uses the low-rank direct preset; "
+                            "preset_options has no meaning there.")
+                    self.add_to_solver_config(selfgrav_dtn_lowrank_direct_solver_parameters)
+            elif preset == "direct":
+                self.add_to_solver_config(
+                    selfgrav_dtn_schur_lowrank_solver_parameters
+                    if self.dtn_representation == "lowrank"
+                    else selfgrav_dtn_schur_solver_parameters)
+            else:
+                self.add_to_solver_config(selfgrav_dtn_iterative_solver_parameters(
+                    condensed=quadrature, dtn_representation=self.dtn_representation,
+                    n_real=n_real, **preset_options))
+        self.add_to_solver_config(solver_parameters_extra)
+        self._refuse_ksponly_on_a_nonlinear_residual()
+        self._attach_context(solver_parameters_extra)
+        self.register_update_callback(self._rebuild_step)
+
+    def _check_dictionary(self, parameters) -> None:
+        """Refuse a dictionary whose block-0 route does not fit this space.
+
+        Two disagreements are silent otherwise: a block-0 class that expects
+        a history field the space does not hold (or the reverse), and a
+        potential split that does not match the DtN representation.
+        """
+        block0 = parameters.get("dtn_fieldsplit_0_pc_python_type",
+                                parameters.get("pc_python_type"))
+        if block0 == "gadopt.CondensedBlockPC" and self.family != "DG":
+            raise ValueError("gadopt.CondensedBlockPC eliminates a DG history "
+                             "field; the Quadrature family has none.")
+        if block0 == "gadopt.ReducedGIABlockPC" and self.family != "Quadrature":
+            raise ValueError("gadopt.ReducedGIABlockPC expects (u, psi) in block "
+                             "0; the DG family holds a history field there.")
+        keys = ("dtn_fieldsplit_0_condensed_fieldsplit_1_pc_python_type",
+                "condensed_fieldsplit_1_pc_python_type")
+        lowrank_split = any(parameters.get(k) == "gadopt.LowRankPotentialPC" for k in keys)
+        if lowrank_split and self.dtn_representation != "lowrank":
+            raise ValueError("gadopt.LowRankPotentialPC needs dtn_representation='lowrank'.")
+        if (self.dtn_representation == "lowrank" and block0 in
+                ("gadopt.CondensedBlockPC", "gadopt.ReducedGIABlockPC")
+                and not lowrank_split):
+            raise ValueError("A low-rank solver needs gadopt.LowRankPotentialPC on "
+                             "the potential split of block 0.")
+        pair = ("dtn_fieldsplit_0_fieldsplit_0_pc_python_type",
+                "fieldsplit_0_pc_python_type")
+        if (self.dtn_representation == "lowrank"
+                and any(parameters.get(k) == "gadopt.InternalVariableSCPC" for k in pair)):
+            raise ValueError("block0='pair' has no potential split for the "
+                             "low-rank update; use block0='condensed'.")
+
+    def _refuse_ksponly_on_a_nonlinear_residual(self) -> None:
+        """Refuse `ksponly` on a residual whose Jacobian depends on the solution.
+
+        One linear solve at the initial state reports convergence and returns
+        a state wrong by the whole nonlinearity.
+        """
+        if (self.solver_parameters.get("snes_type") == "ksponly"
+                and self.jacobian_depends_on_solution):
+            raise ValueError(
+                "snes_type='ksponly' is refused: the Jacobian depends on the "
+                "solution (a power law, a nonlinear backstress or a live "
+                "coastline), so one linear solve returns a wrong state. Use "
+                "snes_type='newtonls'.")
+
+    def _attach_context(self, extras) -> None:
+        """Publish what the preconditioners read in the application context.
+
+        `approximation`, `dt`, `scaling_factor`, `time_alpha`, the reuse
+        counter `operator_version`, `gia_jacobian_depends_on_solution`,
+        `gia_solve_index`, the displacement parts of the nullspaces and the
+        near-nullspace provider of the condensed displacement operator, and
+        on the low-rank path `dtn_operator`. Also replaces a CG on the
+        condensed displacement split by a GMRES of the same length when the
+        material makes that operator nonsymmetric.
+        """
+        if (self.family == "Quadrature" and self.dtn_representation == "lowrank"
+                and self.jacobian_depends_on_solution
+                and "gia_rebuild" not in self.solver_parameters):
+            # A state-dependent Jacobian defeats a tangent frozen at the
+            # replay's zero initial guess. Honour a chosen lag policy.
+            self.add_to_solver_config({"gia_rebuild": "always"})
+        ctx = self.appctx
+        ctx["approximation"] = self.approximation
+        ctx["dt"] = self.dt
+        ctx["scaling_factor"] = self.scaling_factor
+        ctx["time_alpha"] = self.time_integrator.alpha
+        ctx["operator_version"] = self._operator_version
+        ctx["gia_jacobian_depends_on_solution"] = self.jacobian_depends_on_solution
+        ctx["gia_solve_index"] = 0
+        if self.dtn_operator is not None:
+            ctx["dtn_operator"] = self.dtn_operator
+        for key, basis in (("condensed_field_nullspace", self.nullspace),
+                           ("condensed_field_transpose_nullspace", self.transpose_nullspace)):
+            displacement_basis = _displacement_basis(basis)
+            if displacement_basis is not None:
+                ctx[key] = _basis_provider(displacement_basis)
+        if self.near_nullspace_modes != "none":
+            modes = self.near_nullspace_modes
+
+            def near_nullspace_provider(space, modes=modes):
+                return near_nullspace_basis(space, modes)
+            ctx["condensed_field_near_nullspace"] = near_nullspace_provider
+        for prefix in ("dtn_fieldsplit_0_fieldsplit_0_condensed_field_",
+                       "dtn_fieldsplit_0_condensed_fieldsplit_0_",
+                       "condensed_fieldsplit_0_"):
+            key = prefix + "ksp_type"
+            user_named = bool(extras) and key in extras
+            if (self.solver_parameters.get(key) == "cg" and not user_named
+                    and self.rheology_nonlinear):
+                self.add_to_solver_config({
+                    key: "gmres",
+                    prefix + "ksp_gmres_restart":
+                        self.solver_parameters.get(prefix + "ksp_max_it", 50)})
+
+    def set_solver(self) -> None:
+        """Build the step variant: stock, low-rank or quadrature."""
+        if self.family == "Quadrature":
+            self._step = _QuadratureStep(self)
+        elif self.dtn_representation == "lowrank":
+            self._step = _LowRankStep(self)
+        else:
+            self._step = _StockStep(self)
+        #: The adopted low-rank solve block of the last annotated solve.
+        self.adjoint_block = None
+        #: Whether the low-rank adjoint carries the derivative of `theta_psi`.
+        self._include_theta_derivative = True
+
+    def _rebuild_step(self) -> None:
+        """Rebuild the variational solver after an options change."""
+        self._step.build()
+
+    @property
+    def solver(self):
+        """The variational solver of the step."""
+        return self._step.solver
+
+    #: SNES and KSP options of the forward Newton loop that a linear
+    #: derivative solve does not take (`StokesSolverBase`).
+    FORWARD_ONLY_OPTIONS = ("snes_rtol", "snes_atol", "snes_stol", "snes_max_it",
+                            "snes_linesearch_type", "ksp_converged_maxits")
+
+    def adjoint_solver_parameters(self) -> dict:
+        """The options of every derivative solve: forward, linear, own cap.
+
+        `ksponly` and no Newton tolerances, because the derivative systems are
+        linear. No accepted cap on the outer Krylov solve, so a capped
+        derivative solve raises. `derivative_max_it` replaces the forward
+        cap when it is given.
+        """
+        parameters = deepcopy(self.solver_parameters)
+        for option in self.FORWARD_ONLY_OPTIONS:
+            parameters.pop(option, None)
+        parameters["snes_type"] = "ksponly"
+        if self.derivative_max_it is not None:
+            parameters["ksp_max_it"] = self.derivative_max_it
+        return parameters
+
+    def adjoint_solve_keywords(self) -> dict:
+        """The keywords of the stock path's derivative solvers, `{}` off the tape."""
+        if not annotate_tape():
+            return {}
+        keywords = dict(getattr(self.solver, "_ad_kwargs", {}))
+        keywords.pop("appctx", None)
+        keywords["solver_parameters"] = self.adjoint_solver_parameters()
+        return {"adj_kwargs": keywords}
+
+    # -- The low-rank callbacks -------------------------------------------------------
+
+    def augment_residual(self, X, F) -> None:
+        """`post_function_callback`: add `theta_psi B psi` to the potential rows."""
+        self.dtn_operator.apply_local(X.array_r, F.array_w)
+
+    def augment_jacobian(self, X, Jmat) -> None:
+        """`post_jacobian_callback`: give the matrix-free action the same `B`."""
+        from .dtn_coupled import install_augmented_context
+        install_augmented_context(Jmat, self.dtn_operator)
+
+    # -- Operator reuse ------------------------------------------------------------------
+
+    def _current_fingerprint(self) -> tuple:
+        """A rank-local snapshot of every Jacobian coefficient but the solution."""
+        snapshot = []
+        for coefficient in self._jacobian_coefficients:
+            if coefficient is self.solution:
+                continue
+            version = getattr(getattr(coefficient, "dat", None), "dat_version", None)
+            if version is not None:
+                snapshot.append(("version", version))
+            elif hasattr(coefficient, "values"):
+                snapshot.append(("values", tuple(coefficient.values())))
+        return tuple(snapshot)
+
+    def invalidate_jacobian(self) -> None:
+        """Tell the preconditioners to rebuild their cached operators."""
+        self._operator_version += 1
+        self.appctx["operator_version"] = self._operator_version
+
+    def _refresh_operator_version(self) -> None:
+        """Bump the operator version if a Jacobian coefficient changed.
+
+        `None` when the Jacobian moves inside one solve, which tells every
+        cache keyed on it to rebuild at each update.
+        """
+        if self.jacobian_depends_on_solution:
+            self.appctx["operator_version"] = None
+            return
+        fingerprint = self._current_fingerprint()
+        changed = self.mesh.comm.allreduce(
+            fingerprint != self._jacobian_fingerprint, op=MPI.LOR)
+        if changed:
+            self._jacobian_fingerprint = fingerprint
+            self.invalidate_jacobian()
+
+    # -- The step -------------------------------------------------------------------
+
+    def solve(self) -> None:
+        """One time step.
+
+        In order: the time coefficients, the 2-D enclosed mass, the step as
+        one recorded block, the recorded kernel projection, the history
+        accept, and the copy into `u` and `psi`.
+        """
+        from .dtn_coupled_adjoint import TapeSweepMarkerBlock
+        self.time_integrator.prepare()
+        ctx = self.coupling_context
+        self.gravity.update_total_mass(ctx.sheets, ctx.on_parent_facet)
+        # Counted before the solve, so every preconditioner setup inside it
+        # sees one index (`gadopt.preconditioners._RebuildRule`).
+        self.appctx["gia_solve_index"] = self.appctx.get("gia_solve_index", 0) + 1
+        markers = annotate_tape()
+        if markers:
+            get_working_tape().add_block(TapeSweepMarkerBlock(
+                self, self.appctx["gia_solve_index"], before=True))
+        self._step.solve()
+        if markers:
+            get_working_tape().add_block(TapeSweepMarkerBlock(
+                self, self.appctx["gia_solve_index"], before=False))
+        snes = self.solver.snes
+        self.appctx["gia_last_solve_linear_its"] = int(snes.getLinearSolveIterations())
+        self.appctx["gia_last_solve_newton_its"] = max(1, int(snes.getIterationNumber()))
+        project_out_kernel(self.nullspace, self.solution)
+        self.history.advance(self)
+        self._copy_out()
+
+    def _copy_out(self) -> None:
+        """Write the displacement and the potential into `u` and `psi`, recorded."""
+        self.u.assign(self.solution.subfunctions[0])
+        self.psi.assign(self.solution.subfunctions[self.layout.potential])
+
+    def restart_time_integration(self) -> None:
+        """Take a backward-Euler step next, after a resolved forcing event."""
+        self.time_integrator.restart()
+
+    # -- Fields and diagnostics ---------------------------------------------------------
+
+    @property
+    def time_integrator(self):
+        """The `BDF2History` of the material history."""
+        return self.history.time_integrator
+
+    @property
+    def internal_variables(self) -> Function:
+        """The accepted history level: the one history Function of the run."""
+        return self.time_integrator.current[0]
+
+    def field(self, name):
+        """The UFL component `name` of the mixed solution, for forms and functionals."""
+        return self.solution_split[self.field_index[name]]
+
+    def real_field(self, name) -> Function:
+        """The `Real` field `name` of the mixed solution, a view."""
+        return self.solution.subfunctions[self.field_index[name]]
+
+    def geoid(self, *, include_rotation: bool = True):
+        """The geoid height `N = +(psi + psi_rot) / g_0`, UFL on the parent mesh."""
+        total = self.approximation.geoid(self.field("potential"))
+        ctx = self.coupling_context
+        if include_rotation and ctx.rotational_potential is not None:
+            total = total + self.approximation.geoid(
+                ctx.rotational_potential(self.potential_mesh))
+        return total
+
+    def coefficients(self) -> dict:
+        """The solved trace coefficients of every DtN boundary, keyed by marker."""
+        if self.dtn_representation == "lowrank":
+            from .dtn_coupled import taped_coupled_trace_coefficients
+            return taped_coupled_trace_coefficients(self)
+        keys, fields = self.form.multiplier_keys, self.layout.multipliers
+        if len(keys) != len(fields):
+            raise RuntimeError("multiplier keys and fields disagree in number.")
+        out = {bc_id: {} for bc_id, _ in self.form.dtn_boundaries}
+        for (bc_id, key), i in zip(keys, fields):
+            out[bc_id][key] = float(self.solution.subfunctions[i])
+        return out
+
+    def require_controls_reach_residual(self, *controls) -> None:
+        """Raise if a control never enters the adopted low-rank solve block."""
+        if self.adjoint_block is None:
+            raise RuntimeError("Run one annotated low-rank solve first.")
+        from .dtn_coupled_adjoint import require_controls_reach_block
+        require_controls_reach_block(self.adjoint_block, controls)
+
+    # -- State ---------------------------------------------------------------------------
+
+    def state(self) -> dict:
+        """The named Functions a restart needs, as views of the solver's own state.
+
+        `displacement`, `potential`, every `Real` field by name
+        (`dtn_multiplier_k`, `core_pressure`, `m1`/`m2`/`m3`,
+        `centre_of_mass_i`, `sea_level_shift`), `history` (the accepted
+        level), `history_previous` (BDF2 only) and `previous_dt`, a `Real`
+        Function on the parent that holds the accepted step or -1 when the
+        next step is a backward-Euler start. Writing a value into a returned
+        Function changes the solver; use `restore` instead.
+        """
+        out = {name: self.solution.subfunctions[i]
+               for i, name in enumerate(self.field_names)
+               if name != "history"}
+        out["history"] = self.internal_variables
+        if self.time_integrator.previous is not None:
+            out["history_previous"] = self.time_integrator.previous[0]
+        previous_dt = self.time_integrator.previous_dt
+        with stop_annotating():
+            record = Function(FunctionSpace(self.potential_mesh, "R", 0),
+                              name="previous_dt")
+            record.assign(-1.0 if previous_dt is None else previous_dt)
+        out["previous_dt"] = record
+        return out
+
+    def _state_targets(self) -> dict:
+        """`{name: the Function restore writes}`."""
+        targets = self.state()
+        targets.pop("previous_dt")
+        return targets
+
+    def restore(self, state: Mapping) -> None:
+        """Put a state back: from `state()` of a solver, or from `gadopt.gia_state`.
+
+        Each value is a Function on the target's own space, a Function on
+        the parent mesh in the checkpoint encoding of `gadopt.gia_state`, or
+        a number for a `Real` field. Values are written with recorded
+        assignments. The DG family's history field of the mixed solution,
+        the initial guess of the next solve, is set to the restored history,
+        and `u` and `psi` are written.
+        """
+        from .gia_state import decode_into
+        targets = self._state_targets()
+        unknown = set(state) - set(targets) - {"previous_dt"}
+        if unknown:
+            raise ValueError(f"Unknown state entries {sorted(unknown)}; this "
+                             f"solver has {sorted(targets)}.")
+        missing = set(targets) - set(state)
+        if missing:
+            raise ValueError(f"The state lacks {sorted(missing)}.")
+        for name, target in targets.items():
+            decode_into(target, state[name], self.potential_mesh, name)
+        if "previous_dt" in state:
+            value = state["previous_dt"]
+            value = scalar_value(value)
+            if value != -1.0 and not (np.isfinite(value) and value > 0):
+                raise ValueError("previous_dt must be positive or -1.")
+            self.time_integrator.previous_dt = None if value == -1.0 else value
+        self.time_integrator.prepared_dt = None
+        if self.family == "DG":
+            self.solution.subfunctions[1].assign(self.internal_variables)
+        self._copy_out()
+
+    def reset(self) -> None:
+        """Return to the undeformed state, with a backward-Euler start next."""
+        self.solution.assign(0.0)
+        for level in (self.time_integrator.current, self.time_integrator.previous or []):
+            for f in level:
+                f.assign(0.0)
+        self.time_integrator.restart()
+        self.time_integrator.prepared_dt = None
+        self._copy_out()
