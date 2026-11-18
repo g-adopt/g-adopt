@@ -687,7 +687,11 @@ def main():
     for k, m in enumerate(meshes):
         # Surface cells per load wavelength: the number that says whether a
         # level can carry cos(n phi) at all.
-        n_surf = len(m.exterior_facets.subset(CURVE_RE).indices)
+        # Count the facets on Re: one HDiv Trace degree-0 dof per facet, and
+        # the assembled facet lengths are nonzero exactly on the tagged ones.
+        trace = FunctionSpace(m, "HDiv Trace", 0)
+        lengths = assemble(TestFunction(trace) * ds(CURVE_RE, domain=m))
+        n_surf = m.comm.allreduce(int(np.count_nonzero(lengths.dat.data_ro)))
         print(f"    L{k}: {m.num_cells():8d} cells, "
               f"CG2 vector dofs {VectorFunctionSpace(m, 'CG', 2).dim():8d}, "
               f"{n_surf:5d} facets on Re = {n_surf / n:6.1f} per wavelength, "

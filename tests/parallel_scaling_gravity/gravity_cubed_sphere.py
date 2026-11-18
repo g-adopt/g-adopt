@@ -566,29 +566,27 @@ def petsc_perf(stages):
 
 
 def cache_statistics():
-    """Hit and miss counts of the PyOP2 and TSFC caches, per cache.
+    """Hit and miss counts of the pyop3 and TSFC caches, per cache.
 
-    Only populated when `PYOP2_CACHE_INFO=1` is set in the environment, which
-    is what makes PyOP2 wrap its dict-like caches in the counting subclass. The
-    counts are what distinguish a genuinely cold run from one that quietly
+    pyop3 wraps every cache in a counting class, so no environment variable is
+    needed. The counts are what distinguish a genuinely cold run from one that quietly
     found a populated cache directory, which is the whole basis of the
     cold-versus-warm cost split: without them, "cold" is an assertion about the
     filesystem rather than a measurement of what the process did.
 
     Returns:
       Dict keyed by `module.function [cache class]`, each a dict of hit, miss,
-      size, and where the cache lives. Empty if instrumentation is off.
+      size, and where the cache lives. Empty if pyop3 is not available.
     """
     try:
-        from pyop2.caching import cache_filter
+        from pyop3.cache import cache_filter
     except ImportError:
         return {}
 
     stats = {}
     for entry in cache_filter():
-        hit, miss, size, _ = entry.get_stats()
-        if hit < 0 and miss < 0:
-            continue                       # uninstrumented cache: no counters
+        # Live and dead (garbage-collected) caches both keep their counters.
+        hit, miss, size = entry.hit, entry.miss, entry.size
         key = (f"{entry.func_module}.{entry.func_name} "
                f"[{entry.cache_name}]")
         record = stats.setdefault(
@@ -603,14 +601,14 @@ def cache_file_counts(comm):
     """Files sitting in the kernel cache directories, maximised over ranks.
 
     A second, independent reading of the same fact the hit/miss counters
-    report, arrived at without going through PyOP2 at all: a genuinely cold
+    report, arrived at without going through pyop3 at all: a genuinely cold
     phase starts with empty directories and a warm one does not. Worth the six
     lines, because every instrument in this study that was trusted without a
     second path to the same number has at some point turned out to be measuring
     nothing.
     """
     counts = {}
-    for label, var in (("pyop2", "PYOP2_CACHE_DIR"),
+    for label, var in (("pyop3", "PYOP3_CACHE_DIR"),
                        ("tsfc", "FIREDRAKE_TSFC_KERNEL_CACHE_DIR"),
                        ("xdg", "XDG_CACHE_HOME")):
         path = os.environ.get(var)

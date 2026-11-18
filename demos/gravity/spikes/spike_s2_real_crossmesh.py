@@ -4,7 +4,7 @@ Question set (from NOTES/PLAN-MONOLITHIC-SELFGRAV.md, Phase 0):
 
   (a) does MixedFunctionSpace([V(sub), S(sub), Psi(parent), R, R, ...]) build?
   (b) does a residual mixing submesh dx, parent dx and parent ds assemble?
-  (c) what does Z.dof_dset.field_ises give, and does it match what
+  (c) what does Z.field_ises give, and does it match what
       gadopt.DtNTwoBlockSchurPC expects?
   (d) does DtNTwoBlockSchurPC initialise on such an operator?
 
@@ -234,8 +234,8 @@ def main():
         # (c) field_ises
         # ------------------------------------------------------------------
         pr(f"\n-- (c) field_ises, {tagname}")
-        ok, ises = report("Z.dof_dset.field_ises",
-                          lambda Z=Z: Z.dof_dset.field_ises)
+        ok, ises = report("Z.field_ises",
+                          lambda Z=Z: Z.field_ises)
         if ok:
             pr(f"       n = {len(ises)} (len(Z) = {len(Z)})")
             sizes = [iset.getLocalSize() for iset in ises]
@@ -248,7 +248,7 @@ def main():
                f"{realidx == list(range(realidx[0], len(Z))) if realidx else False}")
             tot = sum(sizes)
             pr(f"       sum of local field sizes = {tot}; "
-               f"Z local dofs = {Z.dof_dset.layout_vec.getLocalSize()}")
+               f"Z local dofs = {Z.template_vec.getLocalSize()}")
 
         # ------------------------------------------------------------------
         # (d) DtNTwoBlockSchurPC on a trivial solve

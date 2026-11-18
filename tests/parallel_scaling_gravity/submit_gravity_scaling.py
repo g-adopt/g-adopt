@@ -38,10 +38,10 @@ same nodes and the same directories. And nodes cannot race each other to write
 the same file, because each writes its own private filesystem - the failure the
 shared-cache version of this script had to avoid by warming level 4 first.
 
-Three cache directories move, not two. PyOP2 holds compiled objects and TSFC
+Three cache directories move, not two. pyop3 holds compiled objects and TSFC
 holds compiled forms, which are the obvious ones; loopy also keeps its code
 generation, scheduling and preprocessing results in sqlite files under
-``XDG_CACHE_HOME``, and PyOP2 goes through loopy code generation on the assembly
+``XDG_CACHE_HOME``, and pyop3 goes through loopy code generation on the assembly
 path. Leaving that one shared would have let a "cold" run answer the codegen and
 scheduling steps out of a warm sqlite file while reporting itself as cold.
 """
@@ -210,29 +210,28 @@ export PYTHONDONTWRITEBYTECODE=1
 export OMP_NUM_THREADS=1
 export OMPI_MCA_io=ompio
 export MPLCONFIGDIR=$PBS_JOBFS/matplotlib
-# Turn on PyOP2's cache hit/miss counters so each sidecar records what the
-# process actually generated, rather than us inferring it from the filesystem.
-export PYOP2_CACHE_INFO=1
+# pyop3 counts cache hits and misses by default, so each sidecar records what
+# the process actually generated without an extra environment variable.
 
 # Node-local kernel caches: private per node, so nodes cannot race, and empty at
 # job start, so the first invocation below is genuinely cold. Setting these is
 # belt and braces - the fp50 wrapper already redirects the cache directories,
 # XDG_CACHE_HOME included, into $PBS_JOBFS inside a job, which was verified on
 # this module rather than assumed - but naming them explicitly means the phases
-# do not depend on that wrapper behaviour staying as it is. PyOP2 and Firedrake
+# do not depend on that wrapper behaviour staying as it is. pyop3 and Firedrake
 # create these directories themselves on whichever node needs them, so there is
 # nothing to pre-create.
 #
 # Per-node rather than shared is also the safer choice, not merely the
 # convenient one. Divergent cache state is only dangerous where it splits a
-# communicator that a collective runs over, and PyOP2's compile communicator is
+# communicator that a collective runs over, and pyop3's compile communicator is
 # node-local, so divergence aligned with node boundaries cannot split it. A
 # shared cache on a network filesystem instead gives divergence driven by
 # metadata-visibility skew, which cuts across nodes, and that is the shape that
-# hangs. `PYOP2_NODE_LOCAL_COMPILATION` must therefore stay at its default of 1:
+# hangs. `PYOP3_NODE_LOCAL_COMPILATION` must therefore stay at its default of 1:
 # switching it off makes every rank copy the compiled object out of rank 0's
 # temporary directory, which does not exist on the other nodes.
-export PYOP2_CACHE_DIR=$PBS_JOBFS/pyop2
+export PYOP3_CACHE_DIR=$PBS_JOBFS/pyop3
 export FIREDRAKE_TSFC_KERNEL_CACHE_DIR=$PBS_JOBFS/tsfc
 # The third cache, and the one it would be easy to miss: loopy keeps its
 # code-generation, scheduling and preprocessing results in sqlite files under

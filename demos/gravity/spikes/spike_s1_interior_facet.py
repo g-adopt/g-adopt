@@ -65,12 +65,10 @@ def main():
     pr("=" * 78)
 
     pr("\n-- does the tag survive the reader at all?")
-    check("exterior_facets markers", lambda: sorted(
-        int(t) for t in parent.exterior_facets.unique_markers))
-    check("interior_facets markers", lambda: sorted(
-        int(t) for t in parent.interior_facets.unique_markers))
+    check("facet markers", lambda: sorted(
+        int(t) for t in parent.facet_markers))
 
-    pr("\n-- unique_markers lists the whole label set, so cross-check which "
+    pr("\n-- facet_markers lists the whole label set, so cross-check which "
        "\n   facets each measure actually visits")
     check("assemble(avg(1)*dS(4))  [outer boundary; must be 0]",
           lambda: assemble(avg(Constant(1)) * dS(OUTER, domain=parent)))

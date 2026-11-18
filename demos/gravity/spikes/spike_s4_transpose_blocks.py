@@ -91,7 +91,7 @@ def main():
     A = assemble(a_B1 + a_B2, mat_type="aij").petscmat
     pr(f"  size {A.getSize()},  ||A||_F = {A.norm():.10e}")
 
-    ises = Z.dof_dset.field_ises
+    ises = Z.field_ises
     rows_u = ises[0].getIndices()
     rows_p = ises[1].getIndices()
     pr(f"  block sizes: u {len(rows_u)}, psi {len(rows_p)}")

@@ -670,7 +670,9 @@ def nest_to_scipy(form, z):
     A = assemble(derivative(form, z), mat_type="nest").petscmat
     Z = z.function_space()
     n = len(Z)
-    sizes = [Z.sub(i).dof_dset.size * Z.sub(i).block_size for i in range(n)]
+    # Owned entries of each field in the monolithic vector. `field_ises` counts
+    # a `Real` field once, on the rank that owns it.
+    sizes = [iset.getLocalSize() for iset in Z.field_ises]
     blocks = [[None] * n for _ in range(n)]
     for i in range(n):
         for j in range(n):
