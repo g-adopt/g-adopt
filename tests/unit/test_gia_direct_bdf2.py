@@ -101,7 +101,13 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
         flat = [f[index] if index else f for f in fields for index in np.ndindex(f.ufl_shape)]
         F = ufl.replace(ufl.algorithms.expand_derivatives(solver.F), {state: fd.as_vector(flat)})
         F = ufl.algorithms.expand_derivatives(F)
-        J = ufl.derivative(F, tuple(fields), fd.TrialFunctions(Z))
+        # Expanded here and not left to the assembler: Firedrake splits the
+        # mixed form into blocks before the form compiler expands
+        # derivatives, and its splitter handles a derivative with respect to
+        # one coefficient only (a tuple raises `ValueError: too many values
+        # to unpack` in `formmanipulation.py`).
+        J = ufl.algorithms.expand_derivatives(
+            ufl.derivative(F, tuple(fields), fd.TrialFunctions(Z)))
         class ReferenceNewton:
             # Assemble the unreduced mixed Jacobian as a nest, then let PETSc
             # convert it to AIJ. This bypasses mixed-coefficient splitting and
