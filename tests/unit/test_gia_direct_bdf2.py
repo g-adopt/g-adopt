@@ -108,10 +108,64 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
         # to unpack` in `formmanipulation.py`).
         J = ufl.algorithms.expand_derivatives(
             ufl.derivative(F, tuple(fields), fd.TrialFunctions(Z)))
+        def jacobian_matrix():
+            """The unreduced mixed Jacobian at the present state, as one AIJ matrix.
+
+            Assembled block by block. A block between two non-`Real` fields
+            is assembled as a matrix. A block with a `Real` row or column is
+            built from actions instead, because the pyop3 Firedrake cannot
+            assemble a matrix with a `Real` row or column on an interior facet
+            of the parent ("Currently cannot deal with non-unit (vector-valued)
+            columns"), and the sea-level and fluid-core terms put such blocks
+            on those facets. A `Real` space has one basis function, the
+            constant 1, so the action of a block on the unit `Real` function
+            is its single column, and the action of the adjoint block is its
+            single row: the entries are those of the assembled block.
+            """
+            from firedrake.formmanipulation import ExtractSubBlock
+            from firedrake.petsc import PETSc
+            assert state.comm.size == 1
+            splitter = ExtractSubBlock()
+            real = [Z.sub(i).ufl_element().family() == 'Real' for i in range(len(Z))]
+            blocks, owned = [], []
+            for row in range(len(Z)):
+                blocks.append([])
+                for col in range(len(Z)):
+                    form = splitter.split(J, (row, col))
+                    if isinstance(form, ufl.ZeroBaseForm) or form.empty():
+                        blocks[-1].append(None)
+                        continue
+                    if not (real[row] or real[col]):
+                        block = fd.assemble(form, mat_type='aij').petscmat
+                        blocks[-1].append(block)
+                        continue
+                    if real[col]:
+                        # The column: the action on the unit Real function.
+                        unit = fd.Function(Z.sub(col)).assign(1.0)
+                        values = fd.assemble(fd.action(form, unit)).dat.data_ro.reshape(-1, 1)
+                    else:
+                        # The row: the action of the adjoint block.
+                        unit = fd.Function(Z.sub(row)).assign(1.0)
+                        values = fd.assemble(fd.action(fd.adjoint(form), unit)).dat.data_ro.reshape(1, -1)
+                    block = PETSc.Mat().createDense(values.shape, array=values.copy(),
+                                                    comm=state.comm).convert('aij')
+                    owned.append(block)
+                    blocks[-1].append(block)
+            nest = PETSc.Mat().createNest(blocks, isrows=Z.field_ises,
+                                          iscols=Z.field_ises, comm=state.comm)
+            nest.assemble()
+            # `convert` without an output matrix converts in place, so the
+            # returned matrix is `nest` itself, now of type AIJ.
+            matrix = nest.convert('aij')
+            for block in owned:
+                block.destroy()
+            return matrix
+
         class ReferenceNewton:
-            # Assemble the unreduced mixed Jacobian as a nest, then let PETSc
-            # convert it to AIJ. This bypasses mixed-coefficient splitting and
-            # the prohibition on direct monolithic assembly with Real fields.
+            # Newton with the unreduced mixed Jacobian, assembled block by
+            # block (`jacobian_matrix`) and factored with MUMPS. This bypasses
+            # mixed-coefficient splitting and the prohibition on direct
+            # monolithic assembly with Real fields.
             def __init__(self):
                 self.snes = self
                 self.iterations = 0
@@ -133,37 +187,7 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
                     if norm < 1e-13:
                         self.iterations = iteration
                         return
-                    matrix = fd.assemble(J, mat_type='nest')
-                    nest = matrix.petscmat
-                    blocks = []
-                    explicit = []
-                    for row in range(len(Z)):
-                        blocks.append([])
-                        for col in range(len(Z)):
-                            block = nest.getNestSubMatrix(row, col)
-                            if block.getType() == 'python':
-                                # Real couplings have one row or one column.
-                                # Probe that dimension, using public Mat actions.
-                                assert state.comm.size == 1
-                                x, y = block.createVecs()
-                                if block.getSize()[0] == 1 and block.getSize()[1] > 1:
-                                    y.set(1.)
-                                    block.multTranspose(y, x)
-                                    values = x.array_r.copy().reshape(block.getSize())
-                                else:
-                                    x.set(1.)
-                                    block.mult(x, y)
-                                    values = y.array_r.copy().reshape(block.getSize())
-                                x.destroy()
-                                y.destroy()
-                                block = PETSc.Mat().createDense(block.getSize(), array=values, comm=state.comm)
-                                block = block.convert('aij')
-                                explicit.append(block)
-                            blocks[-1].append(block)
-                    isrows, iscols = nest.getNestISs()
-                    assembled = PETSc.Mat().createNest(blocks, isrows=isrows, iscols=iscols, comm=state.comm)
-                    assembled.assemble()
-                    A = assembled.convert('aij')
+                    A = jacobian_matrix()
                     ksp = PETSc.KSP().create(comm=state.comm)
                     ksp.setOperators(A)
                     ksp.setType('preonly')
@@ -177,9 +201,6 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
                         delta.destroy()
                     ksp.destroy()
                     A.destroy()
-                    assembled.destroy()
-                    for block in explicit:
-                        block.destroy()
                 raise RuntimeError(f'Reference Newton failed, residual={norm}')
         solver.solver = ReferenceNewton()
     return solver, dt, ice

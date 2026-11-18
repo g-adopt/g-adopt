@@ -1209,6 +1209,7 @@ def _pair_indices(layout, pair):
 
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
+@test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
 class TestTransposes:
     """Every coupling block the sheet creates is the transpose of its partner.
 
@@ -1238,6 +1239,7 @@ class TestTransposes:
 
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
+@test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
 class TestRotationTransposes:
     """The rotation row against the sheet, on the live-coastline shoreline state.
 

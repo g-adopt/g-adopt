@@ -46,6 +46,9 @@ from gadopt.gia_gravity import (
     selfgrav_dtn_schur_solver_parameters,
 )
 from gadopt.stokes_integrators import newton_stokes_solver_parameters
+# The xfail marker of the tests that assemble a `Real` block on the parent's
+# interior facets (the sibling test module, on the test path).
+from test_gia_gravity import REAL_BLOCK_ON_PARENT_FACETS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Geometry and constants: the coarse 2-D annulus of the adjoint suite
@@ -375,6 +378,7 @@ def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
     assert rel < PARITY_FLOOR, f"rebuilt S vs S_ref error {rel:.3e}"
 
 
+@REAL_BLOCK_ON_PARENT_FACETS
 def test_T4c_fluid_core_pressure_joins_the_dense_complement(meshes):
     """The physical zero diagonal gains its inverse through the Schur term."""
     solver, z, layout, Z = _build_solver(meshes, fluid_core=True)

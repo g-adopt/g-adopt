@@ -373,6 +373,7 @@ class TestResidualIsTheVariationOfTheEnergy:
 
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
+@tsl.test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
 class TestTransposes:
     """The Jacobian of the softplus sheet is symmetric on the shoreline state.
 
