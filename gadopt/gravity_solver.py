@@ -93,8 +93,7 @@ from .dtn_form import (  # noqa: F401 - re-exported; see the note below
 from .dtn_lowrank import LowRankDtNOperator, apply_dirichlet_to_rows
 from .solver_options_manager import (ConfigType, SolverConfigurationMixin,
                                      gamg_parameters)
-from .utility import (DEBUG, INFO, ensure_constant, log_level,
-                      restrict_real_coefficients_on_interior_facets)
+from .utility import (DEBUG, INFO, ensure_constant, log_level)
 
 # The boundary treatment, the DtN descriptors and the calibrated quadrature
 # apparatus live in `gadopt.dtn_form`, so that a coupled residual can use them
@@ -633,9 +632,9 @@ class GravitySolver(SolverConfigurationMixin):
         F += self.form.boundary_bilinear(psi, v, multipliers)
         F -= self.form.boundary_source(v, extra_flux=self.monopole_fluxes())
 
-        # A `Real` `G` (or another `Real` control) in front of a sheet on an
-        # interior facet needs a restriction for its derivative to exist.
-        self.F = restrict_real_coefficients_on_interior_facets(F, self.mesh)
+        # A sheet on an interior facet restricts its whole integrand, `G`
+        # included, where `self.form` builds it (`sheet_integral`).
+        self.F = F
         self.strong_bcs = [
             DirichletBC(self.mixed_space.sub(0), val, bc_id)
             for bc_id, val in self.dirichlet_bcs]
@@ -665,8 +664,6 @@ class GravitySolver(SolverConfigurationMixin):
 
         F = 4 * np.pi * self.G * self.rho * v * self.dx_rho
         F += self.form.boundary_source(v, extra_flux=self.monopole_fluxes())
-        # The same restriction as in `set_form`, for the `Real` controls.
-        F = restrict_real_coefficients_on_interior_facets(F, self.mesh)
 
         self.a_form, self.rhs_form = a, F
         self.strong_bcs = [

@@ -36,7 +36,7 @@ into this row by their own couplings, not here.
 import numpy as np
 from firedrake import (Constant, DirichletBC, Function, FunctionSpace,
                        Measure, SpatialCoordinate, TestFunction, TrialFunction,
-                       assemble, avg, dot, grad, solve, sqrt)
+                       assemble, dot, grad, solve, sqrt)
 from warnings import warn
 
 from pyadjoint.tape import stop_annotating
@@ -45,7 +45,7 @@ from .dtn_coupled import CoupledLowRankDtN
 from .dtn_form import DtNGravityForm
 from .dtn_lowrank import apply_dirichlet_to_rows
 from .gravity_solver import real_scalar_solver_parameters
-from .utility import ensure_constant, restrict_real_coefficients_on_interior_facets
+from .utility import ensure_constant, interior_facet_integrand
 
 __all__ = ["GravityPotential"]
 
@@ -175,17 +175,6 @@ class GravityPotential:
                     f"A parent coefficient integrated over the mantle gives "
                     f"{crossed:.6e} against the mantle volume {volume:.6e}.")
 
-    def restrict_parent_reals(self, form):
-        """Restrict the parent's `Real` coefficients on its interior facets.
-
-        A `Real` control on the parent (`B_mu`, `Lambda`) in a facet term
-        needs a restriction for its derivative to exist
-        (`gadopt.utility.restrict_real_coefficients_on_interior_facets`).
-        """
-        if not self.cross_mesh:
-            return form
-        return restrict_real_coefficients_on_interior_facets(form, self.potential_mesh)
-
     # -- The residual row -------------------------------------------------------
 
     def residual(self, psi, v, u, *, density, theta_psi, multipliers=None):
@@ -271,7 +260,7 @@ class GravityPotential:
         where UFL requires a restriction of every argument; `avg` is exact for
         a `Real` field.
         """
-        return avg(value) if self.cross_mesh else value
+        return interior_facet_integrand(value) if self.cross_mesh else value
 
     def enclosed_mass_forms(self, extra_masses=()):
         """`(identity, mass, flux)`: the one-by-one systems on the `Real` space.
@@ -279,9 +268,12 @@ class GravityPotential:
         Args:
           extra_masses: `(density, measure)` pairs of sheets that the caller
             writes into the residual itself. `density` is UFL on the
-            density's mesh, `measure` a facet measure of that mesh, already
-            restricted to its tag (intersected with the parent's interior
-            facets in a cross-mesh system).
+            density's mesh with no quantity of the parent in it (a parent
+            quantity would need a restriction on the parent's interior
+            facets, which this method gives the `Real` test function only),
+            `measure` a facet measure of that mesh, already restricted to its
+            tag (intersected with the parent's interior facets in a
+            cross-mesh system).
         """
         mu = TestFunction(self.real_space)
         nu = TrialFunction(self.real_space)
@@ -298,10 +290,6 @@ class GravityPotential:
         for bc_id, value in self.form.flux_bcs:
             term = ensure_constant(value) * mu * self.form.ds(bc_id)
             flux = term if flux is None else flux + term
-        if mass is not None:
-            mass = self.restrict_parent_reals(mass)
-        if flux is not None:
-            flux = self.restrict_parent_reals(flux)
         return identity, mass, flux
 
     def update_total_mass(self, extra_masses=(), extra_scales=()) -> None:

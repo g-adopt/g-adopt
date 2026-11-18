@@ -224,7 +224,7 @@ class DirectConstitutiveBackend:
         self.matrix = self.linear_solver = None
 
     def _theta_values(self):
-        from .gia_gravity import scalar_value
+        from .utility import scalar_value
         return tuple(scalar_value(self._mapping.get(c, c)) for c in self._theta_factors)
 
     @contextmanager
@@ -233,7 +233,7 @@ class DirectConstitutiveBackend:
         if not self.lowrank:
             yield
             return
-        from .gia_gravity import scalar_value
+        from .utility import scalar_value
         op, ctx = self.owner.dtn_operator, self.owner.appctx
         saved_theta = op.theta
         sf, bmu, lam = self._theta_values()

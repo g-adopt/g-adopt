@@ -65,7 +65,7 @@ from typing import Any, ClassVar
 
 import numpy as np
 from firedrake import (Constant, FacetNormal, Form, Measure,
-                       SpatialCoordinate, TestFunction, assemble, avg, dot,
+                       SpatialCoordinate, TestFunction, assemble, dot,
                        ds, grad, split, sqrt)
 from mpi4py import MPI
 from ufl import derivative as ufl_derivative
@@ -73,7 +73,8 @@ from ufl.algorithms.ad import expand_derivatives
 
 from .momentum_equation import rotational_potential
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
-from .utility import CombinedSurfaceMeasure, ensure_constant, scalar_value
+from .utility import (CombinedSurfaceMeasure, ensure_constant,
+                      interior_facet_integrand, scalar_value)
 
 __all__ = [
     "CentreOfMass",
@@ -198,11 +199,11 @@ class CouplingContext:
         mechanics mesh must not go through here: UFL refuses a restriction on
         its exterior facets.
         """
-        return avg(value) if self.cross_mesh else value
+        return interior_facet_integrand(value) if self.cross_mesh else value
 
     def parent_trace(self, value):
         """A continuous field of the parent (the potential) on a coupling facet."""
-        return avg(value) if self.cross_mesh else value
+        return interior_facet_integrand(value) if self.cross_mesh else value
 
     def surface_measure(self, tag) -> Measure:
         """The facet measure of a coupling on `tag`, at the boundary degree.
@@ -440,7 +441,7 @@ class FluidCore(Coupling):
         approximation = ctx.approximation
         u = ctx.fields["displacement"]
         psi = ctx.fields["potential"]
-        p_core = ctx.on_parent_facet(ctx.fields["core_pressure"])
+        p_core = ctx.fields["core_pressure"]
         un = dot(u, FacetNormal(ctx.mesh))
         rho_core = ensure_constant(self.rho_core)
         rho_mantle = (approximation.density if self.rho_mantle is None
@@ -448,17 +449,21 @@ class FluidCore(Coupling):
         g0 = approximation.g if self.g is None else ensure_constant(self.g)
         B_mu = approximation.B_mu
         dss = self.measure()
-        # `-B_mu sigma psi`, written through the sheet so that the sheet the
+        c = ctx.scaling_factor
+        # Each integrand is written with its parent quantities, the row
+        # scalings among them, under one restriction (`on_parent_facet`):
+        # `c` and `B_mu` can be `Real` controls on the parent.
+        # `-c B_mu sigma psi`, written through the sheet so that the sheet the
         # other rows read and the one the potential row carries are one
         # expression.
-        E = -B_mu * self.sheet_density(u) * ctx.parent_trace(psi) * dss
+        E = -ctx.on_parent_facet(c * B_mu * psi) * self.sheet_density(u) * dss
         spring_rho = (rho_core - rho_mantle if self.buoyancy_density == "contrast"
                       else rho_core)
-        E += 0.5 * B_mu * spring_rho * g0 * un * un * dss
+        E += ctx.on_parent_facet(c * B_mu) * 0.5 * spring_rho * g0 * un * un * dss
         # The uniform pressure that keeps the core volume. The floored B_mu
         # keeps the row non-empty at B_mu = 0.
-        E += ctx.row_scale_B_mu * p_core * un * dss
-        return ctx.scaling_factor * E
+        E += ctx.on_parent_facet(c * ctx.row_scale_B_mu * p_core) * un * dss
+        return E
 
     def residual(self, ctx) -> Form:
         # One energy gives the (u, psi), (psi, u), (u, u), (u, p) and (p, u)
@@ -473,7 +478,7 @@ class FluidCore(Coupling):
             w = ctx.tests["displacement"]
             n = FacetNormal(ctx.mesh)
             psi_rot = ctx.rotational_potential(ctx.mesh, facet=True)
-            F += (ctx.scaling_factor * ctx.approximation.B_mu
+            F += (ctx.on_parent_facet(ctx.scaling_factor * ctx.approximation.B_mu)
                   * ensure_constant(self.rho_core) * dot(w, n) * psi_rot
                   * self.measure())
         return F
@@ -512,7 +517,7 @@ class Rotation(Coupling):
       k_s: the secular Love number; needs `surface_radius`.
       Omega_sq: the squared rotation rate in the units of the solver,
         `Omega^2 L / g_bar` (1.566e-3 for the Earth with `L` the mantle depth
-        and `g_bar = 9.815`; `gadopt.gia_gravity.OMEGA_SQ_EARTH`). Required,
+        and `g_bar = 9.815`; `gadopt.gia_presets.OMEGA_SQ_EARTH`). Required,
         because the value depends on the non-dimensionalisation.
       surface_radius: the non-dimensional radius of the free surface,
         checked against the mechanics mesh's outer radius to two percent.
@@ -604,10 +609,11 @@ class Rotation(Coupling):
             n_rot = 1 if mesh.geometric_dimension == 2 else 3
             values = [Constant(0.0) if name is None else fields[name]
                       for name in self.slots(ctx)]
+            Omega_sq = self.Omega_sq
             if facet:
                 values = [ctx.on_parent_facet(value) for value in values]
-            return rotational_potential(values[-n_rot:], mesh,
-                                        Omega_sq=self.Omega_sq)
+                Omega_sq = ctx.on_parent_facet(Omega_sq)
+            return rotational_potential(values[-n_rot:], mesh, Omega_sq=Omega_sq)
         ctx.rotational_potential = psi_rot
 
     @staticmethod
@@ -617,13 +623,15 @@ class Rotation(Coupling):
             return X[0] ** 2 + X[1] ** 2
         return -X[i] * X[2]
 
-    def inertia_form(self, ctx, i, test=None):
-        """`dI_i3` at the current solution, weighted by `test` (or 1)."""
+    def inertia_form(self, ctx, i, test=None, scale=None):
+        """`dI_i3` at the current solution, weighted by `scale * test` (or 1)."""
         weight = Constant(1.0) if test is None else test
-        facet_weight = ctx.on_parent_facet(weight)
+        scale = Constant(1.0) if scale is None else scale
+        # The weight and the scale under one restriction on the sheets.
+        facet_weight = ctx.on_parent_facet(scale * weight)
         p = self.inertia_polynomial(i, SpatialCoordinate(ctx.mesh))
         u = ctx.fields["displacement"]
-        form = weight * ctx.approximation.density * dot(grad(p), u) * ctx.dx_m
+        form = scale * weight * ctx.approximation.density * dot(grad(p), u) * ctx.dx_m
         for sheet in ctx.sheets:
             form += facet_weight * p * sheet.density * sheet.measure
         return form
@@ -643,9 +651,10 @@ class Rotation(Coupling):
             if name is None:
                 continue
             m_i, nu_i = ctx.fields[name], ctx.tests[name]
-            row = (self.closure_constants[i] * m_i / volume) * nu_i * ctx.dx_m
-            row -= self.CLOSURE_SIGNS[i] * self.inertia_form(ctx, i, test=nu_i)
-            F += self.theta_rot(ctx, i) * row
+            theta = self.theta_rot(ctx, i)
+            F += theta * (self.closure_constants[i] * m_i / volume) * nu_i * ctx.dx_m
+            F -= self.CLOSURE_SIGNS[i] * self.inertia_form(ctx, i, test=nu_i,
+                                                           scale=theta)
         return F
 
     def values(self) -> dict:
@@ -702,7 +711,7 @@ class CentreOfMass(Coupling):
         """`D_i` at the current solution, as a form in `weight` (1 by default)."""
         weight = Constant(1.0) if weight is None else weight
         scale = Constant(1.0) if scale is None else scale
-        facet_weight = scale * ctx.on_parent_facet(weight)
+        facet_weight = ctx.on_parent_facet(scale * weight)
         X = SpatialCoordinate(ctx.mesh)
         u = ctx.fields["displacement"]
         form = scale * weight * ctx.approximation.density * u[i] * ctx.dx_m
@@ -725,7 +734,7 @@ class CentreOfMass(Coupling):
             for sheet in ctx.sheets:
                 if sheet.test_variation is None:
                     continue
-                F += (beta * ctx.on_parent_facet(lam_i) * X[i]
+                F += (ctx.on_parent_facet(beta * lam_i) * X[i]
                       * sheet.test_variation * sheet.measure)
         return F
 
@@ -902,15 +911,16 @@ class SeaLevel(Coupling):
         dss = self.measure()
         scale = self._scale(ctx)
         w = ctx.tests["displacement"]
-        v_face = ctx.parent_trace(ctx.tests["potential"])
-        s = ctx.on_parent_facet(ctx.tests["sea_level_shift"])
+        v = ctx.tests["potential"]
+        s = ctx.tests["sea_level_shift"]
+        # The scale and every parent test function under one restriction.
         # The displacement row: the weight of the load.
-        F = scale * sigma * dot(w, FacetNormal(ctx.mesh)) * dss
+        F = ctx.on_parent_facet(scale) * sigma * dot(w, FacetNormal(ctx.mesh)) * dss
         # The potential row: the mass sheet, with the sign of every sheet.
-        F -= scale * sigma * (v_face / g_surface) * dss
+        F -= ctx.on_parent_facet(scale * v / g_surface) * sigma * dss
         # The Shift row: the net mass of water and ice is zero, up to the
         # centre-of-mass column.
-        F -= scale * sigma * s * dss
+        F -= ctx.on_parent_facet(scale * s) * sigma * dss
         return F
 
     def energy(self) -> Form:
@@ -926,14 +936,14 @@ class SeaLevel(Coupling):
             C0 = self.ocean_mask()
             ice = self.rho_i * ((1 - C0) * self.I - (1 - C0) * self.I_init)
             G = ice * delta + 0.5 * self.rho_w * C0 * delta * delta
-            return -self._scale(ctx) * G * self.measure()
+            return -ctx.on_parent_facet(self._scale(ctx)) * G * self.measure()
         frozen = ctx.solution.copy(deepcopy=True)
         SL_f = self.sea_level(ctx.split_of(frozen))
         eps = ensure_constant(self.softplus_width)
         W_f = water_fraction(self.I, SL_f, eps, self.rho_w, self.rho_i)
         sigma_0 = self.sheet_of(SL_f) + self.rho_w * W_f * (self.SL_init - SL_f)
         G = sigma_0 * delta + 0.5 * self.rho_w * W_f * delta * delta
-        return -self._scale(ctx) * G * self.measure()
+        return -ctx.on_parent_facet(self._scale(ctx)) * G * self.measure()
 
     def shift(self):
         """`Shift`, a `Real` Function (a view of the solution)."""
@@ -1007,8 +1017,9 @@ class SurfaceLoad(Coupling):
         # `theta_psi 4 pi G` is `c B_mu` for every nonzero `B_mu`; at
         # `B_mu = 0` the potential still sees the load while the mechanics
         # does not, which is the null-coupling configuration.
-        v_face = ctx.parent_trace(ctx.tests["potential"])
-        return -ctx.theta_psi * ctx.four_pi_G * self.sigma * v_face * self.measure()
+        v = ctx.tests["potential"]
+        return (-ctx.on_parent_facet(ctx.theta_psi * ctx.four_pi_G * v)
+                * self.sigma * self.measure())
 
 
 

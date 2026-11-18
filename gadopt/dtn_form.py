@@ -47,7 +47,7 @@ from .dtn_lowrank import (
     boundary_facet_cellname, build_boundary_mode_rows, supports_trace_build,
     tabulate_boundary_modes, validation_keys)
 from .spherical_harmonics import real_spherical_harmonic
-from .utility import CombinedSurfaceMeasure, ensure_constant
+from .utility import CombinedSurfaceMeasure, ensure_constant, interior_facet_integrand
 
 __all__ = ["BaseDtN", "CylindricalDtN", "DtNGravityForm", "DtNMode",
            "QuadratureCalibration", "QuadratureRuleReport", "SphericalDtN"]
@@ -825,7 +825,9 @@ class DtNGravityForm:
         """
         if integral_type == "exterior_facet":
             return integrand * self.ds(bc_id)
-        return avg(integrand) * self.dS(bc_id)
+        # The whole integrand, scalings included, under one restriction
+        # (`gadopt.utility.interior_facet_integrand`).
+        return interior_facet_integrand(integrand) * self.dS(bc_id)
 
     def check_sheet_measures(self) -> None:
         """Refuses a sheet whose facets do not exist. Called from `__init__`.
@@ -1033,8 +1035,10 @@ class DtNGravityForm:
         """
         L = Form([])
         for bc_id, sigma, integral_type in self.sigma_bcs:
-            L += 4 * np.pi * self.G * self.sheet_integral(
-                sigma * v, bc_id, integral_type)
+            # `4 pi G` inside the integrand: `G` can be a `Real` control, and on
+            # an interior facet it must be restricted with the rest.
+            L += self.sheet_integral(4 * np.pi * self.G * sigma * v, bc_id,
+                                     integral_type)
 
         for bc_id, flux in self.flux_bcs:
             L += flux * v * self.ds(bc_id)

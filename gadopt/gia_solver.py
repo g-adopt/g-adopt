@@ -94,7 +94,7 @@ from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.algorithms import expand_derivatives, extract_coefficients
 
 from .gia_couplings import CouplingContext, ordered, scalar_value
-from .gia_gravity import (NULL_COUPLING_ROW_SCALE,
+from .gia_presets import (NULL_COUPLING_ROW_SCALE,
                           selfgrav_dtn_iterative_solver_parameters,
                           selfgrav_dtn_lowrank_direct_solver_parameters,
                           selfgrav_dtn_schur_lowrank_solver_parameters,
@@ -280,7 +280,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
       solver_parameters: `None` (direct in 2-D, iterative in 3-D),
         `"direct"`, `"iterative"`, or a complete dictionary.
       preset_options: arguments of
-        `gadopt.gia_gravity.selfgrav_dtn_iterative_solver_parameters` for the
+        `gadopt.gia_presets.selfgrav_dtn_iterative_solver_parameters` for the
         iterative preset, for example `{"outer_rtol": 1e-8}`. The solver
         supplies `condensed`, `dtn_representation` and `n_real`.
       solver_parameters_extra: options added last.
@@ -491,7 +491,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         `theta_psi` and the rotation and frame rows scale whole rows by
         `B_mu`; at `B_mu = 0` that would delete those rows instead of
-        decoupling them (`gadopt.gia_gravity.NULL_COUPLING_ROW_SCALE`).
+        decoupling them (`gadopt.gia_presets.NULL_COUPLING_ROW_SCALE`).
         """
         B_mu = self.approximation.B_mu
         if scalar_value(B_mu) == 0.0:
@@ -592,7 +592,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             theta_psi=self.theta_psi, multipliers=multipliers)
         for coupling in self.couplings:
             F += coupling.residual(ctx)
-        self.F = self.gravity.restrict_parent_reals(F)
+        # Every interior-facet integrand restricts its parent quantities where
+        # it is built (`gadopt.utility.interior_facet_integrand`).
+        self.F = F
         self.strong_bcs.extend(self.gravity.dirichlet_bcs(
             self.solution_space.sub(self.potential_index)))
         self._detect_solution_dependence()

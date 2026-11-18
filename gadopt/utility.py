@@ -875,6 +875,48 @@ def derivative_solve_keywords(solver, adj_kwargs: dict,
     return {}
 
 
+def interior_facet_integrand(expr):
+    """Restrict a quantity of a mesh on that mesh's interior facets: `avg(expr)`.
+
+    UFL's rule: in an integral over interior facets, every `Argument` and
+    every `Coefficient` of a discontinuous element must carry a restriction
+    (`'+'`, `'-'` or `avg`); a coefficient of a continuous element is given a
+    default side. A `Real` field counts as continuous, so a `Real`
+    coefficient is accepted unrestricted in a form, but the derivative with
+    respect to it is a `Real` `Argument`, which UFL refuses unrestricted
+    (`Discontinuous type Argument must be restricted`). pyadjoint builds
+    exactly that derivative when the coefficient is a control. Firedrake used
+    to replace every `Real` argument by the literal 1 before UFL saw it,
+    which hid the rule; since firedrakeproject/firedrake#5656 the arguments
+    reach UFL and the rule applies. So every quantity of the mesh whose
+    facets are interior facets of the integral goes through this helper
+    where the integrand is built: test and trial functions, `Real` fields
+    and `Real` coefficients that can be controls (row scalings such as
+    `B_mu`, `Lambda`, `G`, a sheet scale), and continuous fields such as the
+    potential.
+
+    `avg` and not `'+'`: which cell UFL calls `'+'` is the mesh's cell
+    ordering. `avg` of a field that is continuous across the facet is the
+    field itself, so the value of the integrand does not change. For a `Real`
+    function, whose one value is the same on both sides, `avg(r) = r`
+    exactly, and the derivative with respect to `r` adds half of the facet
+    integral from each side to its one global entry, once in total.
+
+    Only quantities of the mesh whose interior facets these are go through
+    here. On a facet-to-facet measure of a submesh (the submesh's exterior
+    facets, intersected with the parent's interior facets) the fields of the
+    submesh must stay unrestricted: their facets are exterior facets, and UFL
+    refuses a restriction there (`Inconsistent restrictions`).
+
+    Args:
+      expr: a UFL expression of the mesh whose interior facets are integrated.
+
+    Returns:
+      `avg(expr)`.
+    """
+    return ufl.avg(expr)
+
+
 def restrict_real_coefficients_on_interior_facets(form, mesh):
     """Restrict the `Real` coefficients of `mesh` on its interior facets.
 
