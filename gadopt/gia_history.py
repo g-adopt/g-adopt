@@ -60,6 +60,8 @@ class DGHistory(MixedHistoryFormulation):
     def __init__(self, solver, degree, order):
         super().__init__()
         approximation = solver.approximation
+        #: The DG degree, or the quadrature degree.
+        self.degree = degree
         self.space = internal_variable_space(
             solver.mesh, approximation.n_history_tensors, degree, family="DG")
         self.history = fd.Function(self.space, name="internal_variables")
@@ -99,12 +101,9 @@ class DGHistory(MixedHistoryFormulation):
             )
         )
 
-    def solved_history(self, solver):
-        """The history of the solved state: field 1 of the mixed solution."""
-        return solver.solution.subfunctions[self.history_index]
-
     def advance(self, solver) -> None:
-        self.time_integrator.accept([self.solved_history(solver)])
+        # The step that solved knows where the new history is.
+        self.time_integrator.accept([solver.solved_history()])
 
 
 class QuadratureHistory(HistoryFormulation):
@@ -131,6 +130,8 @@ class QuadratureHistory(HistoryFormulation):
     def __init__(self, solver, degree, order):
         super().__init__()
         approximation = solver.approximation
+        #: The DG degree, or the quadrature degree.
+        self.degree = degree
         self.space = internal_variable_space(
             solver.mesh, approximation.n_history_tensors, degree,
             family="Quadrature")
@@ -162,12 +163,9 @@ class QuadratureHistory(HistoryFormulation):
         # The history is eliminated at quadrature points; no equation.
         return None
 
-    def solved_history(self, solver):
-        """The history of the solved state: the step backend's updated values."""
-        return solver._step.backend.buffers[0]
-
     def advance(self, solver) -> None:
-        self.time_integrator.accept([self.solved_history(solver)])
+        # The step that solved knows where the new history is.
+        self.time_integrator.accept([solver.solved_history()])
 
 
 def history_formulation(family, solver, degree, order):

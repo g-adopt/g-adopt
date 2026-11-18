@@ -49,7 +49,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     # that must not write `approximation.mu` (two solvers can share one
     # approximation) passes its own coefficient as the equation attribute
     # `mu`; every other solver leaves it out and the approximation's value
-    # is used, as before.
+    # is used.
     mu = eq.mu if hasattr(eq, "mu") else eq.approximation.mu
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx

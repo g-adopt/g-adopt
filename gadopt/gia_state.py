@@ -87,6 +87,24 @@ def decode_into(target: Function, value, parent, name: str) -> None:
     target.assign(scratch)
 
 
+#: The HDF5 group of the configuration record of a state.
+_GROUP = "/gadopt_gia_state"
+
+
+def configuration(solver) -> dict:
+    """What a state is only valid for: scheme, history family and degree, DtN.
+
+    The history degree is the DG degree or the quadrature degree; a state of
+    another degree has other degrees of freedom. The DtN representation
+    decides whether the state holds multiplier fields.
+    """
+    return {"time_scheme": solver.time_scheme,
+            "internal_variable_family": solver.family,
+            "history_degree": int(solver.history.degree),
+            "dtn_representation": solver.dtn_representation,
+            "fields": ",".join(sorted(solver.state()))}
+
+
 def write_state(checkpoint, solver, *, idx=None, timestepping_info=None,
                 prefix: str = "") -> None:
     """Store `solver.state()` in an open `CheckpointFile`.
@@ -99,6 +117,9 @@ def write_state(checkpoint, solver, *, idx=None, timestepping_info=None,
       prefix: prepended to every stored name, to keep two states apart.
     """
     parent = solver.potential_mesh
+    checkpoint.require_group(_GROUP + prefix)
+    for key, value in configuration(solver).items():
+        checkpoint.set_attr(_GROUP + prefix, key, value)
     with stop_annotating():
         for name, field in solver.state().items():
             stored = CheckpointField(prefix + name, field, parent,
@@ -117,7 +138,24 @@ def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
 
     Returns:
       `{name: Function on the parent}`, for `solver.restore`.
+
+    Raises:
+      ValueError: when the file was written by a solver of another time
+        scheme, history family, history degree or DtN representation.
     """
+    expected = configuration(solver)
+    for key, value in expected.items():
+        if not checkpoint.has_attr(_GROUP + prefix, key):
+            raise ValueError(f"The checkpoint has no {key!r}; it was not "
+                             "written by gadopt.gia_state.write_state.")
+        stored = checkpoint.get_attr(_GROUP + prefix, key)
+        if isinstance(stored, bytes):
+            stored = stored.decode()
+        if hasattr(stored, "item"):
+            stored = stored.item()
+        if stored != value:
+            raise ValueError(f"The checkpoint was written with {key}={stored!r}; "
+                             f"this solver has {value!r}.")
     parent = solver.potential_mesh
     kwargs = {} if idx is None else {"idx": idx}
     return {name: checkpoint.load_function(parent, prefix + name, **kwargs)

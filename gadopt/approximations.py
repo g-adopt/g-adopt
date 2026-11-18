@@ -998,6 +998,12 @@ class InternalVariableApproximation(BaseGIAApproximation):
 
         return internal_variable_history_terms
 
+    #: Whether `history_terms` carries the boundary part that keeps the
+    #: coupled Jacobian symmetric under a `"u"` or `"un"` displacement
+    #: condition (`history_strain_term`). A rheology without it supports
+    #: natural displacement boundaries only.
+    history_supports_displacement_conditions = True
+
     def quadrature_update(self, owner):
         """The local constitutive update of this rheology at quadrature points.
 

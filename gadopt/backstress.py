@@ -21,6 +21,9 @@ class BackstressApproximation(CompressibleInternalVariableApproximation):
     [creep strain, strain-like backstress], are required.
     """
     n_history_tensors = 2
+    #: `backstress_history_term` has no boundary part, so a `"u"` or `"un"`
+    #: displacement condition is not supported.
+    history_supports_displacement_conditions = False
 
     def __init__(self, bulk_modulus, density, shear_modulus, viscosity, *,
                  backstress_modulus, recovery_time, exponent=1,

@@ -73,7 +73,7 @@ from ufl.algorithms.ad import expand_derivatives
 
 from .momentum_equation import rotational_potential
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
-from .utility import CombinedSurfaceMeasure, ensure_constant
+from .utility import CombinedSurfaceMeasure, ensure_constant, scalar_value
 
 __all__ = [
     "CentreOfMass",
@@ -86,23 +86,6 @@ __all__ = [
     "SurfaceLoad",
     "scalar_value",
 ]
-
-
-def scalar_value(value) -> float:
-    """`float()` of one scalar carrier: a number, a `Constant` or a `Real` Function.
-
-    Used for checks at construction only. A value that enters a form stays
-    UFL. `float()` of a composite UFL expression raises when a factor is a
-    `Real` Function, so composites are computed from their factors.
-    """
-    try:
-        return float(value)
-    except (TypeError, NotImplementedError):
-        pass
-    # A `Real` value is owned by one rank and is a ghost entry on the others,
-    # so the array with ghosts is read.
-    return float(np.asarray(value.dat.data_ro_with_halos,
-                            dtype=float).reshape(-1)[0])
 
 
 @dataclass(frozen=True)
@@ -142,6 +125,10 @@ class CouplingContext:
     Built by the solver once its mixed space and solution exist, and passed
     to every stage of every coupling. A coupling reads its own fields and the
     fields of the others by name, never by index.
+
+    The attributes and methods below are the whole interface a coupling may
+    rely on. Of the solver itself a coupling uses only `real_field(name)`,
+    for the `Real` Functions its diagnostics return.
 
     Attributes:
       solution: the mixed solution `Function`.
@@ -397,7 +384,9 @@ class FluidCore(Coupling):
       rho_mantle: the mantle density at the CMB, used only by
         `buoyancy_density="contrast"`; `None` takes the approximation's.
       g: the reference gravity at the CMB; `None` takes the approximation's.
-      buoyancy_density: `"core"` (correct) or `"contrast"` (old baseline).
+      buoyancy_density: `"core"` (the physical spring) or `"contrast"`, which
+        writes the density contrast and is too soft by the mantle half; it
+        exists to reproduce runs made with that coefficient.
     """
 
     order = 10
@@ -521,7 +510,10 @@ class Rotation(Coupling):
       C: the polar moment of the reference body, `int rho_0 r^2 dV` in 2-D.
       C_minus_A: the dynamical ellipticity (3-D).
       k_s: the secular Love number; needs `surface_radius`.
-      Omega_sq: the squared rotation rate in units of `g_bar / L`.
+      Omega_sq: the squared rotation rate in the units of the solver,
+        `Omega^2 L / g_bar` (1.566e-3 for the Earth with `L` the mantle depth
+        and `g_bar = 9.815`; `gadopt.gia_gravity.OMEGA_SQ_EARTH`). Required,
+        because the value depends on the non-dimensionalisation.
       surface_radius: the non-dimensional radius of the free surface,
         checked against the mechanics mesh's outer radius to two percent.
     """
@@ -537,8 +529,8 @@ class Rotation(Coupling):
     #: Relative tolerance of `surface_radius` against the mesh's outer radius.
     SURFACE_RADIUS_RTOL = 2e-2
 
-    def __init__(self, *, C=None, C_minus_A=None, k_s=None,
-                 Omega_sq=1.566e-3, surface_radius=None) -> None:
+    def __init__(self, *, Omega_sq, C=None, C_minus_A=None, k_s=None,
+                 surface_radius=None) -> None:
         super().__init__()
         self.C = C
         self.C_minus_A_given = C_minus_A
@@ -960,8 +952,8 @@ class SurfaceLoad(Coupling):
     - the 2-D monopole datum, with no lag, because it does not depend on the
       solution.
 
-    Giving the load once removes the two copies (a traction on the mechanics
-    mesh and an `interior_sigma` on the parent) that had to agree. Make
+    Giving the load once leaves no second copy (a traction on the mechanics
+    mesh and an `interior_sigma` on the parent) that could disagree. Make
     `sigma` a `Function` updated with `assign` for a time-dependent load, so
     every use follows it. It has no `Real` field.
 
