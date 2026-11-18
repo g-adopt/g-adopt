@@ -194,6 +194,9 @@ from .utility import CombinedSurfaceMeasure, ensure_constant
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
 from ufl import derivative as ufl_derivative
 from ufl.algorithms.ad import expand_derivatives
+from ufl.algorithms.analysis import extract_coefficients
+from ufl.classes import Restricted
+from ufl.corealg.traversal import unique_pre_traversal
 
 
 __all__ = [
@@ -3253,6 +3256,72 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         """
         return avg(value) if self.layout.cross_mesh else value
 
+    def _restrict_parent_real_coefficients(self, form: Form) -> Form:
+        """Restrict the parent's `Real` coefficients on its interior facets.
+
+        `_on_parent_facet` restricts the `Real` fields of the mixed space where
+        a term is written. A `Real` coefficient that comes from outside the
+        solver, such as `B_mu`, `Lambda` or a sheet scale given as a `Function`
+        on the parent's `Real` space, can appear in the same integrals through
+        the approximation and the gravity form. UFL accepts it unrestricted,
+        because it gives a coefficient of a continuous element a default side,
+        but the derivative with respect to it is a `Real` `Argument`, which
+        must be restricted. pyadjoint builds exactly that derivative for a
+        control, so a gradient with respect to such a coefficient would raise
+        `ValueError: Discontinuous type Argument must be restricted`.
+
+        This replaces each such coefficient by its `avg` in every integral in
+        which the parent's facets are interior facets: the parent's own `dS`,
+        and the facet-to-facet measures of the fluid core and the sea level.
+        The value of a `Real` coefficient is the same on both sides, so the
+        residual does not change. A coefficient that already carries a
+        restriction in an integral is left as it is, because UFL refuses a
+        second restriction.
+
+        Args:
+          form: A form of this solver.
+
+        Returns:
+          The form with the parent's `Real` coefficients restricted on those
+          integrals, or `form` itself when the meshes are the same.
+        """
+        if not self.layout.cross_mesh:
+            return form
+        parent = self.potential_mesh
+
+        def parent_real(c):
+            # A `Function` on a `Real` space of the parent. The mixed solution
+            # lives on both meshes and is not one; its `Real` fields are
+            # restricted where they are used (`_on_parent_facet`).
+            try:
+                space = c.function_space()
+            except AttributeError:
+                return False
+            return (space.mesh() is parent
+                    and space.ufl_element().family() == "Real")
+
+        integrals = []
+        for integral in form.integrals():
+            on_parent_facets = (
+                (integral.ufl_domain() is parent
+                 and integral.integral_type() == "interior_facet")
+                or integral.extra_domain_integral_type_map().get(parent)
+                == "interior_facet")
+            if on_parent_facets:
+                integrand = integral.integrand()
+                # Every coefficient anywhere under a restriction, for example
+                # `sigma` inside `avg(sigma * psi)` of a parent sheet.
+                restricted = {c for node in unique_pre_traversal(integrand)
+                              if isinstance(node, Restricted)
+                              for c in extract_coefficients(node.ufl_operands[0])}
+                mapping = {c: avg(c) for c in extract_coefficients(integrand)
+                           if parent_real(c) and c not in restricted}
+                if mapping:
+                    integral = integral.reconstruct(
+                        integrand=replace(integrand, mapping))
+            integrals.append(integral)
+        return Form(integrals)
+
     def fluid_core_measure(self) -> Measure:
         r"""The CMB measure: the mantle's own `ds`, intersected with the parent's `dS`.
 
@@ -4807,6 +4876,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if self.layout.rotation:
             self.F += self.rotation_residual()
         self.F += self.centre_of_mass_residual()
+        # A `Real` control on the parent (`B_mu`, `Lambda`) in a facet term
+        # needs a restriction for its derivative to exist.
+        self.F = self._restrict_parent_real_coefficients(self.F)
 
         self.strong_bcs.extend(
             DirichletBC(self.solution_space.sub(self.layout.potential),
@@ -5036,6 +5108,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         for bc_id, value in self.form.flux_bcs:
             term = ensure_constant(value) * mu * self.form.ds(bc_id)
             flux = term if flux is None else flux + term
+        # The same restriction as in the residual, for the `Real` controls
+        # that the sheets can carry (`_restrict_parent_real_coefficients`).
+        if mass is not None:
+            mass = self._restrict_parent_real_coefficients(mass)
+        if flux is not None:
+            flux = self._restrict_parent_real_coefficients(flux)
         return identity, mass, flux
 
     def monopole_fluxes(self) -> dict:
