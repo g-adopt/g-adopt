@@ -134,16 +134,17 @@ def test_residual_and_jacobian_action_match_the_old_solver(meshes, case):
 def test_the_gate_sees_a_changed_residual(meshes):
     """Negative control: one small extra term is a difference far above round-off.
 
-    The term `1e-3 (u, w)` is about a thousandth of the elastic stiffness,
-    the size of a modelling error the gate must catch.
+    The term `1e-3 (u, w)` is about a thousandth of the elastic stiffness of
+    the displacement block, the size of a modelling error the gate must catch.
     """
     def add_a_term(new):
         new.F = new.F + 1e-3 * fd.inner(new.solution_split[0], new.tests[0]) * new.gravity.dx_m
 
     result = gate(meshes, Case(rotation=True), perturb=add_a_term)
     print(result)
-    # The state is small (1e-3) against the load, so the term moves the
-    # residual by about 6e-7 of its size and the actions by about 1e-3:
-    # both are many orders above round-off.
+    # The state is small (1e-3) against the load, and the random directions
+    # are dominated by the potential and the history, so the term moves the
+    # residual and the actions by about 6e-7 of their size: five orders
+    # above round-off.
     assert result["residual"][0] > 1e3 * RTOL
     assert all(overall > 1e3 * RTOL for overall, _ in result["actions"])
