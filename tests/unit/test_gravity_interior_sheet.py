@@ -265,3 +265,68 @@ class TestAgainstClosedForms:
         psi, _ = solve_with_sheet(mesh, fd.cos(2 * phi))
         norm = np.sqrt(fd.assemble(psi**2 * fd.dx(domain=mesh)))
         assert norm > 1.0
+
+
+class TestRealControlsOnTheSheet:
+    """Gradients with respect to `Real` controls that scale an interior sheet.
+
+    The sheet term is `4 pi G int avg(sigma v) dS`. A `Real` coefficient
+    outside the `avg` assembles, because UFL gives a coefficient of a
+    continuous element a default side, but the derivative with respect to it
+    is a `Real` `Argument`, which UFL accepts on an interior facet only with a
+    restriction. Since Firedrake no longer replaces a `Real` argument by the
+    literal 1 (#5656), such a gradient raises `Discontinuous type Argument
+    must be restricted`. `G` was such a factor until `DtNGravityForm` moved it
+    inside the `avg`; the sheet scale was always inside. Both gradients are
+    checked against a central difference of fresh solves.
+    """
+
+    G0, S0, STEP = 1.3, 0.7, 1e-5
+
+    def functional(self, mesh, g_value, s_value):
+        """`int psi^2 dx` after one solve with `Real` `G` and sheet scale."""
+        from firedrake.adjoint import stop_annotating
+
+        R = fd.FunctionSpace(mesh, "R", 0)
+        with stop_annotating():
+            G = fd.Function(R).assign(g_value)
+            scale = fd.Function(R).assign(s_value)
+        X = fd.SpatialCoordinate(mesh)
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
+        bcs = {OUTER_ID: {"dtn": CylindricalDtN(M=4)},
+               INNER_ID: {"dtn": CylindricalDtN(M=4)},
+               SHEET_ID: {"interior_sigma":
+                          scale * (1 + fd.cos(2 * fd.atan2(X[1], X[0])))}}
+        GravitySolver(psi, 0.0, gravitational_constant=G, bcs=bcs,
+                      solver_parameters="direct").solve()
+        return fd.assemble(psi ** 2 * fd.dx), G, scale
+
+    @pytest.mark.parametrize("control", ["G", "sheet scale"])
+    def test_gradient_matches_a_central_difference(self, mesh, control):
+        from firedrake.adjoint import (Control, ReducedFunctional,
+                                       continue_annotation, get_working_tape,
+                                       pause_annotation, stop_annotating)
+
+        tape = get_working_tape()
+        tape.clear_tape()
+        continue_annotation()
+        try:
+            J, G, scale = self.functional(mesh, self.G0, self.S0)
+        finally:
+            pause_annotation()
+        m = G if control == "G" else scale
+        gradient = float(ReducedFunctional(J, Control(m)).derivative().dat.data_ro[0])
+        tape.clear_tape()
+        values = []
+        with stop_annotating():
+            for sign in (1, -1):
+                g_value, s_value = self.G0, self.S0
+                if control == "G":
+                    g_value += sign * self.STEP
+                else:
+                    s_value += sign * self.STEP
+                values.append(float(self.functional(mesh, g_value, s_value)[0]))
+        difference = (values[0] - values[1]) / (2 * self.STEP)
+        # The functional is quadratic in either control, so the central
+        # difference is exact up to the round-off of the two solves.
+        assert abs(gradient - difference) <= 1e-7 * abs(difference)
