@@ -280,6 +280,19 @@ def lanczos_ritz_values(rz, z, d, comm=MPI.COMM_WORLD):
     positive ``alpha``. Neither gives a coefficient, so the matrix is built from the
     completed steps alone.
 
+    How to read the result. Conjugate gradient in floating point loses the
+    orthogonality of its Lanczos vectors once a Ritz value has converged, and the
+    converged value then appears again as a "ghost" copy. In the 20-step solve of
+    the S0 run D2, 981038 appears three times and 23597 twice. Therefore:
+
+    - the list is not a count of clustered eigenvalues, and repeated entries must
+      not be read as multiplicity;
+    - ``ritz_max`` is a lower bound on the largest eigenvalue of ``M^{-1} Q`` and
+      ``ritz_min`` is an upper bound on the smallest, because Ritz values lie
+      inside the spectrum;
+    - so ``ritz_max / ritz_min`` is a lower bound on the condition number of the
+      preconditioned operator, never an estimate of it from above.
+
     Args:
         rz: list of ``r_j^T z_j``, one per preconditioner application.
         z: list of the local entries of ``z_j``, same length as ``rz``.

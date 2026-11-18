@@ -59,7 +59,9 @@ echo "##### comparison, A is the reference"
 (
     export MY_GADOPT="$CODE_B"
     source /software/projects/pawsey0821/sghelichkhani/env-hessian.sh
+    # A mismatch in any compared field gives exit status 1, which fails the job
+    # through ``set -e``, so that a change of path cannot pass unnoticed.
     python3 "$CODE_B/demos/optimisation/box/prior_campaign/compare_records.py" \
-        "$RUN_DIR/A/smoke.json" "$RUN_DIR/B/smoke.json" --rows both --all-fields || true
+        "$RUN_DIR/A/smoke.json" "$RUN_DIR/B/smoke.json" --rows both --all-fields
 )
 echo "### done"

@@ -76,6 +76,8 @@ counts. Add `--all-fields` to compare every numeric field that both records hold
 Add `--rows both` to compare the gradient rows as well as the iteration rows. The
 exit status is 0 only when every compared field is bitwise equal.
 
-The work budget uses the measured cost of a Hessian-vector product. Thus two runs
-with the same path can stop at different iterations. The script compares the rows
-that both records hold.
+The field `work` uses the measured wall time of a Hessian-vector product. Thus
+`work` is the one old field that differs between two runs with bitwise-equal paths.
+The script does not compare it. The work budget tests `work`, so two runs with the
+same path can stop at different iterations. The script compares only the rows that
+both records hold.

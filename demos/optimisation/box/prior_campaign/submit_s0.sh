@@ -40,7 +40,10 @@ echo "smoke test:      job $SMOKE"
 
 for RUN in D1 D2; do
     if [ "$RUN" = D1 ]; then CODE=$CODE_D1; else CODE=$CODE_D2; fi
-    JOB=$(sbatch --parsable "${DEPEND[@]}" --job-name="s0-$RUN" "$JOBS/inverse.slurm" \
+    # "${DEPEND[@]+"${DEPEND[@]}"}" expands to nothing when DEPEND is empty. The
+    # plain "${DEPEND[@]}" is an "unbound variable" error under set -u in bash
+    # before 4.4, and the form here works in every version.
+    JOB=$(sbatch --parsable ${DEPEND[@]+"${DEPEND[@]}"} --job-name="s0-$RUN" "$JOBS/inverse.slurm" \
         "$CODE" "$STEP/$RUN" "$REFERENCE/reference-state.h5" \
         tao-bnls-riesz_regularisation.json "${BASELINE[@]}")
     echo "run $RUN:          job $JOB"
