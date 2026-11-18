@@ -13,7 +13,12 @@ Reads one JSON record per run, as written by ``inverse.py`` with the recording o
 
 Work is the forward-equivalent work of the record, priced from measured wall time, so
 two runs compare at equal work, and the iteration that crosses a level differs from
-run to run. A run is read at its last iteration below each level, never by
+run to run. Each record prices a Hessian-vector product by its own measured ratio to
+a forward call, so the timing of the node moves the work axis of each run. With
+``--common-ratio`` every run is re-priced with one ratio from its recorded counts,
+``work = forward + adjoint + ratio * hessian``. ``--common-ratio pooled`` uses the
+ratio of all the records together: the mean time of a Hessian-vector product over
+the mean time of a forward call, both pooled over every call of every record. A run is read at its last iteration below each level, never by
 interpolation, because ``initial_misfit`` need not change smoothly between iterations.
 
 Usage:
@@ -31,6 +36,12 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("runs", nargs="+", metavar="NAME=PATH",
                         help="a short name and the path of one record")
+    parser.add_argument("--common-ratio", default=None,
+                        help="re-price every run with one Hessian-to-forward ratio: "
+                             "a number, or 'pooled' for the pooled ratio of all "
+                             "records")
+    parser.add_argument("--plot", default=None,
+                        help="write initial_misfit against work to this image file")
     parser.add_argument("--levels", nargs="+", type=float,
                         default=[50, 100, 200, 300, 400, 500, 600],
                         help="work levels for the first table")
@@ -78,12 +89,67 @@ def wall_transitions(solves):
     return out
 
 
+def pooled_ratio(records):
+    """Mean Hessian-vector product time over mean forward time, over every record."""
+    forward = [t for r in records.values() for t in r["forward_times"]]
+    hessian = [t for r in records.values() for t in r["hessian_times"]]
+    return (sum(hessian) / len(hessian)) / (sum(forward) / len(forward))
+
+
+def reprice(records, ratio):
+    """Replace ``work`` of every iteration row by the common-ratio work, in place."""
+    for record in records.values():
+        for row in record["iterations"]:
+            row["work_recorded"] = row["work"]
+            row["work"] = row["forward"] + row["adjoint"] + ratio * row["hessian"]
+
+
+def plot(records, path, title):
+    """Draw initial_misfit against work, total and wall rows, one line per run."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5), sharex=True)
+    panels = (("initial_misfit", "total"), ("initial_misfit_interior", "remainder"),
+              ("walls", "bottom + top rows"))
+    for name, record in records.items():
+        rows = record["iterations"]
+        work = [r["work"] for r in rows]
+        for ax, (field, label) in zip(axes, panels):
+            if field == "walls":
+                values = [r.get("initial_misfit_bottom", float("nan"))
+                          + r.get("initial_misfit_top", float("nan")) for r in rows]
+            else:
+                values = [r.get(field, float("nan")) for r in rows]
+            ax.semilogy(work, values, marker=".", label=name)
+            ax.set_title(f"initial_misfit, {label}")
+            ax.set_xlabel("work (forward-equivalents)")
+            ax.grid(True, which="both", alpha=0.3)
+    axes[0].legend()
+    fig.suptitle(title)
+    fig.tight_layout()
+    fig.savefig(path, dpi=130)
+
+
 def main(argv=None):
     args = parse_args(argv)
     records = {}
     for item in args.runs:
         name, _, path = item.partition("=")
         records[name] = json.load(open(path))
+    title = "work as recorded (each run's own measured ratio)"
+    if args.common_ratio is not None:
+        ratio = (pooled_ratio(records) if args.common_ratio == "pooled"
+                 else float(args.common_ratio))
+        reprice(records, ratio)
+        title = f"work re-priced with one ratio {ratio:.4f} (Hessian-vector product / forward)"
+    print(f"== {title}")
+    for name, record in records.items():
+        cost = record.get("call_cost", {})
+        print(f"   {name}: own ratio {cost.get('hessian_per_forward')}, "
+              f"mean forward {cost.get('mean_forward_time')}")
+    if args.plot:
+        plot(records, args.plot, title)
 
     fields = ("initial_misfit", "initial_misfit_bottom", "initial_misfit_top",
               "initial_misfit_interior")
