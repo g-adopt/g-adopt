@@ -279,6 +279,7 @@ def make_inner_product(Q1, name, c_d=1.0, c_s=0.0):
 def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
                   inner_product="L2", initial_guess="average",
                   metric_alpha_d=None, metric_alpha_s=None,
+                  prior_sigma=None, prior_L=None,
                   checkpointing_schedule=None):
     """Tape the forward model once and return the inverse problem.
 
@@ -304,6 +305,17 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
             damping term. A number given here separates the two, which is what makes
             the inner product usable when the objective carries no regularisation.
         metric_alpha_s: the same for the stiffness term and ``alpha_s``.
+        prior_sigma: the formal standard deviation ``sigma`` of the prior
+            statement of the metric. Given together with ``prior_L``, it replaces
+            the two metric weights: ``metric_c_d = 1 / sigma^2`` and ``metric_c_s =
+            L^2 / sigma^2``. The metric is then ``(1 / sigma^2) (M + L^2 K)``
+            before the factor 2 below, a first-order precision with correlation
+            length ``L``. ``sigma`` is formal: it is not a pointwise standard
+            deviation (a first-order prior in two dimensions has no finite
+            pointwise variance), and it is relative to an observation covariance
+            of the identity, because the misfit term carries weight 1.
+        prior_L: the correlation length ``L`` of the same statement, in the
+            non-dimensional length of the box.
         checkpointing_schedule: a ``checkpoint_schedules`` schedule, or None to hold
             every state in memory. Hessian-vector products need None, because
             pyadjoint has no checkpoint-manager path for the tangent linear and
@@ -386,10 +398,31 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
     # terms when the metric weights are the objective weights, which is the default.
     # When the objective has no regularisation the two are separate numbers, and the
     # metric is then an operator of the same shape that is not a term in J.
-    m_alpha_d = alpha_d if metric_alpha_d is None else metric_alpha_d
-    m_alpha_s = alpha_s if metric_alpha_s is None else metric_alpha_s
-    m_c_d = m_alpha_d * norm_obs / norm_damping
-    m_c_s = m_alpha_s * norm_obs / norm_smoothing
+    if (prior_sigma is None) != (prior_L is None):
+        raise ValueError("prior_sigma and prior_L must be given together")
+    if prior_sigma is not None:
+        # The prior statement of the same operator. The two coefficients are
+        # numbers of their own and depend on neither the data nor the mesh, while
+        # the legacy weights below are scaled by data norms, which change with the
+        # window (norm_obs) and the mesh (norm_smoothing). The legacy weights are
+        # left unset, so the record cannot claim a weight that was never used.
+        if metric_alpha_d is not None or metric_alpha_s is not None:
+            raise ValueError("give either prior_sigma and prior_L, or the metric "
+                             "weights, not both")
+        if inner_product != "regularisation":
+            raise ValueError("prior_sigma and prior_L define the 'regularisation' "
+                             f"inner product, and inner_product is {inner_product!r}")
+        if prior_sigma <= 0 or prior_L < 0:
+            raise ValueError(f"need sigma > 0 and L >= 0, got sigma={prior_sigma}, "
+                             f"L={prior_L}")
+        m_alpha_d = m_alpha_s = None
+        m_c_d = 1.0 / prior_sigma ** 2
+        m_c_s = prior_L ** 2 / prior_sigma ** 2
+    else:
+        m_alpha_d = alpha_d if metric_alpha_d is None else metric_alpha_d
+        m_alpha_s = alpha_s if metric_alpha_s is None else metric_alpha_s
+        m_c_d = m_alpha_d * norm_obs / norm_damping
+        m_c_s = m_alpha_s * norm_obs / norm_smoothing
     if inner_product == "regularisation" and (m_c_d <= 0 or m_c_s < 0):
         # The mass term is what makes the form positive definite. The stiffness
         # matrix alone has the constants in its null space, because the form carries
@@ -514,7 +547,8 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
         inner_product=ip,
         weights={"alpha_d": alpha_d, "alpha_s": alpha_s, "c_d": c_d, "c_s": c_s,
                  "metric_alpha_d": m_alpha_d, "metric_alpha_s": m_alpha_s,
-                 "metric_c_d": m_c_d, "metric_c_s": m_c_s},
+                 "metric_c_d": m_c_d, "metric_c_s": m_c_s,
+                 "prior_sigma": prior_sigma, "prior_L": prior_L},
         window=window,
         mesh=mesh,
         norm_obs=float(norm_obs),

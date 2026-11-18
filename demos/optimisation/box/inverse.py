@@ -55,6 +55,22 @@ def parse_args(argv=None):
     parser.add_argument("--metric-alpha-s", type=float, default=None,
                         help="stiffness weight of the regularisation inner product; "
                              "defaults to --alpha-s")
+    parser.add_argument("--prior-sigma", type=float, default=None,
+                        help="formal standard deviation sigma of the prior statement "
+                             "of the regularisation inner product; needs --prior-L "
+                             "and --riesz regularisation, and replaces "
+                             "--metric-alpha-d and --metric-alpha-s. It sets "
+                             "metric_c_d = 1/sigma^2. sigma is formal: it is NOT a "
+                             "pointwise standard deviation, and it is relative to an "
+                             "observation covariance of the identity (the misfit "
+                             "term has weight 1)")
+    parser.add_argument("--prior-L", type=float, default=None,
+                        help="correlation length L of the prior statement, in the "
+                             "non-dimensional length of the box; needs "
+                             "--prior-sigma. It sets metric_c_s = L^2/sigma^2. "
+                             "Compute sigma and L from the doubles of a record "
+                             "(sigma = 1/sqrt(metric_c_d), L = "
+                             "sqrt(metric_c_s/metric_c_d)), never from rounded digits")
     parser.add_argument("--work-budget", type=float, default=0.0,
                         help="stop when forward replays plus adjoint sweeps plus the "
                              "measured cost of the Hessian-vector products passes "
@@ -160,10 +176,17 @@ def prior_record(problem, riesz):
     The prior-covariance campaign states the regularisation, the Riesz map and the
     Krylov preconditioner as one operator, a prior covariance ``B`` with a standard
     deviation ``sigma``, a correlation length ``L``, an order, a wall treatment and a
-    mean ``m0``. This code does not define that operator yet. The inner product it
-    uses is the legacy metric ``a(u, v) = 2 c_d (u, v) + 2 c_s (grad u, grad v)``,
-    so the block holds the coefficients of that metric, and None for every quantity
-    that does not exist in the code.
+    mean ``m0``. The inner product of this code is the first-order metric
+    ``a(u, v) = 2 c_d (u, v) + 2 c_s (grad u, grad v)``. Its two coefficients come
+    either from ``--prior-sigma`` and ``--prior-L`` (``c_d = 1/sigma^2``,
+    ``c_s = L^2/sigma^2``) or from the legacy weights ``--metric-alpha-d`` and
+    ``--metric-alpha-s``, which scale by data norms.
+
+    ``sigma`` and ``L`` hold the flag values when the flags were given, and None
+    otherwise. ``sigma_implied`` and ``L_implied`` hold the values that the
+    coefficients imply in either case, ``1/sqrt(c_d)`` and ``sqrt(c_s/c_d)``, so a
+    legacy record can be restated as a prior without a new run. Every quantity that
+    does not exist in the code yet is None.
 
     Args:
         problem: the ``InverseProblem``.
@@ -172,9 +195,17 @@ def prior_record(problem, riesz):
     Returns:
         dict
     """
+    import math
     weights = problem.weights
+    sigma, length = weights.get("prior_sigma"), weights.get("prior_L")
+    if riesz != "regularisation":
+        kind = "L2"
+    elif sigma is not None:
+        kind = "sigma-L"
+    else:
+        kind = "legacy-metric"
     block = {
-        "kind": "legacy-metric" if riesz == "regularisation" else "L2",
+        "kind": kind,
         # ``metric_c_d`` and ``metric_c_s`` are the coefficients of the records;
         # the form that the Riesz map inverts carries twice these values
         # (``problem.py``, ``make_inner_product(..., c_d=2 * m_c_d, c_s=2 * m_c_s)``).
@@ -182,8 +213,12 @@ def prior_record(problem, riesz):
         "metric_c_s": weights.get("metric_c_s"),
         "form_c_d": None,
         "form_c_s": None,
-        "sigma": None,
-        "L": None,
+        "sigma": sigma,
+        "L": length,
+        "sigma_implied": None,
+        "L_implied": None,
+        # The first-order form ``c_d M + c_s K`` is outside the autoregressive
+        # family of firedrake's covariance operator, so no order is stated.
         "order": None,
         "wall_treatment": None,
         "m0": None,
@@ -191,8 +226,11 @@ def prior_record(problem, riesz):
         "pointwise_std_measured": None,
     }
     if riesz == "regularisation":
-        block["form_c_d"] = 2 * weights["metric_c_d"]
-        block["form_c_s"] = 2 * weights["metric_c_s"]
+        c_d, c_s = weights["metric_c_d"], weights["metric_c_s"]
+        block["form_c_d"] = 2 * c_d
+        block["form_c_s"] = 2 * c_s
+        block["sigma_implied"] = 1.0 / math.sqrt(c_d)
+        block["L_implied"] = math.sqrt(c_s / c_d)
     return block
 
 
@@ -244,6 +282,7 @@ def main(argv=None):
         alpha_d=args.alpha_d, alpha_s=args.alpha_s,
         inner_product=args.riesz, initial_guess=args.initial_guess,
         metric_alpha_d=args.metric_alpha_d, metric_alpha_s=args.metric_alpha_s,
+        prior_sigma=args.prior_sigma, prior_L=args.prior_L,
     )
     log(f"Problem built: window {problem.window} steps, control dofs "
         f"{problem.Tic.function_space().dim()}, inner product {problem.inner_product.name}, "
