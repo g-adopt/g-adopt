@@ -87,6 +87,11 @@ class InnerProductMat:
         # spaces have the same dof layout, so one interface serves for both; the two
         # names are kept apart only for readability at the call sites.
         self.vec_interface = PETScVecInterface(Function(control_space), comm=comm)
+        # A callable ``observer(r, z)`` that ``RieszPC.apply`` calls after each
+        # application with the input and the output, or None. ``recording.py`` sets
+        # it to rebuild the conjugate gradient coefficients. It only reads the two
+        # vectors, so the solve is the same with or without it.
+        self.observer = None
 
     # -- sizes ---------------------------------------------------------------------
 
@@ -196,6 +201,11 @@ class MaskedInnerProductMat:
         self.scatter = PETSc.Scatter().create(self.x_full, self.iset, self.x_reduced, None)
 
     @property
+    def observer(self):
+        """The observer of the full-space context. See ``InnerProductMat``."""
+        return self.parent.observer
+
+    @property
     def sizes(self):
         """``((n, N), (n, N))`` of the reduced space."""
         n, N = self.iset.getLocalSize(), self.iset.getSize()
@@ -260,7 +270,13 @@ class RieszPC:
         # setUp is called by PETSc before apply, but the operators can be replaced
         # between solves, so the context is read again here.
         _, P = pc.getOperators()
-        P.getPythonContext().apply_riesz(x, y)
+        context = P.getPythonContext()
+        context.apply_riesz(x, y)
+        # Hand the residual and the preconditioned residual to the recorder, if one
+        # is attached. Both vectors are in the reduced space of the Krylov solve.
+        observer = getattr(context, "observer", None)
+        if observer is not None:
+            observer(x, y)
 
     def view(self, pc, viewer=None):
         """Print what this preconditioner is, under ``-tao_view``."""

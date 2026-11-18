@@ -98,6 +98,12 @@ class InverseProblem:
         norm_obs: ``int Tobs^2 dx``, the normalisation of the objective. Used to turn
             the final misfit into a relative number.
         norm_ic: ``int Tic_true^2 dx``, the same for the initial misfit.
+        delta_t: the timestep length of the reference run, non-dimensional.
+        window_time: the physical length of the observation window,
+            ``window * delta_t``. The field ``window`` is a step count.
+        Taverage: the layer average at the window start, the reference of the
+            regularisation terms.
+        T0_bcs: the two ``DirichletBC`` objects that turn the control into ``T0``.
     """
 
     reduced_functional: object
@@ -113,6 +119,10 @@ class InverseProblem:
     mesh: object = None
     norm_obs: float = 1.0
     norm_ic: float = 1.0
+    delta_t: Optional[float] = None
+    window_time: Optional[float] = None
+    Taverage: Optional[Function] = None
+    T0_bcs: list = field(default_factory=list)
 
     def control_error(self, m=None):
         """Relative L2 error of a control value against the true initial temperature.
@@ -172,6 +182,44 @@ class InverseProblem:
             float
         """
         return self.final_misfit() / self.norm_obs
+
+    def prior_term(self, m=None):
+        """The regularisation part of the objective at a control value.
+
+        The objective is the misfit term plus this term. The campaign calls it the
+        prior term, because in the prior-covariance form of the problem it is
+        ``1/2 ||m - m0||^2_{B^-1}``. Here it is still the legacy regularisation of
+        the tutorial:
+
+            c_d int (T0 - Taverage)^2 dx + c_s int |grad(T0 - Taverage)|^2 dx
+
+        with ``T0`` the control projected into CG1 with the wall values imposed,
+        the same projection and the same quadrature as the taped objective in
+        ``build_problem``. It is evaluated off the tape, so it can be called from a
+        reduced-functional callback.
+
+        Args:
+            m: a Function in the control space. Defaults to the current tape value.
+
+        Returns:
+            float. Exactly 0.0 when both weights are zero, which is the case of every
+            run without regularisation in the objective; no assembly happens then.
+        """
+        c_d = self.weights.get("c_d", 0.0)
+        c_s = self.weights.get("c_s", 0.0)
+        if c_d == 0.0 and c_s == 0.0:
+            return 0.0
+        if m is None:
+            m = self.control.tape_value()
+        with stop_annotating():
+            T0 = Function(m.function_space()).project(m, bcs=self.T0_bcs)
+            value = 0.0
+            if c_d > 0.0:
+                value += c_d * float(assemble((T0 - self.Taverage) ** 2 * _dx))
+            if c_s > 0.0:
+                value += c_s * float(assemble(
+                    dot(grad(T0 - self.Taverage), grad(T0 - self.Taverage)) * _dx))
+        return value
 
     def measures(self, m=None):
         """The two misfits of the paper plus their relative forms, in one dictionary.
@@ -379,6 +427,15 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
     if alpha_d > 0 or alpha_s > 0:
         T0_bcs = [DirichletBC(Q1, 0.0, boundary.top), DirichletBC(Q1, 1.0, boundary.bottom)]
         T0 = Function(Q1, name="Initial_Guess_Temperature").project(Tic, bcs=T0_bcs)
+    else:
+        # ``InverseProblem.prior_term`` repeats the projection off the tape, so the
+        # boundary conditions must exist even when T0 does not. They are built with
+        # annotation stopped, so that a run without regularisation keeps exactly the
+        # tape it had before: a boundary condition with a constant value can add a
+        # block of its own when it is built during annotation.
+        with stop_annotating():
+            T0_bcs = [DirichletBC(Q1, 0.0, boundary.top),
+                      DirichletBC(Q1, 1.0, boundary.bottom)]
 
     # ---- Forward model on the tape ------------------------------------------------
     T.project(Tic, bcs=energy_solver.strong_bcs)
@@ -462,4 +519,8 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
         mesh=mesh,
         norm_obs=float(norm_obs),
         norm_ic=float(assemble(Tic_true ** 2 * _dx)),
+        delta_t=delta_t_value,
+        window_time=window * delta_t_value,
+        Taverage=Taverage,
+        T0_bcs=T0_bcs,
     )

@@ -128,6 +128,18 @@ def provenance():
     import pyadjoint
     firedrake_path = Path(firedrake.__file__).resolve().parent
 
+    # The library versions. The Setonix container and the reunion environment run
+    # different PETSc releases, and a comparison across machines must name both.
+    from importlib import metadata
+    from petsc4py import PETSc
+
+    def package_version(name):
+        """Installed version of a distribution, or None."""
+        try:
+            return metadata.version(name)
+        except Exception:
+            return None
+
     return {
         "commit": git_head(here),
         "demo_files": demo_files,
@@ -135,7 +147,53 @@ def provenance():
         "firedrake_commit": git_head(firedrake_path),
         "pyadjoint": str(Path(pyadjoint.__file__).resolve().parent),
         "python": sys.executable,
+        "petsc_version": ".".join(str(v) for v in PETSc.Sys.getVersion()),
+        "petsc4py_version": package_version("petsc4py"),
+        "firedrake_version": package_version("firedrake"),
+        "pyadjoint_version": package_version("pyadjoint-ad"),
     }
+
+
+def prior_record(problem, riesz):
+    """The ``prior`` block of the run record.
+
+    The prior-covariance campaign states the regularisation, the Riesz map and the
+    Krylov preconditioner as one operator, a prior covariance ``B`` with a standard
+    deviation ``sigma``, a correlation length ``L``, an order, a wall treatment and a
+    mean ``m0``. This code does not define that operator yet. The inner product it
+    uses is the legacy metric ``a(u, v) = 2 c_d (u, v) + 2 c_s (grad u, grad v)``,
+    so the block holds the coefficients of that metric, and None for every quantity
+    that does not exist in the code.
+
+    Args:
+        problem: the ``InverseProblem``.
+        riesz: the ``--riesz`` choice, ``"L2"`` or ``"regularisation"``.
+
+    Returns:
+        dict
+    """
+    weights = problem.weights
+    block = {
+        "kind": "legacy-metric" if riesz == "regularisation" else "L2",
+        # ``metric_c_d`` and ``metric_c_s`` are the coefficients of the records;
+        # the form that the Riesz map inverts carries twice these values
+        # (``problem.py``, ``make_inner_product(..., c_d=2 * m_c_d, c_s=2 * m_c_s)``).
+        "metric_c_d": weights.get("metric_c_d"),
+        "metric_c_s": weights.get("metric_c_s"),
+        "form_c_d": None,
+        "form_c_s": None,
+        "sigma": None,
+        "L": None,
+        "order": None,
+        "wall_treatment": None,
+        "m0": None,
+        "sigma_obs": None,
+        "pointwise_std_measured": None,
+    }
+    if riesz == "regularisation":
+        block["form_c_d"] = 2 * weights["metric_c_d"]
+        block["form_c_s"] = 2 * weights["metric_c_s"]
+    return block
 
 
 def parse_tao_options(items):
@@ -210,6 +268,11 @@ def main(argv=None):
         "work_budget_requested": args.work_budget,
         "checkpoint": str(args.checkpoint),
         "provenance": provenance(),
+        # The timestep and the physical length of the window; ``window`` is a count.
+        "delta_t": problem.delta_t,
+        "window_time": problem.window_time,
+        "krylov_max_it": args.krylov_max_it,
+        "prior": prior_record(problem, args.riesz),
     }
 
     kwargs = {"max_it": args.max_it, "initial_radius": args.initial_radius,

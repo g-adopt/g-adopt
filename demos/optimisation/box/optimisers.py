@@ -65,6 +65,7 @@ from pyadjoint import MinimizationProblem, stop_annotating
 from pyadjoint.enlisting import Enlist
 from pyadjoint.optimization.tao_solver import PETScVecInterface, RieszMapMat, TAOConvergenceError, TAOSolver
 from riesz_hessian import build_preconditioner_matrix
+from recording import PETSC_LIBRARY, KrylovRecorder, gradient_norms, tao_view_text
 import ROL
 
 class WorkBudgetReached(Exception):
@@ -90,6 +91,9 @@ ROL_NEWTON_KRYLOV_VARIANTS = ("rol-newton-krylov",)
 TAO_VARIANTS = ("tao-blmvm", "tao-bqnktr", "tao-bqnkls", "tao-bntr", "tao-bntr-noprec",
                 "tao-bntr-riesz", "tao-bnls", "tao-bnls-riesz")
 VARIANTS = ROL_VARIANTS + TAO_VARIANTS
+# The TAO types that solve a Krylov system per iteration through the BNK kernel. The
+# per-solve recording of ``recording.KrylovRecorder`` applies to these alone.
+TAO_KRYLOV_TYPES = ("bnls", "bntr", "bntl", "bqnkls", "bqnktr", "bqnktl")
 
 
 # ---------------------------------------------------------------------------------
@@ -130,6 +134,13 @@ class Recorder:
         hessian: number of Hessian-vector products so far.
         gradients: list of dict, one per gradient evaluation.
         iterations: list of dict, one per optimiser iteration.
+        last_dual_gradient: local entries of the most recent gradient, when the
+            optimiser asked for it in the dual space (TAO), in the layout of the
+            PETSc vector of the control; None before the first gradient and for
+            ROL. ``recording.gradient_norms`` needs it, because BNK keeps the
+            unprojected gradient private.
+        final_diagnostics: entries that exist only at the end of a run, such as the
+            text of ``-tao_view``. They go into every dump at the top level.
     """
 
     problem: object
@@ -150,6 +161,8 @@ class Recorder:
     gradient_times: list = field(default_factory=list)
     hessian_times: list = field(default_factory=list)
     _call_start: dict = field(default_factory=dict)
+    last_dual_gradient: object = None
+    final_diagnostics: dict = field(default_factory=dict)
 
     def attach(self):
         """Install the callbacks on the reduced functional.
@@ -266,6 +279,11 @@ class Recorder:
         else:
             gnorm = ip.norm(g)
         m = values[0] if isinstance(values, (list, tuple)) else values
+        if isinstance(g, Cofunction):
+            # A copy, in the layout of the PETSc vector that TAO holds: the owned
+            # entries of the dat, which is what ``PETScVecInterface.to_petsc`` copies
+            # into TAO's gradient for a single control.
+            self.last_dual_gradient = np.array(g.dat.data_ro, dtype=float)
         # The two misfits of Ghelichkhan et al. (2024, GMD) Fig. 5: the initial misfit
         # against the reference initial condition, and the final misfit against Tobs.
         # Both are taken here, at the point where the adjoint was just computed, so
@@ -280,6 +298,12 @@ class Recorder:
             "time": time.perf_counter() - self.t0,
         }
         row.update(self.problem.measures(m))
+        # The two parts of the objective, under the names of the prior-covariance
+        # campaign. The misfit term is the final misfit, the same integral as the
+        # first term of the taped objective; the prior term is the rest. J is their
+        # sum.
+        row["misfit_term"] = row["final_misfit"]
+        row["prior_term"] = self.problem.prior_term(m)
         self.gradients.append(row)
         self._chain("derivative_cb_post", J, dJ, values)
         return dJ
@@ -296,7 +320,8 @@ class Recorder:
             row.update({key: self.gradients[-1][key]
                         for key in ("J", "gradient_norm", "control_error",
                                     "initial_misfit", "final_misfit",
-                                    "relative_final_misfit")})
+                                    "relative_final_misfit", "misfit_term",
+                                    "prior_term")})
         row.update(extra)
         self.iterations.append(row)
         self.write()
@@ -359,6 +384,7 @@ class Recorder:
             "stop_reason": self.stop_reason,
             "gradients": self.gradients,
             "iterations": self.iterations,
+            **self.final_diagnostics,
         }
 
 
@@ -788,10 +814,69 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     if riesz_initial_hessian and tao.getType() in ("bqnktr", "bqnkls", "bqnktl", "bqnls"):
         j0_refs = _set_lmvm_initial_hessian(tao, problem)
 
+    # The per-solve record of the Krylov solver, for the types that have one.
+    krylov = None
+    if tao.getType() in TAO_KRYLOV_TYPES:
+        krylov = KrylovRecorder(tao, pmat_context=pmat_context,
+                                comm=problem.Tic.function_space().mesh().comm)
+        krylov.attach()
+    diagnostic_errors = []
+
+    def diagnostics(tao_obj, xdiff, gnorm):
+        """The entries of the run record that TAO does not report through petsc4py.
+
+        Every entry only reads state, so the optimiser takes the same path with or
+        without them. A failure here is stored and never raised, because an
+        exception would reach PETSc as error 101 and end the run.
+
+        Args:
+            tao_obj: the TAO object.
+            xdiff: the ``xdiff`` of ``getSolutionStatus``, the step length of the
+                line search for the BNK types (``bnls.c:167``).
+            gnorm: the ``gnorm`` of ``getSolutionStatus``, which for the BNK types is
+                the Fischer-Burmeister residual norm that TAO tests.
+
+        Returns:
+            dict of new row entries.
+        """
+        extra = {
+            # The step length of the last line search, under its own name. The
+            # field ``radius`` holds the same number, and stays for the records
+            # made before this field existed.
+            "step_length": float(xdiff),
+            # ``tao->trust`` after the update that follows the step; BNK gives this
+            # radius to the next Krylov solve.
+            "trust_radius": None,
+            "gradient_norm_euclidean": None,
+            "gradient_norm_metric": None,
+            "gradient_norm_fischer_burmeister": None,
+            "fischer_burmeister_rel_diff": None,
+        }
+        try:
+            extra["trust_radius"] = PETSC_LIBRARY.trust_radius(tao_obj)
+            norms = gradient_norms(tao_obj, recorder.last_dual_gradient,
+                                   comm=problem.Tic.function_space().mesh().comm)
+            extra["gradient_norm_euclidean"] = norms["euclidean"]
+            extra["gradient_norm_metric"] = norms["metric"]
+            extra["gradient_norm_fischer_burmeister"] = norms["fischer_burmeister"]
+            if norms["fischer_burmeister"] is not None and gnorm:
+                # The check that the recomputed residual is the one TAO tested. It
+                # differs from zero by roundoff unless the last adjoint sweep did
+                # not belong to the accepted iterate, for example after a failed
+                # line search, where BNK restores the previous point.
+                extra["fischer_burmeister_rel_diff"] = (
+                    abs(norms["fischer_burmeister"] - gnorm) / abs(gnorm))
+        except Exception as error:  # noqa: BLE001 -- see the docstring
+            diagnostic_errors.append(f"iteration diagnostics: {type(error).__name__}: {error}")
+        if krylov is not None:
+            extra["krylov_solves"] = krylov.pop_solves()
+        return extra
+
     def monitor(tao_obj):
         its = tao_obj.getIterationNumber()
         _, f, gnorm, cnorm, xdiff, reason = tao_obj.getSolutionStatus()
-        recorder.mark_iteration(its, tao_gnorm=float(gnorm), radius=float(xdiff))
+        recorder.mark_iteration(its, tao_gnorm=float(gnorm), radius=float(xdiff),
+                                **diagnostics(tao_obj, xdiff, gnorm))
         if recorder.over_budget():
             recorder.stop_reason = (
                 f"work budget of {recorder.work_budget:.0f} forward-equivalents spent")
@@ -819,6 +904,20 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
             log(f"TAO stopped: {e}")
     if not recorder.budget_hit:
         recorder.stop_reason = f"TAO converged reason {tao.getConvergedReason()}"
+    # The output of ``-tao_view``, taken after the solve. It holds the counts of the
+    # step types and of the Krylov termination reasons, and the Newton shift is
+    # visible nowhere else.
+    view_path = None if output is None else f"{os.path.splitext(str(output))[0]}.tao_view.txt"
+    try:
+        recorder.final_diagnostics["tao_view"] = tao_view_text(tao, view_path)
+    except Exception as error:  # noqa: BLE001 -- the view must never fail a run
+        diagnostic_errors.append(f"tao_view: {type(error).__name__}: {error}")
+    recorder.final_diagnostics["recording_errors"] = (
+        diagnostic_errors + (krylov.errors if krylov is not None else []))
+    if krylov is not None and krylov.solves:
+        # Solves after the last monitor call, which can only happen when TAO stops
+        # inside an iteration. They are kept, so that no solve is lost.
+        recorder.final_diagnostics["krylov_solves_unassigned"] = krylov.pop_solves()
     # Both references were only kept alive for the solve; a petsc4py TAO cannot hold
     # Python attributes, so the Python side has to own them until here.
     del j0_refs, pmat, pmat_context
