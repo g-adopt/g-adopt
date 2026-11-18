@@ -9,12 +9,20 @@ extend that basis with low-degree divergence-free fields, which is what a
 nearly-incompressible (large bulk/shear) displacement operator needs GAMG to
 carry as a near-nullspace -- its slow modes live in the divergence-free space,
 which the six rigid-body modes do not span.
+
+`project_out_kernel` removes a declared kernel from a solution after a solve
+and records the removal on the pyadjoint tape (`KernelProjectionBlock`), so
+that replay, adjoint, tangent linear and Hessian all apply the same
+projection as the forward run. `apply_kernel_projection` is the unrecorded
+operation that both use, and the one definition of the projection in G-ADOPT.
 """
 
 import itertools
 
 import firedrake as fd
-from pyadjoint.tape import stop_annotating
+from firedrake.adjoint_utils.checkpointing import maybe_disk_checkpoint
+from pyadjoint import Block
+from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.constantvalue import Zero
 from ufl.tensors import ListTensor
 from .approximations import AnelasticLiquidApproximation
@@ -521,3 +529,277 @@ def near_incompressible_modes(
     )
     solenoidal = solenoidal_modes(V, max_degree=max_degree, divfree_tol=divfree_tol)
     return _orthonormalised_survivors(rigid + solenoidal, comm=V.mesh().comm)
+
+
+def _kernel_bases(nullspace) -> list[tuple[int, fd.VectorSpaceBasis]]:
+    """The sub-function indices and bases of a nullspace that remove something.
+
+    A `MixedVectorSpaceBasis` holds one entry per sub-space. An entry that is
+    an indexed function space means "no kernel in this block" and is skipped.
+    A plain `VectorSpaceBasis` iterates as itself, so it maps to index 0,
+    which is the function itself on a non-mixed space.
+
+    Args:
+      nullspace: a `VectorSpaceBasis`, a `MixedVectorSpaceBasis` or `None`.
+
+    Returns:
+      A list of `(index, basis)` pairs, empty when nothing is removed.
+    """
+    if nullspace is None:
+        return []
+    return [(i, basis) for i, basis in enumerate(nullspace)
+            if isinstance(basis, fd.VectorSpaceBasis)]
+
+
+def check_kernel_basis(nullspace) -> None:
+    """Refuse a nullspace basis that is not orthonormal.
+
+    PETSc `MatNullSpaceRemove` assumes an orthonormal set. With another set it
+    removes a wrong component without a message, and the projection is not
+    symmetric, so `KernelProjectionBlock` would apply a wrong adjoint. Firedrake
+    does not orthonormalise a `VectorSpaceBasis` at construction; the caller
+    must call `orthonormalize()`.
+
+    The check costs a few global dot products. A basis that passes is marked,
+    so a second call on the same basis does no work. A solver calls this once
+    where it receives the nullspace; `project_out_kernel` calls it as well,
+    for callers that use it without a solver.
+
+    Args:
+      nullspace: a `VectorSpaceBasis`, a `MixedVectorSpaceBasis` or `None`.
+
+    Raises:
+      ValueError: if a basis is not orthonormal, or not orthogonal to the
+        constant vector when it was built with ``constant=True``.
+    """
+    for i, basis in _kernel_bases(nullspace):
+        if getattr(basis, "_gadopt_orthonormal", False):
+            continue
+        if not basis.is_orthonormal():
+            raise ValueError(
+                f"the nullspace basis of sub-function {i} is not orthonormal. "
+                "Call `orthonormalize()` on it: PETSc removes a non-orthonormal "
+                "basis incorrectly, and the recorded projection needs a "
+                "symmetric projection for its adjoint.")
+        # The vectors of a basis must not change after construction (Firedrake
+        # documents this), so one successful check holds for its lifetime.
+        basis._gadopt_orthonormal = True
+
+
+def apply_kernel_projection(nullspace, target) -> bool:
+    r"""Apply the kernel projection in place, without recording it.
+
+    For each sub-function :math:`x_i` of ``target`` whose entry in
+    ``nullspace`` is a `VectorSpaceBasis` with vectors :math:`e_k`, this sets
+
+    .. math:: x_i \leftarrow P x_i, \qquad P = I - \sum_k e_k e_k^T,
+
+    where every product is the Euclidean (l2) product of coefficient
+    vectors, not an L2 integral. The operation is
+    `VectorSpaceBasis.orthogonalize`, that is PETSc `MatNullSpaceRemove`.
+    PETSc first subtracts the mean when the basis has ``constant=True``, then
+    computes all the coefficients :math:`e_k^T x_i` from the input vector
+    (classical Gram-Schmidt), then subtracts. All dot products are global, so
+    the call is collective and correct in parallel.
+
+    :math:`P` is an orthogonal projection, symmetric in coefficient space, only
+    if the basis is orthonormal and, with ``constant=True``, orthogonal to the
+    constant vector (`check_kernel_basis`).
+
+    ``target`` can be a `Function` or a `Cofunction`. For a `Cofunction` the
+    same coefficient-space operation is :math:`P^T`, the transpose that the
+    adjoint of :math:`x \mapsto P x` needs, because :math:`P^T = P`.
+
+    Args:
+      nullspace: the declared nullspace, or `None`.
+      target: the `Function` or `Cofunction` to change in place. Its
+        sub-functions share memory with it, so the change is visible in it.
+
+    Returns:
+      Whether a basis was applied.
+    """
+    bases = _kernel_bases(nullspace)
+    for i, basis in bases:
+        basis.orthogonalize(target.subfunctions[i])
+    return bool(bases)
+
+
+class KernelProjectionBlock(Block):
+    r"""The tape record of :math:`x \leftarrow P x` (`apply_kernel_projection`).
+
+    The block has one dependency, the function before the projection, and one
+    output, the same function after it. :math:`P` is linear and does not
+    depend on :math:`x`, so
+
+    - replay applies :math:`P` to the replayed input,
+    - the tangent linear model applies :math:`P` to the input tangent,
+    - the adjoint applies :math:`P^T = P` to the output adjoint, a
+      `Cofunction`, in coefficient space,
+    - the second-order adjoint applies :math:`P^T` to the output Hessian
+      value. The second derivative of a linear map is zero, so no other term
+      exists.
+
+    Memory. Without a checkpoint schedule, the tape keeps a copy of the input
+    (saved when the block takes it as a dependency) and, once a later block
+    reads the output, a copy of the output. A solve followed by this block
+    therefore keeps two copies of the solved Function per step. The input
+    copy is the converged solve output, which the adjoint of the solve block
+    needs for its Jacobian, so it cannot be dropped. With a disk or
+    multistage schedule the copies go to the schedule's storage.
+
+    The basis vectors are not dependencies. They are fixed geometric data,
+    so a derivative with respect to the mesh coordinates does not include
+    the change of the basis with the mesh.
+
+    Args:
+      function: the `Function` that is projected in place.
+      nullspace: the `VectorSpaceBasis` or `MixedVectorSpaceBasis` that
+        defines :math:`P`. It must be orthonormal (`check_kernel_basis`) and
+        stay unchanged for the life of the tape.
+      ad_block_tag: optional tag for `Tape.get_blocks`.
+    """
+
+    def __init__(self, function, nullspace, ad_block_tag=None):
+        super().__init__(ad_block_tag=ad_block_tag)
+        self.nullspace = nullspace
+        self.add_dependency(function)
+
+    def _projected_copy(self, value):
+        """Return a projected copy of a tangent, adjoint or Hessian value.
+
+        A copy, because pyadjoint adds the returned object into the
+        dependency's value and can keep a reference to it. The input value
+        belongs to the output block variable and must not change.
+
+        Args:
+          value: a `Function` (tangent) or `Cofunction` (adjoint, Hessian),
+            or `None` when no value reached the block.
+
+        Returns:
+          A new object of the same type with :math:`P` applied, or `None`.
+        """
+        if value is None:
+            return None
+        result = value.copy(deepcopy=True)
+        apply_kernel_projection(self.nullspace, result)
+        return result
+
+    def recompute_component(self, inputs, block_variable, idx, prepared):
+        """Replay: copy the recorded or replayed input, then project the copy.
+
+        `Function.assign` between equal spaces copies the coefficients
+        exactly, and the projection is the same PETSc call as in the forward
+        run, so the replay of an unchanged input is bit-identical to it.
+
+        Args:
+          inputs: the saved value of the dependency, the unprojected Function.
+          block_variable: the output block variable.
+          idx: index of the output, always 0.
+          prepared: unused.
+
+        Returns:
+          The projected Function, wrapped for disk checkpointing if that is on.
+        """
+        with stop_annotating():
+            output = fd.Function(block_variable.output.function_space())
+            output.assign(inputs[0])
+            apply_kernel_projection(self.nullspace, output)
+        return maybe_disk_checkpoint(output)
+
+    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx,
+                               prepared=None):
+        r"""Adjoint: :math:`\lambda_{in} = P^T \lambda_{out} = P \lambda_{out}`.
+
+        Args:
+          inputs: unused, :math:`P` does not depend on the input.
+          adj_inputs: the adjoint value of the output, a `Cofunction`.
+          block_variable: the dependency block variable.
+          idx: index of the dependency, always 0.
+          prepared: unused.
+
+        Returns:
+          The projected copy of the output adjoint value.
+        """
+        return self._projected_copy(adj_inputs[0])
+
+    def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable, idx,
+                               prepared=None):
+        r"""Tangent linear model: :math:`\dot x_{out} = P \dot x_{in}`.
+
+        Args:
+          inputs: unused, :math:`P` does not depend on the input.
+          tlm_inputs: the tangent of the dependency, a `Function`.
+          block_variable: the output block variable.
+          idx: index of the output, always 0.
+          prepared: unused.
+
+        Returns:
+          The projected copy of the input tangent.
+        """
+        return self._projected_copy(tlm_inputs[0])
+
+    def evaluate_hessian_component(self, inputs, hessian_inputs, adj_inputs,
+                                   block_variable, idx, relevant_dependencies,
+                                   prepared=None):
+        r"""Second-order adjoint: :math:`P^T` applied to the output Hessian value.
+
+        The term with the second derivative of the block is zero, because
+        :math:`P` is linear.
+
+        Args:
+          inputs: unused.
+          hessian_inputs: the Hessian value of the output, a `Cofunction`.
+          adj_inputs: unused, it multiplies the zero second derivative.
+          block_variable: the dependency block variable.
+          idx: index of the dependency, always 0.
+          relevant_dependencies: unused.
+          prepared: unused.
+
+        Returns:
+          The projected copy of the output Hessian value.
+        """
+        return self._projected_copy(hessian_inputs[0])
+
+    def __str__(self):
+        return f"project_out_kernel({self.get_dependencies()[0]})"
+
+
+def project_out_kernel(nullspace, function) -> bool:
+    """Remove a declared kernel from ``function`` in place, and record it.
+
+    This is `apply_kernel_projection` on a `Function` that the tape can use
+    later. When annotation is on, a `KernelProjectionBlock` takes the
+    current value of ``function`` as its dependency before the change, and
+    the changed ``function`` gets a new block variable as the output of the
+    block. A later recorded operation, for example ``old.assign(function)``,
+    then depends on the projected value in the forward run, in replay and in
+    the adjoint.
+
+    Without annotation, or when ``nullspace`` holds no `VectorSpaceBasis`,
+    no block is added. The forward values are the same in all cases.
+
+    Args:
+      nullspace: the declared nullspace, or `None`.
+      function: the `Function` to project in place.
+
+    Returns:
+      Whether a basis was applied.
+
+    Raises:
+      ValueError: if a basis is not orthonormal (`check_kernel_basis`).
+    """
+    if not _kernel_bases(nullspace):
+        return False
+    # Does work only on the first call for a given basis.
+    check_kernel_basis(nullspace)
+    block = None
+    if annotate_tape():
+        # The dependency is taken here, before the change: `add_dependency`
+        # saves the unprojected value as the input checkpoint of the block.
+        block = KernelProjectionBlock(function, nullspace)
+        get_working_tape().add_block(block)
+    with stop_annotating():
+        apply_kernel_projection(nullspace, function)
+    if block is not None:
+        block.add_output(function.create_block_variable())
+    return True

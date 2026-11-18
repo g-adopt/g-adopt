@@ -15,6 +15,7 @@ from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.algorithms.analysis import extract_coefficients
 
 from .internal_variable_equation import assign_history_slices, history_slices
+from .nullspaces import apply_kernel_projection
 
 
 class MaxwellQuadratureUpdate:
@@ -250,10 +251,9 @@ class DirectConstitutiveBackend:
             self.solver.solve()
         # Projection is part of this recorded map: replay must return the same
         # gauge as the original forward solve, not an arbitrary rigid rotation.
-        if self.owner.nullspace is not None:
-            for i, basis in enumerate(self.owner.nullspace._bases):
-                if isinstance(basis, fd.VectorSpaceBasis):
-                    basis.orthogonalize(self.work.subfunctions[i])
+        # `self.work` is private to this block and never on the tape, so the
+        # unrecorded form of the projection is the right one here.
+        apply_kernel_projection(self.owner.nullspace, self.work)
         self.material.refresh(self.work)
         # Interpolate on the mechanics mesh only, not through mixed-domain split.
         assign_history_slices(self.buffers, self.material.updates)
@@ -288,10 +288,9 @@ class DirectConstitutiveBackend:
             rhs += seeds[0]
         # The forward result is projected onto the complement of the rigid
         # kernel. Apply the transpose of that Euclidean projection to its seed.
-        if self.owner.nullspace is not None:
-            for i, basis in enumerate(self.owner.nullspace._bases):
-                if isinstance(basis, fd.VectorSpaceBasis):
-                    basis.orthogonalize(rhs.subfunctions[i])
+        # `rhs` is a Cofunction, and the projection is symmetric in
+        # coefficient space, so the same function applies the transpose.
+        apply_kernel_projection(self.owner.nullspace, rhs)
         if self.matrix is None:
             self.matrix = fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, mat_type='matfree',
                                       appctx=self.owner.appctx)

@@ -26,11 +26,12 @@ Design, mirroring `test_gravity_adjoint.py`:
     `__init__` never clutter the tape.
   * **Matfree-safe: first-order ladder only, no Hessian leg.**
 
-`nullspace=None` is deliberate for the primary test. `project_out_nullspace`
-(`gia_gravity.py`) does an in-place `basis.orthogonalize(solution.subfunctions[i])`
-*after* the taped solve, which the tape cannot see; declaring no nullspace makes
-that method a no-op and gives the cleanest taped path. The nullspace-on case is
-a separate, diagnostic test -- S1.6 predicts it may sever, unverified.
+`nullspace=None` is deliberate for the primary test: `project_out_nullspace`
+is then a no-op and the tape holds the solve alone. With a nullspace declared,
+`project_out_nullspace` records the projection as a `KernelProjectionBlock`
+after the solve (`gadopt.nullspaces.project_out_kernel`). The nullspace-on
+case has its own test here, and the projection block itself is tested in
+`test_gia_nullspace_projection_adjoint.py`.
 """
 
 import sys
@@ -238,21 +239,15 @@ def test_coupled_adjoint_with_nullspace_declared(meshes):
     """The declared-nullspace production path also tapes to second order.
 
     Declaring `rigid_rotation_nullspace` makes `solve()` call
-    `project_out_nullspace`, whose `basis.orthogonalize(...)` mutates
-    `solution.subfunctions[i]` in place *after* the taped solve -- the operation
-    S1.6 predicts might sever the tape.
+    `project_out_nullspace`, which records the projection as a
+    `KernelProjectionBlock` after the taped solve.
 
-    Measured: the gradient is still exact (rate 2). **This does NOT prove the
-    orthogonalize is tape-safe.** The rigid rotation this configuration projects
-    out is a genuine kernel, so the solve leaves only ~1e-13 of it in `u`
-    (documented in `project_out_nullspace`); removing ~1e-13 moves J below the
-    finite-difference floor, so a taken-at-the-wrong-point gradient and a correct
-    one are indistinguishable here. What this test pins is the weaker, still
-    useful fact that the production path with a nullspace declared is
-    differentiable to the same tolerance as without one. Actually stressing the
-    orthogonalize needs a configuration where the projected component is O(1) --
-    e.g. seeding `u` with a large rigid rotation before the objective -- which is
-    left as the follow-up S1.6 names.
+    The rigid rotation this configuration projects out is a genuine kernel, so
+    the solve leaves only about 1e-13 of it in `u`, and this functional cannot
+    tell a recorded projection from a missing one. What this test pins is that
+    the production path with a nullspace declared is differentiable to the
+    same tolerance as without one. The projection is tested where it removes a
+    large component, in `test_gia_nullspace_projection_adjoint.py`.
     """
     Jhat, control, h, J = _reduced_functional(meshes, declare_nullspace=True)
     assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
@@ -286,9 +281,9 @@ def test_coupled_adjoint_is_second_order_with_a_power_law(meshes):
     `snes_atol 1e-14` gives 4 iterations, a final norm of 1e-17 and the same
     rates. That ladder is the expected result of this test.
 
-    `declare_nullspace=False`, as in the primary Newtonian test: the in-place
-    `project_out_nullspace` after the taped solve is a separate question and
-    has its own test.
+    `declare_nullspace=False`, as in the primary Newtonian test: the
+    projection after the solve has its own tests (the nullspace-on test above
+    and `test_gia_nullspace_projection_adjoint.py`).
     """
     approximation_kwargs = {"exponent": 3.0, "transition_stress": 1e-3}
     solver_parameters_extra = {"snes_rtol": 1e-10, "snes_atol": 1e-14}

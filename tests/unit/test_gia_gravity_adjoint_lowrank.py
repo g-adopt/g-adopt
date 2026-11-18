@@ -1158,8 +1158,8 @@ def test_one_solve_adds_one_block(meshes):
 #
 # Measured: one post-solve assign lands a `FunctionAssignBlock` after the solve
 # block, and `get_blocks()[-1]` then picks up the wrong one. Not hypothetical --
-# `project_out_nullspace` orthogonalises in place after the solve and
-# `update_total_mass` assembles and assigns.
+# `project_out_nullspace` adds a `KernelProjectionBlock` and an assign after
+# the solve, and `update_total_mass` assembles and assigns before it.
 # ===========================================================================
 def test_block_is_found_by_output_identity_not_position(meshes):
     """L26: an intervening block must not defeat the adoption."""
@@ -1176,7 +1176,7 @@ def test_block_is_found_by_output_identity_not_position(meshes):
         _, _, z, _ = forward(meshes, "shear_modulus", control, "multiplier",
                              tape_it=True)
         spoiler = fd.Function(z.function_space())
-        spoiler.assign(z)                      # what project_out_nullspace does
+        spoiler.assign(z)                      # a block after the solve, as project_out_nullspace adds
     finally:
         pause_annotation()
 

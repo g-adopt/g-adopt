@@ -168,6 +168,7 @@ from pyadjoint.tape import annotate_tape, get_working_tape
 from .dtn_coupled import (CoupledLowRankDtN, install_augmented_context,
                           taped_coupled_trace_coefficients)
 from .dtn_lowrank import apply_dirichlet_to_rows
+from .nullspaces import check_kernel_basis, project_out_kernel
 from .equations import Equation
 from .gravity_solver import real_scalar_solver_parameters
 from .momentum_equation import (
@@ -2492,6 +2493,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # paying for either.
         self.check_geometry()
         self.check_fluid_core(kwargs.get("bcs") or {})
+        # Once, here, so that a basis that is not orthonormal is refused in
+        # forward-only runs too. `project_out_nullspace` and PETSc both assume
+        # an orthonormal set and are silently wrong without one.
+        check_kernel_basis(kwargs.get("nullspace"))
+        check_kernel_basis(kwargs.get("transpose_nullspace"))
         self.form.warn_on_quadrature_rule_limits()
         self.set_monopole_datum()
         super().__init__(solution, approximation, dt=dt, **kwargs)
@@ -5971,7 +5977,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         same declaration on the LU reference took it from `-3.5e-13` to
         `2.6e-19`.
 
-        So the projection is applied here, once, after each solve. It is
+        So the projection is applied here, after each solve. On the
+        quadrature path (`constitutive_method="direct"`) the solve block has
+        already applied it inside its own map, and this is the second
+        application, which changes nothing beyond round-off. It is
         legitimate precisely when the declaration is: a genuine kernel admits
         no solution at all unless the residual is orthogonal to it, so removing
         it selects the minimum-norm representative and discards nothing. The
@@ -5982,15 +5991,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
 
         Only blocks carrying an actual `VectorSpaceBasis` are touched; the
         entries that are plain sub-spaces mean "no kernel here" and are skipped.
+
+        The projection is a recorded operation (`gadopt.nullspaces.
+        project_out_kernel`). The coefficient change goes through the PETSc
+        vector, which pyadjoint cannot see, so the function records a
+        `KernelProjectionBlock` around it. Replay then returns the projected
+        solution, as the forward run did, and the adjoint, the tangent linear
+        model and the Hessian apply the same projection. The forward values
+        are those of `VectorSpaceBasis.orthogonalize`, bit for bit.
         """
-        if self.nullspace is None:
-            return False
-        projected = False
-        for i, basis in enumerate(self.nullspace):
-            if isinstance(basis, VectorSpaceBasis):
-                basis.orthogonalize(self.solution.subfunctions[i])
-                projected = True
-        return projected
+        return project_out_kernel(self.nullspace, self.solution)
 
     def solve(self) -> None:
         """Refreshes the enclosed mass, solves, then projects out the kernel."""
@@ -6036,6 +6046,13 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if adopt:
             from .dtn_coupled_adjoint import adopt_coupled_lowrank_block
             adopt_coupled_lowrank_block(self, tape, n0)
+        # The projection is recorded, and so is the copy below, which depends
+        # on the projected value. On the quadrature path the solve block has
+        # already projected inside its own map (`DirectConstitutiveBackend.
+        # forward`), so this applies P a second time. P is idempotent up to
+        # round-off, and its adjoint is applied twice as well, which is
+        # correct. The second application is part of the forward map that the
+        # GIA reference runs are compared against bit for bit.
         if self.project_out_nullspace():
             # `StokesSolverBase.solve` has already copied the solution into
             # `solution_old`; the projection happens afterwards, so the old

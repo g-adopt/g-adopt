@@ -39,7 +39,9 @@ from .level_set_tools import (
     min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
-from .nullspaces import (create_stokes_nullspace, near_incompressible_modes,
+from .nullspaces import (KernelProjectionBlock, apply_kernel_projection,
+                         check_kernel_basis, create_stokes_nullspace,
+                         near_incompressible_modes, project_out_kernel,
                          rigid_body_modes, solenoidal_modes)
 from .internal_variable_equation import internal_variable_space
 from .preconditioners import (CondensedBlockPC, ReducedGIABlockPC,  # noqa: F401
