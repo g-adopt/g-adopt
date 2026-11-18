@@ -359,14 +359,19 @@ class KrylovRecorder:
         pmat_context: the ``InnerProductMat`` of ``riesz_hessian.py`` that the run
             passed as the preconditioning matrix, or None.
         comm: communicator of the control.
+        wall_nodes: ``{"bottom": array, "top": array}`` of local indices of the
+            wall nodes in the layout of the control vector, or None. With it, each
+            solve also records which wall nodes are in the active set, so that the
+            entries into and exits from the active set can be counted.
 
     Attributes:
         solves: the solve records not yet handed out by ``pop_solves``.
         errors: messages of failures inside the hooks.
     """
 
-    def __init__(self, tao, pmat_context=None, comm=MPI.COMM_WORLD):
+    def __init__(self, tao, pmat_context=None, comm=MPI.COMM_WORLD, wall_nodes=None):
         self.tao = tao
+        self.wall_nodes = wall_nodes or {}
         self.ksp = tao.getKSP()
         self.pmat_context = pmat_context
         self.comm = comm
@@ -481,6 +486,8 @@ class KrylovRecorder:
             None when the preconditioning matrix is not from ``riesz_hessian.py``.
         """
         split = {"active_lower": None, "active_upper": None, "active_fixed": None}
+        for name in self.wall_nodes:
+            split[f"active_wall_{name}"] = None
         context = pmat.getPythonContext() if pmat.getType() == PETSc.Mat.Type.PYTHON else None
         if context is None:
             return split
@@ -504,6 +511,13 @@ class KrylovRecorder:
         for key, mask in (("active_lower", near_lower), ("active_upper", near_upper),
                           ("active_fixed", fixed)):
             split[key] = int(self.comm.allreduce(int(mask.sum()), op=MPI.SUM))
+        # The wall nodes in the active set, as global indices of the control
+        # vector, sorted. One wall has 65 nodes at 64 cells, so the list is short,
+        # and two consecutive lists give the nodes that entered and left the set.
+        for name, nodes in self.wall_nodes.items():
+            local = [int(i) + start for i in nodes if active[i]]
+            gathered = self.comm.allgather(local)
+            split[f"active_wall_{name}"] = sorted(i for part in gathered for i in part)
         return split
 
     def pop_solves(self):

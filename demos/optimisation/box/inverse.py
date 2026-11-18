@@ -71,6 +71,20 @@ def parse_args(argv=None):
                              "Compute sigma and L from the doubles of a record "
                              "(sigma = 1/sqrt(metric_c_d), L = "
                              "sqrt(metric_c_s/metric_c_d)), never from rounded digits")
+    parser.add_argument("--wall-treatment", default="free", choices=("free", "pinned"),
+                        help="'pinned' gives the top and bottom wall nodes equal "
+                             "lower and upper bounds at the wall values (bottom 1, "
+                             "top 0), so BNK keeps them in its fixed set; the first "
+                             "guess then carries the wall values too. 'free' keeps "
+                             "the bounds [0, 1] everywhere (default)")
+    parser.add_argument("--prior-wall-bc", default="none", choices=("none", "dirichlet"),
+                        help="'dirichlet' puts a homogeneous Dirichlet condition on "
+                             "the top and bottom walls into the regularisation "
+                             "operator (Riesz map and preconditioner); 'none' keeps "
+                             "the Neumann operator (default)")
+    parser.add_argument("--initial-guess-walls", action="store_true",
+                        help="set the wall nodes of the first guess to the wall "
+                             "values without pinning them")
     parser.add_argument("--work-budget", type=float, default=0.0,
                         help="stop when forward replays plus adjoint sweeps plus the "
                              "measured cost of the Hessian-vector products passes "
@@ -220,11 +234,20 @@ def prior_record(problem, riesz):
         # The first-order form ``c_d M + c_s K`` is outside the autoregressive
         # family of firedrake's covariance operator, so no order is stated.
         "order": None,
-        "wall_treatment": None,
-        "m0": None,
+        # The bounds on the wall nodes, the condition in the operator, and whether
+        # the first guess carries the wall values. The defaults are the state of
+        # every record before step S2: free, none, False.
+        "wall_treatment": dict(problem.wall_settings) or None,
+        # The prior mean is defined but enters no term of the objective yet.
+        "m0": "layer average at the window start, wall values imposed (bottom 1, top 0); "
+              "not in the objective",
+        "m0_norm": None,
         "sigma_obs": None,
         "pointwise_std_measured": None,
     }
+    if problem.m0 is not None:
+        from firedrake import assemble, dx
+        block["m0_norm"] = float(assemble(problem.m0 ** 2 * dx) ** 0.5)
     if riesz == "regularisation":
         c_d, c_s = weights["metric_c_d"], weights["metric_c_s"]
         block["form_c_d"] = 2 * c_d
@@ -283,6 +306,8 @@ def main(argv=None):
         inner_product=args.riesz, initial_guess=args.initial_guess,
         metric_alpha_d=args.metric_alpha_d, metric_alpha_s=args.metric_alpha_s,
         prior_sigma=args.prior_sigma, prior_L=args.prior_L,
+        wall_treatment=args.wall_treatment, prior_wall_bc=args.prior_wall_bc,
+        initial_guess_walls=args.initial_guess_walls,
     )
     log(f"Problem built: window {problem.window} steps, control dofs "
         f"{problem.Tic.function_space().dim()}, inner product {problem.inner_product.name}, "

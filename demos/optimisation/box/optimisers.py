@@ -321,7 +321,10 @@ class Recorder:
                         for key in ("J", "gradient_norm", "control_error",
                                     "initial_misfit", "final_misfit",
                                     "relative_final_misfit", "misfit_term",
-                                    "prior_term")})
+                                    "prior_term", "initial_misfit_bottom",
+                                    "initial_misfit_top", "initial_misfit_interior",
+                                    "wall_max_dev_bottom", "wall_max_dev_top")
+                        if key in self.gradients[-1]})
         row.update(extra)
         self.iterations.append(row)
         self.write()
@@ -818,7 +821,8 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     krylov = None
     if tao.getType() in TAO_KRYLOV_TYPES:
         krylov = KrylovRecorder(tao, pmat_context=pmat_context,
-                                comm=problem.Tic.function_space().mesh().comm)
+                                comm=problem.Tic.function_space().mesh().comm,
+                                wall_nodes=problem.wall_nodes)
         krylov.attach()
     diagnostic_errors = []
 

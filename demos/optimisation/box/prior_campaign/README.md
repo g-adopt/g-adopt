@@ -14,6 +14,9 @@ The run outputs are not in git.
 | `smoke.slurm` | Runs the tiny box case with two code copies and compares the two records. |
 | `submit_s0.sh` | Submits step S0. Runs on a Setonix login node. |
 | `submit_s1.sh` | Submits acceptance test 3 of step S1. Runs on a Setonix login node. |
+| `submit_s2.sh` | Submits step S2, the wall treatment: a smoke job, a regression run and five long runs. Runs on a Setonix login node. |
+| `smoke_pinned.slurm` | Runs the two pinned cases of S2 for two iterations and checks them. |
+| `check_pinned.py` | Checks that pinned wall nodes stay in BNK's fixed set and do not move. |
 | `fetch.sh` | Copies the records of one step from Setonix to reunion. Runs on reunion. |
 | `compare_records.py` | Compares two JSON records row by row. |
 

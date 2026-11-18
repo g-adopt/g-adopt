@@ -36,6 +36,8 @@ the initial inverse Hessian and the Krylov preconditioner.
 """
 
 import gc
+
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -62,11 +64,18 @@ class InnerProduct:
         riesz_map: a firedrake ``RieszMap`` that inverts the form. Passed to
             ``Control(..., riesz_map=...)`` so pyadjoint returns gradients and Hessian
             actions measured in this inner product.
+        bcs: the homogeneous ``DirichletBC`` objects of the operator, or an empty
+            list. With conditions, the operator is the form restricted to the free
+            nodes: ``riesz_map`` returns ``A_ff^{-1} g_f`` on the free nodes and zero
+            on the constrained ones, and ignores the entries of ``g`` there. ``form``
+            stays the form without conditions, and it equals the operator on every
+            pair of functions that vanish on the constrained nodes.
     """
 
     name: str
     form: Callable
     riesz_map: object
+    bcs: list = field(default_factory=list)
 
     def norm(self, x):
         """Norm of a primal Function in this inner product."""
@@ -104,6 +113,17 @@ class InverseProblem:
         Taverage: the layer average at the window start, the reference of the
             regularisation terms.
         T0_bcs: the two ``DirichletBC`` objects that turn the control into ``T0``.
+        m0: the prior mean, the layer average at the window start with the wall
+            values imposed (bottom 1, top 0). It enters no term of the objective
+            yet; it is defined here so that a prior term can use it.
+        wall_nodes: ``{"bottom": array, "top": array}``, the owned local indices
+            of the control nodes on the two walls, in the order of the PETSc
+            vector of the control.
+        wall_weights: ``{"bottom": Function, "top": Function}``, the sum of the
+            CG1 hat functions of the nodes of each wall. With the remainder
+            ``1 - bottom - top`` they form a partition of unity, which splits an
+            integral into three parts that add up to the whole.
+        wall_settings: the wall treatment of this problem, for the record.
     """
 
     reduced_functional: object
@@ -123,6 +143,10 @@ class InverseProblem:
     window_time: Optional[float] = None
     Taverage: Optional[Function] = None
     T0_bcs: list = field(default_factory=list)
+    m0: Optional[Function] = None
+    wall_nodes: dict = field(default_factory=dict)
+    wall_weights: dict = field(default_factory=dict)
+    wall_settings: dict = field(default_factory=dict)
 
     def control_error(self, m=None):
         """Relative L2 error of a control value against the true initial temperature.
@@ -231,15 +255,56 @@ class InverseProblem:
             dict with ``initial_misfit``, ``final_misfit``, ``control_error`` and
             ``relative_final_misfit``.
         """
-        return {
+        out = {
             "initial_misfit": self.initial_misfit(m),
             "final_misfit": self.final_misfit(),
             "control_error": float(self.control_error(m)),
             "relative_final_misfit": self.relative_final_misfit(),
         }
+        out.update(self.wall_measures(m))
+        return out
+
+    def wall_measures(self, m=None):
+        """The initial misfit split into the two wall rows and the remainder.
+
+        The split uses the partition of unity of ``wall_weights``:
+
+            initial_misfit = int e^2 w_bottom dx + int e^2 w_top dx
+                           + int e^2 (1 - w_bottom - w_top) dx,  e = m - Tic_true,
+
+        with the same degree-6 quadrature as ``initial_misfit``, so the three
+        parts add up to it to round-off. ``w_bottom`` is 1 on the bottom nodes and
+        falls to 0 one cell above them, so the bottom part measures the error in
+        the bottom cell row, weighted towards the wall. The nodal deviations are
+        ``max |m - 1|`` on the bottom nodes and ``max |m|`` on the top nodes, the
+        distance of the control from the wall values of the temperature; with
+        pinned walls both are exactly zero.
+
+        Args:
+            m: a Function in the control space. Defaults to the current tape value.
+
+        Returns:
+            dict, empty when the problem holds no wall weights.
+        """
+        if not self.wall_weights:
+            return {}
+        if m is None:
+            m = self.control.tape_value()
+        error_sq = (m - self.Tic_true) ** 2
+        w_bottom, w_top = self.wall_weights["bottom"], self.wall_weights["top"]
+        values = m.dat.data_ro
+        return {
+            "initial_misfit_bottom": float(assemble(error_sq * w_bottom * _dx)),
+            "initial_misfit_top": float(assemble(error_sq * w_top * _dx)),
+            "initial_misfit_interior": float(
+                assemble(error_sq * (1 - w_bottom - w_top) * _dx)),
+            "wall_max_dev_bottom": float(np.max(np.abs(
+                values[self.wall_nodes["bottom"]] - 1.0))),
+            "wall_max_dev_top": float(np.max(np.abs(values[self.wall_nodes["top"]]))),
+        }
 
 
-def make_inner_product(Q1, name, c_d=1.0, c_s=0.0):
+def make_inner_product(Q1, name, c_d=1.0, c_s=0.0, bcs=None):
     """Build an ``InnerProduct`` on the control space.
 
     Args:
@@ -267,19 +332,39 @@ def make_inner_product(Q1, name, c_d=1.0, c_s=0.0):
     else:
         raise ValueError(f"unknown inner product {name!r}; use 'L2' or 'regularisation'")
 
+    solver_parameters = {"ksp_type": "preonly", "pc_type": "lu",
+                         "pc_factor_mat_solver_type": "mumps"}
+    if not bcs:
+        riesz_map = RieszMap(
+            form(TrialFunction(Q1), TestFunction(Q1)),
+            solver_parameters=solver_parameters,
+            constant_jacobian=True,
+        )
+        return InnerProduct(name=name, form=form, riesz_map=riesz_map)
+
+    # The operator with homogeneous Dirichlet conditions. ``restrict=False`` keeps
+    # the full space: firedrake replaces the constrained rows by identity rows and
+    # sets the solution there to the condition value, zero, so the solve gives
+    # ``A_ff u_f = g_f`` on the free nodes exactly, with the coupling block
+    # multiplied by ``u_c = 0``. The default ``restrict=True`` builds a
+    # RestrictedFunctionSpace, which gave a relative error of 1.25 against an
+    # assembled reference on this mesh and once an IndexError
+    # (NOTES/HANDOUT-BOX-PRIOR-2026-11-18.md, step S2).
     riesz_map = RieszMap(
         form(TrialFunction(Q1), TestFunction(Q1)),
-        solver_parameters={"ksp_type": "preonly", "pc_type": "lu",
-                           "pc_factor_mat_solver_type": "mumps"},
+        bcs=list(bcs), restrict=False,
+        solver_parameters=solver_parameters,
         constant_jacobian=True,
     )
-    return InnerProduct(name=name, form=form, riesz_map=riesz_map)
+    return InnerProduct(name=name, form=form, riesz_map=riesz_map, bcs=list(bcs))
 
 
 def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
                   inner_product="L2", initial_guess="average",
                   metric_alpha_d=None, metric_alpha_s=None,
                   prior_sigma=None, prior_L=None,
+                  wall_treatment="free", prior_wall_bc="none",
+                  initial_guess_walls=False,
                   checkpointing_schedule=None):
     """Tape the forward model once and return the inverse problem.
 
@@ -316,6 +401,18 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
             of the identity, because the misfit term carries weight 1.
         prior_L: the correlation length ``L`` of the same statement, in the
             non-dimensional length of the box.
+        wall_treatment: ``"free"`` keeps the bounds [0, 1] on every node.
+            ``"pinned"`` gives the wall nodes equal lower and upper bounds, the
+            wall values of the temperature (bottom 1, top 0). BNK puts a variable
+            with equal bounds in its fixed set, so it never enters the Krylov
+            system. The first guess then carries the wall values as well, which TAO
+            would impose anyway when it projects the first point onto the bounds.
+        prior_wall_bc: ``"none"`` builds the metric with no boundary condition (a
+            Neumann stiffness matrix). ``"dirichlet"`` puts a homogeneous Dirichlet
+            condition on the top and bottom walls into the operator, see
+            ``make_inner_product``. Needs ``inner_product="regularisation"``.
+        initial_guess_walls: set the wall nodes of the first guess to the wall
+            values, without pinning them.
         checkpointing_schedule: a ``checkpoint_schedules`` schedule, or None to hold
             every state in memory. Hessian-vector products need None, because
             pyadjoint has no checkpoint-manager path for the tangent linear and
@@ -433,7 +530,39 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
             f"non-negative stiffness weight, and got metric_alpha_d={m_alpha_d} "
             f"(mass) and metric_alpha_s={m_alpha_s} (stiffness). With alpha_d at "
             f"zero, pass metric_alpha_d explicitly.")
-    ip = make_inner_product(Q1, inner_product, c_d=2 * m_c_d, c_s=2 * m_c_s)
+    # ---- Walls ---------------------------------------------------------------------
+    # Every object here is built with annotation stopped, so that the tape is the
+    # same for every wall setting: a boundary condition with a constant value can
+    # add a block of its own when it is built during annotation.
+    if wall_treatment not in ("free", "pinned"):
+        raise ValueError(f"unknown wall_treatment {wall_treatment!r}")
+    if prior_wall_bc not in ("none", "dirichlet"):
+        raise ValueError(f"unknown prior_wall_bc {prior_wall_bc!r}")
+    if prior_wall_bc == "dirichlet" and inner_product != "regularisation":
+        raise ValueError("prior_wall_bc='dirichlet' needs the 'regularisation' "
+                         "inner product")
+    with stop_annotating():
+        # The wall values of the temperature, the same as ``temp_bcs`` and T0_bcs.
+        wall_value_bcs = [DirichletBC(Q1, 1.0, boundary.bottom),
+                          DirichletBC(Q1, 0.0, boundary.top)]
+        n_owned = Q1.dof_dset.size
+        wall_nodes = {name: np.sort(bc.nodes[bc.nodes < n_owned])
+                      for name, bc in zip(("bottom", "top"), wall_value_bcs)}
+        wall_weights = {}
+        for name, bc in zip(("bottom", "top"), wall_value_bcs):
+            weight = Function(Q1, name=f"Wall_Weight_{name}")
+            DirichletBC(Q1, 1.0, bc.sub_domain).apply(weight)
+            wall_weights[name] = weight
+        # The prior mean of the campaign: the layer average with the wall values.
+        m0 = Function(Q1, name="Prior_Mean").assign(Taverage)
+        for bc in wall_value_bcs:
+            bc.apply(m0)
+        operator_bcs = None
+        if prior_wall_bc == "dirichlet":
+            operator_bcs = [DirichletBC(Q1, 0.0, boundary.bottom),
+                            DirichletBC(Q1, 0.0, boundary.top)]
+    ip = make_inner_product(Q1, inner_product, c_d=2 * m_c_d, c_s=2 * m_c_s,
+                            bcs=operator_bcs)
 
     # The initial guess is data, not part of the model, so it is set without
     # annotation. The Control is the first tape entry that involves ``Tic``.
@@ -450,6 +579,12 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
             Tic.project(Tic_true)
         else:
             raise ValueError(f"unknown initial_guess {initial_guess!r}")
+        guess_walls = initial_guess_walls or wall_treatment == "pinned"
+        if guess_walls:
+            # The projection of Tobs misses the wall values slightly (0.9977 on the
+            # bottom row against 1), so the wall nodes are overwritten with them.
+            for bc in wall_value_bcs:
+                bc.apply(Tic)
     control = Control(Tic, riesz_map=ip.riesz_map)
 
     # T0 is the control with the strong boundary values imposed, in the control
@@ -535,6 +670,13 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
 
     T_lb = Function(Q1, name="Lower_Bound_Temperature").assign(0.0)
     T_ub = Function(Q1, name="Upper_Bound_Temperature").assign(1.0)
+    if wall_treatment == "pinned":
+        # Equal bounds on the wall nodes: BNK's fixed set. The tape is untouched,
+        # so the Hessian harness in tests/hessian/ works as before.
+        with stop_annotating():
+            for bc in wall_value_bcs:
+                bc.apply(T_lb)
+                bc.apply(T_ub)
 
     return InverseProblem(
         reduced_functional=reduced_functional,
@@ -557,4 +699,11 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
         window_time=window * delta_t_value,
         Taverage=Taverage,
         T0_bcs=T0_bcs,
+        m0=m0,
+        wall_nodes=wall_nodes,
+        wall_weights=wall_weights,
+        wall_settings={"bounds": wall_treatment, "operator_bc": prior_wall_bc,
+                       "first_guess_walls": bool(guess_walls),
+                       "wall_nodes_bottom": int(len(wall_nodes["bottom"])),
+                       "wall_nodes_top": int(len(wall_nodes["top"]))},
     )
