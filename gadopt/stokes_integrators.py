@@ -886,10 +886,14 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
 
     def solve(self) -> None:
         """Solves the system."""
+        # Copy the present solution into `solution_old` before the solve, so
+        # that forms which read `solution_old` see the state at the start of
+        # this step, also when the caller changed `solution` since the last
+        # solve. This is the order `IrksomeIntegrator.advance` uses.
+        self.solution_old.assign(self.solution)
         # The adjoint keywords are read on the first annotated solve only:
         # Firedrake builds the cached adjoint solver then and keeps it.
         self.solver.solve(**self.adjoint_solve_keywords())
-        self.solution_old.assign(self.solution)
 
 
 class StokesSolver(StokesSolverBase):

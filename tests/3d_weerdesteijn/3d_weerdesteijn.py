@@ -402,7 +402,7 @@ for timestep in range(1, max_timesteps+1):
     with coupled_stage: coupled_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {float(time)} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
                  f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
@@ -413,7 +413,7 @@ for timestep in range(1, max_timesteps+1):
     log("Greatest (-ve) displacement", displacement_min)
     displacement_max = gd.uv_max(boundary.top) * D
     log("Greatest (+ve) displacement", displacement_max)
-    displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
+    displacement_min_array.append([characteristic_maxwell_time*float(time)/year_in_seconds, displacement_min])
     disp_norm_L2surf = gd.l2_norm_top()
     log("L2 surface norm displacement", disp_norm_L2surf)
     disp_norm_L1surf = gd.l1_norm_top()

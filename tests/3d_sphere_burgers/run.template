@@ -1,0 +1,9 @@
+{header}
+
+{prescript}
+
+export GADOPT_LOGLEVEL=DEBUG
+{executor} {command} --Tend ${DT_YEARS} 2> level_${LEVEL}_warmup.err > level_${LEVEL}_warmup.out
+unset GADOPT_LOGLEVEL
+export PETSC_OPTIONS="-log_view :profile_${LEVEL}.txt"
+{executor} {command} --Tend ${RUN_END} 2> level_${LEVEL}_full.err > level_${LEVEL}_full.out

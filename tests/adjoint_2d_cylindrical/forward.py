@@ -155,7 +155,8 @@ def get_reference_values():
             - delta_t: Time-step length (6e-6)
             - mu_0: Background viscosity (2.0)
             - mu_plast: Minimum plastic viscosity (0.1)
-            - mu_min: Minimum effective viscosity (0.4)
+            - mu_min: Minimum effective viscosity (0.4), applied as a smooth maximum
+            - mu_min_smoothing: width of the smooth maximum as a fraction of mu_min (0.05)
             - sigma_y: Surface yield stress (2e4)
             - sigma_y_depth: Depth dependence of yield stress (4e5)
             - mu_T: Temperature dependence of viscosity (80)
@@ -166,7 +167,8 @@ def get_reference_values():
         "delta_t": 6e-6,  # Time-step length
         "mu_0": 2.0,  # Background viscosity
         "mu_plast": 0.1,  # minimum plastic viscosity: mu_plast = 0.1 + sigma_y / epsii
-        "mu_min": 0.4,  # Miminimum amount of effective viscosity: mu = min(mu_eff, 0.4)
+        "mu_min": 0.4,  # Minimum effective viscosity: mu >= 0.4, applied as a smooth maximum
+        "mu_min_smoothing": 0.05,  # width of the smooth maximum, as a fraction of mu_min
         "sigma_y": 2e4,  # yield stress at the surface: sigma_y = 2e4 + 4e5 * (rmax - r)
         "sigma_y_depth": 4e5,  # depth dependence of yield stress: sigma_y = 2e4 + 4e5 * (rmax - r)
         "mu_T": 80,  # Temperature dependence of viscosity: mu_lin *= exp(-ln(Constant(80)) * T)
@@ -227,7 +229,13 @@ def get_viscosity(r, T, u):
     sigma_y = reference_values["sigma_y"] + reference_values["sigma_y_depth"] * (geometry_parameters["rmax"] - r)
     mu_plast = 0.1 + (sigma_y / epsii)
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
-    mu = conditional(mu_eff > reference_values["mu_min"], mu_eff, reference_values["mu_min"])
+
+    # Smooth maximum for the floor mu >= mu_min. A `conditional` has a kink whose
+    # second derivative UFL drops, so the Hessian fails the second-order Taylor test.
+    # This form never falls below mu_min and exceeds max(mu_eff, mu_min) by at most delta/2.
+    mu_min = reference_values["mu_min"]
+    delta = reference_values["mu_min_smoothing"] * mu_min
+    mu = 0.5 * (mu_eff + mu_min + sqrt((mu_eff - mu_min) ** 2 + delta**2))
     return mu
 
 
