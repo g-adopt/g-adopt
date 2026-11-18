@@ -815,6 +815,15 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
     FORWARD_ONLY_SNES_OPTIONS = ("snes_rtol", "snes_atol", "snes_stol",
                                  "snes_max_it", "snes_linesearch_type")
 
+    #: Outer KSP options that only a Newton loop can afford. A forward solve
+    #: that accepts a capped linear solve (`ksp_converged_maxits`, set by
+    #: `outer_accept_capped`) is repaired by the next Newton iteration; a
+    #: derivative solve is one linear solve, and an accepted cap there returns
+    #: an unconverged adjoint or tangent with no error. They are dropped from
+    #: the derivative options, so a derivative solve that reaches `ksp_max_it`
+    #: raises `ConvergenceError`.
+    FORWARD_ONLY_KSP_OPTIONS = ("ksp_converged_maxits",)
+
     def adjoint_solver_parameters(self) -> dict:
         """The PETSc options for the adjoint solve that pyadjoint caches.
 
@@ -833,15 +842,24 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         scale").
 
         The options here are the forward ones with the Newton loop removed:
-        `snes_type ksponly` and no SNES tolerance. Every KSP option is kept,
-        because the preconditioner of the adjoint operator is the forward one
-        transposed and needs the same description.
+        `snes_type ksponly` and no SNES tolerance. The outer
+        `ksp_converged_maxits` is removed too (`FORWARD_ONLY_KSP_OPTIONS`): a
+        derivative solve has no Newton loop to repair a capped linear solve,
+        so it must raise when it reaches the cap. Every other KSP option is
+        kept, because the preconditioner of the adjoint operator is the
+        forward one transposed and needs the same description.
+
+        The same options serve every derivative solve of the GIA solvers: the
+        cached adjoint and tangent solvers (`adjoint_solve_keywords`,
+        `gadopt.dtn_coupled_adjoint.derivative_solver_kwargs`) and the
+        transpose solve of the quadrature path
+        (`gadopt.constitutive_integrators.DirectConstitutiveBackend`).
 
         Returns:
           A `dict` of PETSc options. Override this method to change them.
         """
         parameters = deepcopy(self.solver_parameters)
-        for option in self.FORWARD_ONLY_SNES_OPTIONS:
+        for option in self.FORWARD_ONLY_SNES_OPTIONS + self.FORWARD_ONLY_KSP_OPTIONS:
             parameters.pop(option, None)
         parameters["snes_type"] = "ksponly"
         return parameters

@@ -193,8 +193,11 @@ from .stokes_integrators import (
 from .utility import CombinedSurfaceMeasure, ensure_constant
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
 from ufl import derivative as ufl_derivative
+from ufl.algorithms import extract_coefficients
 from ufl.algorithms.ad import expand_derivatives
-from ufl.algorithms.analysis import extract_coefficients
+# Not in `ufl.algorithms.__all__`, and with no public equivalent: the node type
+# of a restriction and the traversal that finds it, which
+# `_restrict_parent_real_coefficients` needs (as `utility.py` does).
 from ufl.classes import Restricted
 from ufl.corealg.traversal import unique_pre_traversal
 
@@ -3239,8 +3242,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         calls `'+'`, and it is the spelling the solver already uses for the
         parent's CG potential on these measures. For a `Real` field it adds
         half of the facet integral to the single global entry from each side,
-        so the assembled value is the facet integral once, as on the pyop2
-        Firedrake (checked in `NOTES/design/step2b/repro/`).
+        so the assembled value is the facet integral once.
 
         Only the `Real` fields of the mixed space, their test functions and
         constants go through here. A field of the mechanics mesh must not:
@@ -3274,9 +3276,19 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         which the parent's facets are interior facets: the parent's own `dS`,
         and the facet-to-facet measures of the fluid core and the sea level.
         The value of a `Real` coefficient is the same on both sides, so the
-        residual does not change. A coefficient that already carries a
-        restriction in an integral is left as it is, because UFL refuses a
-        second restriction.
+        residual does not change. A coefficient that carries a restriction
+        everywhere it occurs in an integral (for example `sigma` inside
+        `avg(sigma * psi)` of a parent sheet) is left as it is, because UFL
+        refuses a second restriction.
+
+        A coefficient that occurs both inside and outside a restriction in one
+        integral (`c * avg(c * psi)`) cannot be fixed by `ufl.replace`, which
+        replaces every occurrence. Restricting only the outside occurrences
+        would need a hand-written UFL transformation, which G-ADOPT does not
+        write. Such a form raises here, at construction, with the name of the
+        coefficient: its derivative would otherwise raise later, in the middle
+        of an adjoint sweep. The remedy is to write the factor inside the
+        restriction, as `DtNGravityForm.boundary_source` does for `G`.
 
         Args:
           form: A form of this solver.
@@ -3284,6 +3296,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         Returns:
           The form with the parent's `Real` coefficients restricted on those
           integrals, or `form` itself when the meshes are the same.
+
+        Raises:
+          ValueError: If a `Real` coefficient of the parent occurs both inside
+            and outside a restriction in one such integral.
         """
         if not self.layout.cross_mesh:
             return form
@@ -3300,13 +3316,31 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             return (space.mesh() is parent
                     and space.ufl_element().family() == "Real")
 
+        def unrestricted_coefficients(expr):
+            # The coefficients that occur outside every restriction in `expr`.
+            # A read-only walk over the expression graph that does not descend
+            # into a `Restricted` node.
+            found, seen, stack = set(), set(), [expr]
+            while stack:
+                node = stack.pop()
+                if id(node) in seen or isinstance(node, Restricted):
+                    continue
+                seen.add(id(node))
+                if isinstance(node, Coefficient):
+                    found.add(node)
+                stack.extend(node.ufl_operands)
+            return found
+
+        # The interior-facet integral types of UFL, the extruded ones included.
+        interior = ("interior_facet", "interior_facet_vert",
+                    "interior_facet_horiz")
         integrals = []
         for integral in form.integrals():
             on_parent_facets = (
                 (integral.ufl_domain() is parent
-                 and integral.integral_type() == "interior_facet")
+                 and integral.integral_type() in interior)
                 or integral.extra_domain_integral_type_map().get(parent)
-                == "interior_facet")
+                in interior)
             if on_parent_facets:
                 integrand = integral.integrand()
                 # Every coefficient anywhere under a restriction, for example
@@ -3314,8 +3348,20 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 restricted = {c for node in unique_pre_traversal(integrand)
                               if isinstance(node, Restricted)
                               for c in extract_coefficients(node.ufl_operands[0])}
-                mapping = {c: avg(c) for c in extract_coefficients(integrand)
-                           if parent_real(c) and c not in restricted}
+                unrestricted = {c for c in unrestricted_coefficients(integrand)
+                                if parent_real(c)}
+                both = unrestricted & restricted
+                if both:
+                    names = ", ".join(sorted(str(c) for c in both))
+                    raise ValueError(
+                        f"The Real coefficient(s) {names} of the potential mesh "
+                        "occur both inside and outside a restriction in one "
+                        "integral on the parent's interior facets. The "
+                        "derivative with respect to them would need a "
+                        "restriction on the outside occurrence, which cannot "
+                        "be added without restricting the inside one twice. "
+                        "Write the factor inside the restriction.")
+                mapping = {c: avg(c) for c in unrestricted}
                 if mapping:
                     integral = integral.reconstruct(
                         integrand=replace(integrand, mapping))
@@ -5880,34 +5926,26 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         install_augmented_context(Jmat, self.dtn_operator)
 
     def adjoint_solve_keywords(self) -> dict:
-        """No adjoint keywords on the low-rank representation.
+        """No adjoint keywords from here on the low-rank representation.
 
         `StokesSolverBase` hands the cached adjoint solver the forward solver's
         own keywords with the options replaced, which is what makes a Taylor
         test complete at Earth scale on the multiplier representation.
 
-        The low-rank representation cannot take them. Its forward options put
-        `gadopt.LowRankPotentialPC` on the potential split, and that class needs
-        a matrix-free operator; the adjoint solve is built on an assembled one,
-        so it stops with `PC 'gadopt.preconditioners.LowRankPotentialPC' needs
-        pmat to have type python, but it is seqaij`. This is the failure
-        `NOTES/DECISIONS.md` records on 2026-09-15 as the reason the low-rank
-        path keeps `pc_type none` on block 1: its adjoint and tangent solves
-        reuse the forward parameters on an assembled matrix and crash
-        otherwise.
-
-        Returning nothing here leaves Firedrake's own path in place on that
-        representation, which is what the branch was measured against.
-
-        Measured on 2026-09-17 after the rebase, on
-        `tests/unit/test_gia_gravity_adjoint_lowrank.py` with the documented
-        filter for the known tangent-linear crash: the parent tip passes 128
-        and deselects 14, and this branch crashed at
-        `test_taylor_with_a_power_law[shear_modulus-iterative]` until this
-        method existed.
+        The low-rank representation cannot take those keywords. Its forward
+        options put `gadopt.LowRankPotentialPC` on the potential split, and
+        that class needs a matrix-free operator with the low-rank update. The
+        derivative solves of that representation need both augmentation
+        callbacks, the application context with `dtn_operator` and the
+        swapped nullspaces instead. `LowRankVariationalSolver.solve` supplies
+        those keywords itself, for the adjoint and the tangent solver
+        (`gadopt.dtn_coupled_adjoint.derivative_solver_kwargs`), so this
+        method returns nothing there and `StokesSolverBase.solve` passes
+        nothing on top.
 
         Returns:
-          The keywords for `solve`, empty on the low-rank representation.
+          `{}` on the low-rank representation, else the keywords of
+          `StokesSolverBase.adjoint_solve_keywords`.
         """
         if self.dtn_representation == "lowrank":
             return {}
@@ -6160,6 +6198,16 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # goes through `_forward_solve` and never through this method, so a
         # replayed solve leaves the index where the forward solve left it.
         self.appctx["gia_solve_index"] = self.appctx.get("gia_solve_index", 0) + 1
+        # Two marker blocks around the taped solve. A replay or a tangent
+        # sweep reaches the first before the solve, an adjoint or a Hessian
+        # sweep the second, and each raises `gia_tape_sweep` when a new sweep
+        # starts, so the rebuild rule of the preconditioners rebuilds for a
+        # replay at a new control value (`TapeSweepMarkerBlock`).
+        from .dtn_coupled_adjoint import TapeSweepMarkerBlock
+        markers = annotate_tape()
+        if markers:
+            get_working_tape().add_block(TapeSweepMarkerBlock(
+                self, self.appctx["gia_solve_index"], before=True))
         # Route 1.5b: on the low-rank path, let the stock annotated solve run,
         # then take its solve block off the tape and re-class it so the adjoint
         # and tangent carry `A + B` and the theta derivative. Record the block
@@ -6176,6 +6224,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             self._direct_backend.solve()
         else:
             super().solve()
+        if markers:
+            get_working_tape().add_block(TapeSweepMarkerBlock(
+                self, self.appctx["gia_solve_index"], before=False))
         # Publish the outer linear iterations and the Newton iterations of
         # this solve. `gia_rebuild = lagged` reads their ratio at the
         # next solve to decide whether its lagged complement of the `Real`

@@ -171,6 +171,22 @@ class TestAdjointSolverOptions:
         for option in solver.FORWARD_ONLY_SNES_OPTIONS:
             assert option not in adjoint
 
+    def test_an_accepted_cap_does_not_reach_the_adjoint(self, mesh):
+        """A capped derivative solve must raise, not return.
+
+        `ksp_converged_maxits` lets a forward solve accept a linear solve that
+        reached `ksp_max_it`, which the next Newton iteration repairs. A
+        derivative solve is one linear solve, so the option is dropped and the
+        cap itself is kept.
+        """
+        solver = build(mesh, exponent=3, transition_stress=1.0)
+        solver.solver_parameters["ksp_max_it"] = 7
+        solver.solver_parameters["ksp_converged_maxits"] = None
+        adjoint = solver.adjoint_solver_parameters()
+        assert "ksp_converged_maxits" not in adjoint
+        assert adjoint["ksp_max_it"] == 7
+        assert "ksp_converged_maxits" in solver.solver_parameters
+
     def test_every_krylov_option_is_kept(self, mesh):
         """The adjoint operator is the forward one transposed.
 
@@ -180,7 +196,7 @@ class TestAdjointSolverOptions:
         solver = build(mesh, exponent=3, transition_stress=1.0)
         adjoint = solver.adjoint_solver_parameters()
         for key, value in solver.solver_parameters.items():
-            if not key.startswith("snes_"):
+            if not key.startswith("snes_") and key not in solver.FORWARD_ONLY_KSP_OPTIONS:
                 assert adjoint[key] == value
 
     def test_the_forward_options_are_not_touched(self, mesh):

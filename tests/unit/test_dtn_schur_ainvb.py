@@ -2010,7 +2010,8 @@ def test_the_gradient_is_right_through_the_cached_path(meshes):
             if ainvb:
                 # The stock or the cached adjoint solver, whichever this
                 # Firedrake builds.
-                adjoint_solver = suite._adjoint_solver(solver.adjoint_block)
+                from gadopt.dtn_coupled_adjoint import adjoint_solver as find_adjoint_solver
+                adjoint_solver = find_adjoint_solver(solver.adjoint_block)
                 cache_builds = ainvb_cache(
                     adjoint_solver.snes.ksp.pc).build_count
             get_working_tape().clear_tape()

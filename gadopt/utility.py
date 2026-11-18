@@ -23,6 +23,7 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+from pyadjoint.tape import annotate_tape
 
 try:
     from firedrake import MeshSequenceGeometry
@@ -793,6 +794,11 @@ _DERIVATIVE_SOLVER_CACHES = ("_ad_forward_cache", "_ad_tangent_cache",
                              "_ad_adjoint_cache", "_ad_hessian_cache")
 
 
+#: The attribute `derivative_solve_keywords` sets on a solver once it has
+#: written the derivative keywords into the solver's namespace.
+_DERIVATIVE_KEYWORDS_WRITTEN = "_gadopt_derivative_keywords_written"
+
+
 def derivative_solve_keywords(solver, adj_kwargs: dict,
                               tlm_kwargs: dict | None = None) -> dict:
     """Give the adjoint (and tangent) solver keywords to the running Firedrake.
@@ -812,26 +818,45 @@ def derivative_solve_keywords(solver, adj_kwargs: dict,
     solvers do not exist yet, which is the same rule as on the stock path: the
     first annotated solve decides. `tlm_kwargs` defaults to a copy of
     `adj_kwargs`, which is what Firedrake does when only `adj_kwargs` is given
-    to the constructor.
+    to the constructor. A solver whose cached derivative solvers exist but
+    were not built from these keywords was solved under annotation before
+    this function saw it; its adjoint would run with the forward Newton
+    options and without the application context, so that raises.
 
     Args:
-      solver: The `NonlinearVariationalSolver` (or subclass) to be solved.
+      solver: The `NonlinearVariationalSolver` (or subclass) to be solved. An
+        object without Firedrake's cached-solver namespace (a test stand-in
+        that solves by hand) builds no derivative solvers and gets nothing.
       adj_kwargs: Constructor keywords of the adjoint `LinearVariationalSolver`.
       tlm_kwargs: Constructor keywords of the tangent `LinearVariationalSolver`
         (cached solver blocks only).
 
     Returns:
       The keywords to pass to `solver.solve`.
-    """
-    from pyadjoint.tape import annotate_tape
 
+    Raises:
+      RuntimeError: With cached solver blocks, if the derivative solvers of
+        `solver` already exist and were built without these keywords.
+    """
     if not annotate_tape():
         return {}
     if not CACHED_SOLVER_BLOCKS:
         return {"adj_kwargs": adj_kwargs}
+    namespace = getattr(solver, "_ad_args_kwargs", None)
+    if namespace is None:
+        return {}
     built = vars(solver)
-    if not any(name in built for name in _DERIVATIVE_SOLVER_CACHES):
-        namespace = solver._ad_args_kwargs
-        namespace.adj_kwargs = dict(adj_kwargs)
-        namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
+    if any(name in built for name in _DERIVATIVE_SOLVER_CACHES):
+        if not built.get(_DERIVATIVE_KEYWORDS_WRITTEN, False):
+            raise RuntimeError(
+                "The cached adjoint and tangent solvers of this solver already "
+                "exist and were built without the G-ADOPT derivative keywords: "
+                "an annotated solve of the inner Firedrake solver ran before "
+                "the G-ADOPT solve. Its adjoint would use the forward Newton "
+                "options and no application context. Solve through the G-ADOPT "
+                "solver (its `solve` method) from the first annotated solve on.")
+        return {}
+    namespace.adj_kwargs = dict(adj_kwargs)
+    namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
+    setattr(solver, _DERIVATIVE_KEYWORDS_WRITTEN, True)
     return {}

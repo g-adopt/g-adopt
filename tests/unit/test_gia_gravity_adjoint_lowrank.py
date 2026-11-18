@@ -1587,10 +1587,8 @@ def _assert_spaces_exact(mat, label):
 
 def _adjoint_solver(block):
     """The adjoint solver of an adopted coupled block, on either Firedrake."""
-    from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS
-    if CACHED_SOLVER_BLOCKS:
-        return block.adjoint_cache.solver
-    return block._ad_solvers["adjoint_lvs"]
+    from gadopt.dtn_coupled_adjoint import adjoint_solver
+    return adjoint_solver(block)
 
 
 def test_declared_nullspaces_are_exact_on_the_lowrank_operator(meshes):
@@ -1626,3 +1624,112 @@ def test_declared_nullspaces_are_exact_on_the_lowrank_operator(meshes):
     _assert_spaces_exact(forward, "forward")
     adjoint, _ = _adjoint_solver(solver.adjoint_block).snes.getJacobian()[:2]
     _assert_spaces_exact(adjoint, "adjoint")
+
+
+# ===========================================================================
+# A capped outer solve on the tape: raise or be right, never silently wrong
+#
+# `outer_accept_capped` makes PETSc count an outer Krylov solve that reaches
+# `outer_max_it` as converged. A forward solve under Newton survives that,
+# because the next Newton iteration repairs it. Two things made it unsafe on the
+# tape. The derivative solves are one linear solve each, and they inherited the
+# accepted cap, so a capped adjoint returned an unconverged answer. And the
+# rebuild rule of the preconditioners saw no change between two replays at
+# different control values, so the replay and the adjoint kept preconditioner
+# pieces built for the taping value, with which the cap is reached early.
+# Measured before the fix on this configuration (tape at viscosity 1.0, replay
+# and gradient at 0.2, cap 2): the replay 78 percent (low-rank) and 81 percent
+# (multiplier) off a fresh solve, and the gradient 83 to 99 percent too small,
+# with every solve reporting convergence. The derivative solves now drop the
+# accepted cap (`StokesSolverBase.FORWARD_ONLY_KSP_OPTIONS`), and
+# `TapeSweepMarkerBlock` moves the rebuild marker at every sweep of the tape.
+# ===========================================================================
+
+def _capped_parameters(representation, cap):
+    """The iterative preset with a `ksponly` outer solve capped at `cap`, accepted."""
+    return selfgrav_dtn_iterative_solver_parameters(
+        condensed=False, block0="condensed", block0_rtol=1e-4,
+        outer_rtol=1e-11, block0_max_it=200, snes_type="ksponly",
+        multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+        dtn_representation=representation, outer_max_it=cap,
+        outer_accept_capped=True)
+
+
+@pytest.mark.parametrize("representation", ["lowrank", "multiplier"])
+def test_a_capped_outer_solve_on_the_tape_is_never_silently_wrong(meshes, representation):
+    """Replay at a new control value with a capped outer solve, then the gradient.
+
+    The sequence of the review script: tape at the taping value, replay and
+    gradient there, then replay and gradient at the new value. The replay at the new value must equal a fresh solve at that value with
+    the same cap: the preconditioner is rebuilt for the new value, so the cap
+    costs what it costs a fresh solve (1.2e-5 relative here) and not 78
+    percent. The gradient there must either raise `ConvergenceError` (the
+    adjoint needs more outer iterations than the cap allows, as the forward
+    does) or equal the gradient of a tape recorded at that value without a
+    cap. A gradient that is neither is the silent failure this guards.
+    """
+    from firedrake.exceptions import ConvergenceError
+
+    sub = meshes[1]
+    taped_value, new_value, cap = 1.0, 0.2, 2
+    options = dict(fluid_core=True, rotation=True, declare_nullspace=True,
+                   declare_transpose_nullspace=True)
+
+    def fresh_value(value, parameters):
+        with stop_annotating():
+            solver, z, layout = _build(meshes, "viscosity", real(sub, value),
+                                       representation,
+                                       solver_parameters=parameters, **options)
+            solver.solve()
+            return float(_objective(z, layout, sub))
+
+    def taped(value, parameters):
+        tape = get_working_tape()
+        tape.clear_tape()
+        with stop_annotating():
+            control = real(sub, value)
+            solver, z, layout = _build(meshes, "viscosity", control,
+                                       representation,
+                                       solver_parameters=parameters, **options)
+        continue_annotation()
+        try:
+            solver.solve()
+            J = _objective(z, layout, sub)
+        finally:
+            pause_annotation()
+        return ReducedFunctional(J, Control(control))
+
+    capped = _capped_parameters(representation, cap)
+    tight = _capped_parameters(representation, 200)
+    tight.pop("ksp_converged_maxits")
+
+    # The reference gradient: a tape recorded at the new value, no cap reached.
+    reference = float(taped(new_value, tight).derivative().dat.data_ro[0])
+    expected_value = fresh_value(new_value, capped)
+
+    Jhat = taped(taped_value, capped)
+    # A replay and a gradient at the taping value first, so that the replay
+    # and the derivative solvers build their preconditioners there. A
+    # gradient that reaches the cap raises; that is the wanted outcome, and
+    # the test goes on to the new value.
+    with stop_annotating():
+        Jhat(real(sub, taped_value))
+    try:
+        Jhat.derivative()
+    except ConvergenceError:
+        pass
+    with stop_annotating():
+        replayed = float(Jhat(real(sub, new_value)))
+    assert abs(replayed - expected_value) <= 1e-4 * abs(expected_value), (
+        f"replay at {new_value} gives {replayed:.10e}, a fresh capped solve "
+        f"{expected_value:.10e}: the replay kept a preconditioner of the "
+        "taping value")
+    try:
+        gradient = float(Jhat.derivative().dat.data_ro[0])
+    except ConvergenceError:
+        return
+    finally:
+        get_working_tape().clear_tape()
+    assert abs(gradient - reference) <= 1e-3 * abs(reference), (
+        f"gradient {gradient:.10e} after a capped replay, {reference:.10e} "
+        "from a tape at that value: a capped derivative solve was accepted")

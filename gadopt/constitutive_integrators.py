@@ -295,7 +295,11 @@ class DirectConstitutiveBackend:
                                       appctx=self.owner.appctx)
             if self.lowrank:
                 self.owner.augment_jacobian(None, self.matrix.petscmat)
-            options = {k: v for k, v in self.owner.solver_parameters.items() if not k.startswith('snes_')}
+            # The derivative options of the solver without its SNES part: no
+            # accepted cap on the outer Krylov solve, so a capped transpose
+            # solve raises (`StokesSolverBase.adjoint_solver_parameters`).
+            options = {k: v for k, v in self.owner.adjoint_solver_parameters().items()
+                       if not k.startswith('snes_')}
             self.linear_solver = fd.LinearSolver(self.matrix, solver_parameters=options,
                 nullspace=self.owner.transpose_nullspace or self.owner.nullspace,
                 transpose_nullspace=self.owner.nullspace, near_nullspace=self.owner.near_nullspace,

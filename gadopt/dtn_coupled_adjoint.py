@@ -102,6 +102,7 @@ from firedrake import (Cofunction, LinearVariationalProblem,
                        LinearVariationalSolver, NonlinearVariationalSolver,
                        TrialFunction, assemble, derivative)
 from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+from pyadjoint import Block
 from pyadjoint.tape import annotate_tape
 
 from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords
@@ -125,12 +126,112 @@ SOLVE_BLOCK_TYPE = (CachedSolverBlock if CACHED_SOLVER_BLOCKS
                     else NonlinearVariationalSolveBlock)
 
 __all__ = ["CACHED_SOLVER_BLOCKS", "CachedCoupledLowRankDtNSolveBlock",
+           "adjoint_solver",
            "CoupledLowRankDtNSolveBlock",
            "LowRankVariationalSolver", "SOLVE_BLOCK_TYPE",
+           "TapeSweepMarkerBlock",
            "TapingSolverReleasedError", "adopt_coupled_lowrank_block",
            "derivative_solver_kwargs",
            "live_solver_objects", "release_taping_solver",
            "require_controls_reach_block"]
+
+
+class TapeSweepMarkerBlock(Block):
+    """A tape block that raises `gia_tape_sweep` when a sweep of the tape starts.
+
+    The rebuild rule of the GIA preconditioners (`gadopt.preconditioners.
+    _RebuildRule`) keys on markers that only `SelfGravitatingGIASolver.solve`
+    moves. A replay at a new control value, or the adjoint sweep that follows
+    it, does not run that method, so without a further marker the replay and
+    derivative solvers keep preconditioner pieces built for the old control
+    value. With a capped outer solve that is a wrong answer and not only a
+    slow one. This block gives the rule that marker.
+
+    `SelfGravitatingGIASolver.solve` puts two of these on the tape around each
+    annotated solve: one before it (`before=True`), which a replay and a
+    tangent sweep reach before the solve block, and one after it, which an
+    adjoint and a Hessian sweep reach before the solve block, because they run
+    the tape backwards. A block counts a new sweep when the direction of the
+    sweep changes, or when the solve index it belongs to does not move on in
+    the direction of the sweep (a replay that starts again at the first step,
+    or a tape of one step). Within one sweep the counter stays, so the lagged
+    rebuild of an adjoint sweep keeps its lag.
+
+    The block has no dependencies and no outputs, so it changes no value on
+    the tape. It writes into the solver's application context, which the
+    forward, replay and derivative solvers of both DtN representations share
+    on this Firedrake; `CachedCoupledLowRankDtNSolveBlock` also copies it
+    into the contexts of its cached solvers (`_bound_to_block`).
+
+    Args:
+      gia_solver: The `SelfGravitatingGIASolver` whose application context
+        holds the counter.
+      solve_index: The `gia_solve_index` of the forward solve this block
+        belongs to.
+      before: `True` for the block in front of the solve, `False` for the one
+        behind it.
+    """
+
+    def __init__(self, gia_solver, solve_index, before):
+        super().__init__()
+        self.gia_solver = gia_solver
+        self.solve_index = solve_index
+        self.before = before
+
+    def __str__(self):
+        return f"TapeSweepMarkerBlock({'before' if self.before else 'after'})"
+
+    def _visit(self, direction):
+        """Count a new sweep if this visit does not continue the last one.
+
+        Args:
+          direction: `+1` for a sweep in tape order (replay, tangent), `-1`
+            for a sweep in reverse order (adjoint, Hessian).
+        """
+        solver = self.gia_solver
+        last = getattr(solver, "_tape_sweep_visit", None)
+        if (last is None or last[0] != direction
+                or (self.solve_index - last[1]) * direction <= 0):
+            solver.appctx["gia_tape_sweep"] = solver.appctx.get("gia_tape_sweep", 0) + 1
+        solver._tape_sweep_visit = (direction, self.solve_index)
+
+    # pyadjoint calls these four for every block of a sweep. The stock
+    # versions return early for a block without outputs, so they are
+    # replaced, not extended.
+    def recompute(self, markings=False):
+        if self.before:
+            self._visit(+1)
+
+    def evaluate_tlm(self, markings=False):
+        if self.before:
+            self._visit(+1)
+
+    def evaluate_adj(self, markings=False):
+        if not self.before:
+            self._visit(-1)
+
+    def evaluate_hessian(self, markings=False):
+        if not self.before:
+            self._visit(-1)
+
+
+def adjoint_solver(block):
+    """The adjoint `LinearVariationalSolver` of a variational solve block.
+
+    The stock solve block (Firedrake `main`) keeps it in its `_ad_solvers`
+    dict; a cached solver block (Firedrake PR 4638) in its adjoint cache. One
+    object per forward solver on both, shared by every block that solver put
+    on the tape.
+
+    Args:
+      block: A block of type `SOLVE_BLOCK_TYPE`, adopted or not.
+
+    Returns:
+      The adjoint solver that the adjoint sweep uses for this block.
+    """
+    if CACHED_SOLVER_BLOCKS:
+        return block.adjoint_cache.solver
+    return block._ad_solvers["adjoint_lvs"]
 
 
 def derivative_solver_kwargs(gia_solver, suffix: str, *, transpose: bool) -> dict:
@@ -153,10 +254,12 @@ def derivative_solver_kwargs(gia_solver, suffix: str, *, transpose: bool) -> dic
     Returns:
       Keyword arguments for `LinearVariationalSolver`.
     """
-    parameters = dict(gia_solver.solver_parameters)
-    # A linear system: one Krylov solve from a zero guess is the answer, and
-    # `newtonls` would spend one more residual evaluation to confirm it.
-    parameters["snes_type"] = "ksponly"
+    # The derivative options of the solver: `ksponly` (a linear system, one
+    # Krylov solve from a zero guess is the answer), no Newton tolerances, and
+    # no accepted cap on the outer Krylov solve, so a capped derivative solve
+    # raises instead of returning an unconverged answer
+    # (`StokesSolverBase.adjoint_solver_parameters`).
+    parameters = gia_solver.adjoint_solver_parameters()
     nullspace, transpose_nullspace = gia_solver.nullspace, gia_solver.transpose_nullspace
     if transpose:
         nullspace, transpose_nullspace = transpose_nullspace, nullspace
@@ -389,6 +492,15 @@ class _ThetaPsiTerms:
         saved_dt = [ctx.get("gia_dt", missing) for ctx in dt_contexts]
         for ctx in dt_contexts:
             ctx["gia_dt"] = dt
+        # The tape sweep counter (`TapeSweepMarkerBlock`) into every context
+        # the preconditioners read. Where those are the solver's own dict this
+        # writes the same value back; where Firedrake gave a cached solver a
+        # copy of the dict, the copy would otherwise keep the counter of the
+        # time it was made. A counter is never restored: it only grows.
+        sweep = self.gia_solver.appctx.get("gia_tape_sweep")
+        if sweep is not None:
+            for ctx in all_contexts:
+                ctx["gia_tape_sweep"] = sweep
         integrator = getattr(self.gia_solver, "time_integrator", None)
         alpha = None
         if integrator is not None:

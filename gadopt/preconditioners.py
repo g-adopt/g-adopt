@@ -672,6 +672,32 @@ def _last_solve_outer_per_newton(pc):
     return float(linear) / max(1, int(newton))
 
 
+def _tape_sweep(pc):
+    """The replay or derivative sweep of the tape this solve belongs to.
+
+    `gadopt.dtn_coupled_adjoint.TapeSweepMarkerBlock` raises
+    `gia_tape_sweep` in the application context when a replay, an adjoint
+    sweep, a tangent sweep or a Hessian sweep of the tape starts. A forward run
+    never moves it. Between two such sweeps the controls can change (a replay
+    at a new control value), and nothing else that the rebuild rule reads
+    moves then: `operator_version` and `gia_solve_index` are only moved by
+    `SelfGravitatingGIASolver.solve`. So a changed sweep number is the signal
+    that the cached pieces may describe another operator.
+
+    The counter is the same on every rank: every rank runs the same blocks of
+    the tape in the same order.
+
+    Args:
+      pc: PETSc preconditioner.
+
+    Returns:
+      The sweep number, or `None` when the context does not carry it (a
+      forward run that has never been replayed, or a context without the
+      solver's markers).
+    """
+    return _solver_appctx(pc).get("gia_tape_sweep")
+
+
 def _staleness_markers(pc):
     """The solver's statement of when the mechanics block last changed.
 
@@ -716,6 +742,13 @@ class _RebuildRule:
     two markers rather than on the Jacobian's object state because that state
     moves at every assembly -- every Newton iteration of every solve -- while
     the operator itself moves far less often.
+
+    Before the branches: the replay or derivative sweep of the tape the
+    solve belongs to (`_tape_sweep`) differs from the one of the last build:
+    rebuild. A replay at a new control value is a new operator that neither
+    marker below can see, and a preconditioner built for another control
+    value can make a capped outer solve return a wrong answer. Within one
+    sweep the branches below decide as in a forward run.
 
     Three branches, in the order they are tested:
 
@@ -770,6 +803,9 @@ class _RebuildRule:
         # The time step the current cached object was built at. Only the
         # lagged branch reads it; see `_published_dt`.
         self._dt = None
+        # The tape sweep the current cached object was built in; see
+        # `_tape_sweep`.
+        self._sweep = None
 
     @classmethod
     def from_options(cls, pc):
@@ -834,6 +870,7 @@ class _RebuildRule:
         """
         self._operator_version, self._solve_index, _ = _staleness_markers(pc)
         self._dt = _published_dt(pc)
+        self._sweep = _tape_sweep(pc)
 
     def moved(self, pc):
         """Whether the operator moved since the last recorded build.
@@ -850,6 +887,15 @@ class _RebuildRule:
         version, solve_index, present = _staleness_markers(pc)
         if not present:
             return False
+        sweep = _tape_sweep(pc)
+        if sweep != self._sweep:
+            # A new replay or derivative sweep of the tape: the controls may
+            # have changed since the last build, and no other marker says so.
+            self._operator_version = version
+            self._solve_index = solve_index
+            self._dt = _published_dt(pc)
+            self._sweep = sweep
+            return True
         if version is not None:
             # The version moves when the forward run assigns a new dt, but
             # not in a replay or an adjoint sweep, which do not touch the
@@ -2279,6 +2325,19 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     replay (nothing runs `SelfGravitatingGIASolver.solve`), so `update`
     compares equal values and the adjoint's complement is likewise built once,
     at the first adjoint solve, and kept.
+
+    Two refinements of that picture hold now. On the low-rank path each solve
+    block binds the solve index and the time step of its own forward solve
+    around its replay and adjoint solves (`gadopt.dtn_coupled_adjoint`), so
+    the lagged rule moves through a sweep as it does through the forward run.
+    And `gia_tape_sweep` (`_tape_sweep`, moved by
+    `gadopt.dtn_coupled_adjoint.TapeSweepMarkerBlock`) changes at the start of
+    every replay and derivative sweep, in every context that carries the
+    solver's markers, so a replay at a new control value rebuilds the
+    complement instead of keeping the one of the taping value. The multiplier
+    path's adjoint solve still carries no context and builds once; its options
+    accept no capped outer solve (`StokesSolverBase.adjoint_solver_parameters`),
+    so a complement too poor for the cap makes that solve raise.
 
     Under `always` the multiplier path is unchanged, because the guard that
     leaves the complement alone when neither marker is present is kept inside
