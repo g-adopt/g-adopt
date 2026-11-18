@@ -237,11 +237,32 @@ def reprice(record, ratio):
 
 
 def first_below(rows, threshold):
-    """The first iteration row with ``J <= threshold``, or None."""
+    """The first iteration row with ``J <= threshold`` and the row before it.
+
+    No interpolation is done: ``J`` crossed the threshold somewhere inside the
+    iteration that ends at the returned row, and one iteration can cost up to about
+    250 forward-equivalents (a Krylov solve at its cap of 100). So the work to
+    reach the threshold is known only to lie in ``(work before, work at]``, and
+    both ends are reported.
+
+    Returns:
+        ``(before, at)``: ``at`` is the first row with ``J <= threshold`` or None;
+        ``before`` is the row before it, or None when ``at`` is the first row.
+    """
+    before = None
     for row in rows:
         if row["J"] <= threshold:
-            return row
-    return None
+            return before, row
+        before = row
+    return None, None
+
+
+def work_bracket(entry):
+    """``(lower, upper)`` bounds of the work to reach a threshold, from ``first_below``."""
+    before, at = entry
+    if at is None:
+        return None
+    return (0.0 if before is None else before["work"], at["work"])
 
 
 def _fmt(value, spec):
@@ -309,30 +330,58 @@ def main(argv=None):
         changed = {k: v for k, v in params.items() if v != BNK_SHIFT_DEFAULTS[k]}
         print(f"{name:>8s} {changed if changed else 'defaults'}")
 
-    print("\n== work to reach J <= threshold (first iteration below), and initial_misfit there")
-    head = " ".join(f"{'J<=' + format(t, '.0e'):>26s}" for t in args.thresholds)
+    print("\n== where each run stopped: its own Hessian-to-forward ratio, which priced its "
+          "budget, and the work of its last iteration as recorded and at the table ratio")
+    print(f"{'run':>8s} {'own ratio':>9s} {'budget':>7s} {'last it':>7s} "
+          f"{'work recorded':>13s} {'work here':>9s}  stop")
+    for name, record in records.items():
+        last = record["iterations"][-1]
+        own = (record.get("call_cost") or {}).get("hessian_per_forward")
+        print(f"{name:>8s} {_fmt(own, '9.3f')} {record.get('work_budget_requested', 0):7.0f} "
+              f"{last['iteration']:7d} {last.get('work_recorded', last['work']):13.1f} "
+              f"{last['work']:9.1f}  {record.get('stop_reason')}")
+
+    print("\n== work to reach J <= threshold: the first iteration at or below it, the work "
+          "of the iteration before and of that iteration, and initial_misfit there")
+    head = " ".join(f"{'J<=' + format(t, '.0e'):>32s}" for t in args.thresholds)
     print(f"{'run':>8s} {head}   {'final J':>10s} {'final work':>10s}")
     reached = {}
     for name, record in records.items():
         cells = []
         for t in args.thresholds:
-            row = first_below(record["iterations"], t)
-            reached[(name, t)] = row
-            cells.append(f"{'not reached':>26s}" if row is None else
-                         f"{row['iteration']:3d} {row['work']:7.1f} {row['initial_misfit']:.3e}".rjust(26))
+            before, row = first_below(record["iterations"], t)
+            reached[(name, t)] = (before, row)
+            if row is None:
+                cells.append(f"{'not reached':>32s}")
+                continue
+            low = 0.0 if before is None else before["work"]
+            cells.append(f"{row['iteration']:3d} {low:6.1f}-{row['work']:6.1f} "
+                         f"{row['initial_misfit']:.3e}".rjust(32))
         last = record["iterations"][-1]
         print(f"{name:>8s} {' '.join(cells)}   {last['J']:10.3e} {last['work']:10.1f}")
-    print("   (each cell: iteration, work, initial_misfit)")
+    print("   (each cell: iteration, work before-work at, initial_misfit at that iteration)")
 
     if args.reference in records:
-        print(f"\n== work to reach J, divided by the work of run {args.reference}")
-        print(f"{'run':>8s} " + " ".join(f"{'J<=' + format(t, '.0e'):>10s}" for t in args.thresholds))
+        # The crossing lies inside one iteration in both runs, so the ratio is only
+        # known to lie between (lower bound of this run) / (upper bound of the
+        # reference) and (upper bound of this run) / (lower bound of the reference).
+        print(f"\n== work to reach J, divided by that of run {args.reference}: the range "
+              "that the iteration steps of both runs allow")
+        print(f"{'run':>8s} " + " ".join(f"{'J<=' + format(t, '.0e'):>14s}" for t in args.thresholds))
         for name in records:
             cells = []
             for t in args.thresholds:
-                mine, ref = reached[(name, t)], reached[(args.reference, t)]
-                cells.append(f"{'-':>10s}" if mine is None or ref is None else
-                             f"{mine['work'] / ref['work']:10.2f}")
+                mine = work_bracket(reached[(name, t)])
+                ref = work_bracket(reached[(args.reference, t)])
+                if mine is None or ref is None:
+                    cells.append(f"{'-':>14s}")
+                    continue
+                if name == args.reference:
+                    cells.append(f"{'reference':>14s}")
+                    continue
+                low = mine[0] / ref[1]
+                high = math.inf if ref[0] == 0.0 else mine[1] / ref[0]
+                cells.append(f"{low:6.2f}-{high:<7.2f}".rjust(14))
             print(f"{name:>8s} " + " ".join(cells))
 
     shifts = {name: replay_shift(record) for name, record in records.items()}
