@@ -41,7 +41,10 @@ def material(model):
 def build(mesh, representation, model, family):
     X = fd.SpatialCoordinate(mesh)
     C_polar = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
-    sigma = C.SIGMA_HAT * X[2]
+    # Every moment the rows read: a mean (mass), `z` (the third
+    # centre-of-mass row) and `x z`, `y z` (the polar-wander rows, through
+    # `p_1 = -x z` and `p_2 = -y z`).
+    sigma = C.SIGMA_HAT * (0.3 + X[2] + X[0] * X[2] + X[1] * X[2])
     quadrature = family == "Quadrature"
     dtn = {"top": {"dtn": gadopt.SphericalDtN(1)},
            "bottom": {"dtn": gadopt.SphericalDtN(1)}}

@@ -75,6 +75,7 @@ writes them to a `CheckpointFile`, reads them back, and converts the files
 of the earlier solver.
 """
 
+import itertools
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
@@ -264,12 +265,15 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         displacement space. Each mode is checked at construction
         (`_check_kernel`) and the measured numbers are logged. The same basis
         is the transpose nullspace.
-      nullspace_rtol: the largest density variation `L` (`_check_kernel`)
-        a declared mode may cause. The default 1e-2 refuses a lateral
-        variation `1 + a x` with `a = 0.01` and warns from `a = 0.001`.
+      nullspace_rtol: the largest change `L` of a density moment of degree
+        up to 4 that a declared mode may cause (`_check_kernel`). The
+        default 1e-2 refuses a lateral variation `1 + a x` with `a = 0.01`
+        and warns from `a = 0.001`.
       nullspace_jacobian_rtol: the largest `|J e| / |J s|` of a declared
         mode against a shear of the same size; it refuses only gross errors
-        such as a pinned point (see `_check_kernel`).
+        such as `un` on a surface that is not a sphere about the origin (see
+        `_check_kernel`). A mode that does not meet a strong displacement
+        condition is refused separately.
       near_nullspace: the modes GAMG is given on the condensed displacement
         operator: `"incompressible"` (default), `"rigid"` or `"none"`.
       scaling_factor: `c`, a factor of the whole momentum residual.
@@ -477,6 +481,8 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                 else:
                     weak[bc_type] += value
             self.weak_bcs[bc_id] = weak
+        #: The strong displacement conditions, which a nullspace mode must meet.
+        self.displacement_bcs = list(self.strong_bcs)
         self.has_strong_displacement_bc = bool(self.strong_bcs)
 
     @property
@@ -628,7 +634,8 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         A declared mode that is not a kernel would be projected out of the
         answer after every solve with no error, so each mode is checked here
-        (`_check_kernel`): it must not move the density, and the Jacobian
+        (`_check_kernel`): it must meet the strong displacement conditions,
+        leave the density moments up to degree 4 unchanged, and the Jacobian
         must nearly annihilate it.
         """
         self.nullspace = self.transpose_nullspace = None
@@ -679,26 +686,46 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             self._check_kernel(basis)
         self.nullspace = self.transpose_nullspace = mixed
 
-    def _check_kernel(self, basis) -> None:
-        r"""Check that each declared mode is a kernel, in two measures.
+    #: The highest polynomial degree of the density measure of
+    #: `_check_kernel`, so the highest harmonic degree of a lateral density
+    #: that the measure sees.
+    NULLSPACE_DENSITY_DEGREE = 4
 
-        **Density invariance.** A rigid rotation is a kernel of the continuous
-        problem only if it does not move density, `e . grad(rho_0) = 0`. The
-        measure is
+    def _check_kernel(self, basis) -> None:
+        r"""Check each declared mode in three ways: boundary values, density, Jacobian.
+
+        **Strong conditions.** A mode that is not zero on the nodes of a
+        strong displacement condition is not in the constrained space at
+        all, and is refused.
+
+        **Density moments.** A rigid rotation `e` is a kernel of the
+        continuous problem only if it moves no density, `e . grad(rho_0) = 0`.
+        The measure is
 
             L = max_v |int rho_0 (e . grad v) dx| / int |rho_0| |e . grad v| dx
 
-        over the polynomials `v` of degree one and two. For a density that
-        depends on radius alone the numerator vanishes on every sphere. Its
-        representation on the mesh (a DG0 or CG1 Function, a jump that is not
-        on cell faces) leaves a cell-scale staircase that the smooth `v`
-        mostly does not see: round-off on the symmetric test annulus, and up
-        to 1.4e-3 on the coarse annulus with its interior nodes moved at
-        random by a sixth of a cell. A lateral variation `1 + a x` gives
-        `L = 1.41 a` on two mesh sizes, at every bulk modulus and with the
-        moved nodes. The measure cannot tell a lateral variation smaller than
-        that staircase from the staircase. Above `nullspace_rtol` the
-        constructor raises; above a tenth of it, it warns.
+        over the monomials `v` of degree 1 to `NULLSPACE_DENSITY_DEGREE` (4).
+        For a rotation `int rho_0 (e . grad v)` is the rate of change of the
+        moment `int rho_0 v` under the rotation, so `L = 0` says that the
+        moments up to degree 4 of the density, its harmonic content up to
+        degree 4, do not change. That is what the measure proves. It does not
+        prove `e . grad(rho_0) = 0`: a lateral variation of harmonic degree 5
+        or higher has unchanged moments and passes, and a localised anomaly is
+        seen through its low-degree content only. The same moments are the
+        volume parts of the centre-of-mass rows (degree 1) and of the rotation
+        rows (degree 2), so for those rows the measure is exact; the potential
+        row sees every degree.
+
+        For a density that depends on radius alone every such moment is
+        unchanged, whatever the representation: a DG0 or CG1 Function or a
+        jump that is not on cell faces leaves a cell-scale staircase that the
+        smooth `v` averages out (round-off on the symmetric test annulus, up
+        to 1.4e-3 at degree 2 with its interior nodes moved at random by a
+        sixth of a cell). A lateral variation `1 + a x` gives `L = 1.41 a` on
+        two mesh sizes and at every bulk modulus. The measure cannot tell a
+        lateral variation smaller than the staircase from the staircase.
+        Above `nullspace_rtol` the constructor raises; above a tenth of it,
+        it warns.
 
         **Jacobian action.** `|J e| / |J s|` with the reference `s = r^2 e`
         at the same coefficient norm. For a rotation `s` is a divergence-free
@@ -708,13 +735,14 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         errors of the declaration: a density that the mesh represents with a
         cell-scale staircase (1.6e-2 for a DG0 radial density on the coarse
         test annulus), and the facet geometry under a weak `un` condition,
-        whose Nitsche penalty carries the bulk modulus (0.33 for a rigid
-        core at `K / mu = 1000`). It is therefore logged, warns above 0.1,
-        and refuses only above `nullspace_jacobian_rtol` (0.5 by default),
-        where the mode is about as stiff as a shear: a pinned point or `un`
-        on a surface that is not a sphere about the origin.
+        whose Nitsche penalty carries the bulk modulus (0.35 for a valid
+        rigid core at a bulk modulus of 1e3 to 1e5). It warns above 0.1 and
+        refuses above `nullspace_jacobian_rtol` (0.5 by default), where the
+        mode is about as stiff as a shear: measured 2.2 to 2.5 for `un` about
+        an off-centre point or a declared translation. It is not a test of
+        the density: a 30 percent lateral density gives 0.02 to 0.14.
 
-        Both ratios are logged at every construction and kept in
+        All numbers are logged at every construction and kept in
         `kernel_residuals` as `(L, |J e|/|J s|, |J^T e|/|J^T s|)`.
         """
         J = derivative(self.F, self.solution)
@@ -722,7 +750,28 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         dim = self.mesh.geometric_dimension
         dx_m = self.gravity.dx_m
         rho = self.approximation.density
-        polynomials = list(X) + [X[i] * X[j] for i in range(dim) for j in range(i, dim)]
+        polynomials = []
+        for degree in range(1, self.NULLSPACE_DENSITY_DEGREE + 1):
+            for powers in itertools.combinations_with_replacement(range(dim), degree):
+                term = Constant(1.0)
+                for k in powers:
+                    term = term * X[k]
+                polynomials.append(term)
+        # All moments in one assembly each: one `Real` test function per
+        # moment, in a mixed space (a vector `Real` space takes no argument).
+        R = FunctionSpace(self.mesh, "R", 0)
+        q = TestFunctions(MixedFunctionSpace([R] * len(polynomials)))
+
+        def values(cofunction):
+            return np.array([scalar_value(c) for c in cofunction.subfunctions])
+
+        def moments(vector):
+            rates = [dot(vector, grad(v)) for v in polynomials]
+            change = sum(rho * rate * q[k] for k, rate in enumerate(rates)) * dx_m
+            scale = sum(abs(rho) * abs(rate) * q[k] for k, rate in enumerate(rates)) * dx_m
+            a, b = np.abs(values(assemble(change))), values(assemble(scale))
+            mask = b > 0
+            return float(np.max(a[mask] / b[mask])) if mask.any() else 0.0
 
         def size(direction, transpose=False):
             form = action(adjoint(J) if transpose else J, direction)
@@ -743,13 +792,22 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         self.kernel_residuals = []
         for vector in basis._vecs:
-            lateral = 0.0
-            for v in polynomials:
-                rate = dot(vector, grad(v))
-                scale = assemble(abs(rho) * abs(rate) * dx_m)
-                if scale > 0.0:
-                    lateral = max(lateral, abs(assemble(rho * rate * dx_m)) / scale)
             mode = unit(vector=vector)
+            for bc in self.displacement_bcs:
+                # The condition lives on the displacement component of the
+                # mixed space, so it zeroes a copy of the whole mixed mode.
+                constrained = mode.copy(deepcopy=True)
+                bc.zero(constrained)
+                with mode.subfunctions[0].dat.vec_ro as x, \
+                        constrained.subfunctions[0].dat.vec_ro as y:
+                    off = (x - y).norm() / x.norm()
+                if off > 1e-12:
+                    raise ValueError(
+                        f"A declared nullspace mode is not zero on boundary "
+                        f"{bc.sub_domain} of a strong displacement condition "
+                        f"(relative size {off:.3e} there), so it is not in the "
+                        "constrained space and cannot be a kernel.")
+            lateral = moments(vector)
             shear = unit(field_expression=dot(X, X) * vector)
             ratio = size(mode) / size(shear)
             ratio_t = size(mode, transpose=True) / size(shear, transpose=True)
@@ -761,10 +819,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             if lateral > self.nullspace_rtol:
                 raise ValueError(
                     f"A declared nullspace mode moves density: L = {lateral:.3e}, "
-                    f"above nullspace_rtol={self.nullspace_rtol:g}. A rigid "
-                    "rotation is a kernel only for a density that depends on "
-                    "radius alone; the declaration would remove a part of the "
-                    "solution that the lateral density drives.")
+                    f"above nullspace_rtol={self.nullspace_rtol:g}: the "
+                    "rotation changes a density moment of degree up to "
+                    f"{self.NULLSPACE_DENSITY_DEGREE}. The declaration would "
+                    "remove a part of the solution that this lateral density "
+                    "drives.")
             if lateral > 0.1 * self.nullspace_rtol:
                 warn(f"A declared nullspace mode moves density: L = "
                      f"{lateral:.3e}, within a factor 10 of nullspace_rtol.")
@@ -781,7 +840,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                 warn(f"A declared nullspace mode is far from a kernel of the "
                      f"discrete Jacobian: |J e| / |J s| = {jacobian:.3e}. A "
                      "weak 'un' condition at a large bulk modulus does this "
-                     "through the facet geometry.")
+                     "through the facet geometry; a lateral density of "
+                     f"harmonic degree above {self.NULLSPACE_DENSITY_DEGREE}, "
+                     "which the density measure does not see, does it too.")
 
     def set_lowrank_operator(self) -> None:
         """Build `theta_psi B` on the low-rank path; `None` on the multiplier path."""

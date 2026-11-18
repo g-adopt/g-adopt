@@ -74,6 +74,8 @@ class Case:
     rotation: bool = False
     centre: bool = False
     load: str | None = "surface"
+    #: The mean of the prescribed load, in units of its amplitude.
+    load_mean: float = 0.0
 
     @property
     def label(self):
@@ -113,10 +115,15 @@ def approximation(case, control=None):
     raise ValueError(case.model)
 
 
-def load_expression(mesh):
-    """The prescribed surface density `SIGMA_HAT cos 2 theta` on `mesh`."""
+def load_expression(mesh, mean=0.0):
+    """The prescribed surface density `SIGMA_HAT (mean + cos 2 theta)` on `mesh`.
+
+    A nonzero mean gives the load a second moment, so its term in the
+    rotation row (`int sigma r^2 dS`) is nonzero, and a net mass for the 2-D
+    monopole datum. The gate uses it; the marches use the mean-free load.
+    """
     X = fd.SpatialCoordinate(mesh)
-    return SIGMA_HAT * fd.cos(2 * fd.atan2(X[1], X[0]))
+    return SIGMA_HAT * (mean + fd.cos(2 * fd.atan2(X[1], X[0])))
 
 
 def polar_moment(meshes):
@@ -180,7 +187,8 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
         couplings.append(new_couplings.CentreOfMass())
     if case.load == "surface":
         couplings.append(new_couplings.SurfaceLoad(
-            boundary=CURVE_RE, sigma=load_expression(sub), g_surface=1.0))
+            boundary=CURVE_RE, sigma=load_expression(sub, case.load_mean),
+            g_surface=1.0))
     elif case.load in ("sea_fixed", "sea_moving"):
         sea = sea or SeaFields(sub)
         couplings.append(new_couplings.SeaLevel(**sea.kwargs(case)))
@@ -207,8 +215,8 @@ def build_old(meshes, case, *, control=None, dt=None, sea=None,
     g_bcs = gravity_bcs(parent)
     bcs = {}
     if case.load == "surface":
-        g_bcs[CURVE_RE] = {"interior_sigma": load_expression(parent)}
-        bcs[CURVE_RE] = {"normal_stress": B_MU * load_expression(sub)}
+        g_bcs[CURVE_RE] = {"interior_sigma": load_expression(parent, case.load_mean)}
+        bcs[CURVE_RE] = {"normal_stress": B_MU * load_expression(sub, case.load_mean)}
     if case.core == "rigid":
         bcs[CURVE_RC] = {"un": 0.0}
     material = approximation(case, control)

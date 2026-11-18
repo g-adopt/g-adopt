@@ -66,6 +66,10 @@ CASES = [
     Case(family="Quadrature", model="power", core="fluid", rotation=True),
 ]
 
+# The prescribed load of the gate has a mean, so its second moment, the
+# load's term in the rotation row, is nonzero and compared.
+CASES = [c.but(load_mean=0.5) if c.load == "surface" else c for c in CASES]
+
 #: Round-off bound on the relative difference of the whole vector.
 RTOL = 1e-12
 

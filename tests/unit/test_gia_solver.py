@@ -693,11 +693,43 @@ def test_a_lateral_density_is_refused_or_warned(meshes, K):
     assert abs(solver.kernel_residuals[0][0] - 1.41e-3) < 1e-4
 
 
+@pytest.mark.parametrize("degree", [3, 4])
+def test_a_lateral_density_of_degree_three_and_four_is_refused(meshes, degree):
+    """N1: a variation with no degree-1 or degree-2 content is seen too."""
+    parent, sub = meshes
+    X = fd.SpatialCoordinate(sub)
+    theta = fd.atan2(X[1], X[0])
+    material = gadopt.CompressibleInternalVariableApproximation(
+        bulk_modulus=1000.0, density=1.0 + 0.3 * fd.cos(degree * theta), g=1.0,
+        B_mu=C.B_MU, self_gravity_number=C.LAMBDA, shear_modulus=1.0, viscosity=1.0)
+    with pytest.raises(ValueError, match="moves density"):
+        NewSolver(fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
+                  fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
+                  dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
+                  couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
+                  nullspace="rigid_rotation", solver_parameters="direct")
+
+
+def test_a_mode_that_violates_a_strong_condition_is_refused(meshes):
+    """N2: `u = 0` on the CMB and the rotation given as a basis."""
+    parent, sub = meshes
+    V = fd.VectorFunctionSpace(sub, "CG", 2)
+    X = fd.SpatialCoordinate(sub)
+    basis = fd.VectorSpaceBasis([fd.Function(V).interpolate(fd.as_vector([-X[1], X[0]]))])
+    basis.orthonormalize()
+    with pytest.raises(ValueError, match="strong displacement condition"):
+        NewSolver(fd.Function(V), fd.Function(fd.FunctionSpace(parent, "CG", 2)),
+                  C.approximation(Case()), dt=C.dt_function(sub),
+                  gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"u": 0.0}},
+                  nullspace=basis, solver_parameters="direct")
+
+
 def test_a_symmetric_configuration_passes_the_nullspace_check(meshes):
     solver, _, _ = C.build_new(meshes, Case(core="fluid", load=None),
                                nullspace="rigid_rotation")
     lateral, ratio, ratio_t = solver.kernel_residuals[0]
-    assert lateral < 1e-12 and max(ratio, ratio_t) < 1e-3
+    # Round-off of the degree-4 moments: about 1e-12.
+    assert lateral < 1e-10 and max(ratio, ratio_t) < 1e-3
 
 
 def test_backstress_refuses_a_displacement_condition(meshes):
