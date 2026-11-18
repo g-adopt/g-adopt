@@ -788,8 +788,9 @@ def initialise_background_field(
 # initialised, so they raise `TypeError`. The namespace is therefore the only
 # place where these keywords can be given on that Firedrake. The write into the
 # private `solver._ad_args_kwargs` is to be replaced by passing `adj_kwargs`
-# and `tlm_kwargs` to the solver constructor once the PR into #4638 that takes
-# adj/tlm kwargs out before __init__ is merged into Firedrake PR #4638.
+# and `tlm_kwargs` to the solver constructor once firedrakeproject/firedrake
+# #5666 ("Take adj/tlm kwargs out before NonlinearVariationalSolver.__init__")
+# is merged into Firedrake PR #4638.
 try:
     from firedrake.adjoint_utils.blocks import CachedSolverBlock  # noqa: F401
     CACHED_SOLVER_BLOCKS = True
@@ -866,8 +867,8 @@ def derivative_solve_keywords(solver, adj_kwargs: dict,
                 "solver (its `solve` method) from the first annotated solve on.")
         return {}
     # A write into a private namespace of Firedrake. To be replaced by
-    # constructor keywords once the PR into #4638 that takes adj/tlm kwargs
-    # out before __init__ is merged into Firedrake PR #4638.
+    # constructor keywords once firedrakeproject/firedrake#5666 is merged
+    # into Firedrake PR #4638.
     namespace.adj_kwargs = dict(adj_kwargs)
     namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
     setattr(solver, _DERIVATIVE_KEYWORDS_WRITTEN, True)
