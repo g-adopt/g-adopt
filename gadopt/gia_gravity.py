@@ -3220,6 +3220,39 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 domain=self.mesh, degree=self.form.quad_degree)(tag)
         return Measure("ds", domain=self.mesh)(tag)
 
+    def _on_parent_facet(self, value):
+        """`value`, a scalar of the potential (parent) mesh, on a facet-to-facet measure.
+
+        The fluid-core and sea-level measures integrate over facets that are
+        exterior facets of the mechanics mesh and interior facets of the
+        parent (`fluid_core_measure`, `sea_level_measure`). UFL requires every
+        `Argument` of the parent to carry a restriction there, including the
+        test and trial functions of a `Real` field, whose single basis function
+        is the global constant 1 and so has the same value on both sides. A
+        `Real` coefficient may stay unrestricted, but its derivative is an
+        `Argument`, so the Jacobian and every adjoint derivative would then
+        need one. `avg` is the restriction: it is exact for any field that is
+        continuous across the facet, it does not depend on which side UFL
+        calls `'+'`, and it is the spelling the solver already uses for the
+        parent's CG potential on these measures. For a `Real` field it adds
+        half of the facet integral to the single global entry from each side,
+        so the assembled value is the facet integral once, as on the pyop2
+        Firedrake (checked in `NOTES/design/step2b/repro/`).
+
+        Only the `Real` fields of the mixed space, their test functions and
+        constants go through here. A field of the mechanics mesh must not:
+        that mesh's facets are exterior facets, and UFL refuses a restriction
+        on them (`Inconsistent restrictions`).
+
+        Args:
+          value: A `Real` field, its test function, or a constant, all on the
+            parent mesh.
+
+        Returns:
+          `avg(value)` when the two meshes differ, `value` otherwise.
+        """
+        return avg(value) if self.layout.cross_mesh else value
+
     def fluid_core_measure(self) -> Measure:
         r"""The CMB measure: the mantle's own `ds`, intersected with the parent's `dS`.
 
@@ -3389,6 +3422,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         polynomial on either mesh at the same point, and writing it on the
         mantle's coordinates keeps the only cross-mesh object in the form the
         `Real` test function, whose basis function is the global constant 1.
+        The caller restricts that test function (`_on_parent_facet`), because
+        the facets are interior facets of the parent.
         """
         sigma = self.fluid_core_sheet()
         if sigma is None:
@@ -3442,7 +3477,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         fc = self.fluid_core
         u = self.solution_split[self.layout.displacement]
         psi = self.solution_split[self.layout.potential]
-        p_core = self.solution_split[self.layout.core_pressure]
+        # The core pressure is a `Real` field of the parent, restricted on the
+        # facet-to-facet measure (`_on_parent_facet`).
+        p_core = self._on_parent_facet(
+            self.solution_split[self.layout.core_pressure])
         # The mantle's OUTWARD normal. At its inner boundary this points inward,
         # so `dot(u, n) = -u_r`, and `vertical_component(u)` is the wrong vector
         # here - see `FluidCore`.
@@ -3528,7 +3566,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             return Form([])
         w = self.tests[self.layout.displacement]
         n = FacetNormal(self.mesh)
-        psi_rot = self.rotational_potential_expression(self.mesh)
+        psi_rot = self.rotational_potential_expression(self.mesh, facet=True)
         dss = self.fluid_core_measure()(self.fluid_core.boundary)
         return (self.scaling_factor * self.approximation.B_mu
                 * ensure_constant(self.fluid_core.rho_core)
@@ -3656,7 +3694,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         sl = self.sea_level_parameters
         u = split[self.layout.displacement]
         psi = split[self.layout.potential]
-        shift = split[self.layout.sea_level]
+        # `Shift` and the rotation scalars are `Real` fields of the parent,
+        # restricted on this facet-to-facet measure (`_on_parent_facet`).
+        shift = self._on_parent_facet(split[self.layout.sea_level])
         g_surface = ensure_constant(sl.g_surface)
         # `avg(psi)`: the surface is an interior facet of the parent, so the
         # parent's field is formally two-valued there. `psi` is CG, so the
@@ -3668,7 +3708,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if self.layout.rotation:
             # The polynomial on the mechanics mesh, which the measure
             # integrates over. It is the same polynomial as on the parent.
-            values = [Constant(0.0) if i is None else split[i]
+            values = [Constant(0.0) if i is None
+                      else self._on_parent_facet(split[i])
                       for i in self.layout.rotation_slots()]
             n_rot = 1 if self.mesh.geometric_dimension == 2 else 3
             N = N + rotational_potential(
@@ -3802,7 +3843,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         An empty form without sea level, so callers need no special case. Write
         a position polynomial on the mechanics mesh's coordinates: the only
         cross-mesh objects in the form are then `psi` inside `sigma` and any
-        `Real` test function.
+        `Real` test function. The caller restricts that test function
+        (`_on_parent_facet`), because the facets are interior facets of the
+        parent.
         """
         if self.sea_level_parameters is None:
             return Form([])
@@ -3959,7 +4002,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         scale = self._sea_level_scale()
         w = self.tests[self.layout.displacement]
         v = self.tests[self.layout.potential]
-        s = self.tests[self.layout.sea_level]
+        # The `Real` test function of `Shift`, restricted on this measure.
+        s = self._on_parent_facet(self.tests[self.layout.sea_level])
         v_face = avg(v) if self.layout.cross_mesh else v
         # The displacement row: the weight of the load on the surface.
         F = scale * sigma * dot(w, FacetNormal(self.mesh)) * dss
@@ -3973,7 +4017,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
     # -- The centre-of-mass frame ---------------------------------------------
 
     def mass_dipole_form(self, i: int, u=None, weight=None, *,
-                         include_load: bool = True) -> Form:
+                         scale=None, include_load: bool = True) -> Form:
         r"""`D_i`, the `i`th component of the first mass moment of the perturbation.
 
             D_i = int_mantle rho_0 u_i dx
@@ -4012,7 +4056,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
           u: displacement; the current solution's by default.
           weight: a factor that multiplies every integrand. `None` gives the
             plain functional, which `assemble` turns into a number. The
-            residual passes a multiplier or its test function here.
+            residual passes a multiplier or its test function here. It must be
+            a `Real` field of the parent, its test function or a constant,
+            because the fluid-core and sea-level terms restrict it
+            (`_on_parent_facet`).
+          scale: a further factor of every integrand that is not restricted,
+            for example `c B_mu`. `None` is one.
           include_load: whether to add the moment of the load sheets. The
             prescribed sheets do not depend on `u`, so the variation of `D`
             with respect to the displacement leaves them out. The sea-level
@@ -4026,6 +4075,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if u is None:
             u = self.solution_split[self.layout.displacement]
         weight = Constant(1.0) if weight is None else weight
+        scale = Constant(1.0) if scale is None else scale
+        # The weight on the fluid-core and sea-level measures, where the
+        # parent's `Real` fields need a restriction (`_on_parent_facet`).
+        facet_weight = scale * self._on_parent_facet(weight)
+        weight = scale * weight
         rho0 = self.approximation.density
 
         # The mantle term, on the intersected mantle measure. The `Real`
@@ -4054,7 +4108,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             sigma_core = -ensure_constant(self.fluid_core.rho_core) * dot(
                 u, FacetNormal(self.mesh))
             dss = self.fluid_core_measure()(self.fluid_core.boundary)
-            form = form + weight * X_m[i] * sigma_core * dss
+            form = form + facet_weight * X_m[i] * sigma_core * dss
 
         # The sea-level sheet of the current solution. It depends on `u`,
         # `psi`, `Shift` and the rotation scalars, so it is not linear in the
@@ -4062,7 +4116,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # `centre_of_mass_residual` writes its variation separately.
         if include_load and self.sea_level_parameters is not None:
             X_m = SpatialCoordinate(self.mesh)
-            form = form + self.surface_load_sheet_integral(weight * X_m[i])
+            form = form + self.surface_load_sheet_integral(facet_weight * X_m[i])
         return form
 
     def centre_of_mass_energy(self) -> Form:
@@ -4105,7 +4159,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         E = Form([])
         for i, index in enumerate(self.layout.centre_of_mass):
             lam_i = self.solution_split[index]
-            E += self.mass_dipole_form(i, weight=beta * lam_i)
+            E += self.mass_dipole_form(i, weight=lam_i, scale=beta)
         return E
 
     def centre_of_mass_residual(self) -> Form:
@@ -4142,11 +4196,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             lam_i = self.solution_split[index]
             nu_i = self.tests[index]
             # The constraint row: the whole moment, load included.
-            F += self.mass_dipole_form(i, weight=beta * nu_i)
+            F += self.mass_dipole_form(i, weight=nu_i, scale=beta)
             # The column: the variation of D_i with respect to u, in the
             # direction of the displacement test function. D_i is linear in u,
             # so this is D_i evaluated at `w` without the constant load term.
-            F += self.mass_dipole_form(i, u=w, weight=beta * lam_i,
+            F += self.mass_dipole_form(i, u=w, weight=lam_i, scale=beta,
                                        include_load=False)
         if self.sea_level_parameters is not None:
             # With sea level on, `D_i` also contains `int x_i sigma dS`, and
@@ -4160,7 +4214,7 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             variation = self._sheet_test_variation()
             dss = self._sea_level_ds()
             for i, index in enumerate(self.layout.centre_of_mass):
-                lam_i = self.solution_split[index]
+                lam_i = self._on_parent_facet(self.solution_split[index])
                 F += beta * lam_i * X_m[i] * variation * dss
         return F
 
@@ -4461,12 +4515,18 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "disc has only the rotation-rate change m_3 (index 2).")
         return -X[i] * X[2]
 
-    def rotational_potential_expression(self, mesh):
+    def rotational_potential_expression(self, mesh, facet: bool = False):
         """`psi_rot` on the given mesh, from the solved rotation scalars.
 
         Built on the mechanics mesh for the body force and on the parent for the
         geoid; the polynomial is the same and the two meshes' coordinates agree
         pointwise where they overlap.
+
+        Args:
+          mesh: The mesh whose coordinates the polynomial is written in.
+          facet: `True` for a term on the fluid-core or sea-level measure. The
+            rotation scalars are `Real` fields of the parent, and on those
+            measures they need a restriction (`_on_parent_facet`).
         """
         slots = self.layout.rotation_slots()
         n_rot = 1 if mesh.geometric_dimension == 2 else 3
@@ -4475,6 +4535,8 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # components whatever the dimension.
         values = [Constant(0.0) if i is None else self.solution_split[i]
                   for i in slots]
+        if facet:
+            values = [self._on_parent_facet(value) for value in values]
         return rotational_potential(
             values[-n_rot:], mesh, Omega_sq=self.Omega_sq)
 
@@ -4502,6 +4564,10 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         if u is None:
             u = self.solution_split[self.layout.displacement]
         weight = Constant(1.0) if test is None else test
+        # The weight on the fluid-core and sea-level measures, where the
+        # rotation test function, a `Real` field of the parent, needs a
+        # restriction (`_on_parent_facet`).
+        facet_weight = self._on_parent_facet(weight)
         rho0 = self.approximation.density
 
         p_m = self.inertia_polynomial(i, SpatialCoordinate(self.mesh))
@@ -4519,12 +4585,12 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # absent. Nothing in FC-1, FC-2 or FC-4 looks at dI, so this would
         # surface only as a polar-motion answer wrong by an unattributable
         # amount. See `fluid_core_sheet` for why it is not in `sigma_bcs`.
-        form = form + self.fluid_core_sheet_integral(weight * p_m)
+        form = form + self.fluid_core_sheet_integral(facet_weight * p_m)
         # The sea-level sheet enters dI as any load sheet does. It depends on
         # the solution, so in the rotation row its variation is the transpose
         # partner of the `psi_rot / g_s` part of the sea level in the
         # sea-level rows (`sea_level_residual`).
-        form = form + self.surface_load_sheet_integral(weight * p_m)
+        form = form + self.surface_load_sheet_integral(facet_weight * p_m)
         return form
 
     def inertia_perturbation(self) -> dict[str, float]:
@@ -4948,7 +5014,9 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # `DtNTwoBlockSchurPC` asserts on, and this is 2-D-lifetime code: in
         # 3-D the `l = 0` exterior map handles net mass exactly and none of
         # this runs.
-        core = self.fluid_core_sheet_integral(mu)
+        # `mu` is the test function of a `Real` space on the parent, restricted
+        # on the core's facet-to-facet measure (`_on_parent_facet`).
+        core = self.fluid_core_sheet_integral(self._on_parent_facet(mu))
         if core.integrals():
             mass = core if mass is None else mass + core
 
