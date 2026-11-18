@@ -377,7 +377,7 @@ def run_to_steady_state(solver, *, dt, max_steps=200, rtol=1e-8,
     `SelfGravitatingGIASolver` derives from `CoupledInternalVariableSolver`,
     which carries the internal variables *inside* the mixed solution and reads
     their old values through `solution_old_split`; `StokesSolverBase.solve`
-    ends with `solution_old.assign(self.solution)`. So the whole time-stepping
+    starts with `solution_old.assign(self.solution)`. So the whole time-stepping
     convention of that family is *one `solve()` call per step and nothing
     else* - unlike `InternalVariableSolver`, which keeps the internal variables
     outside the solution and interpolates them forward by hand. There is no

@@ -62,7 +62,11 @@ def test_coupled_against_independent_rescaled_be(meshes, exponent):
             alpha, beta, gamma = (1+2*r)/(1+r), 1+r, -r*r/(1+r)
         else:
             alpha, beta, gamma = 1., 1., 0.
-        reference.solution_old.subfunctions[i].interpolate((beta*old+gamma*previous)/alpha)
+        # `solve` copies `solution` into `solution_old` before it solves, so
+        # the rescaled history goes into the internal-variable field of
+        # `solution`. That field is also the initial guess of the Newton
+        # solve, which changes the iterate path but not the converged answer.
+        reference.solution.subfunctions[i].interpolate((beta*old+gamma*previous)/alpha)
         ref_dt.assign(h/alpha)
         reference.solve()
         previous.assign(old)

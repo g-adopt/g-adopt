@@ -6054,10 +6054,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         # correct. The second application is part of the forward map that the
         # GIA reference runs are compared against bit for bit.
         if self.project_out_nullspace():
-            # `StokesSolverBase.solve` has already copied the solution into
-            # `solution_old`; the projection happens afterwards, so the old
-            # state has to follow it or the next step's internal-variable
-            # source would carry the kernel component the current one dropped.
+            # `StokesSolverBase.solve` copies `solution` into `solution_old`
+            # before it solves, so the next solve starts from the projected
+            # state in any case. The copy here makes `solution_old` equal the
+            # accepted, projected solution as soon as this step ends, which is
+            # the state a checkpoint or a caller reads between two steps.
             self.solution_old.assign(self.solution)
         if self.layout.condensed:
             self.recover_internal_variables()
