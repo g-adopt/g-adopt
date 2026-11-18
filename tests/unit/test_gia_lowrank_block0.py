@@ -778,7 +778,9 @@ def test_the_adjoint_solve_carries_both_augmentations(meshes):
     value = suite.CONTROL_VALUES["shear_modulus"]
     functional, _, _, _, solver = suite.reduced_functional(
         meshes, "shear_modulus", value, "lowrank", fluid_core=True)
-    adjoint_solver = solver.adjoint_block._ad_solvers["adjoint_lvs"]
+    # The adjoint solver of the adopted block: the stock block's
+    # `_ad_solvers` entry, or the cached adjoint solver with Firedrake PR 4638.
+    adjoint_solver = suite._adjoint_solver(solver.adjoint_block)
     context = adjoint_solver._ctx
     assert context._post_function_callback == solver.augment_residual
     assert context._post_jacobian_callback == solver.augment_jacobian
