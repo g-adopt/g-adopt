@@ -120,14 +120,22 @@ from gadopt.solver_options_manager import GAMG_PARAMETERS
 RigidBodyAssembledPC = _RigidBodyAssembledPC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# The cell and surface tags of the four-region sphere. They live in the shared
-# module of the self-gravitating benchmarks, with the mesh generator that
-# writes them.
-BENCH = os.path.normpath(os.path.join(
-    HERE, "..", "..", "..", "tests", "gia_selfgrav_benchmarks"))
-sys.path.insert(0, BENCH)
 
-import selfgrav_common as gen  # noqa: E402
+
+class gen:
+    """The cell and surface tags of the four-region sphere.
+
+    They are the tags that the mesh generator of the self-gravitating
+    benchmarks writes (`selfgrav_common`, now in `examples/common` of the
+    giamip repository).
+    """
+
+    #: The mantle cell group.
+    CELL_MANTLE = 101
+    #: The surface groups: the Earth surface, the core-mantle boundary, and
+    #: the outer and inner boundaries of the potential domain.
+    SURF_RE, SURF_RC, SURF_OUTER, SURF_INNER = 2, 3, 4, 5
+
 
 # Non-dimensional constants, from the 2-D driver; Lambda ~ 1 is the point.
 B_MU = 1.2769

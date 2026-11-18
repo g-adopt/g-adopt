@@ -147,7 +147,8 @@ ranks. MPI validation and commands are recorded in the main
 
 Natural displacement boundaries, prescribed BE/BDF2 steps, fixed geometry and
 first reverse derivatives remain the supported direct-path scope.
-[Production-driver selection and restart support](gia_benchmark_bdf2.md) are
+Production-driver selection and restart support (`examples/common/gia_benchmark_bdf2.md`
+of the giamip repository) are
 now available. Full 3D nonlinear validation, memory/performance scaling, adaptive
 step selection, strong/weak displacement boundaries and second derivatives
 remain separate work.

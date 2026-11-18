@@ -163,7 +163,7 @@ stress parameter.
   step and uses a deterministic zero guess for replay.
   The GIAMIP and benchmark drivers now expose coupled and direct eliminated
   BE/BDF2 with application restart history; see the
-  [driver guide](gia_benchmark_bdf2.md). Automatic adaptivity and full 3D
+  driver guide (`examples/common/gia_benchmark_bdf2.md` of the giamip repository). Automatic adaptivity and full 3D
   production validation remain outstanding.
 
 ## Validation

@@ -59,8 +59,6 @@ the class from a marked node id, so a parallel test inside a class never runs
 """
 
 import re
-import sys
-from pathlib import Path
 
 import firedrake as fd
 import numpy as np
@@ -85,13 +83,35 @@ from test_gia_gravity import (  # noqa: E402  (module-level helpers)
 # the only unused name is in it.
 from test_gia_gravity import meshes  # noqa: E402,F401  (pytest fixture)
 
-# The reference state of the benchmark drivers, for the one calibration test.
-# `selfgrav_common` is a module of the benchmark test directory, so that
-# directory goes on the path the same way `test_gia_gravity.meshes` puts
-# `demos/gravity` there for the mesh generator.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests"
-                       / "gia_selfgrav_benchmarks"))
-import selfgrav_common as refstate  # noqa: E402
+
+class refstate:
+    """The reference state of the Spada et al. (2011) benchmark drivers.
+
+    These are the scales of `selfgrav_common` of the benchmark drivers (now in
+    `examples/common` of the giamip repository), copied here so that this
+    calibration test does not depend on that repository. The numbers are the
+    ones the benchmark prescribes.
+    """
+
+    #: Newton's constant, prescribed by the benchmark, m^3 kg^-1 s^-2.
+    G_NEWTON = 6.6732e-11
+    #: The Earth radius, m.
+    A_EARTH = 6.371e6
+    #: The length scale D = Re - Rc, m.
+    D_SCALE = 2.891e6
+    #: The density scale, the mean density of M3-L70-V01, kg m^-3.
+    RHO_BAR = 5511.68
+    #: The gravity scale, m s^-2.
+    G_BAR = 9.81555
+    #: The self-gravity number 4 pi G rho_bar D / g_bar (1.361324).
+    LAMBDA = 4 * np.pi * G_NEWTON * RHO_BAR * D_SCALE / G_BAR
+    #: C - A of the hydrostatic figure with the secular Love number K_S_SPADA,
+    #: 2.6952e35 kg m^2, in units of rho_bar D^5 (0.24214001).
+    C_MINUS_A = {"ks": 2.6952e35 / (RHO_BAR * D_SCALE**5)}
+    #: The rotation rate squared, Omega = 7.292115e-5 rad/s, in units of
+    #: g_bar / D (1.5661757e-03).
+    OMEGA_SQ = 7.292115e-5**2 * D_SCALE / G_BAR
+
 
 #: The secular (fluid-limit) tidal Love number of M3-L70-V01, from the TABOO
 #: transfer function the Spada et al. (2011) benchmark used. It is the number
