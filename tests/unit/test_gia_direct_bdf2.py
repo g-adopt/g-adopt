@@ -163,7 +163,7 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
                     ksp.setType('preonly')
                     ksp.getPC().setType('lu')
                     ksp.getPC().setFactorSolverType('mumps')
-                    with residual.dat.vec_ro as r, state.dat.vec as x:
+                    with residual.dat.vec_ro as r, state.dat.vec_rw as x:
                         delta = x.duplicate()
                         ksp.solve(r, delta)
                         assert ksp.getConvergedReason() > 0

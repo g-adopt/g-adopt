@@ -1356,7 +1356,7 @@ class _SchurAinvBCache:
         and the two scatters stay as `__init__` built them, and that is safe
         because a re-extraction cannot change a LAYOUT in this solver: the two
         index sets are built once in `DtNTwoBlockSchurPC.initialize` from
-        `W.dof_dset.field_ises` and handed to the inner fieldsplit with
+        `W.field_ises` and handed to the inner fieldsplit with
         `PCFieldSplitSetIS`, so every extraction, reusing the old `Mat` objects
         or building new ones, addresses the same rows of the same mixed space
         on the same communicator. A different space or a different communicator
@@ -1699,7 +1699,7 @@ class DtNTwoBlockSchurPC(fd.PCBase):
         # in the monolithic row space, and the merged sets are exact in-order
         # concatenations of them, which is what lets the matrix-free submatrix
         # extraction recognise them as whole fields.
-        field_ises = W.dof_dset.field_ises
+        field_ises = W.field_ises
 
         def merge(ises):
             indices = np.concatenate([iset.getIndices() for iset in ises])
@@ -3500,7 +3500,7 @@ class InternalVariableSCPC(fd.SCPC):
         """
         self.weight = Function(Vc)
         par_loop((domain, instructions), dx, {"w": (self.weight, INC)})
-        with self.weight.dat.vec as wc:
+        with self.weight.dat.vec_rw as wc:
             wc.reciprocal()
 
         # Get expressions for the condensed linear system
@@ -3846,7 +3846,7 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         """
         self.weight = Function(self.displacement_space)
         par_loop((domain, instructions), ufl_dx, {"w": (self.weight, INC)})
-        with self.weight.dat.vec as weight:
+        with self.weight.dat.vec_rw as weight:
             weight.reciprocal()
 
         # -- the Slate half: the elimination, the complement, the recovery --
@@ -4194,7 +4194,7 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
                 self.residual.subfunctions[mixed_field].dat.data_ro)
         # Undo the multiplicity the cell-wise Slate assembly will reintroduce
         # on the continuous displacement field; see `self.weight`.
-        with self._pair_residual.subfunctions[0].dat.vec as r_u, \
+        with self._pair_residual.subfunctions[0].dat.vec_rw as r_u, \
                 self.weight.dat.vec_ro as weight:
             r_u.pointwiseMult(r_u, weight)
 

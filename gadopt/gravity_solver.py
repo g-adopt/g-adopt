@@ -1023,13 +1023,15 @@ class GravitySolver(SolverConfigurationMixin):
     def _real_value(value) -> float:
         """A number from a `Constant`, a `Real` `Function` or a plain scalar.
 
-        `Real` data is replicated on every rank, so reading entry 0 is a local
-        operation that needs no reduction and agrees everywhere.
+        `Real` data is owned by rank 0 and held as a ghost entry on every other
+        rank, so the owned array `data_ro` is empty above rank 0. The array with
+        ghosts holds the one value on every rank, so reading its entry 0 agrees
+        everywhere. A `Constant` holds its value the same way.
         """
         try:
             return float(value)
         except (TypeError, ValueError):
-            return float(value.dat.data_ro[0])
+            return float(value.dat.data_ro_with_halos[0])
 
     def check_net_mass(self) -> None:
         """Warns about monopole leakage, and refuses a doubly-anchored gauge.
@@ -1150,16 +1152,20 @@ class GravitySolver(SolverConfigurationMixin):
             for bc in self.strong_bcs:
                 bc.apply(lift)
             b = assemble(rhs_form - action(self.a_form, lift))
-            # `bc.nodes` carries ghost entries too, while `dat.data_wo` is the
+            # `bc.nodes` carries ghost entries too, while `dat.data_rw` is the
             # owned block; the vector handed to the KSP is owned-only, so the
-            # ghosts are both unnecessary and out of range.
-            owned = self.solution_space.dof_dset.size
+            # ghosts are both unnecessary and out of range. The write is
+            # `data_rw` and not `data_wo`: it changes only some entries of a
+            # freshly assembled vector, and a write-only access in pyop3 drops
+            # the halo reduction that the assembly may still have pending, which
+            # would lose the ghost contributions on partition boundaries.
+            owned = self.solution_space.nodes.owned.local_size
             for bc in self.strong_bcs:
                 nodes = bc.nodes[bc.nodes < owned]
-                b.dat.data_wo[nodes] = lift.dat.data_ro[nodes]
+                b.dat.data_rw[nodes] = lift.dat.data_ro[nodes]
         else:
             b = assemble(rhs_form)
-        with b.dat.vec_ro as rhs, self.mixed_solution.dat.vec as x:
+        with b.dat.vec_ro as rhs, self.mixed_solution.dat.vec_rw as x:
             self.ksp.solve(rhs, x)
         if self.ksp.getConvergedReason() < 0:
             raise RuntimeError(

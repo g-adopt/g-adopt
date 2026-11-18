@@ -409,7 +409,7 @@ def b_liveness(solver, z, representation):
         # the ratio below compares like with like.
         operator = _contract(solver, "operator_attr")
         Bz = fd.Function(z.function_space())
-        with z.dat.vec_ro as xv, Bz.dat.vec as yv:
+        with z.dat.vec_ro as xv, Bz.dat.vec_rw as yv:
             operator.mult(xv, yv, theta=None)
             num = yv.norm()
         label = "||theta B z||"

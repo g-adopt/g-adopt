@@ -1836,8 +1836,10 @@ def scalar_value(value) -> float:
     except (TypeError, NotImplementedError):
         pass
     # A `Real` `Function` holds its one number in `dat`, and reaching it that
-    # way works identically for a `Constant`.
-    return float(np.asarray(value.dat.data_ro, dtype=float).reshape(-1)[0])
+    # way works identically for a `Constant`. The value is owned by rank 0 and
+    # is a ghost entry on the other ranks, so read the array with ghosts: the
+    # owned array `data_ro` is empty above rank 0.
+    return float(np.asarray(value.dat.data_ro_with_halos, dtype=float).reshape(-1)[0])
 
 
 def self_gravitating_gia_space(

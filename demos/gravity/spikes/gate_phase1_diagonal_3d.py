@@ -274,7 +274,7 @@ def real_block(solver, z, layout):
     """The full `n x n` `Real` block, by differencing. No nest, ever."""
     Z = z.function_space()
     comm = Z.mesh().comm
-    ises = Z.dof_dset.field_ises[layout.real_fields[0]:]
+    ises = Z.field_ises[layout.real_fields[0]:]
     real = layout.real_fields
 
     z.assign(0.0)
@@ -479,8 +479,8 @@ def pairing_diagnostics(solver, z, layout):
     # mantle cells at all. If the factor equals the communicator size the
     # replication is over all ranks; if it equals the number of ranks owning
     # mantle cells it is over the contributors. Those are different bugs.
-    own_sub = mech.cell_set.size
-    own_par = parent.cell_set.size
+    own_sub = mech.cells.owned.local_size
+    own_par = parent.cells.owned.local_size
     all_sub = comm.allgather(own_sub)
     all_par = comm.allgather(own_par)
     participating = sum(1 for c in all_sub if c > 0)
@@ -510,7 +510,7 @@ def pairing_diagnostics(solver, z, layout):
     print("    [2] dI_33 at u = X, weighted two ways")
     print(f"        0-form, Constant(1.0) weight   {scalar!r}")
     if rot is not None:
-        ises = z.function_space().dof_dset.field_ises[layout.real_fields[0]:]
+        ises = z.function_space().field_ises[layout.real_fields[0]:]
         row = read_real_rows(fd.assemble(solver.F), ises, comm)[n_mult + 2]
         base_row = row
         print(f"        Real-test row of solver.F      {base_row!r}")
@@ -544,7 +544,7 @@ def pairing_diagnostics(solver, z, layout):
         # 41.29 of 171.41, which is how it was caught.
         core_half = solver.fluid_core_sheet_integral(nu * p_m)
 
-        ises = z.function_space().dof_dset.field_ises[layout.real_fields[0]:]
+        ises = z.function_space().field_ises[layout.real_fields[0]:]
 
         def real_row(form):
             if form is None or not form.integrals():

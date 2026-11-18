@@ -19,11 +19,17 @@ class CheckpointField:
         space = field.function_space()
         self.quadrature = space.ufl_element().family() == "Quadrature"
         if self.quadrature:
-            self.nodes = space.cell_node_map().values
-            self.cells = space.mesh().cell_set.size
-            width = self.nodes.shape[1]*field.dat.cdim
-            self.local = fd.Function(fd.VectorFunctionSpace(space.mesh(), "DG", 0, dim=width))
-            self.local_nodes = self.local.function_space().cell_node_map().values[:self.cells, 0]
+            # Cell-to-node table of the quadrature space, one row per local
+            # cell. The owned cells come first, so the first `self.cells`
+            # rows are the cells this rank writes. Quadrature nodes sit inside
+            # a cell, so the nodes of an owned cell are owned nodes.
+            self.nodes = space.cell_node_list
+            self.cells = space.mesh().cells.owned.local_size
+            # One DG0 vector per cell holds every component at every
+            # quadrature point of that cell.
+            self.width = self.nodes.shape[1]*space.block_size
+            self.local = fd.Function(fd.VectorFunctionSpace(space.mesh(), "DG", 0, dim=self.width))
+            self.local_nodes = self.local.function_space().cell_node_list[:self.cells, 0]
             element = self.local.ufl_element()
         elif space.mesh() is not parent and broken:
             element = BrokenElement(space.ufl_element())
@@ -36,7 +42,11 @@ class CheckpointField:
     def encode(self):
         if self.quadrature:
             data = self.field.dat.data_ro_with_halos[self.nodes[:self.cells]]
-            self.local.dat.data_wo[self.local_nodes] = data.reshape(self.cells, -1)
+            # `data_rw` because the write is indexed: in pyop3 a write-only
+            # access drops a pending halo reduction of the whole vector.
+            # The width is explicit, because a rank that owns no cell of a
+            # submesh has an empty array, and numpy cannot infer -1 from 0.
+            self.local.dat.data_rw[self.local_nodes] = data.reshape(self.cells, self.width)
         elif self.local is not self.field:
             self.local.interpolate(self.field)
         if self.local.function_space().mesh() is self.parent:
@@ -53,10 +63,12 @@ class CheckpointField:
                 raise ValueError("Checkpoint quadrature storage shape does not match the material history")
             self.local.interpolate(stored)
             shape = (self.cells, self.nodes.shape[1], *self.field.dat.data_ro.shape[1:])
-            self.field.dat.data_wo[self.nodes[:self.cells]] = (
+            self.field.dat.data_rw[self.nodes[:self.cells]] = (
                 self.local.dat.data_ro[self.local_nodes].reshape(shape))
         elif self.field.function_space().ufl_element().family() == "Real":
-            self.field.assign(float(stored.dat.data_ro[0]))
+            # The array with ghosts: a `Real` value is owned by rank 0 only
+            # and is a ghost entry on the other ranks.
+            self.field.assign(float(stored.dat.data_ro_with_halos[0]))
         elif not self.broken:
             self.field.assign(stored)
         else:

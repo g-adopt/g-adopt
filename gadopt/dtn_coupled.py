@@ -39,14 +39,14 @@ __all__ = ["AugmentedImplicitMatrixContext", "CoupledLowRankDtN",
 
 
 def psi_local_offset(mixed_space, psi_field: int) -> int:
-    """Local offset of field `psi_field` inside `Function(Z).dat.vec`.
+    """Local offset of field `psi_field` inside `Function(Z).dat.vec_rw`.
 
     The owned sizes of the preceding fields, taken from the field index sets.
 
-    **Do NOT sum `Z.subfunctions[i].dat` sizes.** A `Real` space reports `dat`
-    size 1 on every rank but owns 0 entries of the monolithic vector on every
-    rank above 0, so an offset built that way drifts by one per preceding
-    `Real` field. Measured on 2, 3 and 4 ranks and cross-mesh
+    **Do NOT sum `Z.subfunctions[i].dat` sizes.** A `Real` space holds one
+    entry with ghosts on every rank but owns 0 entries of the monolithic vector
+    on every rank above 0, so an offset built from the sizes with ghosts drifts
+    by one per preceding `Real` field. Measured on 2, 3 and 4 ranks and cross-mesh
     (`NOTES/fastdtn/REVIEW-FORWARD.md` section 3.2): with the layout
     `(u, psi, R, R, R)` on 4 ranks the true offsets on rank 1 are
     `[0, 24, 36, 36, 36]`, the field index sets agree, and the `dat` recipe
@@ -60,7 +60,7 @@ def psi_local_offset(mixed_space, psi_field: int) -> int:
     owns no displacement dofs at all, so the offset is 0 there. That is legal
     and this function returns 0, rather than treating 0 as "not found".
     """
-    ises = mixed_space.dof_dset.field_ises
+    ises = mixed_space.field_ises
     return int(sum(ises[i].getLocalSize() for i in range(psi_field)))
 
 
@@ -403,7 +403,7 @@ class CoupledTraceCoefficientBlock(Block):
 
     def _seeded_cofunction(self, seed):
         out = Cofunction(self.function_space.dual())
-        with out.dat.vec as vec:
+        with out.dat.vec_rw as vec:
             self.row.scatter_into(vec.array_w, float(seed))
         return out
 

@@ -275,7 +275,8 @@ def _scalar(value) -> float:
     try:
         return float(value)
     except (TypeError, NotImplementedError):
-        return float(np.asarray(value.dat.data_ro, dtype=float).reshape(-1)[0])
+        # The array with ghosts: a `Real` value is a ghost entry above rank 0.
+        return float(np.asarray(value.dat.data_ro_with_halos, dtype=float).reshape(-1)[0])
 
 
 class _ThetaPsiTerms:
@@ -469,7 +470,7 @@ class _ThetaPsiTerms:
         psi = output.saved_output
         out = Cofunction(output.output.function_space().dual())
         op = self.gia_solver.dtn_operator
-        with psi.dat.vec_ro as xv, out.dat.vec as yv:
+        with psi.dat.vec_ro as xv, out.dat.vec_rw as yv:
             yv.set(0.0)
             op.apply_local(xv.array_r, yv.array_w, theta=1.0)
         return out
@@ -572,7 +573,7 @@ class CoupledLowRankDtNSolveBlock(_ThetaPsiTerms, NonlinearVariationalSolveBlock
             if not isinstance(dFdm, Cofunction):
                 dFdm = assemble(dFdm)
             dFdm = dFdm.copy()
-            with dFdm.dat.vec as dv, B0_psi.dat.vec_ro as bv:
+            with dFdm.dat.vec_rw as dv, B0_psi.dat.vec_ro as bv:
                 dv.axpy(-coeff, bv)
         # The tangent operator as a FORM, not the pre-assembled matrix pyadjoint
         # hands in: a variational solve carries the two callbacks and the
@@ -682,7 +683,7 @@ if CACHED_SOLVER_BLOCKS:
             coeff = self._theta_tangent_coefficient()
             if coeff != 0.0:
                 B0_psi = self._B0_psi()
-                with tlm_rhs.dat.vec as dv, B0_psi.dat.vec_ro as bv:
+                with tlm_rhs.dat.vec_rw as dv, B0_psi.dat.vec_ro as bv:
                     dv.axpy(-coeff, bv)
 
             solver = self.tangent_cache.solver

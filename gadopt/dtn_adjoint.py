@@ -227,11 +227,13 @@ class LowRankGravitySolveBlock(Block):
             # Homogeneous conditions on the adjoint/tangent: the constrained
             # values are data, so their sensitivity is carried by the control
             # they came from, not by this solve.
-            owned = self.function_space.dof_dset.size
+            owned = self.function_space.nodes.owned.local_size
+            # A partial write, so `data_rw`: a write-only access in pyop3
+            # drops any pending halo reduction of the whole vector.
             for bc in self.solver.strong_bcs:
                 nodes = bc.nodes[bc.nodes < owned]
-                rhs_function.dat.data_wo[nodes] = 0.0
-        with rhs_function.dat.vec_ro as b, solution.dat.vec as x:
+                rhs_function.dat.data_rw[nodes] = 0.0
+        with rhs_function.dat.vec_ro as b, solution.dat.vec_rw as x:
             self.solver.ksp.solve(b, x)
         return solution
 
@@ -272,7 +274,7 @@ class TraceCoefficientBlock(Block):
         if seed is None:
             return None
         out = Cofunction(self.function_space.dual())
-        self.row.scatter_into(out.dat.data_wo, float(seed))
+        self.row.scatter_into(out.dat.data_rw, float(seed))
         return out
 
     def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable, idx,
@@ -292,7 +294,7 @@ class TraceCoefficientBlock(Block):
         if seed is None:
             return None
         out = Cofunction(self.function_space.dual())
-        self.row.scatter_into(out.dat.data_wo, float(seed))
+        self.row.scatter_into(out.dat.data_rw, float(seed))
         return out
 
 

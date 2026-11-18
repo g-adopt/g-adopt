@@ -462,7 +462,7 @@ def _orthonormalised_survivors(
     survivors: list[fd.Function] = []
     ortho_vecs = []
     for f in functions:
-        with f.dat.vec as v:
+        with f.dat.vec_rw as v:
             start_norm = v.norm()
             if start_norm == 0.0:
                 continue
@@ -595,8 +595,9 @@ def apply_kernel_projection(nullspace, target) -> bool:
     .. math:: x_i \leftarrow P x_i, \qquad P = I - \sum_k e_k e_k^T,
 
     where every product is the Euclidean (l2) product of coefficient
-    vectors, not an L2 integral. The operation is
-    `VectorSpaceBasis.orthogonalize`, that is PETSc `MatNullSpaceRemove`.
+    vectors, not an L2 integral. The operation is PETSc `MatNullSpaceRemove`
+    on the nullspace that `VectorSpaceBasis.nullspace` builds, which is what
+    `VectorSpaceBasis.orthogonalize` does.
     PETSc first subtracts the mean when the basis has ``constant=True``, then
     computes all the coefficients :math:`e_k^T x_i` from the input vector
     (classical Gram-Schmidt), then subtracts. All dot products are global, so
@@ -620,7 +621,14 @@ def apply_kernel_projection(nullspace, target) -> bool:
     """
     bases = _kernel_bases(nullspace)
     for i, basis in bases:
-        basis.orthogonalize(target.subfunctions[i])
+        # The PETSc call of `VectorSpaceBasis.orthogonalize`, made here with a
+        # read-write access to the vector. The pyop3 Firedrake opens the
+        # vector of `orthogonalize` read-only and then changes it, which fails
+        # the state check of pyop3 at the end of the access (an
+        # `AssertionError`) and, with assertions off, leaves the ghost entries
+        # out of date.
+        with target.subfunctions[i].dat.vec_rw as vector:
+            basis.nullspace().remove(vector)
     return bool(bases)
 
 

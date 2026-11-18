@@ -45,6 +45,7 @@ from gadopt.gia_gravity import (
 )
 from gadopt.internal_variable_equation import history_slices
 from gadopt.momentum_equation import rotational_potential
+from gadopt.nullspaces import apply_kernel_projection
 
 # Road-map §2.2 with the production constants.
 B_MU = 1.2769
@@ -943,13 +944,13 @@ PLANTED_EPS = 1e-9
 def real_block_index_sets(Z, layout):
     """The block-1 index sets, taken the way `DtNTwoBlockSchurPC` takes them.
 
-    `Z.dof_dset.field_ises[i_R:]`, i.e. Firedrake's own authority on where each
+    `Z.field_ises[i_R:]`, i.e. Firedrake's own authority on where each
     sub-field sits in the monolithic row space, sliced at the first `Real`
     sub-field. `DtNTwoBlockSchurPC.initialize` merges exactly this slice into
     its "1" split, so a probe that reads through it exercises the
     preconditioner's own indexing rather than a second, parallel-untested one.
     """
-    return Z.dof_dset.field_ises[layout.real_fields[0]:]
+    return Z.field_ises[layout.real_fields[0]:]
 
 
 def read_real_rows(cofunction, ises, comm):
@@ -1516,7 +1517,7 @@ class TestBlockOneIsTheDiagonalItClaims:
         comm = Z.mesh().comm
         i_R = layout.real_fields[0]
         block1 = real_block_index_sets(Z, layout)
-        block0 = Z.dof_dset.field_ises[:i_R]
+        block0 = Z.field_ises[:i_R]
 
         assert len(block1) == len(layout.real_fields)
         merged = np.concatenate([iset.getIndices() for iset in block1]) \
@@ -1677,18 +1678,18 @@ class TestBlockOneInThreeDimensions:
     def test_the_case_is_the_small_one(self):
         """A tripwire on the cost, not a statement about the discretisation.
 
-        24 cells and 1971 degrees of freedom. If a future edit makes this a
-        refinement level larger it stops being a unit test, and the rule this
-        class is written under stops holding.
+        24 columns of two layers (48 cells) and 1971 degrees of freedom. If a
+        future edit makes this a refinement level larger it stops being a unit
+        test, and the rule this class is written under stops holding.
 
-        The cell count is summed over `cell_set.size`, the *owned* count, and
-        not `num_cells()`, which is rank-local and includes the halo: on 2 ranks
-        it reads 20 on rank 0, so the obvious spelling is a test that passes
-        only in serial.
+        The cell count is summed over `cells.owned.local_size`, the *owned*
+        count, and not `num_cells()`, which is rank-local and includes the
+        halo, so the obvious spelling is a test that passes only in serial.
+        On an extruded mesh `cells` counts every cell of every layer.
         """
         solver, z, layout = self.build()
         assert z.function_space().dim() == 1971
-        assert solver.mesh.comm.allreduce(solver.mesh.cell_set.size) == 24
+        assert solver.mesh.comm.allreduce(solver.mesh.cells.owned.local_size) == 48
         assert len(layout.real_fields) == 11
         # (L+1)^2 = 4 modes on each of two boundaries, then m_1, m_2, m_3.
         assert len(layout.multipliers) == 8
@@ -2266,7 +2267,9 @@ class TestNullCoupling:
             solver_parameters="direct",
             nullspace=fd.MixedVectorSpaceBasis(Zm, [basis, Zm.sub(1)]))
         ref.solve()
-        basis.orthogonalize(zm.subfunctions[0])
+        # `apply_kernel_projection` makes the PETSc call of
+        # `basis.orthogonalize` with a read-write access to the vector.
+        apply_kernel_projection(basis, zm.subfunctions[0])
 
         uc = z.subfunctions[layout.displacement]
         ur = zm.subfunctions[0]

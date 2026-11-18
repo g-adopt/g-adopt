@@ -260,7 +260,7 @@ def direct(meshes):
 def monolithic_field_indices(Z):
     """The block-0 and block-1 row indices of the mixed space, in field order.
 
-    Read from `Z.dof_dset.field_ises`, which is Firedrake's own authority on
+    Read from `Z.field_ises`, which is Firedrake's own authority on
     where each sub-field lives in the monolithic row space and the very object
     `DtNTwoBlockSchurPC.initialize` merges into its two index sets. Reading it
     here rather than from the preconditioner is what makes the column test
@@ -274,7 +274,7 @@ def monolithic_field_indices(Z):
     """
     reals = [i for i, V in enumerate(Z)
              if V.ufl_element().family() == "Real"]
-    ises = Z.dof_dset.field_ises
+    ises = Z.field_ises
     block0 = [i for i in range(len(Z)) if i not in reals]
     i0 = np.concatenate([ises[i].getIndices() for i in block0])
     i1 = np.concatenate([ises[i].getIndices() for i in reals])

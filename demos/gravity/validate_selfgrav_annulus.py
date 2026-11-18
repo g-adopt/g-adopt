@@ -74,8 +74,8 @@ import gadopt  # noqa: F401  BEFORE firedrake; see SPIKE-RESULTS.md S2(d)
 import numpy as np
 from firedrake import (
     COMM_WORLD, And, Function, FunctionSpace, Measure, Mesh, SpatialCoordinate,
-    Submesh, VectorFunctionSpace, assemble, atan2, avg, conditional, cos, dS,
-    ds, dx, sqrt)
+    Submesh, TestFunction, VectorFunctionSpace, assemble, atan2, avg,
+    conditional, cos, dS, ds, dx, sqrt)
 from gadopt import CylindricalDtN, GravitySolver
 from scipy.integrate import quad
 
@@ -174,8 +174,12 @@ def build_mesh(**kwargs):
 
 def cell_count(mesh, tag):
     """Cells carrying a given cell tag, owned only, summed over ranks."""
-    owned = mesh.cell_set.size
-    local = int(np.count_nonzero(mesh.cell_subset(tag).indices < owned))
+    # Assemble the volume of every tagged cell into a DG0 vector. The owned
+    # entries of that vector are the owned cells, so counting its nonzero
+    # owned entries counts each tagged cell on exactly one rank.
+    DG0 = FunctionSpace(mesh, "DG", 0)
+    volumes = assemble(TestFunction(DG0) * dx(tag, domain=mesh))
+    local = int(np.count_nonzero(volumes.dat.data_ro))
     return mesh.comm.allreduce(local)
 
 

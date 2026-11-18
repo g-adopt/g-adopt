@@ -873,7 +873,7 @@ class TestTheAssembledBlocks:
             petsc_matrix(context.A_psiu).mult(uv, out)
         with psi.dat.vec_ro as pv, scratch.dat.vec_wo as out:
             petsc_matrix(context.A_psipsi).mult(pv, out)
-        with assembled.dat.vec as a, scratch.dat.vec_ro as s:
+        with assembled.dat.vec_rw as a, scratch.dat.vec_ro as s:
             a.axpy(1.0, s)
 
         reference = fd.Function(function_space_of(W, 2))
