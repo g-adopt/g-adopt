@@ -27,6 +27,55 @@ from gadopt import *
 from gadopt.inverse import *
 
 
+def _coordinate_normals(function_space, seed):
+    """Draw one standard normal per node, keyed on the coordinates of that node.
+
+    A generator seeded with one number gives each MPI rank the same stream, so
+    filling ``dat.data`` from it makes the field depend on the partition. Keying on
+    the coordinates removes that dependence: a node keeps its value whatever rank
+    owns it and however many ranks there are.
+
+    The coordinates are quantised to 1e-9 before hashing, so that the same node gets
+    the same key on every rank in spite of the last bits of the coordinate
+    arithmetic. The hash is splitmix64, which is cheap, vectorises over the whole
+    array and passes the usual mixing tests. The uniform variates it produces are
+    mapped to normals with the inverse normal CDF.
+
+    Args:
+        function_space: the control space.
+        seed (int, optional): the seed. None is treated as 0, so the field is then
+            still reproducible.
+
+    Returns:
+        numpy.ndarray: one value per owned node, in the local ordering.
+    """
+    from scipy.special import ndtri
+
+    mesh = function_space.mesh()
+    coordinates = Function(
+        VectorFunctionSpace(mesh, function_space.ufl_element())
+    ).interpolate(SpatialCoordinate(mesh))
+    xy = coordinates.dat.data_ro.reshape(coordinates.dat.data_ro.shape[0], -1)
+
+    # Quantise, so that a coordinate computed two ways gives one key.
+    key = np.round(xy / 1e-9).astype(np.int64).astype(np.uint64)
+
+    # splitmix64 over the coordinate components and the seed.
+    state = np.full(key.shape[0], np.uint64(0 if seed is None else seed))
+    golden = np.uint64(0x9E3779B97F4A7C15)
+    for column in range(key.shape[1]):
+        state = state + golden + key[:, column]
+        z = state
+        z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+        z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+        state = z ^ (z >> np.uint64(31))
+
+    # Map to (0, 1), with both ends excluded so the inverse CDF stays finite.
+    uniform = (state >> np.uint64(11)).astype(np.float64) * (1.0 / 9007199254740992.0)
+    uniform = np.clip(uniform, 1e-12, 1.0 - 1e-12)
+    return ndtri(uniform)
+
+
 def make_perturbation(function_space, kind="white", seed=None):
     """Build the direction h in which the Taylor expansion is taken.
 
@@ -38,6 +87,9 @@ def make_perturbation(function_space, kind="white", seed=None):
             mesh independent. "smooth" is a zero-mean Gaussian field passed through
             one Helmholtz smoothing solve, which removes the mean and damps the
             roughest modes, where a discrete Hessian is least accurate.
+            "smooth-stable" is the same field, drawn so that it does not depend on
+            the number of MPI ranks. Use it to compare a serial run with a parallel
+            one; "smooth" gives different directions on different rank counts.
         seed (int, optional): seed for the random generator, so a run repeats.
 
     Returns:
@@ -54,12 +106,24 @@ def make_perturbation(function_space, kind="white", seed=None):
         delta.dat.data[:] = np.random.random(delta.dat.data.shape)
         return delta
 
-    if kind != "smooth":
+    if kind not in ("smooth", "smooth-stable"):
         raise ValueError(f"unknown perturbation kind: {kind}")
 
-    rng = np.random.default_rng(seed)
     raw = Function(function_space)
-    raw.dat.data[:] = rng.standard_normal(raw.dat.data.shape)
+    if kind == "smooth":
+        # Each rank fills its own slice from a generator seeded with the same seed,
+        # so the field depends on how many ranks the run uses. A serial run and a
+        # 16-rank run of the same command get different directions, and every
+        # quantity contracted with the direction differs with it: <dJ,h>, <h,Hh> and
+        # all the remainders. Kept as the default so that runs already recorded stay
+        # reproducible.
+        rng = np.random.default_rng(seed)
+        raw.dat.data[:] = rng.standard_normal(raw.dat.data.shape)
+    else:
+        # "smooth-stable" draws each nodal value from the coordinates of its own
+        # node, so the direction is the same field on any number of ranks. Use it
+        # whenever a serial result must be compared with a parallel one.
+        raw.dat.data[:] = _coordinate_normals(function_space, seed)
 
     # One Helmholtz solve, (1 - L^2 grad^2) h = raw, acts as a low-pass filter with
     # a correlation length L. L is set to a few cells so that the direction is
@@ -231,6 +295,12 @@ def two_term_fit(eps, R2):
             residuals, "ratios", the consecutive ratios R2[i] / R2[i+1], and "pair",
             the two epsilons used.
     """
+    # The fit needs two epsilons, because it solves a 2x2 system for (C, D). A sweep
+    # of one level happens when the driver is called only to build the reference
+    # state, so return an empty fit instead of raising IndexError.
+    if len(eps) < 2 or len(R2) < 2:
+        return {"fits": [], "ratios": [], "pair": tuple(eps)}
+
     e1, e2 = eps[-2], eps[-1]
     r1, r2 = R2[-2], R2[-1]
     fits = []
@@ -285,6 +355,13 @@ def three_term_fit(eps, r2, n_points=4):
         return coef, resid
 
     out = {"n_points": n, "eps_used": e.tolist()}
+
+    # The (D, C, E) fit needs three points, and the (C, E) reference fit needs two.
+    # With fewer points numpy returns a least-norm solution of an underdetermined
+    # system, which looks like a fit and means nothing, so report no fit instead.
+    # The caller skips any key that is absent.
+    if n < 3:
+        return out
 
     coef, resid = lstsq((2, 3, 4))
     out["DCE"] = {"D": float(coef[0]), "C": float(coef[1]), "E": float(coef[2]), "resid": resid}
@@ -408,7 +485,8 @@ def report(case, result):
 
 
 
-def hessian_vs_finite_difference(reduced_functional, m, h, epsilons=(1e-2, 1e-3, 1e-4)):
+def hessian_vs_finite_difference(reduced_functional, m, h, epsilons=(1e-2, 1e-3, 1e-4),
+                                 scheme="one-sided"):
     """Check the Hessian-vector product against a finite difference of the gradient.
 
     This is independent of the Taylor expansion of J. The Hessian-vector product is
@@ -425,25 +503,43 @@ def hessian_vs_finite_difference(reduced_functional, m, h, epsilons=(1e-2, 1e-3,
     - If H h disagrees, the second-order adjoint is genuinely wrong, and the size of
       the disagreement says by how much.
 
-    The finite difference is itself only first-order accurate and carries a roundoff
-    error that grows as 1/eps, so it has a best epsilon somewhere in the middle of the
-    range. Several epsilons are used, and the best agreement over the range is what
-    counts, not the agreement at the smallest one.
+    Two schemes are available, and the choice sets how small an error in H the check
+    can detect.
 
-    Each epsilon costs one gradient evaluation, which is one forward sweep plus one
-    adjoint sweep.
+    The one-sided difference `(g(m + eps h) - g(m)) / eps` is first-order accurate, so
+    its own truncation error is about `eps/2 * d3J[h,h,.]`. On the 125-step cylindrical
+    case that error is 1.3e-02 relative at eps 1e-04, which is the floor of the check
+    and not a statement about H. It costs one gradient per epsilon, plus the gradient
+    at the expansion point.
+
+    The central difference `(g(m + eps h) - g(m - eps h)) / (2 eps)` is second-order
+    accurate, so the same epsilon gives a bound about `eps` times smaller, near 1e-04
+    on that case. It costs two gradients per epsilon, and one more at the expansion
+    point whose value it never uses, because pyadjoint needs that adjoint sweep before
+    the second-order adjoint can run. Use it whenever the one-sided check reaches its
+    truncation floor before it reaches the error size you need to exclude.
+
+    Both schemes carry a roundoff error that grows as 1/eps, so each has a best
+    epsilon somewhere in the middle of the range. Several epsilons are used, and the
+    best agreement over the range is what counts, not the agreement at the smallest
+    one.
 
     Args:
         reduced_functional (ReducedFunctional): the functional to differentiate.
         m (Function): the expansion point in control space.
         h (Function): the direction.
         epsilons (tuple): the finite-difference step sizes to try.
+        scheme (str): "one-sided" for `(g(m + eps h) - g(m)) / eps`, order 1, or
+            "central" for `(g(m + eps h) - g(m - eps h)) / (2 eps)`, order 2.
 
     Returns:
-        dict: with "Hh_norm", the L2 norm of the exact Hessian-vector product, and
-            "rows", one entry per epsilon holding the norm of the finite difference,
-            the norm of the difference between the two, and their relative difference.
+        dict: with "Hh_norm", the L2 norm of the exact Hessian-vector product,
+            "scheme", the scheme used, and "rows", one entry per epsilon holding the
+            norm of the finite difference, the norm of the difference between the two,
+            and their relative difference.
     """
+    if scheme not in ("one-sided", "central"):
+        raise ValueError(f"scheme must be 'one-sided' or 'central', and is {scheme!r}")
     with stop_annotating():
         # Order matters. pyadjoint needs the functional evaluated and the first-order
         # adjoint swept before the second-order adjoint has the adjoint inputs it
@@ -452,25 +548,45 @@ def hessian_vs_finite_difference(reduced_functional, m, h, epsilons=(1e-2, 1e-3,
         # taylor_remainders uses.
         reduced_functional(m)
 
-        # The gradient at the expansion point, held for every finite difference.
+        # The gradient at the expansion point. The central difference does not use
+        # its value, and the call must still happen: pyadjoint's compute_hessian runs
+        # the tangent-linear sweep and then evaluate_hessian, and never runs the
+        # first-order adjoint sweep itself. Without this call the adjoint values on
+        # the tape are unset and the second-order adjoint fails inside
+        # evaluate_hessian_component with
+        # "TypeError: unsupported operand type(s) for *: 'int' and 'NoneType'".
+        # The value is dropped for the central scheme so that a later edit cannot use
+        # the gradient at the expansion point by accident.
         g0 = reduced_functional.derivative().riesz_representation(riesz_map="l2")
+        if scheme != "one-sided":
+            g0 = None
 
         # The exact product, via the tangent-linear and second-order adjoint sweeps.
         Hh = reduced_functional.hessian(h)
         Hh_vec = Hh.riesz_representation(riesz_map="l2")
 
         Hh_norm = float(np.sqrt(Hh_vec.dat.inner(Hh_vec.dat)))
-        out = {"Hh_norm": Hh_norm, "rows": []}
+        out = {"Hh_norm": Hh_norm, "scheme": scheme, "rows": []}
 
         for eps in epsilons:
-            # Gradient at the perturbed control.
+            # Gradient at the forward perturbed control.
             reduced_functional(m._ad_add(h._ad_mul(eps)))
             g1 = reduced_functional.derivative().riesz_representation(riesz_map="l2")
 
-            # The one-sided difference quotient, which approximates H h.
-            fd = g1.copy(deepcopy=True)
-            fd -= g0
-            fd /= eps
+            if scheme == "one-sided":
+                # (g(m + eps h) - g(m)) / eps, order 1.
+                fd = g1.copy(deepcopy=True)
+                fd -= g0
+                fd /= eps
+            else:
+                # (g(m + eps h) - g(m - eps h)) / (2 eps), order 2. The odd-order
+                # terms of the two expansions cancel, which removes the leading
+                # truncation error of the one-sided form.
+                reduced_functional(m._ad_add(h._ad_mul(-eps)))
+                gm = reduced_functional.derivative().riesz_representation(riesz_map="l2")
+                fd = g1.copy(deepcopy=True)
+                fd -= gm
+                fd /= (2.0 * eps)
 
             diff = fd.copy(deepcopy=True)
             diff -= Hh_vec
@@ -498,13 +614,51 @@ def report_fd(case, result):
         case (str): the objective term this result belongs to.
         result (dict): the dictionary returned by ``hessian_vs_finite_difference``.
     """
+    scheme = result.get("scheme", "one-sided")
+    order = 1 if scheme == "one-sided" else 2
     print(f"\n=== Hessian vs finite-difference gradient: {case} ===")
+    print(f"scheme             = {scheme}, truncation order {order}")
     print(f"||H h||            = {result['Hh_norm']:.8e}")
-    print(f"{'eps':>10s}  {'||fd||':>14s}  {'||fd - H h||':>14s}  {'relative':>12s}")
+    print(f"{'eps':>10s}  {'||fd||':>14s}  {'||fd - H h||':>14s}  {'relative':>12s}  "
+          f"{'decay':>8s}")
+    prev = None
     for row in result["rows"]:
+        # The factor by which the relative difference fell since the previous, larger
+        # eps. For a correct H the truncation error decays as eps**order, so a factor
+        # of ten in eps must give about 10**order here. A factor near 1 means the
+        # check has reached a floor, which is either the gradient noise or a real
+        # error in H.
+        decay = "" if prev is None else f"{prev / row['relative']:8.2f}"
+        prev = row["relative"]
         print(f"{row['eps']:10.3e}  {row['fd_norm']:14.6e}  "
-              f"{row['diff_norm']:14.6e}  {row['relative']:12.3e}")
+              f"{row['diff_norm']:14.6e}  {row['relative']:12.3e}  {decay:>8s}")
     # The smallest relative difference over the range is the meaningful number: the
-    # finite difference is first-order accurate at large eps and noisy at small eps.
+    # finite difference carries a truncation error at large eps and noise at small eps.
     best = min(row["relative"] for row in result["rows"])
     print(f"best relative agreement: {best:.3e}")
+
+    # Whether that number is a bound on the error of H, or the error itself, is told
+    # by the decay. A correct H leaves only the truncation error, which falls by
+    # 10**order for each factor of ten in eps. A decay near 1 means the difference has
+    # stopped falling, and the remaining value is either the noise of the gradient or
+    # a real error in H.
+    rels = [row["relative"] for row in result["rows"]]
+    epss = [row["eps"] for row in result["rows"]]
+    if len(rels) >= 2 and rels[-1] > 0:
+        ratio_eps = epss[-2] / epss[-1]
+        expected = ratio_eps ** order
+        measured = rels[-2] / rels[-1]
+        if measured > 0.5 * expected:
+            print(f"  The last decay is {measured:.1f} against {expected:.1f} expected for")
+            print(f"  order {order}, so the difference is still truncation. The relative error")
+            print(f"  of H h is below {best:.1e}, and a smaller bound needs a smaller eps or,")
+            print("  for the one-sided scheme, the central scheme.")
+        elif measured > 2.0:
+            print(f"  The last decay is {measured:.1f} against {expected:.1f} expected for")
+            print(f"  order {order}. The difference is close to a floor, so read {best:.1e} as")
+            print("  near the limit of this check and confirm with one smaller eps.")
+        else:
+            print(f"  The last decay is {measured:.1f}, so the difference has stopped falling.")
+            print(f"  WARNING: {best:.1e} is then the size of a systematic disagreement, from")
+            print("  the noise of the gradient or from an error in H. Tighten the solver")
+            print("  tolerances and repeat. A value near 1 means H h is wrong.")

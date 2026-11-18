@@ -105,18 +105,26 @@ def prepare_rundir(rundir):
     return rundir
 
 
-def set_max_timesteps(max_timesteps):
-    """Shorten the reference run and the inverse problem to a few timesteps.
+def set_max_timesteps(max_timesteps, delta_t=None):
+    """Set the trajectory length, and optionally the timestep, of the cylindrical case.
 
     ``forward.py`` and ``inverse.py`` both take the trajectory length from
     ``get_reference_values()["max_timesteps"]``. ``inverse.py`` imported that function
     by value, so it holds its own reference and both modules have to be redirected.
 
-    Nothing else in the returned dictionary is touched, so the rheology, the Rayleigh
-    number and the timestep are exactly those of the full case.
+    The timestep is a separate key, ``delta_t``, with the production value 6e-6 in
+    non-dimensional time. Doubling it with the same number of steps doubles the time
+    span of the trajectory, which is what a longer advection time does to the Hessian:
+    the control influences the final state through more advection, so the second
+    derivative is larger and the Taylor series has a smaller radius of convergence.
+    Leave it at ``None`` to keep the production value.
+
+    Nothing else in the returned dictionary is touched, so the rheology and the
+    Rayleigh number are exactly those of the full case.
 
     Args:
         max_timesteps (int): the number of timesteps to run.
+        delta_t (float): the timestep in non-dimensional time, or None to keep 6e-6.
     """
     import forward
     import inverse
@@ -126,6 +134,8 @@ def set_max_timesteps(max_timesteps):
     def shortened():
         values = original()
         values["max_timesteps"] = max_timesteps
+        if delta_t is not None:
+            values["delta_t"] = delta_t
         return values
 
     forward.get_reference_values = shortened
@@ -313,7 +323,7 @@ def override_viscosity(kind, delta_fraction=0.05):
     inverse.get_viscosity = replacement
 
 
-def make_reference(max_timesteps):
+def make_reference(max_timesteps, delta_t=None):
     """Run the cylindrical forward model to produce a matching reference state.
 
     Writes ``Checkpoint_State.h5`` in the current directory, holding the initial
@@ -325,11 +335,11 @@ def make_reference(max_timesteps):
     """
     import forward
 
-    set_max_timesteps(max_timesteps)
+    set_max_timesteps(max_timesteps, delta_t)
     forward.run_forward()
 
 
-def build_reduced_functional(case, max_timesteps):
+def build_reduced_functional(case, max_timesteps, delta_t=None):
     """Build the cylindrical reduced functional for one objective term.
 
     This delegates entirely to ``inverse.generate_inverse_problem``, so the forward
@@ -346,7 +356,7 @@ def build_reduced_functional(case, max_timesteps):
     """
     import inverse
 
-    set_max_timesteps(max_timesteps)
+    set_max_timesteps(max_timesteps, delta_t)
 
     alpha_T, alpha_u, alpha_d, alpha_s = CASE_WEIGHTS[case]
 
@@ -367,13 +377,28 @@ def build_reduced_functional(case, max_timesteps):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", nargs="?", default="Tobs", choices=list(CASE_WEIGHTS))
+    parser.add_argument("--delta-t", type=float, default=None,
+                        help="timestep in non-dimensional time; the production value "
+                             "is 6e-6. Pass 1.2e-5 for the doubled timestep that the "
+                             "student's 125-step figures used.")
     parser.add_argument("--timesteps", type=int, default=5,
                         help="length of the forward trajectory")
+    parser.add_argument("--and-measure", action="store_true",
+                        help="with --make-reference, run the measurement in the same "
+                             "command. Without it, --make-reference writes the "
+                             "reference state and stops.")
     parser.add_argument("--make-reference", action="store_true",
                         help="run the forward model first to build Checkpoint_State.h5")
     parser.add_argument("--rundir", default=None,
                         help="directory to run in (default: run_cylindrical next to this script)")
-    parser.add_argument("--perturbation", default="white", choices=["white", "smooth"])
+    parser.add_argument("--perturbation", default="white",
+                        choices=["white", "smooth", "smooth-stable"],
+                        help="the direction of the Taylor expansion. white is nodal "
+                             "noise in [0,1). smooth is a zero-mean Gaussian field "
+                             "through one Helmholtz solve, and it depends on the "
+                             "number of MPI ranks. smooth-stable is the same field "
+                             "drawn from the node coordinates, so a serial run and a "
+                             "parallel run get the same direction.")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--eps0", type=float, default=0.05,
                         help="largest perturbation size in the Taylor expansion")
@@ -413,15 +438,39 @@ def main():
     parser.add_argument("--fd-check", action="store_true",
                         help="compare H h against a finite difference of the gradient "
                              "instead of running the Taylor expansion of J")
+    parser.add_argument("--fd-scheme", default="one-sided",
+                        choices=("one-sided", "central"),
+                        help="the difference used by --fd-check. one-sided is "
+                             "(g(m+eps h) - g(m))/eps, order 1, one gradient per eps. "
+                             "central is (g(m+eps h) - g(m-eps h))/(2 eps), order 2, "
+                             "two gradients per eps, and it bounds an error in H about "
+                             "eps times smaller at the same eps.")
+    parser.add_argument("--fd-eps", type=float, nargs="+", default=None,
+                        metavar="EPS",
+                        help="the finite-difference steps for --fd-check. The default "
+                             "is 1e-2 1e-3 1e-4.")
     args = parser.parse_args()
 
     if args.snes_rtol is not None:
         # Mutate the shared default dictionary before any solver is built, so that
         # StokesSolver picks the tightened tolerance up when it selects newtonls.
+        #
+        # Newton stops on whichever test fires first. The g-adopt defaults carry
+        # snes_atol 1e-10 beside snes_rtol 1e-5, and PETSc adds snes_stol 1e-8 on the
+        # step length. A request for snes_rtol 1e-12 alone is therefore not honoured
+        # by every solve: at 60 timesteps, 48 of 1080 Stokes solves stopped on the
+        # absolute test instead, those whose starting residual was already near 1e-05.
+        # Scale the other two tests with the request so that one flag means one
+        # accuracy for every solve on the trajectory.
         import gadopt.stokes_integrators as stokes_integrators
-        stokes_integrators.newton_stokes_solver_parameters["snes_rtol"] = args.snes_rtol
+        parameters = stokes_integrators.newton_stokes_solver_parameters
+        parameters["snes_rtol"] = args.snes_rtol
+        parameters["snes_atol"] = args.snes_rtol * 1e-5
+        parameters["snes_stol"] = args.snes_rtol
         if MPI.COMM_WORLD.rank == 0:
-            print(f"Stokes snes_rtol overridden to {args.snes_rtol:g}")
+            print(f"Stokes Newton tolerances overridden: snes_rtol "
+                  f"{parameters['snes_rtol']:g}, snes_atol {parameters['snes_atol']:g}, "
+                  f"snes_stol {parameters['snes_stol']:g}")
 
     if args.viscosity != "production":
         override_viscosity(args.viscosity, args.delta_fraction)
@@ -439,21 +488,36 @@ def main():
     os.chdir(rundir)
 
     if args.make_reference:
-        make_reference(args.timesteps)
-        # The forward run leaves nothing on the tape that the inverse problem should
-        # inherit, and generate_inverse_problem clears the tape anyway.
+        make_reference(args.timesteps, args.delta_t)
+        # Writing the reference state is a job on its own: at 125 timesteps the
+        # forward run takes about half an hour and the sweep that used to follow it
+        # takes another nine hours, with the default viscosity and the default
+        # direction, which is never the measurement anyone wanted. Stop here and let
+        # the measurement be a second command with its own flags. Pass
+        # --and-measure to keep both in one run.
+        if not args.and_measure:
+            if MPI.COMM_WORLD.rank == 0:
+                print(f"reference written in {rundir}. Run the measurement as a "
+                      "separate command, or pass --and-measure to do both.")
+            return
 
-    reduced_functional, control = build_reduced_functional(args.case, args.timesteps)
+    reduced_functional, control = build_reduced_functional(
+        args.case, args.timesteps, args.delta_t)
     delta = make_perturbation(control.function_space(), args.perturbation, args.seed)
 
     label = (f"cylindrical {args.case}, {args.timesteps} timesteps, "
+             f"dt={args.delta_t or 6e-6}, "
              f"viscosity={args.viscosity}(delta={args.delta_fraction}), "
              f"snes_rtol={args.snes_rtol or 'default'}")
 
     if args.fd_check:
         # An independent check of the second-order adjoint that does not rely on the
         # Taylor expansion of J at all.
-        result = hessian_vs_finite_difference(reduced_functional, control, delta)
+        fd_kwargs = {"scheme": args.fd_scheme}
+        if args.fd_eps is not None:
+            fd_kwargs["epsilons"] = tuple(args.fd_eps)
+        result = hessian_vs_finite_difference(reduced_functional, control, delta,
+                                              **fd_kwargs)
         if MPI.COMM_WORLD.rank == 0:
             report_fd(label, result)
     else:

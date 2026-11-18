@@ -222,7 +222,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("case", nargs="?", default=None, choices=cases)
     parser.add_argument("scheduler", nargs="?", default="noscheduler", choices=list(schedules))
-    parser.add_argument("--perturbation", default="white", choices=["white", "smooth"])
+    parser.add_argument("--perturbation", default="white",
+                        choices=["white", "smooth", "smooth-stable"],
+                        help="the direction of the Taylor expansion. white is nodal "
+                             "noise in [0,1). smooth is a zero-mean Gaussian field "
+                             "through one Helmholtz solve, and it depends on the "
+                             "number of MPI ranks. smooth-stable is the same field "
+                             "drawn from the node coordinates, so a serial run and a "
+                             "parallel run get the same direction.")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--timesteps", type=int, default=None,
                         help="cap the forward trajectory at this many steps")
