@@ -121,6 +121,10 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
             constant 1, so the action of a block on the unit `Real` function
             is its single column, and the action of the adjoint block is its
             single row: the entries are those of the assembled block.
+
+            Replace the actions by direct assembly of every block once
+            firedrakeproject/firedrake#5665 ("Cannot assemble a 2-form with a
+            Real argument on interior facets (pyop3)") is fixed.
             """
             from firedrake.formmanipulation import ExtractSubBlock
             from firedrake.petsc import PETSc

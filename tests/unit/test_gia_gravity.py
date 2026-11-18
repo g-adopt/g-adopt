@@ -70,13 +70,16 @@ N_AZIMUTHAL = 32
 #: the block, and any other failure in it stays visible. The alternative is
 #: the rewrite that `test_gia_direct_bdf2.py` received: build a `Real` column
 #: as the action on the unit `Real` function and a `Real` row as the action of
-#: the adjoint block.
+#: the adjoint block. Firedrake issue firedrakeproject/firedrake#5665 records
+#: the limitation; once it is fixed, this mark goes and the tests assemble the
+#: block directly.
 REAL_BLOCK_ON_PARENT_FACETS = pytest.mark.xfail(
     raises=NotImplementedError, strict=True,
     reason="pyop3 Firedrake cannot assemble a matrix block with a Real row or "
            "column on an interior facet of the parent (NotImplementedError: "
            "Currently cannot deal with non-unit (vector-valued) columns); "
-           "this test assembles such a block")
+           "this test assembles such a block. Remove this mark and assemble "
+           "directly once firedrakeproject/firedrake#5665 is fixed")
 
 DR_MANTLE = 0.2
 
