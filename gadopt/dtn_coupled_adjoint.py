@@ -79,18 +79,20 @@ from the forward solver's constructor keywords, and shared by every block that
 solver adds. The module supports both Firedrakes and finds out at import which
 one it runs on (`CACHED_SOLVER_BLOCKS`):
 
-  - stock: the adjoint keywords go to `solve` (`LowRankVariationalSolver`),
-    and the stock block becomes a `CoupledLowRankDtNSolveBlock` with the five
-    overrides above.
-  - cached: the adjoint and tangent keywords go to the constructor
-    (`derivative_constructor_kwargs`), the callbacks reach every cached solver
-    through the constructor keywords, and the cached block becomes a
+  - stock: the adjoint keywords go to `solve`, and the stock block becomes a
+    `CoupledLowRankDtNSolveBlock` with the five overrides above.
+  - cached: the adjoint and tangent keywords go to the namespace from which
+    the forward solver builds its cached solvers, the callbacks reach every
+    cached solver through those keywords, and the cached block becomes a
     `CachedCoupledLowRankDtNSolveBlock`, which binds `theta_psi` around each
     solve and adds the theta derivative.
 
-On the cached Firedrake the constructor keywords need the fix that takes
-`adj_kwargs` and `tlm_kwargs` out of the keywords before the solver is
-initialised; without it the constructor raises `TypeError`.
+On both, `LowRankVariationalSolver.solve` hands the keywords over through
+`gadopt.utility.derivative_solve_keywords`, which knows where the running
+Firedrake reads them. On the cached Firedrake neither `solve` nor the
+constructor accepts them (the constructor removes `adj_kwargs` and
+`tlm_kwargs` only after the solver is initialised, so they raise
+`TypeError`), so the namespace is the only place to give them.
 """
 
 from contextlib import contextmanager
@@ -102,22 +104,20 @@ from firedrake import (Cofunction, LinearVariationalProblem,
 from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
 from pyadjoint.tape import annotate_tape
 
+from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords
+
 # Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
 # replaces the stock solve block of an annotated variational solve with a
 # `CachedSolverBlock`. That block replays and differentiates through solvers
 # that the forward solver builds once and shares with every block it puts on
 # the tape, and it takes the keywords of the adjoint and tangent solvers from
-# the constructor of the forward solver, not from `solve`. Both Firedrakes are
-# supported here until the PR is merged: the module finds out once which one
-# it runs on.
+# a namespace on the forward solver, not from `solve`. Both Firedrakes are
+# supported here until the PR is merged: `gadopt.utility` finds out once which
+# one it runs on (`CACHED_SOLVER_BLOCKS`, re-exported here for the tests).
 try:
     from firedrake.adjoint_utils.blocks import CachedSolverBlock
 except ImportError:
     CachedSolverBlock = None
-
-#: True on a Firedrake whose annotated variational solves put a
-#: `CachedSolverBlock` on the tape (Firedrake PR 4638).
-CACHED_SOLVER_BLOCKS = CachedSolverBlock is not None
 
 #: The class of the block an annotated variational solve puts on the tape on
 #: this Firedrake. Tests and the adopt function look for this class.
@@ -128,7 +128,7 @@ __all__ = ["CACHED_SOLVER_BLOCKS", "CachedCoupledLowRankDtNSolveBlock",
            "CoupledLowRankDtNSolveBlock",
            "LowRankVariationalSolver", "SOLVE_BLOCK_TYPE",
            "TapingSolverReleasedError", "adopt_coupled_lowrank_block",
-           "derivative_constructor_kwargs", "derivative_solver_kwargs",
+           "derivative_solver_kwargs",
            "live_solver_objects", "release_taping_solver",
            "require_controls_reach_block"]
 
@@ -182,11 +182,13 @@ class LowRankVariationalSolver(NonlinearVariationalSolver):
     copies the forward keywords and drops the application context, so the
     block-0 preconditioner of the iterative preset would run the adjoint with
     no `dtn_operator`, no nullspace providers and no reuse marker. This
-    subclass supplies `adj_kwargs` on every annotated solve. The keywords are
-    read at solve time and not stored at construction, because the tape clones
+    subclass supplies the adjoint keywords, and with cached solver blocks also
+    the tangent keywords, on every annotated solve. The keywords are read at
+    solve time and not stored at construction, because the stock tape clones
     the forward solver from its constructor keywords for the replay
     (`type(self)(problem, **self._ad_kwargs)`), and the clone must find them
-    the same way.
+    the same way. `gadopt.utility.derivative_solve_keywords` decides where
+    they go on the running Firedrake.
     """
 
     #: Set by `SelfGravitatingGIASolver.set_solver`; the owner of the
@@ -194,54 +196,27 @@ class LowRankVariationalSolver(NonlinearVariationalSolver):
     gia_solver = None
 
     def solve(self, **kwargs):
-        # Only an annotated solve takes `adj_kwargs`: Firedrake's wrapper pops
-        # the tape keywords when it is recording and passes everything else
-        # to the plain solve, which refuses them. `annotate_tape` on a COPY,
-        # because it removes the `annotate` key from the mapping it is given
-        # and the wrapper needs to see that key itself. With cached solver
-        # blocks the keywords go to the constructor instead
-        # (`derivative_constructor_kwargs`), and `solve` refuses them.
-        if (not CACHED_SOLVER_BLOCKS and self.gia_solver is not None
-                and annotate_tape(dict(kwargs))):
-            kwargs.setdefault("adj_kwargs", derivative_solver_kwargs(
-                self.gia_solver, "_lowrank_adj", transpose=True))
+        # Only an annotated solve builds derivative solvers. `annotate_tape`
+        # on a COPY, because it removes the `annotate` key from the mapping it
+        # is given and Firedrake's wrapper needs to see that key itself.
+        #
+        # With cached solver blocks (Firedrake PR 4638) the tangent solver is
+        # one of the cached solvers and gets its own keywords: the forward
+        # nullspaces in the forward slots, and `ksponly`, which the forward
+        # `snes_type` would otherwise replace (a Newton line search on a
+        # linear system costs one residual evaluation more per solve). With
+        # the stock block `CoupledLowRankDtNSolveBlock` builds the tangent
+        # solver itself and the tangent keywords are not used.
+        #
+        # The keywords are built here and not at construction, so they carry
+        # the solver parameters, nullspaces and context of the time of the
+        # first annotated solve, which is when Firedrake reads them.
+        if self.gia_solver is not None and annotate_tape(dict(kwargs)):
+            kwargs.update(derivative_solve_keywords(
+                self,
+                derivative_solver_kwargs(self.gia_solver, "_lowrank_adj", transpose=True),
+                derivative_solver_kwargs(self.gia_solver, "_lowrank_tlm", transpose=False)))
         return super().solve(**kwargs)
-
-
-def derivative_constructor_kwargs(gia_solver) -> dict:
-    """The adjoint and tangent keywords for the forward solver's constructor.
-
-    With cached solver blocks (Firedrake PR 4638) the forward solver builds
-    its adjoint and tangent linear solvers from `adj_kwargs` and `tlm_kwargs`
-    given to its constructor. Without them both would inherit the forward
-    keywords: the forward `snes_type` (Newton line search on a linear system,
-    one residual evaluation more per solve) and the forward nullspaces in the
-    forward slots. With the stock solve block the adjoint keywords go to
-    `solve` (`LowRankVariationalSolver.solve`) and the tangent solver is built
-    by `CoupledLowRankDtNSolveBlock`, so this returns nothing.
-
-    The keywords are read once, here. `derivative_solver_kwargs` copies the
-    solver parameters, so a later change of the forward dictionary does not
-    reach the derivative solvers. The application context is the forward one;
-    Firedrake clones its UFL entries for the cached solvers.
-
-    Args:
-      gia_solver: the `SelfGravitatingGIASolver` whose callbacks, context and
-        nullspaces the derivative solves carry. Its solver parameters,
-        nullspaces and context must be set before this is called.
-
-    Returns:
-      `{"adj_kwargs": ..., "tlm_kwargs": ...}` with cached solver blocks, else
-      an empty `dict`.
-    """
-    if not CACHED_SOLVER_BLOCKS:
-        return {}
-    return {
-        "adj_kwargs": derivative_solver_kwargs(
-            gia_solver, "_lowrank_adj", transpose=True),
-        "tlm_kwargs": derivative_solver_kwargs(
-            gia_solver, "_lowrank_tlm", transpose=False),
-    }
 
 
 def require_controls_reach_block(block, controls):
@@ -599,10 +574,11 @@ if CACHED_SOLVER_BLOCKS:
 
         The forward, adjoint and tangent solvers of a `CachedSolverBlock` are
         built once by the forward solver and shared by every block it puts on
-        the tape. They are built from the forward solver's constructor
-        keywords, so they carry both augmentation callbacks, and the adjoint
-        and tangent ones the keywords of `derivative_constructor_kwargs`:
-        `A + B` is on every operator with no override. What the forms cannot
+        the tape. The replay solver is built from the forward solver's
+        constructor keywords and the adjoint and tangent ones from the keywords
+        that `LowRankVariationalSolver.solve` supplies
+        (`derivative_solver_kwargs`), so all three carry both augmentation
+        callbacks: `A + B` is on every operator with no override. What the forms cannot
         carry is added here: `theta_psi` bound to this block's saved values
         around each solve (the shared solvers make this necessary for every
         block, since they read one prefactor), `gia_solve_index` bound to the
@@ -620,13 +596,13 @@ if CACHED_SOLVER_BLOCKS:
         def _solve_index_contexts(self):
             """The `appctx` dicts of the cached replay, tangent and adjoint solvers.
 
-            Firedrake builds these solvers once per forward solver and gives
-            each a copy of the forward `appctx` made at that time
-            (`_ad_clone_kwargs`), in which `gia_solve_index` is the integer of
-            the first taped solve. The preconditioners read the dict the solver
-            context holds (`solver._ctx.appctx`), so that is the dict to write.
-            One solver can appear twice if Firedrake shares it; the list holds
-            each dict once.
+            Firedrake builds these solvers once per forward solver. Depending on
+            the Firedrake, each gets the forward `appctx` dict itself or a copy
+            of it made at that time, in which `gia_solve_index` is the integer
+            of the first taped solve. The preconditioners read the dict the
+            solver context holds (`solver._ctx.appctx`), so that is the dict to
+            write. One dict can appear more than once when the solvers share
+            it; the list holds each dict once.
             """
             contexts = []
             for cache in (self.forward_cache, self.tangent_cache,

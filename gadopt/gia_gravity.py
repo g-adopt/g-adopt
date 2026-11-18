@@ -5813,14 +5813,11 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
                 "block-0 preconditioner already avoids the reassembly a "
                 "constant Jacobian would save.")
         # `LowRankVariationalSolver` and not the base class: it names the
-        # adjoint solver's keywords on every annotated solve, so the adjoint
-        # carries the two callbacks, this context and `ksponly`
+        # adjoint solver's keywords (and, with Firedrake PR 4638, the tangent
+        # solver's) on every annotated solve, so the derivative solves carry
+        # the two callbacks, this context and `ksponly`
         # (`gadopt.dtn_coupled_adjoint`, "Both augmentations, and ksponly").
-        # With Firedrake PR 4638 the adjoint and tangent keywords go to the
-        # constructor (`derivative_constructor_kwargs`); otherwise nothing is
-        # added here and `LowRankVariationalSolver.solve` supplies them.
-        from .dtn_coupled_adjoint import (LowRankVariationalSolver,
-                                          derivative_constructor_kwargs)
+        from .dtn_coupled_adjoint import LowRankVariationalSolver
         self.solver = LowRankVariationalSolver(
             self.problem,
             solver_parameters=self.solver_parameters,
@@ -5831,7 +5828,6 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
             options_prefix=self.name,
             post_function_callback=self.augment_residual,
             post_jacobian_callback=self.augment_jacobian,
-            **derivative_constructor_kwargs(self),
         )
         self.solver.gia_solver = self
 

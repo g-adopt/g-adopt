@@ -765,3 +765,73 @@ def initialise_background_field(
             conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
                                     background_values[i], f), f))
+
+
+# -- Keywords of the adjoint and tangent solvers of an annotated variational solve --
+#
+# Two Firedrakes are in use. On Firedrake `main` an annotated variational solve
+# puts a `NonlinearVariationalSolveBlock` on the tape, and the keywords of its
+# adjoint solver are given to `solve` as `adj_kwargs`. Firedrake PR 4638 ("NLVS:
+# cache more adjoint solvers/forms and fix Hessian") puts a `CachedSolverBlock`
+# on the tape instead. Its forward, adjoint and tangent solvers are built once,
+# at the first annotated solve, from a namespace that the solver constructor
+# fills (`solver._ad_args_kwargs`), and `solve` refuses `adj_kwargs`. The
+# constructor of that branch does not accept `adj_kwargs` or `tlm_kwargs`
+# either: it removes them from the keywords only after the solver has been
+# initialised, so they raise `TypeError`. The namespace is therefore the only
+# place where these keywords can be given on that Firedrake.
+try:
+    from firedrake.adjoint_utils.blocks import CachedSolverBlock  # noqa: F401
+    CACHED_SOLVER_BLOCKS = True
+except ImportError:
+    CACHED_SOLVER_BLOCKS = False
+
+#: The names under which Firedrake PR 4638 caches the replay, tangent and
+#: adjoint solvers of a variational solver (`functools.cached_property`, so
+#: each one is in the instance `__dict__` once it is built).
+_DERIVATIVE_SOLVER_CACHES = ("_ad_forward_cache", "_ad_tangent_cache",
+                             "_ad_adjoint_cache", "_ad_hessian_cache")
+
+
+def derivative_solve_keywords(solver, adj_kwargs: dict,
+                              tlm_kwargs: dict | None = None) -> dict:
+    """Give the adjoint (and tangent) solver keywords to the running Firedrake.
+
+    Call this before every solve of `solver` and pass the result to `solve`.
+    Nothing is done unless the tape is recording, because only an annotated
+    solve builds derivative solvers.
+
+    With the stock solve block (Firedrake `main`) the adjoint keywords go to
+    `solve`, which takes them on the first annotated solve and ignores them
+    after that. The stock block builds its tangent solver itself, so
+    `tlm_kwargs` is not used there.
+
+    With cached solver blocks (Firedrake PR 4638) the keywords are written into
+    the namespace from which the solver builds its cached adjoint and tangent
+    solvers, and `solve` gets nothing. They are written only while those
+    solvers do not exist yet, which is the same rule as on the stock path: the
+    first annotated solve decides. `tlm_kwargs` defaults to a copy of
+    `adj_kwargs`, which is what Firedrake does when only `adj_kwargs` is given
+    to the constructor.
+
+    Args:
+      solver: The `NonlinearVariationalSolver` (or subclass) to be solved.
+      adj_kwargs: Constructor keywords of the adjoint `LinearVariationalSolver`.
+      tlm_kwargs: Constructor keywords of the tangent `LinearVariationalSolver`
+        (cached solver blocks only).
+
+    Returns:
+      The keywords to pass to `solver.solve`.
+    """
+    from pyadjoint.tape import annotate_tape
+
+    if not annotate_tape():
+        return {}
+    if not CACHED_SOLVER_BLOCKS:
+        return {"adj_kwargs": adj_kwargs}
+    built = vars(solver)
+    if not any(name in built for name in _DERIVATIVE_SOLVER_CACHES):
+        namespace = solver._ad_args_kwargs
+        namespace.adj_kwargs = dict(adj_kwargs)
+        namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
+    return {}

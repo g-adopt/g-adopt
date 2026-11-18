@@ -39,6 +39,7 @@ from .utility import (
     INFO,
     InteriorBC,
     depends_on,
+    derivative_solve_keywords,
     is_cartesian,
     is_continuous,
     log_level,
@@ -846,11 +847,14 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         return parameters
 
     def adjoint_solve_keywords(self) -> dict:
-        """The `adj_kwargs` for `solve`, or `{}` when nothing is taped.
+        """The keywords of the cached adjoint solver, or `{}` when nothing is taped.
 
-        Firedrake pops `adj_kwargs` from the keywords of `solve` only while it
-        annotates. Without annotation the keyword would reach the real `solve`,
-        which does not take it, so it is passed only when the tape is running.
+        The result is `{"adj_kwargs": keywords}`. `solve` hands the keywords to
+        Firedrake through `gadopt.utility.derivative_solve_keywords`, which
+        puts them where the running Firedrake reads them: the `solve` call on
+        Firedrake `main`, the solver's cached-solver namespace with Firedrake
+        PR 4638. They are built only while the tape is running, because only an
+        annotated solve builds an adjoint solver.
 
         The keywords are the forward solver's own, with the options replaced.
         They are read from `_ad_kwargs`, which Firedrake sets on the solver and
@@ -867,7 +871,7 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         first.
 
         Returns:
-          A `dict` to expand into `solve`.
+          `{"adj_kwargs": dict}`, or `{}` when the tape is not running.
         """
         if not annotate_tape():
             return {}
@@ -892,8 +896,14 @@ class StokesSolverBase(SolverConfigurationMixin, abc.ABC):
         # solve. This is the order `IrksomeIntegrator.advance` uses.
         self.solution_old.assign(self.solution)
         # The adjoint keywords are read on the first annotated solve only:
-        # Firedrake builds the cached adjoint solver then and keeps it.
-        self.solver.solve(**self.adjoint_solve_keywords())
+        # Firedrake builds the cached adjoint solver then and keeps it. With
+        # Firedrake PR 4638 the same keywords also go to the cached tangent
+        # solver, whose operator is the forward Jacobian and so needs the same
+        # description.
+        keywords = self.adjoint_solve_keywords()
+        solve_keywords = (derivative_solve_keywords(self.solver, keywords["adj_kwargs"])
+                          if keywords else {})
+        self.solver.solve(**solve_keywords)
 
 
 class StokesSolver(StokesSolverBase):

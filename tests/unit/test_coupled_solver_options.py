@@ -212,6 +212,51 @@ class TestAdjointSolverOptions:
         assert adjoint["near_nullspace"] is solver.near_nullspace
         assert adjoint["options_prefix"] == solver.name
 
+    def test_the_taped_solve_builds_the_derivative_solvers_with_these_options(self, mesh):
+        """The options reach the adjoint solver that Firedrake really builds.
+
+        The test above checks the keywords; this one checks where they end up,
+        which depends on the Firedrake. On Firedrake `main` they go to `solve`
+        and the stock solve block builds its adjoint solver from them. With
+        Firedrake PR 4638 neither `solve` nor the constructor takes them (both
+        raise `TypeError`), and `gadopt.utility.derivative_solve_keywords`
+        writes them into the namespace from which the solver builds its cached
+        adjoint and tangent solvers at the first annotated solve. A newtonls
+        forward is used, so that `ksponly` on the derivative solvers can only
+        come from these keywords.
+        """
+        from firedrake.adjoint import get_working_tape
+        from gadopt.utility import CACHED_SOLVER_BLOCKS
+
+        solver = build(mesh, exponent=3, transition_stress=1.0)
+        assert solver.solver_parameters["snes_type"] == "newtonls"
+        tape = get_working_tape()
+        tape.clear_tape()
+        continue_annotation()
+        try:
+            solver.solve()
+        finally:
+            pause_annotation()
+        if CACHED_SOLVER_BLOCKS:
+            derivative_solvers = [solver.solver._ad_adjoint_cache.solver,
+                                  solver.solver._ad_tangent_cache.solver]
+        else:
+            from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
+            blocks = [b for b in tape.get_blocks()
+                      if isinstance(b, NonlinearVariationalSolveBlock)]
+            derivative_solvers = [blocks[-1]._ad_solvers["adjoint_lvs"]]
+        tape.clear_tape()
+        expected = solver.adjoint_solver_parameters()
+        for derivative_solver in derivative_solvers:
+            assert derivative_solver.parameters["snes_type"] == "ksponly"
+            for option in solver.FORWARD_ONLY_SNES_OPTIONS:
+                assert option not in derivative_solver.parameters
+            # Firedrake flattens nested option dictionaries, so the flat
+            # Krylov options are compared.
+            for key, value in expected.items():
+                if not key.startswith("snes_") and not isinstance(value, dict):
+                    assert derivative_solver.parameters[key] == value
+
 
 class TestAssembledPCFactoring:
     """One SPD flag, one three-valued near-nullspace axis, not three siblings."""
