@@ -190,16 +190,11 @@ from .stokes_integrators import (
     _displacement_basis,
     newton_stokes_solver_parameters,
 )
-from .utility import CombinedSurfaceMeasure, ensure_constant
+from .utility import (CombinedSurfaceMeasure, ensure_constant,
+                      restrict_real_coefficients_on_interior_facets)
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
 from ufl import derivative as ufl_derivative
-from ufl.algorithms import extract_coefficients
 from ufl.algorithms.ad import expand_derivatives
-# Not in `ufl.algorithms.__all__`, and with no public equivalent: the node type
-# of a restriction and the traversal that finds it, which
-# `_restrict_parent_real_coefficients` needs (as `utility.py` does).
-from ufl.classes import Restricted
-from ufl.corealg.traversal import unique_pre_traversal
 
 
 __all__ = [
@@ -3265,108 +3260,22 @@ class SelfGravitatingGIASolver(CoupledInternalVariableSolver):
         a term is written. A `Real` coefficient that comes from outside the
         solver, such as `B_mu`, `Lambda` or a sheet scale given as a `Function`
         on the parent's `Real` space, can appear in the same integrals through
-        the approximation and the gravity form. UFL accepts it unrestricted,
-        because it gives a coefficient of a continuous element a default side,
-        but the derivative with respect to it is a `Real` `Argument`, which
-        must be restricted. pyadjoint builds exactly that derivative for a
-        control, so a gradient with respect to such a coefficient would raise
-        `ValueError: Discontinuous type Argument must be restricted`.
-
-        This replaces each such coefficient by its `avg` in every integral in
-        which the parent's facets are interior facets: the parent's own `dS`,
-        and the facet-to-facet measures of the fluid core and the sea level.
-        The value of a `Real` coefficient is the same on both sides, so the
-        residual does not change. A coefficient that carries a restriction
-        everywhere it occurs in an integral (for example `sigma` inside
-        `avg(sigma * psi)` of a parent sheet) is left as it is, because UFL
-        refuses a second restriction.
-
-        A coefficient that occurs both inside and outside a restriction in one
-        integral (`c * avg(c * psi)`) cannot be fixed by `ufl.replace`, which
-        replaces every occurrence. Restricting only the outside occurrences
-        would need a hand-written UFL transformation, which G-ADOPT does not
-        write. Such a form raises here, at construction, with the name of the
-        coefficient: its derivative would otherwise raise later, in the middle
-        of an adjoint sweep. The remedy is to write the factor inside the
-        restriction, as `DtNGravityForm.boundary_source` does for `G`.
+        the approximation and the gravity form, and pyadjoint differentiates
+        with respect to it when it is a control. This applies
+        `gadopt.utility.restrict_real_coefficients_on_interior_facets` with
+        the parent, which explains the rule.
 
         Args:
           form: A form of this solver.
 
         Returns:
-          The form with the parent's `Real` coefficients restricted on those
-          integrals, or `form` itself when the meshes are the same.
-
-        Raises:
-          ValueError: If a `Real` coefficient of the parent occurs both inside
-            and outside a restriction in one such integral.
+          The form with the parent's `Real` coefficients restricted on its
+          interior facets, or `form` itself when the meshes are the same.
         """
         if not self.layout.cross_mesh:
             return form
-        parent = self.potential_mesh
-
-        def parent_real(c):
-            # A `Function` on a `Real` space of the parent. The mixed solution
-            # lives on both meshes and is not one; its `Real` fields are
-            # restricted where they are used (`_on_parent_facet`).
-            try:
-                space = c.function_space()
-            except AttributeError:
-                return False
-            return (space.mesh() is parent
-                    and space.ufl_element().family() == "Real")
-
-        def unrestricted_coefficients(expr):
-            # The coefficients that occur outside every restriction in `expr`.
-            # A read-only walk over the expression graph that does not descend
-            # into a `Restricted` node.
-            found, seen, stack = set(), set(), [expr]
-            while stack:
-                node = stack.pop()
-                if id(node) in seen or isinstance(node, Restricted):
-                    continue
-                seen.add(id(node))
-                if isinstance(node, Coefficient):
-                    found.add(node)
-                stack.extend(node.ufl_operands)
-            return found
-
-        # The interior-facet integral types of UFL, the extruded ones included.
-        interior = ("interior_facet", "interior_facet_vert",
-                    "interior_facet_horiz")
-        integrals = []
-        for integral in form.integrals():
-            on_parent_facets = (
-                (integral.ufl_domain() is parent
-                 and integral.integral_type() in interior)
-                or integral.extra_domain_integral_type_map().get(parent)
-                in interior)
-            if on_parent_facets:
-                integrand = integral.integrand()
-                # Every coefficient anywhere under a restriction, for example
-                # `sigma` inside `avg(sigma * psi)` of a parent sheet.
-                restricted = {c for node in unique_pre_traversal(integrand)
-                              if isinstance(node, Restricted)
-                              for c in extract_coefficients(node.ufl_operands[0])}
-                unrestricted = {c for c in unrestricted_coefficients(integrand)
-                                if parent_real(c)}
-                both = unrestricted & restricted
-                if both:
-                    names = ", ".join(sorted(str(c) for c in both))
-                    raise ValueError(
-                        f"The Real coefficient(s) {names} of the potential mesh "
-                        "occur both inside and outside a restriction in one "
-                        "integral on the parent's interior facets. The "
-                        "derivative with respect to them would need a "
-                        "restriction on the outside occurrence, which cannot "
-                        "be added without restricting the inside one twice. "
-                        "Write the factor inside the restriction.")
-                mapping = {c: avg(c) for c in unrestricted}
-                if mapping:
-                    integral = integral.reconstruct(
-                        integrand=replace(integrand, mapping))
-            integrals.append(integral)
-        return Form(integrals)
+        return restrict_real_coefficients_on_interior_facets(
+            form, self.potential_mesh)
 
     def fluid_core_measure(self) -> Measure:
         r"""The CMB measure: the mantle's own `ds`, intersected with the parent's `dS`.

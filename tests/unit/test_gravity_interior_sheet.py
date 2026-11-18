@@ -276,9 +276,11 @@ class TestRealControlsOnTheSheet:
     is a `Real` `Argument`, which UFL accepts on an interior facet only with a
     restriction. Since Firedrake no longer replaces a `Real` argument by the
     literal 1 (#5656), such a gradient raises `Discontinuous type Argument
-    must be restricted`. `G` was such a factor until `DtNGravityForm` moved it
-    inside the `avg`; the sheet scale was always inside. Both gradients are
-    checked against a central difference of fresh solves.
+    must be restricted`. `G` is such a factor, outside the `avg`;
+    `GravitySolver` restricts it with
+    `gadopt.utility.restrict_real_coefficients_on_interior_facets`. The sheet
+    scale is inside the `avg`. Both gradients are checked against a central
+    difference of fresh solves.
     """
 
     G0, S0, STEP = 1.3, 0.7, 1e-5
@@ -330,3 +332,37 @@ class TestRealControlsOnTheSheet:
         # The functional is quadratic in either control, so the central
         # difference is exact up to the round-off of the two solves.
         assert abs(gradient - difference) <= 1e-7 * abs(difference)
+
+
+class TestRestrictRealCoefficients:
+    """`restrict_real_coefficients_on_interior_facets` on one small mesh."""
+
+    @pytest.fixture(scope="class")
+    def square(self):
+        mesh = fd.UnitSquareMesh(4, 4)
+        r = fd.Function(fd.FunctionSpace(mesh, "R", 0)).assign(1.0)
+        return mesh, r
+
+    def test_the_derivative_exists_and_has_the_facet_value(self, square):
+        """`derivative(r dS, r)` is the interior facet length, once."""
+        from gadopt.utility import restrict_real_coefficients_on_interior_facets
+        mesh, r = square
+        form = restrict_real_coefficients_on_interior_facets(r * fd.dS, mesh)
+        exact = fd.assemble(fd.Constant(1.0) * fd.dS(domain=mesh))
+        assert fd.assemble(form) == pytest.approx(exact, rel=1e-14)
+        gradient = fd.assemble(fd.derivative(form, r)).dat.data_ro_with_halos[0]
+        assert gradient == pytest.approx(exact, rel=1e-14)
+
+    def test_a_coefficient_inside_and_outside_a_restriction_is_refused(self, square):
+        from gadopt.utility import restrict_real_coefficients_on_interior_facets
+        mesh, r = square
+        v = fd.TestFunction(fd.FunctionSpace(mesh, "CG", 1))
+        with pytest.raises(ValueError, match="both inside and outside"):
+            restrict_real_coefficients_on_interior_facets(
+                r * fd.avg(r * v) * fd.dS, mesh)
+
+    def test_exterior_facets_are_left_alone(self, square):
+        from gadopt.utility import restrict_real_coefficients_on_interior_facets
+        mesh, r = square
+        form = r * fd.ds
+        assert restrict_real_coefficients_on_interior_facets(form, mesh) == form

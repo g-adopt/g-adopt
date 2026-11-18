@@ -1033,13 +1033,8 @@ class DtNGravityForm:
         """
         L = Form([])
         for bc_id, sigma, integral_type in self.sigma_bcs:
-            # `4 pi G` inside the integrand, so that `sheet_integral` restricts
-            # it with the rest on an interior facet. `G` can be a `Function` on
-            # the `Real` space (a control), and the derivative with respect to
-            # it is a `Real` `Argument`, which UFL accepts on an interior facet
-            # only with a restriction.
-            L += self.sheet_integral(
-                4 * np.pi * self.G * sigma * v, bc_id, integral_type)
+            L += 4 * np.pi * self.G * self.sheet_integral(
+                sigma * v, bc_id, integral_type)
 
         for bc_id, flux in self.flux_bcs:
             L += flux * v * self.ds(bc_id)

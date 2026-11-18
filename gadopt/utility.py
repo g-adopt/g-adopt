@@ -12,7 +12,13 @@ from firedrake.ufl_expr import extract_unique_domain
 import pyop3 as op3
 import ufl
 import time
+from ufl.algorithms import extract_coefficients
 from ufl.corealg.traversal import traverse_unique_terminals
+# Not in `ufl.algorithms.__all__`, and with no public equivalent: the node type
+# of a restriction and the traversal that finds it, which
+# `restrict_real_coefficients_on_interior_facets` needs.
+from ufl.classes import Restricted
+from ufl.corealg.traversal import unique_pre_traversal
 from firedrake.petsc import PETSc
 from firedrake.utils import get_device_type as fd_get_device_type
 from functools import cached_property
@@ -860,3 +866,111 @@ def derivative_solve_keywords(solver, adj_kwargs: dict,
     namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
     setattr(solver, _DERIVATIVE_KEYWORDS_WRITTEN, True)
     return {}
+
+
+def restrict_real_coefficients_on_interior_facets(form, mesh):
+    """Restrict the `Real` coefficients of `mesh` on its interior facets.
+
+    UFL accepts a coefficient of a continuous element unrestricted on an
+    interior facet, because it gives it a default side; a `Real` coefficient
+    counts as continuous. The derivative with respect to it is a `Real`
+    `Argument`, and UFL requires every `Argument` on an interior facet to carry
+    a restriction. pyadjoint builds exactly that derivative for a control, so
+    since Firedrake stopped replacing `Real` arguments by the literal 1
+    (#5656), a gradient with respect to a `Real` control that multiplies an
+    interior-facet term unrestricted raises `ValueError: Discontinuous type
+    Argument must be restricted`. A `Real` gravitational constant in front of
+    a mass sheet on `dS`, or the self-gravity number in the row scaling of the
+    coupled GIA solver, is such a factor.
+
+    This replaces each such coefficient by its `avg` in every integral in
+    which the facets of `mesh` are interior facets: an `interior_facet`
+    integral on `mesh` (and the extruded types), and an integral on another
+    mesh that is intersected with the interior facets of `mesh` (the
+    facet-to-facet measures of a submesh). A `Real` coefficient has the same
+    value on both sides, so the value of the form does not change, and
+    `avg(c)` keeps `c` as a terminal, so the tape still sees the dependency.
+
+    A coefficient that carries a restriction everywhere it occurs in an
+    integral (for example `sigma` inside `avg(sigma * v)`) is left as it is,
+    because UFL refuses a second restriction. A coefficient that occurs both
+    inside and outside a restriction in one integral cannot be handled with
+    `ufl.replace`, which replaces every occurrence, and restricting only the
+    outside occurrences would need a hand-written UFL transformation, which
+    G-ADOPT does not write. Such a form raises here, at construction, instead
+    of in the middle of an adjoint sweep; the remedy is to write the factor
+    either inside or outside the restriction in every term of that integral.
+
+    Args:
+      form: The form to process.
+      mesh: The mesh whose interior facets and whose `Real` coefficients are
+        meant.
+
+    Returns:
+      The form with those coefficients restricted.
+
+    Raises:
+      ValueError: If a `Real` coefficient of `mesh` occurs both inside and
+        outside a restriction in one integral on its interior facets.
+    """
+
+    def is_real_on_mesh(c):
+        # A `Function` on a `Real` space of `mesh`. A mixed function on
+        # several meshes is not one; a caller restricts its `Real` fields
+        # where it uses them.
+        try:
+            space = c.function_space()
+        except AttributeError:
+            return False
+        return (space.mesh() is mesh
+                and space.ufl_element().family() == "Real")
+
+    def unrestricted_coefficients(expr):
+        # The coefficients that occur outside every restriction in `expr`. A
+        # read-only walk over the expression graph that does not descend into
+        # a `Restricted` node.
+        found, seen, stack = set(), set(), [expr]
+        while stack:
+            node = stack.pop()
+            if id(node) in seen or isinstance(node, Restricted):
+                continue
+            seen.add(id(node))
+            if isinstance(node, ufl.Coefficient):
+                found.add(node)
+            stack.extend(node.ufl_operands)
+        return found
+
+    # The interior-facet integral types of UFL, the extruded ones included.
+    interior = ("interior_facet", "interior_facet_vert", "interior_facet_horiz")
+    integrals = []
+    for integral in form.integrals():
+        on_interior_facets = (
+            (integral.ufl_domain() is mesh
+             and integral.integral_type() in interior)
+            or integral.extra_domain_integral_type_map().get(mesh) in interior)
+        if on_interior_facets:
+            integrand = integral.integrand()
+            # Every coefficient anywhere under a restriction, for example
+            # `sigma` inside `avg(sigma * v)` of a sheet.
+            restricted = {c for node in unique_pre_traversal(integrand)
+                          if isinstance(node, Restricted)
+                          for c in extract_coefficients(node.ufl_operands[0])}
+            unrestricted = {c for c in unrestricted_coefficients(integrand)
+                            if is_real_on_mesh(c)}
+            both = unrestricted & restricted
+            if both:
+                names = ", ".join(sorted(str(c) for c in both))
+                raise ValueError(
+                    f"The Real coefficient(s) {names} occur both inside and "
+                    "outside a restriction in one integral on interior facets. "
+                    "The derivative with respect to them would need a "
+                    "restriction on the outside occurrence, which cannot be "
+                    "added without restricting the inside one twice. Write the "
+                    "factor either inside or outside the restriction in every "
+                    "term of the integral.")
+            mapping = {c: ufl.avg(c) for c in unrestricted}
+            if mapping:
+                integral = integral.reconstruct(
+                    integrand=ufl.replace(integrand, mapping))
+        integrals.append(integral)
+    return ufl.Form(integrals)
