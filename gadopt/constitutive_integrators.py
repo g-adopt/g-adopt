@@ -17,13 +17,17 @@ from ufl.algorithms.analysis import extract_coefficients
 from .internal_variable_equation import assign_history_slices, history_slices
 from .nullspaces import apply_kernel_projection
 
+#: The index of the displacement in the mixed space of both GIA solvers that
+#: own a quadrature step; the field order of either solver starts with it.
+DISPLACEMENT = 0
+
 
 class MaxwellQuadratureUpdate:
     """One scalar common-fluidity root per mechanical quadrature point."""
 
     def _initialise(self, owner):
         self.owner = owner
-        self.u = fd.Function(owner.solution_space.sub(owner.layout.displacement))
+        self.u = fd.Function(owner.solution_space.sub(DISPLACEMENT))
         self.histories = owner.time_integrator
         element = self.histories.current[0].function_space().ufl_element()
         Q = fd.FunctionSpace(owner.mesh, element.sub_elements[0])
@@ -52,11 +56,11 @@ class MaxwellQuadratureUpdate:
 
     def on_mixed_state(self, expression, state=None):
         state = self.owner.solution if state is None else state
-        return ufl.replace(expression, {self.u: fd.split(state)[self.owner.layout.displacement]})
+        return ufl.replace(expression, {self.u: fd.split(state)[DISPLACEMENT]})
 
     def refresh(self, state):
         """Solve with fixed accepted histories, using only mechanics-mesh fields."""
-        self.u.assign(state.subfunctions[self.owner.layout.displacement])
+        self.u.assign(state.subfunctions[DISPLACEMENT])
         self.q.interpolate(self.lower)
         lower = self.q.dat.data_ro.copy()
         self.E0.interpolate(self.equation)
@@ -183,7 +187,7 @@ class DirectConstitutiveBackend:
         self.adjoint = fd.Function(owner.solution_space)
         # Each history Function may hold several Maxwell modes in one tensor.
         self.densities = [fd.Function(m.function_space()) for m in self.buffers]
-        intersect = (fd.dx(domain=owner.potential_mesh),) if owner.layout.cross_mesh else ()
+        intersect = (fd.dx(domain=owner.potential_mesh),) if owner.mesh is not owner.potential_mesh else ()
         dx = fd.Measure('dx', domain=owner.mesh, intersect_measures=intersect,
                         metadata={'quadrature_degree': owner.quad_degree})
         densities = history_slices(self.densities)
