@@ -629,7 +629,7 @@ class BaseDiagnostics:
             f = func_or_op
         func_ctx = self._function_contexts[func_or_op]
         self._check_boundary_id(func_or_op, boundary_id)
-        if boundary_id:
+        if boundary_id is not None:
             f_data = f.dat.data_ro[func_ctx.get_boundary_nodes(boundary_id)]
         else:
             f_data = f.dat.data_ro
