@@ -16,11 +16,23 @@ recorded too, but it is the secondary measure.
 
 Optimiser variants, selected by name:
 
-ROL, all through ``ROL.TypeB.LinMoreAlgorithm`` with an L-BFGS secant:
+ROL, through ``ROL.TypeB.LinMoreAlgorithm`` with an L-BFGS secant:
 
     rol-lbfgs          secant used as the Hessian (what g-adopt runs today)
     rol-newton         true Hessian-vector products, secant as the CG preconditioner
     rol-newton-noprec  true Hessian-vector products, no preconditioner
+
+ROL, through ``ROL.TypeB.NewtonKrylovAlgorithm``:
+
+    rol-newton-krylov  true Hessian-vector products, secant as the CG preconditioner.
+                       One Krylov solve per outer iteration on the free variables, then
+                       a projected backtracking line search that applies no Hessian.
+                       Lin-More instead applies the model Hessian many times per outer
+                       iteration, in its Cauchy point stage and in every round of its
+                       minor loop, which is free for a secant and costs 2.2 forward
+                       calls per application for a true Hessian. This variant has the
+                       same structure as TAO's ``bnls``, so the pair separates the
+                       algorithm from the library.
 
 TAO, through ``pyadjoint.TAOSolver``:
 
@@ -50,6 +62,7 @@ from gadopt import *
 from gadopt.inverse import ROLSolver, minimisation_parameters
 import pyadjoint.optimization.rol_solver as pyadjoint_rol
 from pyadjoint import MinimizationProblem, stop_annotating
+from pyadjoint.enlisting import Enlist
 from pyadjoint.optimization.tao_solver import PETScVecInterface, RieszMapMat, TAOConvergenceError, TAOSolver
 from riesz_hessian import build_preconditioner_matrix
 import ROL
@@ -71,7 +84,9 @@ class WorkBudgetReached(Exception):
     """
 
 
-ROL_VARIANTS = ("rol-lbfgs", "rol-newton", "rol-newton-noprec")
+ROL_VARIANTS = ("rol-lbfgs", "rol-newton", "rol-newton-noprec", "rol-newton-krylov")
+# The variants that run through NewtonKrylovAlgorithm instead of LinMoreAlgorithm.
+ROL_NEWTON_KRYLOV_VARIANTS = ("rol-newton-krylov",)
 TAO_VARIANTS = ("tao-blmvm", "tao-bqnktr", "tao-bqnkls", "tao-bntr", "tao-bntr-noprec",
                 "tao-bntr-riesz", "tao-bnls", "tao-bnls-riesz")
 VARIANTS = ROL_VARIANTS + TAO_VARIANTS
@@ -351,6 +366,51 @@ class Recorder:
 # ROL
 # ---------------------------------------------------------------------------------
 
+class ShiftedROLObjective(pyadjoint_rol.ROLObjective):
+    """A reduced functional whose Hessian action carries a shift ``lambda``.
+
+    The action returned is ``H v + lambda v`` in the control space. pyadjoint returns
+    the Hessian action already mapped through the Riesz map of the control inner
+    product, so the operator ROL's Krylov solver sees is ``A^{-1} H``, with ``A`` the
+    inner-product operator. Adding ``lambda v`` to the mapped action therefore makes
+    that operator ``A^{-1} H + lambda I``, which is ``A^{-1} (H + lambda A)``: the
+    shift is by a multiple of the inner-product operator, and not by a multiple of the
+    identity in nodal coordinates.
+
+    Why this exists. The misfit Hessian of this problem with no regularisation is
+    indefinite: ROL's truncated CG met negative curvature within two or three
+    iterations in 18 of the 25 outer iterations of the first
+    ``rol-newton-krylov`` run. ROL has no answer to that in any of its algorithms or
+    parameters; it truncates CG and returns the partial iterate, which after one step
+    is a preconditioned steepest-descent direction. PETSc's bounded Newton types
+    instead shift the Hessian whenever they see negative curvature, an indefinite
+    matrix, a direction that is not descent, or a failed line search, with
+    ``pert = min(100, max(1e-4, 0.1 |g|))`` grown tenfold on each further failure
+    (``bnk.c:563-580``). This class gives ROL the same treatment from outside the
+    library, so that the comparison is between two methods that both regularise an
+    indefinite model.
+
+    ``shift`` is set by the caller once per outer iteration and held fixed for every
+    Hessian application inside that iteration, which is what BNK does.
+
+    Attributes:
+        shift: the current value of lambda. Zero applies no shift.
+    """
+
+    def __init__(self, rf, scale=1.0):
+        super().__init__(rf, scale=scale)
+        self.shift = 0.0
+
+    def hessVec(self, hv, v, x, tol):
+        """Apply the shifted Hessian to ``v`` and write the result into ``hv``."""
+        super().hessVec(hv, v, x, tol)
+        if self.shift:
+            # ``hv.dat`` and ``v.dat`` are lists of controls. Enlist gives a list for a
+            # single control as well, so one loop covers both cases.
+            for h, direction in zip(Enlist(hv.dat), Enlist(v.dat)):
+                h.assign(h + self.shift * direction)
+
+
 class FormROLVector(pyadjoint_rol.ROLVector):
     """A ROL vector whose inner product is a user bilinear form on the control space.
 
@@ -388,7 +448,8 @@ class FormROLVector(pyadjoint_rol.ROLVector):
 
 
 def rol_parameters(variant, max_it, initial_radius=1e-2, secant_storage=10,
-                   krylov_max_it=20, krylov_rtol=1e-2, krylov_atol=1e-4):
+                   krylov_max_it=20, krylov_rtol=1e-2, krylov_atol=1e-4,
+                   overrides=None):
     """ROL parameter list for one variant, from g-adopt's ``minimisation_parameters``.
 
     Args:
@@ -399,6 +460,13 @@ def rol_parameters(variant, max_it, initial_radius=1e-2, secant_storage=10,
         krylov_max_it: truncated CG iteration limit. Each iteration is one
             Hessian-vector product when the true Hessian is used.
         krylov_rtol, krylov_atol: truncated CG tolerances.
+        overrides: dict mapping a tuple of keys to a value, applied last. Lin-More
+            prices a model-Hessian application at zero, which is right for the secant
+            and wrong for a true Hessian-vector product that costs about 2.2 forward
+            calls, so its inner limits need to be tunable from a run script. The
+            entries that matter are the radius rule under ``Step/Trust Region``, the
+            Krylov tolerances under ``General/Krylov``, and the projected-search and
+            minor-iteration limits under ``Step/Trust Region/Lin-More``.
 
     Returns:
         dict, a deep copy with the variant applied.
@@ -423,15 +491,45 @@ def rol_parameters(variant, max_it, initial_radius=1e-2, secant_storage=10,
     elif variant == "rol-newton-noprec":
         params["General"]["Secant"]["Use as Hessian"] = False
         params["General"]["Secant"]["Use as Preconditioner"] = False
+    elif variant == "rol-newton-krylov":
+        # NewtonKrylovAlgorithm reads the same two keys and gives them the same
+        # meaning, so the settings match rol-newton: the true Hessian in the Krylov
+        # operator, the inverse secant as the Krylov preconditioner.
+        params["General"]["Secant"]["Use as Hessian"] = False
+        params["General"]["Secant"]["Use as Preconditioner"] = True
+        # The Krylov type must be named. NewtonKrylovAlgorithm builds its solver
+        # through KrylovFactory, which reads this key with the default "GMRES"
+        # (ROL_KrylovFactory.hpp:135), while the algorithm reads the SAME key for its
+        # display name with the default "Conjugate Gradients"
+        # (ROL_TypeB_NewtonKrylovAlgorithm_Def.hpp:66). Leaving the key out therefore
+        # runs GMRES under a label that says CG. GMRES also sets its flag to 0 or 1
+        # only, so the negative-curvature branch of the run loop can never fire, and
+        # an ascent direction would pass the Armijo test, because that test compares
+        # against ``-c1 * gs`` with ``gs`` the inner product of the step and the
+        # gradient. CG detects negative curvature and the fallback to steepest descent
+        # works, so name it here.
+        params["General"]["Krylov"]["Type"] = "Conjugate Gradients"
     else:
         raise ValueError(f"unknown ROL variant {variant!r}")
     params["General"]["Print Verbosity"] = 1 if MPI.COMM_WORLD.rank == 0 else 0
     params["General"]["Output Level"] = 1 if MPI.COMM_WORLD.rank == 0 else 0
+    # Applied last, so that a run script can change any entry, including the ones the
+    # variant set above. Every key on the path must already exist: a typo in a ROL
+    # parameter name is silently ignored by ROL itself, so it is caught here instead.
+    for path, value in (overrides or {}).items():
+        node = params
+        for key in path[:-1]:
+            if key not in node:
+                raise KeyError(f"no ROL parameter group {'/'.join(path)!r}: {key!r}")
+            node = node[key]
+        if path[-1] not in node:
+            raise KeyError(f"no ROL parameter {'/'.join(path)!r}: {path[-1]!r}")
+        node[path[-1]] = value
     return params
 
 
 def run_rol(problem, variant, max_it=20, output=None, metadata=None,
-            gradient_rtol=0.0, work_budget=0.0, **kwargs):
+            gradient_rtol=0.0, work_budget=0.0, hessian_shift=0.0, **kwargs):
     """Run one ROL Lin-More variant on the problem.
 
     This mirrors ``gadopt.inverse.LinMoreOptimiser`` without the ROL checkpointing,
@@ -464,8 +562,19 @@ def run_rol(problem, variant, max_it=20, output=None, metadata=None,
     minimisation_problem = MinimizationProblem(problem.reduced_functional, bounds=problem.bounds)
     solver = ROLSolver(minimisation_problem, params, inner_product=problem.inner_product.name,
                        vector_class=FormROLVector, vector_args=[problem.inner_product])
+    if hessian_shift > 0.0:
+        # Replace the objective with one that shifts the Hessian action. ``run`` below
+        # is given this object explicitly, so swapping it here is enough.
+        solver.rolobjective = ShiftedROLObjective(problem.reduced_functional)
     secant = ROL.lBFGS(params["General"]["Secant"]["Maximum Storage"])
-    algorithm = ROL.LinMoreAlgorithm(rol_params, secant)
+    if variant in ROL_NEWTON_KRYLOV_VARIANTS:
+        # NewtonKrylovAlgorithm ignores the whole Step/Trust Region block, including
+        # the initial radius, so ``initial_radius`` has no effect on this variant. It
+        # is a line-search method and it starts every outer iteration at a step length
+        # of 1.0, because "Use Previous Step Length as Initial Guess" is false.
+        algorithm = ROL.NewtonKrylovAlgorithm(rol_params, secant)
+    else:
+        algorithm = ROL.LinMoreAlgorithm(rol_params, secant)
 
     class StatusTest(ROL.StatusTest):
         """Record the iterate, apply the relative gradient test, then defer to ROL.
@@ -481,6 +590,14 @@ def run_rol(problem, variant, max_it=20, output=None, metadata=None,
             gnorm = float(status.gnorm)
             if inner_self.gnorm0 is None and gnorm > 0.0:
                 inner_self.gnorm0 = gnorm
+            if hessian_shift > 0.0:
+                # BNK's initial rule, ``pert = min(1e2, max(1e-4, 0.1 |g|))``
+                # (bnk.c:570 with the defaults at 1264-1273). The value is set once per
+                # outer iteration and stays fixed for every Hessian application inside
+                # it, which is what BNK does. BNK also grows the shift tenfold on each
+                # further failure; that part is not reproduced, so this is the mildest
+                # form of the treatment.
+                solver.rolobjective.shift = min(1e2, max(1e-4, hessian_shift * gnorm))
             recorder.mark_iteration(inner_self.iteration, rol_gnorm=gnorm,
                                     snorm=float(status.snorm))
             inner_self.iteration += 1

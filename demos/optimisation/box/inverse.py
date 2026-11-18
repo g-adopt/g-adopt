@@ -70,6 +70,20 @@ def parse_args(argv=None):
                         help="TAO bqnk types: leave the LMVM initial Hessian as the identity")
     parser.add_argument("--tao-opt", action="append", default=[], metavar="KEY=VALUE",
                         help="extra PETSc option for TAO, repeatable; KEY alone sets a flag")
+    parser.add_argument("--rol-shift", type=float, default=0.0, metavar="FACTOR",
+                        help="ROL only: shift the Hessian action by FACTOR times the "
+                             "gradient norm, as PETSc BNK does "
+                             "(pert = min(1e2, max(1e-4, 0.1|g|))). 0 applies no "
+                             "shift. Use 0.1 to match BNK's initial rule. The misfit "
+                             "Hessian with no regularisation is indefinite, and ROL "
+                             "has no way to regularise it from inside the library")
+    parser.add_argument("--rol-opt", action="append", default=[], metavar="PATH=VALUE",
+                        help="override one entry of the ROL parameter list, repeatable. "
+                             "PATH is the slash-separated path through the nested "
+                             "parameter dictionary, for example "
+                             "'Step/Trust Region/Radius Growing Rate=2.5'. The value is "
+                             "read as a Python literal, so 2.5 is a float, 5 is an "
+                             "integer and true is the string; write True for the boolean")
     parser.add_argument("--output", default=None, help="JSON output file")
     parser.add_argument("--save-control", action="store_true",
                         help="write the final control to <output stem>.h5")
@@ -133,6 +147,36 @@ def parse_tao_options(items):
     return options
 
 
+def parse_rol_options(items):
+    """Turn ``["A/B=2.5"]`` into ``{("A", "B"): 2.5}``.
+
+    The ROL parameter list is a nested dictionary, so an override needs the whole
+    path to the entry and not only its name. The path is split on "/" and the value
+    is read with ``ast.literal_eval``, which gives a float for 2.5, an integer for 5
+    and a boolean for True. A value that is not a Python literal is kept as the
+    string it was written as, which is what ROL wants for entries such as
+    ``Subproblem Model``.
+
+    Args:
+        items: the raw ``PATH=VALUE`` strings from the command line.
+
+    Returns:
+        dict mapping a tuple of keys to the value to write there.
+    """
+    import ast
+    options = {}
+    for item in items:
+        path, sep, value = item.partition("=")
+        if not sep:
+            raise ValueError(f"--rol-opt needs PATH=VALUE, and got {item!r}")
+        try:
+            parsed = ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            parsed = value
+        options[tuple(path.split("/"))] = parsed
+    return options
+
+
 def main(argv=None):
     args = parse_args(argv)
     output = Path(args.output or f"{args.optimiser}_{args.riesz}.json")
@@ -174,6 +218,8 @@ def main(argv=None):
               "work_budget": args.work_budget}
     if args.optimiser.startswith("rol"):
         kwargs["krylov_max_it"] = args.krylov_max_it
+        kwargs["overrides"] = parse_rol_options(args.rol_opt)
+        kwargs["hessian_shift"] = args.rol_shift
     else:
         extra = {"tao_bnk_ksp_max_it": args.krylov_max_it}
         extra.update(parse_tao_options(args.tao_opt))
@@ -185,6 +231,11 @@ def main(argv=None):
     # Final dump: the same record plus the measures that only exist at the end.
     record["final_control_error"] = float(problem.control_error())
     record["tao_options"] = kwargs.get("extra_options")
+    # The ROL overrides are recorded with their paths joined back into one string, so
+    # that the JSON keeps a form that can be pasted straight onto a command line.
+    record["rol_shift"] = args.rol_shift
+    record["rol_options"] = {"/".join(path): value
+                             for path, value in (kwargs.get("overrides") or {}).items()}
     record["final_initial_misfit"] = problem.initial_misfit()
     recorder.metadata = record
     recorder.write()
