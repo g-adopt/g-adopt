@@ -175,7 +175,7 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
     else:
         couplings.append(new_couplings.FluidCore(boundary=CURVE_RC, rho_core=1.2, g=1.))
     if case.rotation:
-        couplings.append(new_couplings.Rotation(C=polar_moment(meshes)))
+        couplings.append(new_couplings.Rotation(C=polar_moment(meshes), Omega_sq=1.566e-3))
     if case.centre:
         couplings.append(new_couplings.CentreOfMass())
     if case.load == "surface":
@@ -322,8 +322,7 @@ def set_state(new, old, old_layout, state, *, previous_dt):
     new.time_integrator.prepare()
     # The 2-D monopole datum at this state.
     old.update_total_mass()
-    ctx = new.coupling_context
-    new.gravity.update_total_mass(ctx.sheets, ctx.on_parent_facet)
+    new.update_total_mass()
 
 
 def _lowrank(solver, x, y):
@@ -384,3 +383,15 @@ def compare(old_vec, new_vec, old_layout, new):
         den += size2
         per_field[name] = np.sqrt(diff2 / size2) if size2 > 0 else np.sqrt(diff2)
     return np.sqrt(num / den), max(per_field.values()), per_field
+
+
+#: Bound on the relative difference of one field block. Every block is
+#: nonzero in the gate cases (the smallest, the `m3` row, is about 1e-4 of the
+#: whole vector), so round-off of one block stays near 1e-15.
+FIELD_RTOL = 1e-10
+
+
+def assert_fields_agree(per_field, rtol=FIELD_RTOL):
+    """Assert every field block of a comparison agrees to round-off."""
+    bad = {name: value for name, value in per_field.items() if value > rtol}
+    assert not bad, f"field blocks differ: {bad}"

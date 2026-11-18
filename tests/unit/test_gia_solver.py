@@ -113,19 +113,60 @@ TAPED = [
                  id="quadrature-bdf2-fluid_core-centre_of_mass"),
     pytest.param(Case(scheme="bdf2", model="power", rotation=True),
                  id="power_law"),
+    # The stock step (multiplier DtN, DG) with a declared nullspace, so that
+    # the recorded projection follows a stock solve block.
+    pytest.param(Case(scheme="bdf2", model="maxwell2", core="fluid", centre=True),
+                 id="stock_step-nullspace"),
 ]
 
 
-def march(meshes, case, control, steps=STEPS[:2]):
-    """A taped (or not) march; the functional reads `u`, `psi` and the history."""
+def march(meshes, case, control, steps=STEPS[:2], *, checkpoint_dir=None,
+          restore_after=None, **kwargs):
+    """A taped (or not) march; the functional reads `u`, `psi` and the history.
+
+    Args:
+      checkpoint_dir: march under `SingleDiskStorageSchedule` with disk
+        checkpointing in this directory.
+      restore_after: after this many steps, copy the state, build a second
+        solver and `restore` the copy into it, and continue with that one;
+        the copy and the restore are on the tape.
+      kwargs: further arguments of the solver.
+    """
     sub = meshes[1]
+
+    def build():
+        with stop_annotating():
+            solver, u, psi = C.build_new(
+                meshes, case, control=control, dt=dt, sea=sea,
+                nullspace="rigid_rotation" if case.core == "fluid" else None,
+                **kwargs)
+        return solver, u, psi
+
     with stop_annotating():
         sea = C.SeaFields(sub)
         dt = C.dt_function(sub)
-        solver, u, psi = C.build_new(
-            meshes, case, control=control, dt=dt, sea=sea,
-            nullspace="rigid_rotation" if case.core == "fluid" else None)
-    for k, h in enumerate(steps):
+    solver, u, psi = build()
+    if checkpoint_dir is not None:
+        from checkpoint_schedules import SingleDiskStorageSchedule
+        from firedrake.adjoint import enable_disk_checkpointing
+        if sub.comm.rank == 0:
+            checkpoint_dir.mkdir()
+        sub.comm.barrier()
+        enable_disk_checkpointing(checkpoint_comm=sub.comm,
+                                  checkpoint_dir=str(checkpoint_dir))
+        get_working_tape().enable_checkpointing(
+            SingleDiskStorageSchedule(), gc_timestep_frequency=1)
+    iterator = enumerate(steps)
+    if checkpoint_dir is not None and annotate_tape():
+        iterator = get_working_tape().timestepper(iter(iterator))
+    for k, h in iterator:
+        if restore_after is not None and k == restore_after:
+            copies = {}
+            for name, f in solver.state().items():
+                copies[name] = (f if name == "previous_dt" else
+                                fd.Function(f.function_space().collapse()).assign(f))
+            solver, u, psi = build()
+            solver.restore(copies)
         dt.assign(h)
         if case.load:
             surface_ice(sea, k)
@@ -164,9 +205,73 @@ def test_taylor_and_replay(meshes, case):
     assert_taylor_with_guards(rf, control, direction, J, min_rate=1.9)
 
 
+def taylor_case(meshes, case, **march_kwargs):
+    """A Taylor test with replay at the recorded control of one taped march."""
+    sub = meshes[1]
+    with stop_annotating():
+        control = fd.Function(fd.FunctionSpace(sub, "CG", 1)).assign(.1)
+        direction = fd.Function(control.function_space()).interpolate(
+            .1 + .03 * fd.SpatialCoordinate(sub)[0])
+    continue_annotation()
+    J = march(meshes, case, control, **march_kwargs)
+    rf = ReducedFunctional(J, Control(control))
+    pause_annotation()
+    assert abs(float(rf(control)) - float(J)) <= 1e-10 * abs(float(J))
+    assert_taylor_with_guards(rf, control, direction, J, min_rate=1.9)
+    return rf, control
+
+
+@pytest.mark.parametrize("case", [
+    pytest.param(Case(representation="lowrank", model="maxwell2", core="fluid",
+                      rotation=True, centre=True, load="sea_moving"),
+                 id="lowrank-DG-sea_level"),
+    pytest.param(Case(family="Quadrature", scheme="bdf2", representation="lowrank",
+                      model="maxwell2", core="fluid", centre=True),
+                 id="quadrature-bdf2")])
+def test_taylor_with_disk_checkpointing(meshes, case, tmp_path):
+    """Three steps under `SingleDiskStorageSchedule`: replay and rate 2."""
+    from pathlib import Path
+    directory = Path(meshes[1].comm.bcast(str(tmp_path / "checkpoints"), root=0))
+    taylor_case(meshes, case, steps=STEPS, checkpoint_dir=directory)
+
+
+def test_taylor_through_a_restore_on_the_tape(meshes):
+    """A state copied and restored into a second solver mid-march, on the tape."""
+    case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
+                model="maxwell2", core="fluid", centre=True)
+    taylor_case(meshes, case, steps=STEPS, restore_after=2)
+
+
+@pytest.mark.parametrize("case", [
+    Case(representation="lowrank", core="fluid", centre=True),
+    Case(representation="multiplier", core="fluid", centre=True),
+    Case(family="Quadrature", representation="lowrank", core="fluid", centre=True)],
+    ids=["lowrank-DG", "multiplier-DG", "quadrature"])
+def test_a_capped_derivative_solve_raises(meshes, case):
+    """`derivative_max_it` caps the adjoint solve: 1 raises, 400 is enough."""
+    sub = meshes[1]
+    for cap, raises in ((1, True), (400, False)):
+        get_working_tape().clear_tape()
+        with stop_annotating():
+            control = fd.Function(fd.FunctionSpace(sub, "CG", 1)).assign(.1)
+        continue_annotation()
+        J = march(meshes, case, control, steps=STEPS[:1],
+                  solver_parameters="iterative", derivative_max_it=cap,
+                  default_options=False)
+        rf = ReducedFunctional(J, Control(control))
+        pause_annotation()
+        if raises:
+            with pytest.raises(fd.ConvergenceError):
+                rf.derivative()
+        else:
+            rf.derivative()
+
+
 # -- State ------------------------------------------------------------------------
 
 STATE_CASES = [
+    # Backward Euler, DG, multiplier DtN, rigid core: no previous level.
+    Case(rotation=True),
     Case(scheme="bdf2", representation="lowrank", model="maxwell2", core="fluid",
          rotation=True, centre=True, load="sea_moving"),
     Case(family="Quadrature", scheme="bdf2", representation="lowrank",
@@ -189,27 +294,42 @@ def values(solver):
             for name, f in solver.state().items()}
 
 
+def load_meshes(path, name):
+    """The parent from a checkpoint file and its curved mantle submesh."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "demos" / "gravity"))
+    from validate_selfgrav_annulus import curve_mesh
+    with fd.CheckpointFile(str(path), "r") as chk:
+        parent = chk.load_mesh(name)
+    parent.cartesian = False
+    sub = curve_mesh(fd.Submesh(parent, 2, C.CELL_MANTLE))
+    sub.cartesian = False
+    return parent, sub
+
+
+def relative(a, b):
+    """`|a - b| / |b|` of the coefficient arrays, for Functions on two meshes
+    loaded from one file, which have the same numbering."""
+    x, y = np.ravel(a.dat.data_ro), np.ravel(b.dat.data_ro)
+    comm = a.function_space().mesh().comm
+    num = comm.allreduce(float(np.sum((x - y) ** 2)))
+    den = comm.allreduce(float(np.sum(y ** 2)))
+    return np.sqrt(num / den)
+
+
 @pytest.mark.parametrize("case", STATE_CASES, ids=[c.label for c in STATE_CASES])
 def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
     """Interrupted, checkpointed, restored on a loaded mesh, continued: bit for bit."""
-    sys_path = __import__("sys").path
     from pathlib import Path
-    sys_path.insert(0, str(Path(__file__).resolve().parents[2] / "demos" / "gravity"))
-    from validate_selfgrav_annulus import curve_mesh
-    comm = meshes[0].comm
-    directory = Path(comm.bcast(str(tmp_path), root=0))
+    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
     name = meshes[0].name
 
     def load(path):
-        with fd.CheckpointFile(str(path), "r") as chk:
-            parent = chk.load_mesh(name)
-        parent.cartesian = False
-        sub = curve_mesh(fd.Submesh(parent, 2, C.CELL_MANTLE))
-        sub.cartesian = False
-        return parent, sub
+        return load_meshes(path, name)
 
     def solver_on(m):
-        sea = C.SeaFields(m[1]) if case.load else None
+        sea = C.SeaFields(m[1]) if case.load in ("sea_fixed", "sea_moving") else None
         solver, _, _ = C.build_new(m, case, dt=C.dt_function(m[1]), sea=sea,
                                    nullspace="rigid_rotation")
         return solver, sea
@@ -242,7 +362,7 @@ def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
 
 def test_state_round_trip_in_memory_and_reset(meshes):
     """`restore` of copied Functions, then `reset` back to rest."""
-    case = STATE_CASES[1]
+    case = STATE_CASES[2]
     sea = None
     a, u, psi = C.build_new(meshes, case, dt=C.dt_function(meshes[1]),
                             nullspace="rigid_rotation")
@@ -311,6 +431,135 @@ def test_a_checkpoint_of_the_old_solver_converts(meshes):
         state_from_checkpoint(new, stored, {**metadata, "time_scheme_order": 1.0})
 
 
+def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
+        meshes, tmp_path):
+    """R4 and R5: a BDF2 state without `previous_dt`, a file of another scheme."""
+    from pathlib import Path
+    bdf2 = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
+                model="maxwell2", core="fluid", centre=True)
+    a, _, _ = C.build_new(meshes, bdf2, nullspace="rigid_rotation")
+    run(a, None, FOUR[:2])
+    state = {k: f.copy(deepcopy=True) for k, f in a.state().items()}
+    del state["previous_dt"]
+    b, _, _ = C.build_new(meshes, bdf2, nullspace="rigid_rotation")
+    with pytest.raises(ValueError, match="previous_dt"):
+        b.restore(state)
+    # A backward-Euler solver takes a state without it.
+    be = Case(rotation=True)
+    c, _, _ = C.build_new(meshes, be)
+    d, _, _ = C.build_new(meshes, be)
+    d.restore({k: f for k, f in c.state().items() if k != "previous_dt"})
+    # A file written by the BDF2 solver is refused by a backward-Euler one of
+    # the same fields otherwise.
+    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
+    with fd.CheckpointFile(str(directory / "s.h5"), "w") as chk:
+        chk.save_mesh(meshes[0])
+        write_state(chk, a, idx=0)
+    other = bdf2.but(scheme="backward_euler")
+    e, _, _ = C.build_new(meshes, other, nullspace="rigid_rotation")
+    with fd.CheckpointFile(str(directory / "s.h5"), "r") as chk:
+        with pytest.raises(ValueError, match="time_scheme"):
+            read_state(chk, e, idx=0)
+
+
+def _old_checkpoint_round_trip(meshes, case, tmp_path, *, exp01):
+    """Write a checkpoint of the old solver in a driver's format, convert, continue.
+
+    `exp01=False`: the `selfgrav_common` layout, every sub-function of the
+    old mixed solution as `solution_{i}` in the broken encoding, the BDF2
+    levels as `time_*`, the metadata of `time_history_metadata` as the
+    timestepping values. `exp01=True`: the Exp01 driver's layout, the
+    displacement, the history and the potential under its own names copied
+    without the broken encoding, and the `Real` rows as `real_{i}` in the
+    timestepping values.
+    """
+    from pathlib import Path
+    from gadopt.viscoelastic_checkpointing import CheckpointField
+    from gadopt.viscoelastic_timestepping import (time_history_fields,
+                                                  time_history_metadata)
+    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
+    # `load_function` takes only a mesh loaded from the file, so the old run
+    # is made on a loaded mesh and the new one on a second load of the file
+    # it writes; both loads number the degrees of freedom alike.
+    with fd.CheckpointFile(str(directory / "mesh.h5"), "w") as chk:
+        chk.save_mesh(meshes[0])
+    name = meshes[0].name
+    first = load_meshes(directory / "mesh.h5", name)
+    parent, sub = first
+    old, z, layout = C.build_old(first, case, dt=C.dt_function(sub),
+                                 declare_nullspace=case.core == "fluid")
+    for h in FOUR[:2]:
+        old.dt.assign(h)
+        old.solve()
+    zs = z.subfunctions
+    info = dict(time_history_metadata(old)) if old.time_integrator else {}
+    if exp01:
+        names = {"displacement": "checkpoint_displacement",
+                 "history": "checkpoint_internal_variables"}
+        fields = [(names["displacement"], zs[layout.displacement]),
+                  (names["history"], zs[layout.internal_variable_field])]
+        fields += time_history_fields(old)
+        encoded = [CheckpointField(n, f, parent, broken=False) for n, f in fields]
+        potential = fd.Function(fd.FunctionSpace(parent, zs[layout.potential].ufl_element()),
+                                name="checkpoint_potential").assign(zs[layout.potential])
+        for i, f in enumerate(zs):
+            if f.ufl_element().family() == "Real":
+                info[f"real_{i}"] = float(f.dat.data_ro_with_halos[0])
+    else:
+        fields = [(f"solution_{i}", f) for i, f in enumerate(zs)]
+        fields += time_history_fields(old)
+        encoded = [CheckpointField(n, f, parent) for n, f in fields]
+    info = {k: float(v) for k, v in info.items()} | {"step": 2.0}
+    path = str(directory / "old.h5")
+    with fd.CheckpointFile(path, "w") as chk:
+        chk.save_mesh(parent)
+        for field in encoded:
+            chk.save_function(field.encode(), idx=0, timestepping_info=info)
+        if exp01:
+            chk.save_function(potential, idx=0, timestepping_info=info)
+    # Read back on the same parent: the file was written from it in this
+    # process, so `load_function` accepts it.
+    stored_names = [f.stored.name() for f in encoded] + (["checkpoint_potential"] if exp01 else [])
+    second = load_meshes(path, name)
+    with fd.CheckpointFile(path, "r") as chk:
+        loaded = {n: chk.load_function(second[0], n, idx=0) for n in stored_names}
+        history = chk.get_timestepping_history(second[0], stored_names[0])
+    metadata = {k: float(v[-1]) for k, v in history.items() if k != "index"}
+    new, u, psi = C.build_new(second, case, dt=C.dt_function(second[1]),
+                              nullspace="rigid_rotation" if case.core == "fluid" else None)
+    aliases = ({"displacement": "checkpoint_displacement",
+                "potential": "checkpoint_potential"} if exp01 else None)
+    state = state_from_checkpoint(new, loaded, metadata, aliases=aliases)
+    if exp01 and "time_current_0" not in loaded:
+        state["history"] = loaded["checkpoint_internal_variables"]
+    new.restore(state)
+    for h in FOUR[2:3]:
+        old.dt.assign(h)
+        new.dt.assign(h)
+        old.solve()
+        new.solve()
+    assert relative(u, zs[0]) <= 1e-12
+    assert relative(psi, zs[layout.potential]) <= 1e-12
+    old_history = old.time_integrator.current[0] if old.time_integrator else zs[1]
+    assert relative(new.internal_variables, old_history) <= 1e-12
+
+
+@pytest.mark.parametrize("case", [Case(rotation=True),
+                                  Case(scheme="bdf2", representation="lowrank",
+                                       core="fluid", rotation=True, centre=True)],
+                         ids=["DG-be-multiplier", "DG-bdf2-lowrank"])
+def test_a_dg_checkpoint_of_the_old_solver_converts(meshes, case, tmp_path):
+    """The old DG layout (history as `solution_1`), through a CheckpointFile."""
+    _old_checkpoint_round_trip(meshes, case, tmp_path, exp01=False)
+
+
+def test_an_exp01_checkpoint_of_the_old_solver_converts(meshes, tmp_path):
+    """The Exp01 layout (own names, `real_{i}`), through a CheckpointFile."""
+    case = Case(scheme="bdf2", representation="lowrank", core="fluid",
+                rotation=True, centre=True)
+    _old_checkpoint_round_trip(meshes, case, tmp_path, exp01=True)
+
+
 # -- Interface ----------------------------------------------------------------------
 
 def test_the_order_of_the_couplings_does_not_matter(meshes):
@@ -321,7 +570,7 @@ def test_the_order_of_the_couplings_does_not_matter(meshes):
 
     def build(order):
         couplings = [cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.),
-                     cp.Rotation(C=C.polar_moment(meshes)), cp.CentreOfMass(),
+                     cp.Rotation(C=C.polar_moment(meshes), Omega_sq=1.566e-3), cp.CentreOfMass(),
                      cp.SeaLevel(**sea.kwargs(case))]
         return NewSolver(fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
                          fd.Function(fd.FunctionSpace(parent, "CG", 2)),
@@ -394,24 +643,88 @@ def test_the_quadrature_family_refuses_a_weak_displacement_condition(meshes):
         C.build_new(meshes, Case(family="Quadrature"))
 
 
-def test_a_wrong_nullspace_is_refused(meshes):
-    """A laterally varying density: the rigid rotation is not a kernel."""
-    parent, sub = meshes
+def _density(sub, kind):
+    """A reference density of the kind the nullspace check is tested on."""
     X = fd.SpatialCoordinate(sub)
+    r = fd.sqrt(fd.dot(X, X))
+    profile = 1.0 + 0.2 * (2.2037 - r)
+    if kind == "DG0":
+        return fd.Function(fd.FunctionSpace(sub, "DG", 0)).interpolate(profile)
+    if kind == "CG1":
+        return fd.Function(fd.FunctionSpace(sub, "CG", 1)).interpolate(profile)
+    if kind == "jump":
+        # A 10 percent jump at a radius that is not on a cell face.
+        return fd.Function(fd.FunctionSpace(sub, "DG", 1)).interpolate(
+            fd.conditional(r < 1.65, 1.1, 1.0))
+    return 1.0 + float(kind) * X[0]
+
+
+def _solver_with_density(meshes, kind, K):
+    parent, sub = meshes
     material = gadopt.CompressibleInternalVariableApproximation(
-        bulk_modulus=1.0, density=1.0 + .3 * X[0], g=1.0, B_mu=C.B_MU,
+        bulk_modulus=K, density=_density(sub, kind), g=1.0, B_mu=C.B_MU,
         self_gravity_number=C.LAMBDA, shear_modulus=1.0, viscosity=1.0)
-    with pytest.raises(ValueError, match="not a kernel"):
-        NewSolver(fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
-                  fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
-                  dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
-                  couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-                  nullspace="rigid_rotation", solver_parameters="direct")
-    # The same configuration with a symmetric density passes, and records
-    # how far the mode is from an exact kernel.
+    return NewSolver(fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
+                     fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
+                     dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
+                     couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
+                     nullspace="rigid_rotation", solver_parameters="direct")
+
+
+@pytest.mark.parametrize("K", [1.0, 1000.0])
+@pytest.mark.parametrize("kind", ["DG0", "CG1", "jump"])
+def test_a_radial_density_passes_the_nullspace_check(meshes, kind, K):
+    """A density that is 1-D by intent, in any representation, at any bulk modulus."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        solver = _solver_with_density(meshes, kind, K)
+    lateral, ratio, ratio_t = solver.kernel_residuals[0]
+    assert lateral < 1e-3
+
+
+@pytest.mark.parametrize("K", [1.0, 1000.0])
+def test_a_lateral_density_is_refused_or_warned(meshes, K):
+    """`1 + a x`: refused at `a = 0.01`, warned at `a = 0.001`, at any bulk modulus."""
+    with pytest.raises(ValueError, match="moves density"):
+        _solver_with_density(meshes, "0.01", K)
+    with pytest.warns(UserWarning, match="moves density"):
+        solver = _solver_with_density(meshes, "0.001", K)
+    assert abs(solver.kernel_residuals[0][0] - 1.41e-3) < 1e-4
+
+
+def test_a_symmetric_configuration_passes_the_nullspace_check(meshes):
     solver, _, _ = C.build_new(meshes, Case(core="fluid", load=None),
                                nullspace="rigid_rotation")
-    assert max(max(pair) for pair in solver.kernel_residuals) < NewSolver.KERNEL_RTOL
+    lateral, ratio, ratio_t = solver.kernel_residuals[0]
+    assert lateral < 1e-12 and max(ratio, ratio_t) < 1e-3
+
+
+def test_backstress_refuses_a_displacement_condition(meshes):
+    """R2: the backstress history equation has no boundary part."""
+    with pytest.raises(NotImplementedError, match="natural displacement"):
+        C.build_new(meshes, Case(model="backstress", core="rigid"))
+
+
+def test_a_traction_without_a_surface_load_warns(meshes):
+    """R10: a `normal_stress` loads the mechanics only."""
+    parent, sub = meshes
+    with pytest.warns(UserWarning, match="normal_stress"):
+        NewSolver(fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
+                  fd.Function(fd.FunctionSpace(parent, "CG", 2)),
+                  C.approximation(Case()), dt=C.dt_function(sub),
+                  gravity_bcs=C.gravity_bcs(parent),
+                  bcs={C.CURVE_RC: {"un": 0.0},
+                       C.CURVE_RE: {"normal_stress": C.load_expression(sub)}},
+                  solver_parameters="direct")
+
+
+def test_the_coefficients_are_real_functions_on_the_multiplier_path(meshes):
+    """R9: no Python float, so a functional keeps its dependency."""
+    solver, _, _ = C.build_new(meshes, Case(rotation=True))
+    solver.solve()
+    values = [v for boundary in solver.coefficients().values() for v in boundary.values()]
+    assert values and all(isinstance(v, fd.Function) for v in values)
 
 
 def test_ksponly_is_refused_on_a_power_law(meshes):

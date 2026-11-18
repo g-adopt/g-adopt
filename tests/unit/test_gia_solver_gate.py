@@ -105,10 +105,12 @@ def gate(meshes, case, *, perturb=None):
     r_new, a_new = C.residual_and_actions(new, directions)
     r_old, a_old = C.residual_and_actions(
         old, old_directions(old, layout, new, directions))
+    comparisons = [C.compare(r_old, r_new, layout, new)]
+    comparisons += [C.compare(o, n, layout, new) for o, n in zip(a_old, a_new)]
     result = {"case": case.label,
-              "residual": C.compare(r_old, r_new, layout, new)[:2],
-              "actions": [C.compare(o, n, layout, new)[:2]
-                          for o, n in zip(a_old, a_new)]}
+              "residual": comparisons[0][:2],
+              "actions": [c[:2] for c in comparisons[1:]],
+              "per_field": [c[2] for c in comparisons]}
     with r_old.dat.vec_ro as v:
         result["residual_norm"] = v.norm()
     return result
@@ -122,29 +124,48 @@ def test_residual_and_jacobian_action_match_the_old_solver(meshes, case):
         with open(report, "a") as f:
             f.write(json.dumps({k: (list(map(float, v)) if k == "residual" else
                                     [list(map(float, a)) for a in v] if k == "actions"
-                                    else v) for k, v in result.items()}) + "\n")
+                                    else v) for k, v in result.items()
+                                if k != "per_field"}) + "\n")
     print(result)
     assert result["residual_norm"] > 0
     overall, worst = result["residual"]
     assert overall < RTOL, result
     for overall, worst in result["actions"]:
         assert overall < RTOL, result
+    # Every field block, so that a difference in a small block (a `Real`
+    # row) is not hidden in the norm of the whole vector.
+    for per_field in result["per_field"]:
+        C.assert_fields_agree(per_field)
 
 
-def test_the_gate_sees_a_changed_residual(meshes):
-    """Negative control: one small extra term is a difference far above round-off.
+def _add(term):
+    """A perturbation that adds `term(new)` to the new solver's residual."""
+    def perturb(new):
+        new.F = new.F + term(new)
+    return perturb
 
-    The term `1e-3 (u, w)` is about a thousandth of the elastic stiffness of
-    the displacement block, the size of a modelling error the gate must catch.
+
+NEGATIVE = {
+    # About a thousandth of the elastic stiffness of the displacement block.
+    "displacement": lambda new: 1e-3 * fd.inner(new.solution_split[0], new.tests[0]) * new.gravity.dx_m,
+    # About a thousandth of the Laplacian of the potential row.
+    "potential": lambda new: 1e-3 * new.field("potential") * new.tests[new.field_index["potential"]] * new.gravity.dx_g,
+    # A thousandth of the diagonal of the rotation row, a `Real` row.
+    "m3": lambda new: 1e-3 * new.field("m3") * new.tests[new.field_index["m3"]] * new.gravity.dx_m,
+}
+
+
+@pytest.mark.parametrize("row", list(NEGATIVE))
+def test_the_gate_sees_a_changed_row(meshes, row):
+    """Negative controls: one small extra term in one row is seen in that block.
+
+    The block of the changed row differs far above round-off in the residual
+    and in the Jacobian actions, and every other block still agrees, so the
+    comparison maps the blocks by name and does not hide a small block.
     """
-    def add_a_term(new):
-        new.F = new.F + 1e-3 * fd.inner(new.solution_split[0], new.tests[0]) * new.gravity.dx_m
-
-    result = gate(meshes, Case(rotation=True), perturb=add_a_term)
-    print(result)
-    # The state is small (1e-3) against the load, and the random directions
-    # are dominated by the potential and the history, so the term moves the
-    # residual and the actions by about 6e-7 of their size: five orders
-    # above round-off.
-    assert result["residual"][0] > 1e3 * RTOL
-    assert all(overall > 1e3 * RTOL for overall, _ in result["actions"])
+    result = gate(meshes, Case(rotation=True), perturb=_add(NEGATIVE[row]))
+    print(row, result["residual"], result["actions"])
+    for per_field in result["per_field"]:
+        assert per_field[row] > 1e3 * RTOL, (row, per_field[row])
+        others = {name: value for name, value in per_field.items() if name != row}
+        C.assert_fields_agree(others)
