@@ -105,7 +105,7 @@ from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
 from pyadjoint import Block
 from pyadjoint.tape import annotate_tape
 
-from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords
+from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords, scalar_value
 
 # Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
 # replaces the stock solve block of an annotated variational solve with a
@@ -344,18 +344,8 @@ def require_controls_reach_block(block, controls):
                 "(REVIEW-ADJOINT S6.5 D1). Raised here instead.")
 
 
-def _scalar(value) -> float:
-    """`float()` of one scalar carrier, `Constant` or `Real` `Function` alike.
-
-    The twin of `gadopt.gia_gravity.scalar_value`, kept local so this module
-    does not import `gia_gravity` and close a cycle.
-    """
-    try:
-        return float(value)
-    except (TypeError, NotImplementedError):
-        # The array with ghosts: a `Real` value is a ghost entry on every
-        # rank but the one that owns it.
-        return float(np.asarray(value.dat.data_ro_with_halos, dtype=float).reshape(-1)[0])
+#: `float()` of one scalar carrier (`gadopt.utility.scalar_value`).
+_scalar = scalar_value
 
 
 class _ThetaPsiTerms:

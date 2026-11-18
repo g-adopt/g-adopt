@@ -191,7 +191,8 @@ from .stokes_integrators import (
     newton_stokes_solver_parameters,
 )
 from .utility import (CombinedSurfaceMeasure, ensure_constant,
-                      restrict_real_coefficients_on_interior_facets)
+                      restrict_real_coefficients_on_interior_facets,
+                      scalar_value)
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
 from ufl import derivative as ufl_derivative
 from ufl.algorithms.ad import expand_derivatives
@@ -1813,34 +1814,7 @@ class GIASpaceLayout:
         return tuple(self.rotation.get(name) for name in self.rotation_names)
 
 
-def scalar_value(value) -> float:
-    """`float()` of one scalar carrier, whatever kind it is.
-
-    **Never call `float()` on a composite UFL expression.** `theta_psi` is
-    `scaling_factor * B_mu / Lambda`, a UFL `Division`, and
-    `Division.__float__` raises
-
-        TypeError: Division.__float__ returned non-float (type NotImplementedType)
-
-    the moment any factor is a `Real` `Function` rather than a `Constant`. That
-    makes control family 4 - `Lambda`, `B_mu`, `G` - unbuildable, and family 4
-    is the only one that separates the correct five-override adjoint from the
-    self-consistent, 93.65%-wrong three-override one. Plan rule 6 says a
-    `float()` must never touch a taped value; taking it of the *composite* is
-    how that rule was violated in shipped code.
-
-    Each factor on its own is a scalar carrier and converts. So compute from
-    the parts and multiply in Python.
-    """
-    try:
-        return float(value)
-    except (TypeError, NotImplementedError):
-        pass
-    # A `Real` `Function` holds its one number in `dat`, and reaching it that
-    # way works identically for a `Constant`. The value is owned by one rank
-    # and is a ghost entry on the others, so read the array with ghosts: the
-    # owned array `data_ro` is empty on every rank but the owner.
-    return float(np.asarray(value.dat.data_ro_with_halos, dtype=float).reshape(-1)[0])
+# `scalar_value` is `gadopt.utility.scalar_value`, imported above.
 
 
 def self_gravitating_gia_space(

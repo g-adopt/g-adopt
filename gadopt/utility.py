@@ -974,3 +974,22 @@ def restrict_real_coefficients_on_interior_facets(form, mesh):
                     integrand=ufl.replace(integrand, mapping))
         integrals.append(integral)
     return ufl.Form(integrals)
+
+
+def scalar_value(value) -> float:
+    """`float()` of one scalar carrier: a number, a `Constant` or a `Real` Function.
+
+    For checks and for numbers that a PETSc callback needs. A value that
+    enters a form stays UFL. `float()` of a composite UFL expression raises
+    when a factor is a `Real` Function (`Division.__float__ returned
+    non-float`), so a composite is computed from its factors by the caller.
+    """
+    try:
+        return float(value)
+    except (TypeError, NotImplementedError):
+        pass
+    # A `Real` value is owned by one rank and is a ghost entry on the others,
+    # so the array with ghosts is read.
+    import numpy as np
+    return float(np.asarray(value.dat.data_ro_with_halos,
+                            dtype=float).reshape(-1)[0])
