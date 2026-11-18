@@ -36,8 +36,10 @@ into this row by their own couplings, not here.
 import numpy as np
 from firedrake import (Constant, DirichletBC, Function, FunctionSpace,
                        Measure, SpatialCoordinate, TestFunction, TrialFunction,
-                       assemble, dot, grad, solve, sqrt)
+                       assemble, avg, dot, grad, solve, sqrt)
 from warnings import warn
+
+from pyadjoint.tape import stop_annotating
 
 from .dtn_coupled import CoupledLowRankDtN
 from .dtn_form import DtNGravityForm
@@ -56,8 +58,12 @@ class GravityPotential:
       mechanics_mesh: the mesh of the density that drives the potential, a
         `Submesh` of the parent or the parent itself.
       gravity_bcs: the boundary conditions of `psi` in `DtNGravityForm`'s
-        dictionary form (`"dtn"`, `"psi"`, `"flux"`). Mass sheets are not
-        accepted here; a coupled solver gives them as couplings.
+        dictionary form (`"dtn"`, `"psi"`, `"flux"`, `"sigma"`,
+        `"interior_sigma"`). A sheet given here enters the residual through
+        the boundary form and the 2-D datum through `enclosed_mass_forms`. A
+        caller that writes its sheets into the residual itself passes them to
+        the datum as `(density, measure)` pairs instead (`update_total_mass`);
+        the coupled GIA solver does that and refuses sheets here.
       Lambda: the self-gravity number `4 pi G rho_bar L / g_bar`. The
         boundary form's gravitational constant is `Lambda / (4 pi)`, so that
         a sheet's `4 pi G sigma` and the volume source agree.
@@ -84,17 +90,12 @@ class GravityPotential:
             potential_space, gravity_bcs,
             gravitational_constant=Lambda / (4.0 * np.pi),
             quad_degree=quad_degree, alpha=alpha)
-        if self.form.sigma_bcs:
-            raise ValueError(
-                "gravity_bcs carries a mass sheet ('sigma' or 'interior_sigma'). "
-                "A coupled solver takes a prescribed load once, as "
-                "SurfaceLoad(boundary=..., sigma=..., g_surface=...) in "
-                "couplings, which gives it to the momentum equation, the "
-                "potential, the rotation rows and the centre-of-mass rows.")
         #: `4 pi G`, written as the boundary form writes it.
         self.four_pi_G = 4 * np.pi * self.form.G
         self.set_measures()
-        self.check_geometry()
+        # Checks of the mesh: numbers nothing on the tape reads.
+        with stop_annotating():
+            self.check_geometry()
         self.set_monopole_datum()
         #: The low-rank operator, built by `build_lowrank_operator`.
         self.dtn_operator = None
@@ -225,8 +226,8 @@ class GravityPotential:
         the trace, because the exterior monopole solution is logarithmic. The
         datum supplies its flux, `-2 G M / R`, with `M` the enclosed mass. The
         divergence-form volume source carries no net mass, so `M` is the mass
-        of the sheets that the caller passes to `update_total_mass`. In 3-D
-        nothing is built.
+        of the sheets: those of the boundary form and those the caller passes
+        to `update_total_mass`. In 3-D nothing is built.
         """
         self.monopole_boundaries = [
             bc_id for bc_id, _ in self.form.dtn_boundaries
@@ -263,23 +264,35 @@ class GravityPotential:
             out[bc_id] = flux
         return out
 
-    def enclosed_mass_forms(self, sheets, on_parent_facet):
+    def _on_facet(self, value):
+        """A `Real` test function of the parent on a facet of the density's mesh.
+
+        In a cross-mesh system those facets are interior facets of the parent,
+        where UFL requires a restriction of every argument; `avg` is exact for
+        a `Real` field.
+        """
+        return avg(value) if self.cross_mesh else value
+
+    def enclosed_mass_forms(self, extra_masses=()):
         """`(identity, mass, flux)`: the one-by-one systems on the `Real` space.
 
         Args:
-          sheets: the `MassSheet`s of the couplings. A sheet with
-            `in_monopole_datum` false is left out.
-          on_parent_facet: the restriction of a parent `Real` test function
-            on the sheets' facets.
+          extra_masses: `(density, measure)` pairs of sheets that the caller
+            writes into the residual itself. `density` is UFL on the
+            density's mesh, `measure` a facet measure of that mesh, already
+            restricted to its tag (intersected with the parent's interior
+            facets in a cross-mesh system).
         """
         mu = TestFunction(self.real_space)
         nu = TrialFunction(self.real_space)
         identity = (nu / self.mesh_volume) * mu * self.dx_parent
         mass = None
-        for sheet in sheets:
-            if not sheet.in_monopole_datum:
-                continue
-            term = on_parent_facet(mu) * sheet.density * sheet.measure
+        for bc_id, sigma, integral_type in self.form.sigma_bcs:
+            term = self.form.sheet_integral(ensure_constant(sigma) * mu, bc_id,
+                                            integral_type)
+            mass = term if mass is None else mass + term
+        for density, measure in extra_masses:
+            term = self._on_facet(mu) * density * measure
             mass = term if mass is None else mass + term
         flux = None
         for bc_id, value in self.form.flux_bcs:
@@ -291,17 +304,23 @@ class GravityPotential:
             flux = self.restrict_parent_reals(flux)
         return identity, mass, flux
 
-    def update_total_mass(self, sheets, on_parent_facet) -> None:
+    def update_total_mass(self, extra_masses=(), extra_scales=()) -> None:
         """Refresh the enclosed-mass scalars the datum reads, as recorded solves.
 
         Called at the start of every step, so the assembles and the solves
         land on the tape. `GravitySolver.update_total_mass` explains why a
         `Constant.assign(assemble(...))` would cut the tape and why a cached
         solver on this `Real` space is not used.
+
+        Args:
+          extra_masses: `(density, measure)` pairs of the caller's sheets that
+            the datum counts (`enclosed_mass_forms`).
+          extra_scales: `(density, measure)` pairs of every sheet of the
+            caller, counted or not, for the scale of `check_net_mass`.
         """
         if not self.monopole_boundaries:
             return
-        identity, mass, flux = self.enclosed_mass_forms(sheets, on_parent_facet)
+        identity, mass, flux = self.enclosed_mass_forms(extra_masses)
         # Each solve starts from zero. A linear solve under `ksponly` adds an
         # update to its initial guess, so a guess left from the last step
         # puts that step's round-off into the datum; from zero the datum is a
@@ -315,20 +334,31 @@ class GravityPotential:
             self.cavity_flux.assign(0.0)
             solve(identity == flux, self.cavity_flux,
                   solver_parameters=real_scalar_solver_parameters)
-        self.check_net_mass(sheets)
+        self.check_net_mass(extra_scales)
 
-    def check_net_mass(self, sheets) -> None:
+    def check_net_mass(self, extra_scales=()) -> None:
         """Refuse a doubly anchored gauge; warn on a small net sheet mass.
 
         The scale is the mass the sheets move, `sum int |sigma|`. With a
         strong `psi` condition and a nonzero net mass, the Robin monopole
         relation and the Dirichlet condition are two anchors of one constant.
+        A diagnostic: nothing on the tape reads it, so it is not recorded.
+
+        Args:
+          extra_scales: `(density, measure)` pairs of the caller's sheets.
         """
         if not self.monopole_boundaries:
             return
+        with stop_annotating():
+            self._check_net_mass(extra_scales)
+
+    def _check_net_mass(self, extra_scales) -> None:
         scale = 0.0
-        for sheet in sheets:
-            scale += assemble(abs(sheet.density) * sheet.measure)
+        for bc_id, sigma, integral_type in self.form.sigma_bcs:
+            scale += assemble(self.form.sheet_integral(
+                abs(ensure_constant(sigma)), bc_id, integral_type))
+        for density, measure in extra_scales:
+            scale += assemble(abs(density) * measure)
         mass = abs(float(self.source_mass))
         relative = mass / scale if scale > 0.0 else 0.0
         anchored = relative > 1e-8 or float(self.cavity_flux) != 0.0
