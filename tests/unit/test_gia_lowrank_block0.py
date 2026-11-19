@@ -69,6 +69,7 @@ from test_gia_gravity import (
     LAMBDA,
     SIGMA_HAT,
 )
+from parallel_ranks import assert_marked_rank_count
 # The module fixture of `test_gia_gravity`, bound by assignment so that pytest finds
 # it here and flake8 does not read the test arguments of the same name as
 # redefinitions of an import.
@@ -418,7 +419,7 @@ def test_the_columns_survive_newton_on_a_power_law(meshes):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_two_ranks_match_the_multiplier_path(meshes):
+def test_two_ranks_match_the_multiplier_path(request, meshes):
     """Item 6 of the stage-1 test list: the `Allreduce` paths of the new PC.
 
     The boundary dofs are partitioned and the modes are global, so every
@@ -428,6 +429,7 @@ def test_two_ranks_match_the_multiplier_path(meshes):
     low-rank arm must reproduce the multiplier arm's state to the outer
     tolerance and its outer count within one, as the serial tests assert.
     """
+    assert_marked_rank_count(request)
     comm = fd.COMM_WORLD
     assert comm.size == 2, "this test must run on exactly two ranks"
     reference, *fields_ref = build(meshes, "multiplier")

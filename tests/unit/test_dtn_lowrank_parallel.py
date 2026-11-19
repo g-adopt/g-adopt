@@ -56,6 +56,7 @@ import gadopt  # noqa: F401  (before firedrake)
 import firedrake as fd  # noqa: E402
 from gadopt import CylindricalDtN  # noqa: E402
 from gadopt.dtn_lowrank import _assert_against_reference  # noqa: E402
+from parallel_ranks import assert_marked_rank_count
 
 RMIN, RMAX = 1.22, 2.22
 QUAD_DEGREE = 12
@@ -102,19 +103,20 @@ def build_pieces(annulus, M=3):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_clean_rows_pass_on_every_rank(annulus):
+def test_clean_rows_pass_on_every_rank(request, annulus):
     """The positive control. Without it the poisoned call proves nothing.
 
     `rows` is the reference, so the deviation is zero and no rank raises. If
     this failed, the poisoned test below would be detecting the setup rather
     than the defect.
     """
+    assert_marked_rank_count(request)
     pieces = build_pieces(annulus)
     _assert_against_reference(**pieces)
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_a_rank_with_empty_rows_does_not_strand_the_others(annulus):
+def test_a_rank_with_empty_rows_does_not_strand_the_others(request, annulus):
     """The regression. Before the fix this HUNG; it did not fail.
 
     Rank 1's `rows` are zeroed, which is the state a rank owning nothing on the
@@ -143,6 +145,7 @@ def test_a_rank_with_empty_rows_does_not_strand_the_others(annulus):
     suite because its trigger is partitioner dependent and would go inert
     without saying so.
     """
+    assert_marked_rank_count(request)
     pieces = build_pieces(annulus)
     if fd.COMM_WORLD.rank != 0:
         pieces["rows"] = np.zeros_like(pieces["rows"])
@@ -156,7 +159,7 @@ def test_a_rank_with_empty_rows_does_not_strand_the_others(annulus):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_every_rank_names_the_same_mode(annulus):
+def test_every_rank_names_the_same_mode(request, annulus):
     """The error message must be the same everywhere.
 
     `worst_key` is rank-local, so before the fix each rank would have named
@@ -164,6 +167,7 @@ def test_every_rank_names_the_same_mode(annulus):
     two different diagnoses for one defect sends the reader after the wrong
     mode.
     """
+    assert_marked_rank_count(request)
     pieces = build_pieces(annulus)
     # Poison a DIFFERENT mode on each rank, so a rank-local `worst_key` would
     # disagree by construction.

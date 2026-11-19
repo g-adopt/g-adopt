@@ -22,6 +22,7 @@ import gia_solver_cases as C
 from gadopt.gia_state import read_state, write_state
 from test_gia_solver import (FOUR, PARALLEL_RTOL, STATE_CASES, load_meshes,
                              relative, run)
+from parallel_ranks import assert_marked_rank_count
 
 
 def _march_and_write(path, comm):
@@ -80,7 +81,7 @@ QUADRATURE_STATE_CASE = STATE_CASES[2]
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_a_quadrature_state_restarts_on_another_number_of_ranks(tmp_path):
+def test_a_quadrature_state_restarts_on_another_number_of_ranks(request, tmp_path):
     """A Quadrature state written on one rank restarts on two, and the other way round.
 
     `write_state` stores the quadrature point coordinates of the history,
@@ -90,6 +91,7 @@ def test_a_quadrature_state_restarts_on_another_number_of_ranks(tmp_path):
     differs by tens of percent. One rank works on `COMM_SELF` alone, and its
     result (or its error) is broadcast, so that every rank fails alike.
     """
+    assert_marked_rank_count(request)
     comm = MPI.COMM_WORLD
     directory = Path(comm.bcast(str(tmp_path), root=0))
 

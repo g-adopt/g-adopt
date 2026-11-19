@@ -23,6 +23,7 @@ import firedrake as fd
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
 from test_gravity_solver import (
     RMAX, annulus_mesh, relative_l2_error, shell_mesh_3d)
+from parallel_ranks import assert_marked_rank_count
 
 
 @pytest.fixture(scope="module")
@@ -425,13 +426,14 @@ def test_cg_gap_does_not_grow_with_refinement():
 # Parallel
 # ---------------------------------------------------------------------------
 @pytest.mark.parallel(nprocs=2)
-def test_parallel_parity(annulus):
+def test_parallel_parity(request, annulus):
     """Same comparison on more than one rank.
 
     The low-rank apply is the only place in this path where ranks have to
     agree, and it does so through a single `Allreduce` of the mode vector; an
     ownership mistake there is invisible in serial.
     """
+    assert_marked_rank_count(request)
     if fd.COMM_WORLD.size < 2:
         pytest.skip("needs >= 2 MPI ranks; run under mpiexec")
     rho = annulus_source(annulus)
@@ -443,12 +445,13 @@ def test_parallel_parity(annulus):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_parallel_coefficients_are_rank_consistent(annulus):
+def test_parallel_coefficients_are_rank_consistent(request, annulus):
     """Every rank must report the same trace spectrum.
 
     `coefficients()` sums rank-local dot products, so a rank that skipped the
     reduction would return its own partial sum and nothing would complain.
     """
+    assert_marked_rank_count(request)
     if fd.COMM_WORLD.size < 2:
         pytest.skip("needs >= 2 MPI ranks; run under mpiexec")
     psi = fd.Function(fd.FunctionSpace(annulus, "CG", 1))

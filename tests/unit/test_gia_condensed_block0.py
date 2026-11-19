@@ -87,6 +87,7 @@ from test_gia_nested_condensation import (  # noqa: E402
 from test_gia_gravity import TestFluidCore as _FluidCoreHelpers
 from test_gia_nested_condensation import TestPowerLaw as _PowerLawSettings
 from test_gia_nested_condensation import TestThreeDimensions as _ThreeD
+from parallel_ranks import assert_marked_rank_count
 
 # The module fixture of `test_gia_gravity`, bound by assignment so that pytest finds
 # it here and flake8 does not read the test arguments of the same name as
@@ -1360,7 +1361,7 @@ class TestThreeDimensions:
 # from the nest rather than from the mixed space's own field ordering.
 # ---------------------------------------------------------------------------
 @pytest.mark.parallel(nprocs=2)
-def test_two_ranks_match_the_direct_route(meshes):  # noqa: F811
+def test_two_ranks_match_the_direct_route(request, meshes):  # noqa: F811
     """The 2-rank annulus solve against LU on block 0, on the same 2 ranks.
 
     The reference is the direct preset on the same communicator rather than a
@@ -1371,6 +1372,7 @@ def test_two_ranks_match_the_direct_route(meshes):  # noqa: F811
     Gate 1e-8 in every field, the preset's outer tolerance's scale, the same
     gate as the serial comparison.
     """
+    assert_marked_rank_count(request)
     assert fd.COMM_WORLD.size == 2, "this test must run on exactly 2 ranks"
     nested, u, psi = build(
         meshes, solver_parameters=condensed_preset())

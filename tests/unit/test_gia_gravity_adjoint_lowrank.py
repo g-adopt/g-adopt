@@ -73,6 +73,7 @@ from test_gravity_adjoint import (  # noqa: E402
     assert_taylor_with_guards,
     taylor_first_order_ladder,
 )
+from parallel_ranks import assert_marked_rank_count
 
 REPRESENTATIONS = ("multiplier", "lowrank")
 
@@ -1475,8 +1476,9 @@ def test_fluid_core_multiplier_and_lowrank_match(meshes):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_fluid_core_lowrank_parallel_forward_solve(meshes):
+def test_fluid_core_lowrank_parallel_forward_solve(request, meshes):
     """FC5: the parent-mesh core pressure works in a two-rank low-rank solve."""
+    assert_marked_rank_count(request)
     comm = fd.COMM_WORLD
     assert comm.size == 2, "FC5 must run on exactly two ranks"
     with stop_annotating():

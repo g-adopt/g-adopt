@@ -80,6 +80,7 @@ from test_gia_lowrank_block0 import (  # noqa: F401
 )
 from test_gia_lowrank_block0 import preset as iterative_parameters
 from test_gravity_adjoint import assert_taylor_with_guards
+from parallel_ranks import assert_marked_rank_count
 
 #: Number of coupled time steps. Three steps give two steps in which the
 #: replayed initial guess and `solution_old` come from a recorded projection.
@@ -233,8 +234,9 @@ def test_small_derivatives_to_second_order():
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_small_parallel_replay_and_gradient():
+def test_small_parallel_replay_and_gradient(request):
     """The same block on two ranks: the basis products are global."""
+    assert_marked_rank_count(request)
     assert fd.COMM_WORLD.size == 2
     Z, nullspace, control, direction = _small_case()
     J, rf = _small_taped(Z, nullspace, control)

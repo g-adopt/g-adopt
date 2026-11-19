@@ -46,6 +46,7 @@ from gadopt.stokes_integrators import newton_stokes_solver_parameters
 # The xfail marker of the tests that assemble a `Real` block on the parent's
 # interior facets (the sibling test module, on the test path).
 from test_gia_gravity import REAL_BLOCK_ON_PARENT_FACETS  # noqa: E402
+from parallel_ranks import assert_marked_rank_count
 
 # ---------------------------------------------------------------------------
 # Geometry and constants: the coarse 2-D annulus of the adjoint suite
@@ -550,7 +551,7 @@ def test_T6_missized_raises_named(capsys):
 # ---------------------------------------------------------------------------
 @pytest.mark.parallel(nprocs=2)
 @pytest.mark.parametrize("fluid_core", [False, True])
-def test_T7_parallel_build_keys_on_global_size(meshes, fluid_core):
+def test_T7_parallel_build_keys_on_global_size(request, meshes, fluid_core):
     """The dense complement builds on every rank at the GLOBAL multiplier count.
 
     FAILS (crashes/hangs) IF the build keys on the local size: the rank owning no
@@ -560,6 +561,7 @@ def test_T7_parallel_build_keys_on_global_size(meshes, fluid_core):
     redundant build agrees). FLOOR: the cross-rank `S` difference is round-off,
     ~1e-13; gate 1e-10.
     """
+    assert_marked_rank_count(request)
     comm = fd.COMM_WORLD
     assert comm.size == 2, "T7 must run on exactly 2 ranks"
 

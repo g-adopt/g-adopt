@@ -82,6 +82,7 @@ from test_gia_gravity import (  # noqa: E402  (module-level helpers)
 # its own line because pyflakes reports the whole `from` statement as unused
 # when the only unused name is in it.
 from test_gia_gravity import meshes  # noqa: E402,F401  (pytest fixture)
+from parallel_ranks import assert_marked_rank_count
 
 
 class refstate:
@@ -540,7 +541,7 @@ def test_resolving_twice_gives_the_same_C_minus_A(ks_rotation):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_the_radius_check_agrees_across_ranks(meshes):  # noqa: F811
+def test_the_radius_check_agrees_across_ranks(request, meshes):  # noqa: F811
     """On 2 ranks the radius check reduces, so both ranks reach the same answer.
 
     The mesh radius is measured as the largest coordinate radius over the whole
@@ -557,6 +558,7 @@ def test_the_radius_check_agrees_across_ranks(meshes):  # noqa: F811
     A module-level function, not a method: `mpi-pytest` drops the class from a
     marked node id and the test would never run.
     """
+    assert_marked_rank_count(request)
     _, rotation = build_rotation(meshes, k_s=K_S_SPADA, surface_radius=RE)
 
     assert rotation.surface_radius == RE

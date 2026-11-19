@@ -68,6 +68,7 @@ from gadopt.gia_solver import SelfGravitatingGIASolver  # noqa: E402
 from gadopt.preconditioners import _RebuildRule, _SchurAinvBCache  # noqa: E402
 import gadopt.preconditioners  # noqa: E402
 from gadopt.stokes_integrators import newton_stokes_solver_parameters  # noqa: E402
+from parallel_ranks import assert_marked_rank_count  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1929,7 +1930,7 @@ def test_the_preset_default_is_the_dictionary_ainvb_true_writes():
 # Module-level function, not a method: mpi-pytest cannot relaunch a test that
 # lives inside a class.
 @pytest.mark.parallel(nprocs=2)
-def test_two_ranks_build_the_same_complement(meshes):
+def test_two_ranks_build_the_same_complement(request, meshes):
     """The build is collective and `S` is redundant, so both ranks agree.
 
     `S` is gathered with an `Allreduce` of length `n` and factored on every
@@ -1946,6 +1947,7 @@ def test_two_ranks_build_the_same_complement(meshes):
     can see; a rebuild decision taken from rank-local data.
     FLOOR: `PARITY_FLOOR` for the cross-rank difference of `S`.
     """
+    assert_marked_rank_count(request)
     comm = fd.COMM_WORLD
     assert comm.size == 2, "this test must run on exactly two ranks"
     solver, _, _ = build_coupled(

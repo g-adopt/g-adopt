@@ -30,6 +30,7 @@ import firedrake as fd
 from finat.ufl import FiniteElement, TensorElement
 from gadopt.viscoelastic_checkpointing import (CheckpointField, match_points,
                                                written_rank_count)
+from parallel_ranks import assert_marked_rank_count
 
 #: Degree of the quadrature rule of the history fields.
 QUADRATURE_DEGREE = 2
@@ -129,7 +130,8 @@ def test_round_trip_serial():
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_round_trip_two_ranks():
+def test_round_trip_two_ranks(request):
+    assert_marked_rank_count(request)
     check_all_round_trips()
 
 
@@ -235,13 +237,14 @@ CROSS_PARTITION_RTOL = 1e-13
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_quadrature_fields_read_on_another_number_of_ranks(tmp_path):
+def test_quadrature_fields_read_on_another_number_of_ranks(request, tmp_path):
     """Written on one rank and read on two, written on two and read on one.
 
     Covers the parent and the submesh. The control reads the file of one
     rank on two without the pairing and must see a large error, which shows
     that the partitions differ and that the test is not vacuous.
     """
+    assert_marked_rank_count(request)
     directory = shared_directory(tmp_path)
     comm = MPI.COMM_WORLD
     one = directory / "written_on_one.h5"
@@ -262,12 +265,13 @@ def test_quadrature_fields_read_on_another_number_of_ranks(tmp_path):
 
 
 @pytest.mark.parallel(nprocs=2)
-def test_a_file_without_point_coordinates_is_refused_on_another_number_of_ranks(tmp_path):
+def test_a_file_without_point_coordinates_is_refused_on_another_number_of_ranks(request, tmp_path):
     """A file without coordinates: refused on one rank, bit for bit on two.
 
     The number of ranks of the writer is the one Firedrake stores with the
     distribution of the mesh, because the file has no record of `save`.
     """
+    assert_marked_rank_count(request)
     directory = shared_directory(tmp_path)
     comm = MPI.COMM_WORLD
     path = directory / "without_points.h5"

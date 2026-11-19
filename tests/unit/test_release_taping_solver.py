@@ -76,6 +76,7 @@ from gadopt.solver_options_manager import DeleteParam
 import gia_solver_cases
 import test_gia_gravity
 import test_gia_transient_power_law_gate as gate
+from parallel_ranks import assert_marked_rank_count
 
 
 @pytest.fixture(scope="module")
@@ -504,14 +505,30 @@ def print_run(label, result):
 
 
 #: Whether the test turns PETSc logging on and checks the object table of the
-#: release stage in the log view. Off by default: the compiled kernels of
-#: Firedrake take the ids of their PETSc log events when they are loaded, and
-#: a kernel loaded while logging was off (or from an earlier process state)
-#: keeps the id -1. Once logging is on, every call of such a kernel prints a
-#: PETSc "Index -1 is not in range" error trace and continues; for this case
-#: that is about 1e5 traces per solve, gigabytes of output and a solve that
-#: takes 45 s in place of 2 s. The Python-level counts of
-#: `live_solver_objects` and the weak references check the release without it.
+#: release stage in the log view. Off by default, because this check cannot
+#: run on the pyop3 Firedrake until Firedrake sets the event ids of its
+#: compiled kernels again:
+#:
+#: - The Slate local `inverse` and `solve` kernels
+#:   (`pyop3/compile/inverse.c`, `solve.c`) and the log events that Slate
+#:   adds to its wrapper kernels start with the PETSc event id -1. Only
+#:   `pyop3.cc.add_profiling_events` sets them, and pyop3 never calls it, so
+#:   the ids stay -1 in every process.
+#: - With logging on, PETSc treats event -1 as active and its default log
+#:   handler looks the event up with a `PetscCheck`, which fails with
+#:   "Index -1 is not in range" on every call of such a kernel. A
+#:   `PetscCheck` is active in optimised PETSc builds too.
+#: - `import gadopt` removes petsc4py's error handler, which would store the
+#:   error without output, so PETSc's own handler prints a full trace for
+#:   each call. `CondensedBlockPC` assembles a Slate inverse in every
+#:   block-0 apply: for this case about 1e5 traces per solve, gigabytes of
+#:   output and a solve of 45 s in place of 2 s.
+#:
+#: The Python-level counts of `live_solver_objects` and the weak references
+#: check the release without it. They see only the PETSc objects with a
+#: Python wrapper; a C object that only C code holds is counted by the
+#: object table alone, so run once with `GADOPT_RELEASE_TEST_PETSC_LOG=1`
+#: on a Firedrake that sets the ids.
 PETSC_LOG = bool(os.environ.get("GADOPT_RELEASE_TEST_PETSC_LOG"))
 
 
@@ -526,7 +543,7 @@ def petsc_logging():
 @needs_cached
 @pytest.mark.parallel(nprocs=[1, 2])
 @pytest.mark.parametrize("order", ["taylor", "invert"])
-def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
+def test_release_changes_no_number_and_frees_one_set(request, meshes, set_tracker,
                                                      order):
     """J and every gradient are bit-identical with the release; one set is freed.
 
@@ -536,6 +553,7 @@ def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
     without it again. The last one checks that two runs without the release
     agree bit for bit, so that the equality of the others is a test.
     """
+    assert_marked_rank_count(request)
     base = run(meshes, set_tracker, release=False, order=order)
     print_run(f"{order} off", base)
     freed = run(meshes, set_tracker, release=True, order=order)
