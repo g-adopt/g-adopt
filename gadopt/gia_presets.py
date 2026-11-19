@@ -41,7 +41,7 @@ constrains is itself zero. `1.0` is the value that needs no bookkeeping -
 `theta_psi` becomes `scaling_factor / Lambda`, the scaling the potential row
 would carry in a system with no mechanics at all.
 
-See `SelfGravitatingGIASolver._row_scale_B_mu` for the full argument.
+`gadopt.gia_solver.SelfGravitatingGIASolver.row_scale_B_mu` applies it.
 """
 
 
@@ -218,17 +218,6 @@ or more `Real` fields (rotation on) the two-block Schur presets still apply.
 
 def _prefixed(d, prefix):
     return {prefix + k: v for k, v in d.items()}
-
-
-# `RigidBodyAssembledPC` now lives in `gadopt.preconditioners`, alongside
-# `SPDAssembledPC` and the `DtNTwoBlockSchurPC` whose merged index sets are the
-# reason it has to exist. It was defined here only because that file was under
-# concurrent edit when it was packaged. It is imported at the top of this
-# module and stays in `__all__`, so `gadopt.RigidBodyAssembledPC` and
-# `gadopt.gia_gravity.RigidBodyAssembledPC` both still resolve -- which matters
-# because every caller reaches it through the *string*
-# `"gadopt.RigidBodyAssembledPC"` in a solver-options dictionary, and a broken
-# name there surfaces as `PETSc.Error: error code 101` naming nothing.
 
 
 #: The preconditioner the displacement split of block 0 runs by default.
@@ -483,7 +472,8 @@ def selfgrav_dtn_iterative_solver_parameters(
       than a tuned figure.
 
     Args:
-      condensed: whether the caller passes `condense_internal_variables=True`.
+      condensed: whether the history is eliminated at the quadrature points
+        (the Quadrature family of the GIA solver, which passes this itself).
         The internal variable is ~85 % of block 0. On the condensed layout it
         is not in the space, and block 0 is a two-way sweep over `u` (through
         `u_pc`) and `psi`. On the uncondensed layout it is field 1, and `M` is
@@ -847,7 +837,7 @@ def selfgrav_dtn_iterative_solver_parameters(
         displacement operator is the condensed matrix and GAMG runs on it
         directly, so this argument has no meaning there and a non-default
         value raises: the near-nullspace is chosen by the solver's
-        `condensed_near_nullspace` argument instead.
+        `near_nullspace` argument instead.
       u_ksp_max_it, u_ksp_rtol: the Krylov solve on the displacement split, on
         both layouts. The default is `0`: one GAMG V-cycle per block-0
         iteration, written as `ksp_type preonly` with no tolerance and no cap
@@ -923,8 +913,8 @@ def selfgrav_dtn_iterative_solver_parameters(
             f"block0={block0!r} has no meaning with condensed=True: the "
             "condensed layout holds no internal-variable field, so there is "
             "nothing for block 0 to eliminate and its sweep is over `u` and "
-            "`psi` alone. Drop the argument, or pass condensed=False if the "
-            "space was built with condense_internal_variables=False.")
+            "`psi` alone. Drop the argument, or pass condensed=False for the "
+            "DG family.")
     # `None` is the sentinel that hands the choice to the preset; a caller who
     # names a string, `"none"` included, gets exactly that string. The dense
     # complement is worth its build only where the `Real` block is small: on
@@ -998,7 +988,7 @@ def selfgrav_dtn_iterative_solver_parameters(
         # path, because under the cached apply the class they named would be
         # built, configured and never applied, and the preset must not take
         # that decision away without saying so. `multiplier_pc="none"` is a
-        # naming, so `demos/gravity/spikes/spike_phase3d.py` keeps its own
+        # naming, so a driver that sweeps `block0_rtol` keeps its own
         # configuration and its tolerance ladder.
         ainvb = forms_exact_complement
     if multiplier_pc is None:
@@ -1184,7 +1174,7 @@ def selfgrav_dtn_iterative_solver_parameters(
                 "displacement operator there is the condensed matrix that "
                 "gadopt.InternalVariableSCPC assembles, and GAMG runs on it "
                 "directly. Choose the near-nullspace with "
-                "SelfGravitatingGIASolver(condensed_near_nullspace=...) "
+                "SelfGravitatingGIASolver(near_nullspace=...) "
                 f"instead; got u_pc={u_pc!r}.")
         if new_block0:
             # `gadopt.CondensedBlockPC` owns the whole block-0 solve, so there
@@ -1201,10 +1191,10 @@ def selfgrav_dtn_iterative_solver_parameters(
             # GAMG runs directly on the two assembled blocks: neither is
             # matrix-free, so no `AssembledPC` wraps them and the GAMG keys
             # carry no `assembled_` prefix.
-            # `SelfGravitatingGIASolver._attach_condensation_context`
-            # replaces the displacement split's CG by a GMRES of the same
-            # length when `condensed_operator_symmetric` says the condensed
-            # operator is not symmetric, which every power-law rheology makes
+            # `SelfGravitatingGIASolver._adjust_options` replaces the
+            # displacement split's CG by a GMRES of the same length when
+            # `rheology_nonlinear` says the condensed operator is not
+            # symmetric, which every power-law rheology makes
             # it. On the default split there is no CG to replace: `preonly`
             # runs one GAMG V-cycle, which is symmetric or not with the
             # operator and needs no Krylov method to match it.
@@ -1231,10 +1221,9 @@ def selfgrav_dtn_iterative_solver_parameters(
         # condensed layout puts on its displacement split: one GAMG V-cycle by
         # default, and the same truncated CG under `u_ksp_max_it=4`. Both
         # routes read one argument so that a job comparing them measures the
-        # route. `SelfGravitatingGIASolver._attach_condensation_context`
-        # replaces a CG by a GMRES of the same length when
-        # `condensed_operator_symmetric` says the condensed operator is not
-        # symmetric, which every power-law rheology does; with `preonly` there
+        # route. `SelfGravitatingGIASolver._adjust_options` replaces a CG
+        # by a GMRES of the same length when `rheology_nonlinear` says the
+        # condensed operator is not symmetric, which every power-law rheology does; with `preonly` there
         # is nothing for it to replace.
         condensation = {
             "ksp_type": "preonly",

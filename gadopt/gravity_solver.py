@@ -710,8 +710,7 @@ class GravitySolver(SolverConfigurationMixin):
 
     #: Preconditioners that belong to `SelfGravitatingGIASolver` and cannot
     #: work here. Refused by NAME rather than left to fail inside PETSc,
-    #: following `SelfGravitatingGIASolver._check_block0_split_matches_layout`:
-    #: a configuration mistake whose only symptom is an opaque PETSc code is
+    #: because a configuration mistake whose only symptom is an opaque PETSc code is
     #: exactly the class of failure that pattern exists to convert into a
     #: sentence. This one is not exotic - it is the most likely misuse, because
     #: the natural act on seeing the coupled system's multiplier block get a

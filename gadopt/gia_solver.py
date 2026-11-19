@@ -27,9 +27,59 @@ core, rotation, centre-of-mass frame, sea level). A minimal script:
         solver.solve()                  # writes u and psi with assign
         output.write(u, psi)
 
-The module docstring of `gadopt.gia_gravity` states the sign convention
-(`psi` is minus the Newtonian potential) and derives the three row
-scalings; this module uses both unchanged.
+## The sign convention
+
+**`psi` is `GravitySolver`'s potential, which is minus the Newtonian one:**
+`grad^2 psi = -4 pi G rho`, the perturbation gravity is `g_1 = +grad psi`,
+and a positive point mass has `psi = +G M / r`. The convention is forced:
+everything in the potential residual after the source line (the Robin
+shift, the DtN constraint rows, the sheets, the 2-D monopole datum) is
+`DtNGravityForm`, and both the monopole flux (`-2 G M / R`) and the sheet
+term are anchored to it and are not sign-symmetric in `psi`. Three
+consequences:
+
+1. Both body-force terms carry a minus, `-c B_mu int rho_0 grad(psi) . w`
+   and the same with `psi_rot`, so that the two off-diagonal blocks of the
+   displacement and the potential carry the same constant.
+2. `psi_rot` is the negated centrifugal perturbation, so that it shares the
+   convention of `psi` and the two body forces read alike.
+3. The geoid is `N = +psi / g_0` (`BaseGIAApproximation.geoid`).
+
+## The row scalings
+
+`theta_psi` and `theta_rot_i` scale whole residual rows. A row scaling
+changes the conditioning of the Jacobian and nothing about the solution. It
+makes the Jacobian symmetric, and it keeps one block from dominating the
+single residual norm of SNES over the mixed vector. Both are computed from
+the approximation's own numbers and must never be fitted to make a symmetry
+test pass: a symmetry test is an equation for the row scaling, so a fitted
+scaling absorbs a sign error in the block it scales.
+
+    theta_psi   = c B_mu / Lambda
+    theta_rot_i = s_i c B_mu Omega_sq,   s = (+1, +1, -1)
+
+with `c` the `scaling_factor`, which multiplies the whole momentum residual
+and so both body forces; a `theta_psi` without it would make the Jacobian
+asymmetric by that factor. The rotation rows close `K_i m_i = s_i dI_i3`
+with `K = (C - A, C - A, C)`: the `m_3` closure has a different constant
+and a different sign from the polar-wander pair, and a 2-D annulus has the
+`m_3` row only.
+
+`Omega_sq` (the squared rotation rate in units of `g / L`, 1.566e-3 for the
+Earth) is small, but the rotational feedback is not: `C - A` is itself
+proportional to `Omega^2`, so `Omega^2` cancels from the closure.
+Eliminating `u` leaves the secular Liouville relation
+
+    m = (1 + k_L) dI_direct / [ (C - A) (1 - k_T / k_s) ]
+
+in which `k_T / k_s` is of order one. On the Spada benchmark the rotational
+body force changes `|m|` by 32 percent at `t = 0`. A tolerance or a `Real`
+block scaling must not be chosen on the assumption that rotation is a small
+correction. The same relation ties `C - A` to `k_s`: the closure that the
+solver solves, `[(C - A) - Q k_T(t)] m = dI_direct` with
+`Q = a^5 Omega^2 / (3 G)` (MacCullagh), is the secular relation only when
+`C - A = Q k_s`. `Rotation` takes either constant, computes the other and
+refuses a pair that disagrees.
 
 ## The parts
 

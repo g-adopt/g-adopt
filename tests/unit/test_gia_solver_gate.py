@@ -1,7 +1,7 @@
 """Gate 1: the self-gravitating GIA solver writes the equations it was checked against.
 
-For every configuration the earlier solver (`gadopt.gia_gravity`, removed
-after this comparison) supported, that solver and the present one were
+For every configuration the earlier solver (`gadopt.gia_gravity` at commit
+2f4b1397) supported, that solver and the present one were
 built on the same annulus, one fixed nonzero state was written into both
 (every field, both history levels, the BDF2 coefficients after a startup
 step), and the assembled residual and the Jacobian action on two random

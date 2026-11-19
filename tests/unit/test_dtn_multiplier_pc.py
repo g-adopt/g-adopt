@@ -549,8 +549,8 @@ class TestItIsScopedToTheCoupledSolver:
 
         Copying the three block-1 lines from the coupled system into a
         standalone gravity solve is the natural act. Left to PETSc it produces
-        `error code 101` naming nothing; this refuses it before any solve, in
-        the `_check_block0_split_matches_layout` spirit.
+        `error code 101` naming nothing; this refuses it by name before any
+        solve.
         """
         from gadopt import CylindricalDtN, GravitySolver
 

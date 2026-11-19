@@ -1,29 +1,22 @@
 # Material elimination with low-rank DtN
 
-The opt-in combination now keeps displacement, potential and physical global
-scalars in the mixed Newton vector, with material histories stored separately.
-The DtN modal multipliers are eliminated too. The default representation of a
-condensed space remains `"multiplier"` for compatibility; select low-rank
-explicitly:
+The Quadrature history family keeps displacement, potential and physical
+global scalars in the mixed Newton vector, with material histories stored
+separately. With the low-rank DtN representation (the default) the DtN modal
+multipliers are eliminated too:
 
 ```python
-Z, layout = self_gravitating_gia_space(
-    mechanics_mesh, potential_mesh, gravity_bcs=gravity_bcs,
-    n_internal_variables=2, condense_internal_variables=True,
-    internal_variable_family="Quadrature", internal_variable_degree=4,
-    dtn_representation="lowrank",
-    # existing fluid_core, rotation, centre_of_mass and sea_level switches
-)
 solver = SelfGravitatingGIASolver(
-    Function(Z), approximation, layout=layout, dt=dt,
-    time_scheme="bdf2", constitutive_method="direct", quad_degree=4,
-    solver_parameters="iterative", **existing_gia_options,
+    u, psi, approximation, dt=dt, gravity_bcs=gravity_bcs,
+    internal_variable_family="Quadrature", quad_degree=4,
+    dtn_representation="lowrank",
+    couplings=couplings,  # FluidCore, Rotation, CentreOfMass, SeaLevel
+    time_scheme="bdf2", solver_parameters="iterative",
 )
 ```
 
-The layout carries the representation to the solver automatically. Linear
-`constitutive_method="pointwise"` also supports low-rank DtN. The existing
-coupled DG and multiplier routes remain available.
+The coupled DG history family and the multiplier representation remain
+available.
 
 ## Operator, preconditioner and reverse calculation
 

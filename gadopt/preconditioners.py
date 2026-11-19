@@ -1957,7 +1957,7 @@ class _RealBlockPCBase(fd.preconditioners.base.PCBase):
 
     The one genuine ordering dependency is global-dof order against
     `multiplier_keys` order, which the merged index set supplies and which
-    `GIASpaceLayout.real_fields` pins.
+    the GIA solver pins by putting its `Real` fields contiguous and last.
 
     Neither ever asks anyone to assemble or differentiate anything on the
     `Real` space, which is what lets them work where `jacobi`, `selfp`,
@@ -2118,8 +2118,9 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
     naming the trap, never a silent zero.
 
     The diagonal is taken from the appctx under `dtn_block1_diagonal`, which
-    the coupled solver supplies; reaching it requires the sub-DM this module
-    now threads onto the multiplier KSP.
+    the caller supplies (no G-ADOPT solver publishes it; the self-gravitating
+    GIA solver uses `DtNMultiplierDenseSchurPC` on this block); reaching it
+    requires the sub-DM this module threads onto the multiplier KSP.
 
     Measured on the 3-D coarse coupled system: block-0 applications 111 -> 48,
     wall time 1.8x. Those figures come from the B2 probe and are **not** yet
@@ -2134,7 +2135,7 @@ class DtNMultiplierDiagPC(_RealBlockPCBase):
         if diag is None:
             raise self._loud(ValueError(
                 "DtNMultiplierDiagPC needs the block-1 diagonal in the "
-                "appctx under 'dtn_block1_diagonal'. SelfGravitatingGIASolver "
+                "appctx under 'dtn_block1_diagonal'. No G-ADOPT solver "
                 "supplies it; a caller assembling this system by hand must "
                 "pass appctx={'dtn_block1_diagonal': ...} with one entry per "
                 "Real sub-field: DtN multipliers, optional core pressure, then "
@@ -3749,7 +3750,7 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
     ## The application context
 
     The key names are the ones `InternalVariableSCPC` reads, so
-    `SelfGravitatingGIASolver._attach_condensation_context` publishes one set
+    `SelfGravitatingGIASolver._attach_context` publishes one set
     for both routes:
 
     - `operator_version` and `gia_solve_index`: the staleness markers that
@@ -3771,8 +3772,8 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
 
     ## What is refused
 
-    A block-0 space that does not have exactly three fields, which is what
-    `condense_internal_variables=True` produces, and a strong boundary
+    A block-0 space that does not have exactly three fields (the Quadrature
+    family of the GIA solver has two), and a strong boundary
     condition on anything but the displacement. A strong condition on the
     displacement is supported: it is carried into `S_uu` by the assembler, as
     `firedrake.SCPC` carries it into its condensed operator, and the rows it
@@ -3791,8 +3792,8 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
 
     needs_python_pmat = True
 
-    #: The field indices of the block-0 mixed space. Fixed by
-    #: `self_gravitating_gia_space` on the full layout: displacement first,
+    #: The field indices of the block-0 mixed space. Fixed by the DG family
+    #: of `gadopt.gia_solver.SelfGravitatingGIASolver`: displacement first,
     #: the combined history field second, the potential third.
     DISPLACEMENT, INTERNAL_VARIABLE, POTENTIAL = 0, 1, 2
 
@@ -3821,8 +3822,8 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         W = self.bilinear_form.arguments()[0].function_space()
         # The field count is the guard that catches the one mismatch nothing
         # else notices: the space and the preset are independent arguments,
-        # and `condense_internal_variables=True` gives a block 0 of two fields
-        # with no history field to eliminate.
+        # and the Quadrature family gives a block 0 of two fields with no
+        # history field to eliminate.
         if len(W) != 3:
             raise ValueError(
                 "gadopt.CondensedBlockPC eliminates the internal-variable "
@@ -3830,11 +3831,9 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
                 "(displacement, internal variables, potential); the space it "
                 f"was given has {len(W)} field(s): "
                 f"{[V.ufl_element() for V in W]}. A two-field block 0 is what "
-                "self_gravitating_gia_space(condense_internal_variables=True) "
-                "builds, and that layout has no internal variables to "
-                "eliminate: either build the space with "
-                "condense_internal_variables=False, or use "
-                "selfgrav_dtn_iterative_solver_parameters(condensed=True), "
+                "the Quadrature family builds, and it has no internal "
+                "variables to eliminate: use internal_variable_family='DG', "
+                "or selfgrav_dtn_iterative_solver_parameters(condensed=True), "
                 "whose block 0 is a two-way sweep.")
         # Standalone copies of the two kept fields. The sub-spaces of a mixed
         # space carry the mixed dof layout, and the assembled blocks act on
@@ -3995,7 +3994,7 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
     def _initialise_kept_solve(self, pc, prefix):
         """Build the retained u/psi nest, low-rank potential PC and KSP."""
         # -- the low-rank DtN update, when the solver carries one -----------
-        # `SelfGravitatingGIASolver.build_dtn_operator` publishes this key on
+        # `SelfGravitatingGIASolver._attach_context` publishes this key on
         # the low-rank representation and never on the multiplier one, so its
         # absence keeps every existing configuration byte for byte.
         #

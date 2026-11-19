@@ -2,8 +2,8 @@
 
 `SelfGravitatingGIASolver(..., time_scheme="bdf2")` selects prescribed
 variable-step BDF2, with backward-Euler startup. The default remains
-`time_scheme="backward_euler"`. Both the coupled DG history formulation and
-linear pointwise substitution support BDF2. The global displacement, potential,
+`time_scheme="backward_euler"`. Both history families, the coupled DG history
+and the quadrature elimination, support BDF2. The global displacement, potential,
 rotation, sea-level and frame constraints remain coupled at the new time.
 Nonlinear quadrature elimination and an illustrative recovering-backstress
 model are also available through the opt-in interface below. These changes live
@@ -13,8 +13,8 @@ on `w3168/giamip-bdf2`, based on `sghelichkhani/giamip-exp01` at `02a75382`.
 # Use a Real-space Function so assignments are checkpointed on the adjoint tape.
 dt = Function(FunctionSpace(mechanics_mesh, "R", 0)).assign(first_dt)
 solver = SelfGravitatingGIASolver(
-    state, approximation, layout=layout, dt=dt,
-    time_scheme="bdf2", **existing_gia_options,
+    u, psi, approximation, dt=dt,
+    time_scheme="bdf2", couplings=couplings, **existing_gia_options,
 )
 for h, forcing in prescribed_schedule:
     dt.assign(h)
@@ -54,27 +54,19 @@ current mixed state; the existing BE-only restart file is not sufficient.
 
 ## Nonlinear elimination at mechanics quadrature points
 
-Create the usual mixed GIA space with the material histories outside the global
-unknown vector. Their quadrature degree must match the residual integration
-degree. For example, combining material elimination with low-rank DtN:
+Select the Quadrature history family, which keeps the material histories
+outside the global unknown vector. Their quadrature degree is the residual
+integration degree. For example, combining material elimination with low-rank
+DtN:
 
 ```python
-Z, layout = self_gravitating_gia_space(
-    mechanics_mesh, potential_mesh,
-    gravity_bcs=gravity_bcs,
-    n_internal_variables=2,
-    condense_internal_variables=True,
-    internal_variable_family="Quadrature",
-    internal_variable_degree=4,
-    dtn_representation="lowrank",
-    # Include the existing rotation, fluid-core, COM and sea-level options.
-)
-state = Function(Z)
 solver = SelfGravitatingGIASolver(
-    state, approximation, layout=layout, dt=dt,
-    time_scheme="bdf2", constitutive_method="direct", quad_degree=4,
-    solver_parameters="iterative",
-    **existing_gia_options,
+    u, psi, approximation, dt=dt,
+    gravity_bcs=gravity_bcs,
+    internal_variable_family="Quadrature", quad_degree=4,
+    dtn_representation="lowrank",
+    couplings=couplings,  # FluidCore, Rotation, CentreOfMass, SeaLevel, ...
+    time_scheme="bdf2", solver_parameters="iterative",
 )
 ```
 

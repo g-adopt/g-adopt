@@ -1,9 +1,10 @@
 """Builders shared by the tests of `gadopt.gia_solver`.
 
-`Case` describes one configuration of the coupled GIA system. `build_new`
-builds it with the new solver (`gadopt.gia_solver.SelfGravitatingGIASolver`)
-and `build_old` with the old one (`gadopt.gia_gravity`), on the same meshes
-and with the same numbers, so that a test can compare the two field by field.
+`Case` describes one configuration of the coupled GIA system and `build_new`
+builds it with `gadopt.gia_solver.SelfGravitatingGIASolver`. `random_state`,
+`write_state` and `residual_and_actions` give the residual and the Jacobian
+actions at one fixed state, and `fingerprint` and `reference_values` compare
+them with the values stored from the earlier solver.
 
 The geometry is the small triangle annulus of `test_gia_direct_bdf2.py`: a
 parent with a stand-off buffer, the mantle a `Submesh`, both P2-curved.
@@ -19,7 +20,6 @@ import numpy as np
 
 import gadopt
 from gadopt import gia_couplings as new_couplings
-from gadopt import gia_gravity as old_gia
 from gadopt.gia_solver import SelfGravitatingGIASolver as NewSolver
 
 # The constants and tags of `test_gia_gravity.py`.
@@ -207,70 +207,6 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
     return solver, u, psi
 
 
-def build_old(meshes, case, *, control=None, dt=None, sea=None,
-              declare_nullspace=False, solver_parameters="direct", extra=None):
-    """The old solver for `case`. Returns `(solver, z, layout)`."""
-    parent, sub = meshes
-    quadrature = case.family == "Quadrature"
-    g_bcs = gravity_bcs(parent)
-    bcs = {}
-    if case.load == "surface":
-        g_bcs[CURVE_RE] = {"interior_sigma": load_expression(parent, case.load_mean)}
-        bcs[CURVE_RE] = {"normal_stress": B_MU * load_expression(sub, case.load_mean)}
-    if case.core == "rigid":
-        bcs[CURVE_RC] = {"un": 0.0}
-    material = approximation(case, control)
-    Z, layout = gadopt.self_gravitating_gia_space(
-        sub, parent, gravity_bcs=g_bcs, rotation=case.rotation,
-        fluid_core=case.core == "fluid", centre_of_mass=case.centre,
-        sea_level=case.load in ("sea_fixed", "sea_moving"),
-        n_internal_variables=material.n_history_tensors,
-        condense_internal_variables=quadrature,
-        internal_variable_family="Quadrature" if quadrature else "DG",
-        internal_variable_degree=QUAD if quadrature else 1,
-        self_gravity_number=LAMBDA, dtn_representation=case.representation)
-    z = fd.Function(Z)
-    kwargs = {}
-    if case.core == "fluid":
-        kwargs["fluid_core"] = old_gia.FluidCore(boundary=CURVE_RC, rho_core=1.2, g=1.)
-    if case.load in ("sea_fixed", "sea_moving"):
-        sea = sea or SeaFields(sub)
-        kwargs["sea_level"] = old_gia.SeaLevel(**sea.kwargs(case))
-    if quadrature:
-        kwargs["quad_degree"] = QUAD
-        kwargs["constitutive_method"] = "direct"
-    if declare_nullspace:
-        ns = gadopt.rigid_rotation_nullspace(Z, layout)
-        kwargs.update(nullspace=ns, transpose_nullspace=ns)
-    options = dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11)
-    options.update(extra or {})
-    solver = old_gia.SelfGravitatingGIASolver(
-        z, material, layout=layout, dt=dt or dt_function(sub),
-        time_scheme=case.scheme, bcs=bcs,
-        rotation_moments={"C": polar_moment(meshes)} if case.rotation else None,
-        solver_parameters=solver_parameters, solver_parameters_extra=options,
-        **kwargs)
-    return solver, z, layout
-
-
-def old_field_names(layout):
-    """The state names of the old layout's fields, in its space order."""
-    names = {layout.displacement: "displacement", layout.potential: "potential"}
-    for i in layout.internal_variables:
-        names[i] = "history"
-    for k, i in enumerate(layout.multipliers):
-        names[i] = f"dtn_multiplier_{k}"
-    if layout.core_pressure is not None:
-        names[layout.core_pressure] = "core_pressure"
-    for name, i in layout.rotation.items():
-        names[i] = name
-    for k, i in enumerate(layout.centre_of_mass):
-        names[i] = f"centre_of_mass_{k}"
-    if layout.sea_level is not None:
-        names[layout.sea_level] = "sea_level_shift"
-    return [names[i] for i in range(layout.n_fields)]
-
-
 def random_function(space, rng, amplitude):
     f = fd.Function(space)
     with f.dat.vec_wo as v:
@@ -322,42 +258,6 @@ def write_state(new, state, *, previous_dt):
     new.update_total_mass()
 
 
-def set_state(new, old, old_layout, state, *, previous_dt):
-    """Write one fixed state into both solvers, field by field and by name.
-
-    Also prepares the time coefficients: a BDF2 solver with a previous step
-    `previous_dt` gets its BDF2 coefficients; `None` gives backward Euler.
-    """
-    names = old_field_names(old_layout)
-    for i, name in enumerate(names):
-        # The DG history unknown is the Newton iterate, a value of its own;
-        # the accepted levels are the integrator's.
-        source = state["history_iterate"] if name == "history" else state[name]
-        fill(old.solution.subfunctions[i], source)
-        fill(new.solution.subfunctions[new.field_index[name]], source)
-    # The history levels.
-    fill(new.time_integrator.current[0], state["history"])
-    if new.time_integrator.previous is not None:
-        fill(new.time_integrator.previous[0], state["history_previous"])
-    if old.time_integrator is None:
-        # The old DG backward-Euler path reads the old history from
-        # `solution_old`.
-        fill(old.solution_old.subfunctions[1], state["history"])
-    else:
-        fill(old.time_integrator.current[0], state["history"])
-        fill(old.time_integrator.previous[0], state.get(
-            "history_previous", state["history"]))
-        old.time_integrator.previous_dt = previous_dt
-        old.time_integrator.prepare()
-        if old.layout.condensed:
-            fill(old.internal_variables, state["history"])
-    new.time_integrator.previous_dt = previous_dt
-    new.time_integrator.prepare()
-    # The 2-D monopole datum at this state.
-    old.update_total_mass()
-    new.update_total_mass()
-
-
 def _lowrank(solver, x, y):
     """`y += theta_psi B x`, the low-rank part of the residual or the Jacobian."""
     if solver.dtn_operator is None:
@@ -373,9 +273,7 @@ def residual_and_actions(solver, directions):
     step backend: the local constitutive root is refreshed at the state,
     and the private inputs are set to the live ones.
     """
-    if getattr(solver, "_direct_backend", None) is not None:
-        backend = solver._direct_backend
-    elif hasattr(solver, "_step") and hasattr(solver._step, "backend"):
+    if hasattr(solver._step, "backend"):
         backend = solver._step.backend
     else:
         backend = None
@@ -400,34 +298,10 @@ def residual_and_actions(solver, directions):
     return residual, actions
 
 
-def compare(old_vec, new_vec, old_layout, new):
-    """`(overall, worst field, per field)` relative differences, mapped by name."""
-    names = old_field_names(old_layout)
-    comm = new.mesh.comm
-    per_field = {}
-    num = den = 0.0
-    for i, name in enumerate(names):
-        # The owned values of each rank, summed over the ranks.
-        a = np.ravel(old_vec.subfunctions[i].dat.data_ro)
-        b = np.ravel(new_vec.subfunctions[new.field_index[name]].dat.data_ro)
-        diff2 = comm.allreduce(float(np.sum((a - b) ** 2)))
-        size2 = comm.allreduce(float(np.sum(a ** 2)))
-        num += diff2
-        den += size2
-        per_field[name] = np.sqrt(diff2 / size2) if size2 > 0 else np.sqrt(diff2)
-    return np.sqrt(num / den), max(per_field.values()), per_field
-
-
 #: Bound on the relative difference of one field block. Every block is
 #: nonzero in the gate cases (the smallest, the `m3` row, is about 1e-4 of the
 #: whole vector), so round-off of one block stays near 1e-15.
 FIELD_RTOL = 1e-10
-
-
-def assert_fields_agree(per_field, rtol=FIELD_RTOL):
-    """Assert every field block of a comparison agrees to round-off."""
-    bad = {name: value for name, value in per_field.items() if value > rtol}
-    assert not bad, f"field blocks differ: {bad}"
 
 
 def fingerprint(vector, index_of):
@@ -482,12 +356,12 @@ def assert_fingerprints_agree(new, reference, rtol=FIELD_RTOL):
     assert not bad, f"field blocks differ from the reference: {bad}"
 
 
-#: The stored values that replace the old solver in the comparisons:
+#: The stored values of the earlier solver that the comparisons read:
 #: `gia_gate_reference.json` holds the fingerprints of the residual and of two
 #: Jacobian actions per gate case (keys "2d" and "3d", then the case label),
 #: `gia_forward_reference.json` the fingerprints of the three-step forward
 #: states and the `Real` values after each step. Both were recorded from the
-#: old solver (`gadopt.gia_gravity`, commit 2f4b1397) in serial, with the
+#: earlier solver (`gadopt.gia_gravity` at commit 2f4b1397) in serial, with the
 #: generators the tests use, so the probes follow the serial order of the
 #: degrees of freedom and the comparisons run in serial only.
 REFERENCE_DIR = Path(__file__).resolve().parent / "data"

@@ -924,11 +924,41 @@ class SeaLevel(Coupling):
         return F
 
     def energy(self) -> Form:
-        """The sea-level energy, with the live sheet linearised at the current state.
+        r"""The sea-level energy, with the live sheet linearised at the current state.
 
-        A diagnostic: its variation equals `residual` at the state where it is
-        built. See `SelfGravitatingGIASolver.sea_level_energy` of
-        `gadopt.gia_gravity` for the derivation.
+            E_sl = -c B_mu g_s int_Re G(Delta) dS,   dG/dDelta = sigma
+
+        with `Delta = SL - SL_init = (N - N_init) - (u_r - ur_init) + Shift`.
+        A diagnostic: its variations are the three sea-level rows of
+        `residual` at the state where it is built.
+
+        - `u`, direction `w`: `+c B_mu g_s int sigma (w . n) dS`, the weight of
+          the load, the same as a `normal_stress` of `B_mu g_s sigma`;
+        - `psi`, direction `v`: `-c B_mu int sigma v dS`, the same as a sheet
+          of density `sigma` in the potential row, which carries
+          `-theta_psi 4 pi G sigma v = -c B_mu sigma v`;
+        - `Shift`, direction `s`: `-c B_mu g_s int sigma dS`, the conservation
+          of the mass of water and ice. With `CentreOfMass`, its energy adds
+          `c B_mu sum_i lambda_i int x_i (dsigma/dShift) s dS` to the same
+          row, because the sheet moves the centre of mass; that column keeps
+          the residual the gradient of one Lagrangian and the Jacobian
+          symmetric.
+
+        The sign of `E_sl` is fixed by the first two. `g_s` equals the
+        reference gravity at the surface, so the potential variation cancels
+        it and the displacement variation keeps it.
+
+        The exact `G` of the softplus sheet needs the dilogarithm, which UFL
+        does not have, so the live sheet is linearised at a copy `SL_f` of
+        the solution made at the call:
+
+            sigma_lin(SL) = sigma(SL_f) + rho_w W_f (SL - SL_f),
+            G(Delta)      = sigma_lin(SL_init) Delta + 0.5 rho_w W_f Delta^2
+
+        with `W_f` the water fraction at the frozen state. Then
+        `dG/dDelta = sigma_lin(SL)`, which equals `sigma(SL)` at the frozen
+        state, so the derivative of the energy equals the written residual
+        there. The fixed coastline needs no linearisation.
         """
         ctx = self.context
         delta = self.sea_level() - self.SL_init

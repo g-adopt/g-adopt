@@ -14,17 +14,19 @@ from .approximations import (
 from .backstress import BackstressApproximation
 from .diagnostics import *
 from .dtn_form import DtNGravityForm
-from .gia_gravity import (
+from .gia_couplings import (
+    CentreOfMass,
     FluidCore,
-    GIASpaceLayout,
-    RigidBodyAssembledPC,
+    Rotation,
     SeaLevel,
-    SelfGravitatingGIASolver,
-    rigid_rotation_nullspace,
-    self_gravitating_gia_space,
+    SurfaceLoad,
+)
+from .gia_presets import (
     selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_lowrank_direct_solver_parameters,
 )
+from .gia_solver import SelfGravitatingGIASolver
+from .preconditioners import RigidBodyAssembledPC
 from .dtn_coupled_adjoint import (
     CoupledLowRankDtNSolveBlock,
     adopt_coupled_lowrank_block,

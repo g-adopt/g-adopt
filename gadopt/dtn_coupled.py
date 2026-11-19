@@ -218,7 +218,7 @@ class AugmentedImplicitMatrixContext(ImplicitMatrixContext):
     nullspace is in general only an approximate kernel of the discrete
     operator. The rigid rotation, for example, is annihilated only to about
     `2e-6` relative, because `u . n_h` is not zero on curved facets
-    (`gadopt.rigid_rotation_nullspace`). PETSc removes the transpose
+    (the `nullspace="rigid_rotation"` of the GIA solver). PETSc removes the transpose
     nullspace from the right-hand side once, and the displacement split of
     the block-0 preconditioner removes the rotation from its input and its
     output. A right-preconditioned outer FGMRES therefore never produces a
