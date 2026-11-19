@@ -146,10 +146,10 @@ def _forwarded(part: str, name: str, target: str | None = None) -> property:
 
     The boundary treatment is `self.form` (`DtNGravityForm`), the measures
     and the 2-D monopole datum are `self.gravity` (`GravityPotential`). The
-    names they hold are still reachable on the solver, because the tests,
-    the demos and the scaling scripts read them there. The forward returns
-    the part's own object and not a copy, so `solver.ds is solver.form.ds`
-    and the two cannot disagree.
+    solver gives the names that the tests, the demos and the scaling scripts
+    read a second name on itself. The forward returns the part's own object
+    and not a copy, so `solver.ds is solver.form.ds` and the two cannot
+    disagree.
 
     Args:
       part: the name of the part on the solver, `"form"` or `"gravity"`.
@@ -389,10 +389,10 @@ class GravitySolver(SolverConfigurationMixin):
     # Everything the DtN treatment and the potential part own is read off
     # `self.form` and `self.gravity` and not copied, so the two cannot drift
     # apart: if a measure is rebuilt on one side, every reader on the other
-    # side sees the new one. The accompanying test asserts identity -
-    # `solver.ds is solver.form.ds` - and not merely that the attribute
-    # exists, because a forward that only exists turns "every existing test
-    # passes" into a statement about `getattr`.
+    # side sees the new one. `tests/unit/test_dtn_form.py` asserts identity
+    # for every forward - `solver.ds is solver.form.ds` - and not merely that
+    # the attribute exists, because a forward that only exists turns "every
+    # existing test passes" into a statement about `getattr`.
     #
     # Three names do not forward. `alpha` is a class attribute of this class,
     # passed into the form by `__init__`, because a test subclasses
@@ -432,20 +432,18 @@ class GravitySolver(SolverConfigurationMixin):
     check_boundary_quadrature = _from_form("check_boundary_quadrature")
     _mode_norms = _from_form("_mode_norms")
     _validate_recovered_rule = _from_form("_validate_recovered_rule")
-    #: `dx` integrates over the potential's mesh and `dx_rho` over the
-    #: density's, at `source_quad_degree` when one is given. They differ only
-    #: in that degree unless the density lives on a `Submesh`, where the pair
-    #: carries the intersection that makes Firedrake build the entity maps.
+    #: `dx` integrates over the potential's mesh. When the density lives on
+    #: a `Submesh` it carries the intersection with the density's mesh that
+    #: makes Firedrake build the entity maps.
     dx = _forwarded("gravity", "dx", "dx_g")
-    dx_rho = _forwarded("gravity", "dx_rho", "dx_density")
     #: The 2-D monopole datum (`GravityPotential.set_monopole_datum`):
     #: the exterior DtN boundaries whose monopole the trace does not
-    #: determine, and the two `Real` Functions of the enclosed mass. The
+    #: determine, and the two `Real` Functions of the enclosed mass, which
+    #: are the differentiable quantities behind `total_enclosed_mass`. The
     #: Functions are `None` without such a boundary, which includes 3-D.
     monopole_boundaries = _forwarded("gravity", "monopole_boundaries")
     source_mass = _forwarded("gravity", "source_mass")
     cavity_flux = _forwarded("gravity", "cavity_flux")
-    mesh_volume = _forwarded("gravity", "mesh_volume")
 
     def set_function_spaces(self) -> None:
         """Builds the internal mixed space: psi, cross-mesh dummy, multipliers.
@@ -501,9 +499,9 @@ class GravitySolver(SolverConfigurationMixin):
         The multipliers are eliminated by hand (see `gadopt.dtn_lowrank`), so
         there is no mixed space, no Schur complement and no matrix-free
         operator: one scalar space, one assembled SPD matrix, and a rank-`n`
-        update applied in factored form. `mixed_solution` still exists and is
-        still the thing to reset before a timed solve, but it is a plain
-        `Function` on the potential space, not a mixed one.
+        update applied in factored form. `mixed_solution` is a plain
+        `Function` on the potential space here, not a mixed one; the KSP
+        writes its solution into it, and `solve` copies it into `solution`.
 
         The stiffness and the right-hand side are `GravityPotential.operator`
         without multipliers (the Robin shift alone) and
@@ -743,12 +741,11 @@ class GravitySolver(SolverConfigurationMixin):
     def warn_on_stale_fieldsplit_options(self) -> None:
         """Warns about fieldsplit options left at the top level of the preset.
 
-        The two Schur blocks used to be described to PETSc by field number, so
-        their sub-solvers sat directly under the solver options. They now live
-        inside `gadopt.DtNTwoBlockSchurPC` under its own `dtn` prefix, and a
-        `fieldsplit_0` entry passed at the top level of
-        `solver_parameters_extra` silently stops matching anything rather than
-        failing - the one way this change can bite an existing script.
+        The two Schur blocks are described to PETSc by index sets inside
+        `gadopt.DtNTwoBlockSchurPC`, and their sub-solvers live under its own
+        `dtn` prefix. A `fieldsplit_0` entry passed at the top level of
+        `solver_parameters_extra` matches nothing there, and PETSc ignores it
+        without an error, so this method warns.
         """
         if self.n_multipliers == 0:
             return
@@ -758,7 +755,7 @@ class GravitySolver(SolverConfigurationMixin):
         if stale:
             warn(
                 f"Solver options {stale} sit at the top level, where the DtN "
-                "preset no longer reads them: the two Schur blocks are now "
+                "preset does not read them: the two Schur blocks are "
                 "described by index sets inside gadopt.DtNTwoBlockSchurPC and "
                 "its sub-solvers live under the 'dtn' entry. Pass them as "
                 "solver_parameters_extra={'dtn': {'fieldsplit_0': ...}} "

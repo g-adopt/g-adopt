@@ -621,8 +621,7 @@ class GravityPotential:
             space.
 
         Returns:
-          The `BoundaryModeRows` list, which is also `form.mode_rows`. The
-          constrained degrees of freedom are stored as `constrained_dofs`.
+          The `BoundaryModeRows` list, which is also `form.mode_rows`.
         """
         mode_rows = self.form.build_mode_rows()
         for (bc_id, dtn), rows in zip(self.form.dtn_boundaries, mode_rows, strict=True):
@@ -636,7 +635,6 @@ class GravityPotential:
         for bc in self.dirichlet_bcs(potential_space):
             constrained.update(np.asarray(bc.nodes, dtype=np.int64).tolist())
         apply_dirichlet_to_rows(mode_rows, constrained)
-        self.constrained_dofs = constrained
         return mode_rows
 
     def build_lowrank_operator(self, mixed_space, potential_index, theta):

@@ -5,6 +5,11 @@ coupled self-gravitating GIA solver compose. These tests construct it
 directly, so that what they check holds for every caller and not only for
 the solver that happens to run it.
 
+The first group of tests covers the constructor arguments: exactly one of
+`Lambda` and `gravitational_constant`, and a volume density with its own
+quadrature degree. The residual is checked against `operator - source`,
+the two spellings of the same row.
+
 The checks of the measures of a cross-mesh system (a potential on a parent
 mesh, a density on a `Submesh`) run in the constructor. The check that every
 DtN boundary is a complete circle or sphere is a policy of the caller: the
@@ -13,6 +18,7 @@ GIA solver runs it, and `GravitySolver` accepts such a boundary.
 
 import gadopt  # noqa: F401 - before firedrake
 import firedrake as fd
+import numpy as np
 import pytest
 
 from gadopt import CylindricalDtN, GravitySolver
@@ -121,3 +127,125 @@ class TestCompleteDtNBoundaries:
         part = GravityPotential(V, sub, {1: {"dtn": CylindricalDtN(M=2)}},
                                 gravitational_constant=1.0)
         part.check_dtn_boundaries_complete()
+
+
+def annulus_space():
+    """CG2 on a radially extruded annulus, radii 1 and 2, with two DtN boundaries.
+
+    The outer boundary is a 2-D exterior DtN boundary, so the part builds
+    the monopole datum and the volume density's net mass enters it.
+    """
+    base = fd.CircleManifoldMesh(64, radius=1.0, degree=2)
+    mesh = fd.ExtrudedMesh(base, layers=6, layer_height=1.0 / 6,
+                           extrusion_type="radial")
+    return fd.FunctionSpace(mesh, "CG", 2)
+
+
+def angular_density(mesh):
+    """A density with net mass whose integrand is not a polynomial.
+
+    The angular part integrates to zero by symmetry at any degree. The
+    exponential is not a polynomial, so its net mass depends on the
+    quadrature degree.
+    """
+    X = fd.SpatialCoordinate(mesh)
+    phi = fd.atan2(X[1], X[0])
+    return fd.cos(2 * phi) + 0.3 * fd.sin(phi) + fd.exp(0.5 * X[0])
+
+
+BCS = {"top": {"dtn": CylindricalDtN(M=3)}, "bottom": {"dtn": CylindricalDtN(M=3)}}
+
+
+class TestConstructorArguments:
+    """`Lambda` or `G`, and the volume density."""
+
+    @pytest.mark.parametrize("given", [{}, {"Lambda": 1.0, "gravitational_constant": 1.0}])
+    def test_exactly_one_of_lambda_and_g(self, given):
+        V = annulus_space()
+        with pytest.raises(ValueError, match="exactly one of Lambda and"):
+            GravityPotential(V, V.mesh(), BCS, **given)
+
+    def test_gravitational_constant_gives_lambda_4_pi_g(self):
+        """With `G` the part is the part with `Lambda = 4 pi G`.
+
+        The boundary form takes `G` itself, the volume source and the
+        displacement source take `4 pi G`, and the residual at a nonzero
+        potential is the same vector to round-off.
+        """
+        V = annulus_space()
+        mesh = V.mesh()
+        G = 0.7
+        rho = angular_density(mesh)
+        with_G = GravityPotential(V, mesh, BCS, gravitational_constant=G,
+                                  volume_density=rho)
+        with_Lambda = GravityPotential(V, mesh, BCS, Lambda=4 * np.pi * G,
+                                       volume_density=rho)
+        assert float(with_G.form.G) == pytest.approx(G, rel=1e-15)
+        assert float(with_G.Lambda) == pytest.approx(4 * np.pi * G, rel=1e-15)
+        assert float(with_G.four_pi_G) == pytest.approx(
+            float(with_Lambda.four_pi_G), rel=1e-15)
+
+        X = fd.SpatialCoordinate(mesh)
+        psi = fd.Function(V).interpolate(X[0] ** 2 - 0.5 * X[1])
+        v = fd.TestFunction(V)
+        residuals = []
+        for part in (with_G, with_Lambda):
+            part.update_total_mass()
+            residuals.append(fd.assemble(part.residual(psi, v)).dat.data_ro.copy())
+        scale = np.max(np.abs(residuals[0]))
+        assert scale > 0.0
+        assert np.max(np.abs(residuals[0] - residuals[1])) <= 1e-14 * scale
+
+    def test_volume_density_with_its_own_quadrature_degree(self):
+        """`source_quad_degree` reaches the volume source and the datum.
+
+        Every integral of the volume source carries the degree, the assembled
+        source equals `Lambda int rho v` at that degree, and the datum's
+        enclosed mass equals `int rho` at that degree. A third value of the
+        mass, at UFL's own estimate, differs, so the degree is not without
+        effect on this density.
+        """
+        V = annulus_space()
+        mesh = V.mesh()
+        # A low degree, so that the difference from UFL's estimate is far
+        # above round-off.
+        degree = 2
+        Lambda = fd.Constant(2.5)
+        rho = angular_density(mesh)
+        part = GravityPotential(V, mesh, BCS, Lambda=Lambda, volume_density=rho,
+                                source_quad_degree=degree)
+        v = fd.TestFunction(V)
+
+        source = part.volume_source(v)
+        assert source.integrals()
+        for integral in source.integrals():
+            assert integral.metadata()["quadrature_degree"] == degree
+
+        dx_q = fd.dx(domain=mesh, degree=degree)
+        expected = fd.assemble(Lambda * rho * v * dx_q).dat.data_ro
+        assembled = fd.assemble(source).dat.data_ro
+        assert np.max(np.abs(assembled - expected)) <= 1e-14 * np.max(np.abs(expected))
+
+        part.update_total_mass()
+        mass = float(part.source_mass)
+        assert mass == pytest.approx(fd.assemble(rho * dx_q), rel=1e-13)
+        assert abs(mass - fd.assemble(rho * fd.dx(domain=mesh))) > 1e-12 * abs(mass)
+
+
+class TestOperatorAndSource:
+    """`residual` is `operator - source` on the low-rank path."""
+
+    def test_residual_equals_operator_minus_source(self):
+        V = annulus_space()
+        mesh = V.mesh()
+        part = GravityPotential(V, mesh, BCS, gravitational_constant=1.0,
+                                volume_density=angular_density(mesh))
+        part.update_total_mass()
+        X = fd.SpatialCoordinate(mesh)
+        psi = fd.Function(V).interpolate(X[0] ** 2 - 0.5 * X[1])
+        v = fd.TestFunction(V)
+        residual = fd.assemble(part.residual(psi, v)).dat.data_ro
+        split = fd.assemble(part.operator(psi, v) - part.source(v)).dat.data_ro
+        scale = np.max(np.abs(residual))
+        assert scale > 0.0
+        assert np.max(np.abs(residual - split)) <= 1e-14 * scale

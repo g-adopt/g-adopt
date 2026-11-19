@@ -72,6 +72,15 @@ FORWARDED = (
     "_mode_norms", "_validate_recovered_rule",
 )
 
+#: Every name `GravitySolver` forwards to its potential part, `GravityPotential`
+#: (`solver.gravity`), with the name on the part.
+FORWARDED_TO_GRAVITY = {
+    "dx": "dx_g",
+    "monopole_boundaries": "monopole_boundaries",
+    "source_mass": "source_mass",
+    "cavity_flux": "cavity_flux",
+}
+
 #: The form's own build steps. Reachable on `solver.form`, deliberately not
 #: given a second name on the solver: re-running one after the residual is
 #: built would rebuild state the residual already refers to.
@@ -136,6 +145,20 @@ class TestTheShimForwardsIdentity:
                 assert mine == theirs, name
             else:
                 assert mine is theirs, name
+
+    @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+    def test_every_potential_forward_is_the_part_s_own_object(self, representation):
+        """The measures and the datum scalars are the part's, not copies.
+
+        The shim annulus has an exterior DtN boundary in 2-D, so the datum
+        scalars exist and the identity is between two `Function`s, not
+        between two `None`s.
+        """
+        solver = shim_solver(representation)
+        assert solver.source_mass is not None
+        assert solver.cavity_flux is not None
+        for name, target in FORWARDED_TO_GRAVITY.items():
+            assert getattr(solver, name) is getattr(solver.gravity, target), name
 
     def test_the_build_steps_are_reachable_only_on_the_form(self):
         solver = shim_solver()
