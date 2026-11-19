@@ -223,7 +223,10 @@ class RichardsTimestepAdaptor:
         q = K_expr * n_down
         J_inv_q = dot(JacobianInverse(self.mesh), q)
         ref_speed = sqrt(dot(J_inv_q, J_inv_q))
-        self._adv_interpolate = interpolate(ref_speed, V, access=op2.MAX)
+        # ref_speed is discontinuous across cells; op3.MAX_RW keeps the largest
+        # value any adjacent cell writes to a shared DOF, so the CFL estimate is
+        # conservative (same pattern as the advective CFL in TimestepAdaptor).
+        self._adv_interpolate = interpolate(ref_speed, V, access=op3.MAX_RW)
 
         # Tier 2: diffusive CFL from D(h) / dx^2 where D = K / C.
         # Only meaningful in the unsaturated regime (h < 0) where C > 0.
@@ -235,7 +238,7 @@ class RichardsTimestepAdaptor:
         D_unsat = K_expr / max_value(abs(C_expr), c_floor)
         D_expr = conditional(h < 0, D_unsat, 0)
         ref_diff_expr = D_expr / CellDiameter(self.mesh) ** 2
-        self._diff_interpolate = interpolate(ref_diff_expr, V, access=op2.MAX)
+        self._diff_interpolate = interpolate(ref_diff_expr, V, access=op3.MAX_RW)
 
     def _get_snes_iterations(self):
         """Read SNES iteration count from the solver's most recent solve.
