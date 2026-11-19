@@ -3,8 +3,9 @@
 Gate 1 (`test_gia_solver_gate.py`) compares the equations with the old
 solver. These tests run the new solver itself:
 
-- three forward steps agree with the old solver to round-off, on the three
-  step variants (stock, low-rank, quadrature);
+- three forward steps agree to round-off with the stored states of the
+  earlier solver (`gadopt.gia_gravity`), on the three step variants (stock,
+  low-rank, quadrature);
 - Taylor tests (rate 2) and replay checks of a taped march, on the low-rank
   DG path with sea level, on the quadrature path with BDF2, a fluid core and
   the centre of mass, and on a power law;
@@ -56,7 +57,7 @@ def surface_ice(sea, k):
     sea.I.interpolate(.002 * (1 + .2 * k) * (1 - fd.cos(theta)) / 2)
 
 
-# -- Forward steps against the old solver --------------------------------------
+# -- Forward steps against the stored values of the earlier solver ---------------
 
 FORWARD = [
     Case(rotation=True),
@@ -66,40 +67,56 @@ FORWARD = [
          model="maxwell2", core="fluid", centre=True),
 ]
 
+#: Fingerprints of the earlier solver's (`gadopt.gia_gravity`) state after
+#: each of the three steps, by case label: per step the displacement, the
+#: potential and the accepted history as `[norm, probe, probe norm]`
+#: (`gia_solver_cases.fingerprint`), and the value of every `Real` field.
+FORWARD_REFERENCE = C.reference_values("forward")
 
+
+def field_fingerprint(function, name):
+    """`[norm, probe, probe norm]` of one Function, as the recording made it."""
+    import zlib
+    values = np.ravel(function.dat.data_ro)
+    probe = np.random.default_rng(zlib.crc32(name.encode())).random(values.shape) - .5
+    return [float(np.linalg.norm(values)), float(values @ probe),
+            float(np.linalg.norm(probe))]
+
+
+@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("case", FORWARD, ids=[c.label for c in FORWARD])
-def test_three_steps_agree_with_the_old_solver(meshes, case):
-    """Direct presets: the two solvers agree to round-off after each step."""
+def test_three_steps_agree_with_the_reference(meshes, case):
+    """Direct presets: after each step the state agrees with the stored one.
+
+    The displacement, the potential and the accepted history are compared
+    through their fingerprints, and every `Real` field by value. The earlier
+    solver and this one agreed to 1e-12 in the field norms when they were
+    run side by side; the bound here is the same.
+    """
     sub = meshes[1]
-    dt_new, dt_old = C.dt_function(sub), C.dt_function(sub)
+    dt = C.dt_function(sub)
     sea = C.SeaFields(sub)
-    new, u, psi = C.build_new(meshes, case, dt=dt_new, sea=sea,
+    new, u, psi = C.build_new(meshes, case, dt=dt, sea=sea,
                               nullspace="rigid_rotation")
-    old, _, layout = C.build_old(meshes, case, dt=dt_old, sea=sea,
-                                 declare_nullspace=True)
-    names = C.old_field_names(layout)
-    reals = [n for n in names if n not in ("displacement", "history", "potential")]
-    for k, h in enumerate(STEPS):
-        dt_new.assign(h)
-        dt_old.assign(h)
+    for k, (h, reference) in enumerate(zip(STEPS, FORWARD_REFERENCE[case.label])):
+        dt.assign(h)
         if case.load:
             surface_ice(sea, k)
         new.solve()
-        old.solve()
-        z = old.solution.subfunctions
-        assert fd.norm(u - z[0]) <= 1e-12 * fd.norm(u)
-        assert fd.norm(psi - z[layout.potential]) <= 1e-12 * fd.norm(psi)
-        old_history = (old.time_integrator.current[0] if old.time_integrator
-                       else z[1])
-        assert (fd.norm(new.internal_variables - old_history)
-                <= 1e-12 * fd.norm(new.internal_variables))
+        fields = {"displacement": field_fingerprint(u, "displacement"),
+                  "potential": field_fingerprint(psi, "potential"),
+                  "history": field_fingerprint(new.internal_variables, "history")}
+        C.assert_fingerprints_agree(
+            fields, {name: reference[name] for name in fields}, rtol=1e-12)
         # A `Real` field whose exact value is zero (the core pressure under a
-        # load with no degree-0 part) is round-off on both sides, so the
-        # bound has an absolute floor far below every nonzero field here.
-        scale = max(abs(float(z[names.index(n)])) for n in reals)
-        for n in reals:
-            difference = abs(float(new.real_field(n)) - float(z[names.index(n)]))
-            assert difference <= 1e-12 * scale + 1e-16, n
+        # load with no degree-0 part) is round-off, so the bound has an
+        # absolute floor far below every nonzero field here.
+        reals = reference["reals"]
+        assert set(reals) == set(new.field_index) - {"displacement", "history", "potential"}
+        scale = max(abs(value) for value in reals.values())
+        for name, value in reals.items():
+            difference = abs(float(new.real_field(name)) - value)
+            assert difference <= 1e-12 * scale + 1e-16, (k, name, difference)
 
 
 # -- Taylor and replay -----------------------------------------------------------
@@ -388,44 +405,73 @@ def test_state_round_trip_in_memory_and_reset(meshes):
         b.restore({**copies, "something": copies["displacement"]})
 
 
-def test_a_checkpoint_of_the_old_solver_converts(meshes):
-    """The `selfgrav_common` layout of the old solver restarts the new one.
+def old_layout(solver):
+    """The fields and the metadata of a checkpoint in the earlier solver's layout.
 
-    The old solver marches two steps; its fields are encoded on the parent
-    as the drivers store them (`solution_{i}`, `time_*`, broken elements) with
-    its metadata. The new solver restores the converted state and both take
-    a third step; they agree to the old/new round-off.
+    The drivers of the earlier solver (`gadopt.gia_gravity`, `selfgrav_common`)
+    stored every sub-function of the mixed solution as `solution_{i}`, the
+    quadrature history also as `internal_variables_0`, the accepted BDF2
+    levels as `time_{current,previous}_{i}` and the metadata of
+    `time_history_metadata`; a backward-Euler DG run stored no levels and no
+    metadata. The earlier solver's mixed space had the same sub-spaces in the
+    same order as this solver's (checked field by field on the three cases
+    below while both existed, `NOTES/design/step3/IMPLEMENTATION-PART2.md`),
+    so a file in that layout is written here from this solver's state.
+
+    Args:
+      solver: a `SelfGravitatingGIASolver` after at least one step.
+
+    Returns:
+      `(fields, metadata)`: a list of `(name, Function)` and a dict of floats.
+    """
+    fields = [(f"solution_{i}", f) for i, f in enumerate(solver.solution.subfunctions)]
+    if solver.family == "Quadrature":
+        fields.append(("internal_variables_0", solver.internal_variables))
+    if solver.time_scheme != "bdf2":
+        return fields, {}
+    history = solver.time_integrator
+    fields += [(f"time_{level}_{i}", f) for level in ("current", "previous")
+               for i, f in enumerate(getattr(history, level) or ())]
+    previous = history.previous_dt
+    metadata = {"time_scheme_order": 2.0, "time_history_version": 1.0,
+                "time_previous_dt": -1.0 if previous is None else float(previous)}
+    if solver.family == "Quadrature":
+        metadata.update(material_solver_kind=1.0, material_quad_degree=float(C.QUAD))
+    return fields, metadata
+
+
+def test_a_checkpoint_of_the_old_solver_converts(meshes):
+    """The `selfgrav_common` layout of the earlier solver restarts this one.
+
+    A run of two steps is encoded on the parent in the drivers' layout
+    (`old_layout`: `solution_{i}`, `time_*`, broken elements) with its
+    metadata. A second solver restores the converted state; both take a third
+    step and agree to round-off. A file with the wrong time order is refused.
     """
     from gadopt.viscoelastic_checkpointing import CheckpointField
-    from gadopt.viscoelastic_timestepping import (time_history_fields,
-                                                  time_history_metadata)
     case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
                 model="maxwell2", core="fluid", centre=True)
     parent, sub = meshes
-    old, z, layout = C.build_old(meshes, case, dt=C.dt_function(sub),
-                                 declare_nullspace=True)
+    first, u_first, psi_first = C.build_new(meshes, case, dt=C.dt_function(sub),
+                                            nullspace="rigid_rotation")
     for h in FOUR[:2]:
-        old.dt.assign(h)
-        old.solve()
-    fields = {f"solution_{i}": f for i, f in enumerate(z.subfunctions)}
-    fields.update({f"internal_variables_{j}": f for j, f in enumerate([old.internal_variables])})
-    fields.update(dict(time_history_fields(old)))
+        first.dt.assign(h)
+        first.solve()
+    fields, metadata = old_layout(first)
     stored = {name: CheckpointField(name, f, parent).encode().copy(deepcopy=True)
-              for name, f in fields.items()}
-    metadata = time_history_metadata(old)
+              for name, f in fields}
     new, u, psi = C.build_new(meshes, case, dt=C.dt_function(sub),
                               nullspace="rigid_rotation")
     new.restore(state_from_checkpoint(new, stored, metadata))
     assert new.time_integrator.previous_dt == FOUR[1]
     for h in FOUR[2:3]:
-        old.dt.assign(h)
+        first.dt.assign(h)
         new.dt.assign(h)
-        old.solve()
+        first.solve()
         new.solve()
-    zs = z.subfunctions
-    assert fd.norm(u - zs[0]) <= 1e-12 * fd.norm(u)
-    assert fd.norm(psi - zs[layout.potential]) <= 1e-12 * fd.norm(psi)
-    assert (fd.norm(new.internal_variables - old.time_integrator.current[0])
+    assert fd.norm(u - u_first) <= 1e-12 * fd.norm(u)
+    assert fd.norm(psi - psi_first) <= 1e-12 * fd.norm(psi)
+    assert (fd.norm(new.internal_variables - first.internal_variables)
             <= 1e-12 * fd.norm(new.internal_variables))
     with pytest.raises(ValueError, match="time order"):
         state_from_checkpoint(new, stored, {**metadata, "time_scheme_order": 1.0})
@@ -463,51 +509,50 @@ def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
 
 
 def _old_checkpoint_round_trip(meshes, case, tmp_path, *, exp01):
-    """Write a checkpoint of the old solver in a driver's format, convert, continue.
+    """Write a checkpoint in a driver's layout of the earlier solver, convert, continue.
 
-    `exp01=False`: the `selfgrav_common` layout, every sub-function of the
-    old mixed solution as `solution_{i}` in the broken encoding, the BDF2
-    levels as `time_*`, the metadata of `time_history_metadata` as the
-    timestepping values. `exp01=True`: the Exp01 driver's layout, the
-    displacement, the history and the potential under its own names copied
-    without the broken encoding, and the `Real` rows as `real_{i}` in the
-    timestepping values.
+    `exp01=False`: the `selfgrav_common` layout (`old_layout`), every
+    sub-function of the mixed solution as `solution_{i}` in the broken
+    encoding, the BDF2 levels as `time_*`, the metadata of
+    `time_history_metadata` as the timestepping values. `exp01=True`: the
+    Exp01 driver's layout, the displacement, the history and the potential
+    under its own names copied without the broken encoding, and the `Real`
+    rows as `real_{i}` in the timestepping values. The run that writes the
+    file continues as the reference.
     """
     from pathlib import Path
     from gadopt.viscoelastic_checkpointing import CheckpointField
-    from gadopt.viscoelastic_timestepping import (time_history_fields,
-                                                  time_history_metadata)
     directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
-    # `load_function` takes only a mesh loaded from the file, so the old run
-    # is made on a loaded mesh and the new one on a second load of the file
-    # it writes; both loads number the degrees of freedom alike.
+    # `load_function` takes only a mesh loaded from the file, so the first
+    # run is made on a loaded mesh and the second on a second load of the
+    # file it writes; both loads number the degrees of freedom alike.
     with fd.CheckpointFile(str(directory / "mesh.h5"), "w") as chk:
         chk.save_mesh(meshes[0])
     name = meshes[0].name
-    first = load_meshes(directory / "mesh.h5", name)
-    parent, sub = first
-    old, z, layout = C.build_old(first, case, dt=C.dt_function(sub),
-                                 declare_nullspace=case.core == "fluid")
+    loaded_meshes = load_meshes(directory / "mesh.h5", name)
+    parent, sub = loaded_meshes
+    first, u_first, psi_first = C.build_new(
+        loaded_meshes, case, dt=C.dt_function(sub),
+        nullspace="rigid_rotation" if case.core == "fluid" else None)
     for h in FOUR[:2]:
-        old.dt.assign(h)
-        old.solve()
-    zs = z.subfunctions
-    info = dict(time_history_metadata(old)) if old.time_integrator else {}
+        first.dt.assign(h)
+        first.solve()
+    zs = first.solution.subfunctions
+    fields, info = old_layout(first)
     if exp01:
         names = {"displacement": "checkpoint_displacement",
                  "history": "checkpoint_internal_variables"}
-        fields = [(names["displacement"], zs[layout.displacement]),
-                  (names["history"], zs[layout.internal_variable_field])]
-        fields += time_history_fields(old)
+        fields = [(names["displacement"], zs[first.field_index["displacement"]]),
+                  (names["history"], zs[first.field_index["history"]])]
+        fields += [(n, f) for n, f in old_layout(first)[0] if n.startswith("time_")]
         encoded = [CheckpointField(n, f, parent, broken=False) for n, f in fields]
-        potential = fd.Function(fd.FunctionSpace(parent, zs[layout.potential].ufl_element()),
-                                name="checkpoint_potential").assign(zs[layout.potential])
+        potential_field = zs[first.field_index["potential"]]
+        potential = fd.Function(fd.FunctionSpace(parent, potential_field.ufl_element()),
+                                name="checkpoint_potential").assign(potential_field)
         for i, f in enumerate(zs):
             if f.ufl_element().family() == "Real":
                 info[f"real_{i}"] = float(f.dat.data_ro_with_halos[0])
     else:
-        fields = [(f"solution_{i}", f) for i, f in enumerate(zs)]
-        fields += time_history_fields(old)
         encoded = [CheckpointField(n, f, parent) for n, f in fields]
     info = {k: float(v) for k, v in info.items()} | {"step": 2.0}
     path = str(directory / "old.h5")
@@ -517,8 +562,7 @@ def _old_checkpoint_round_trip(meshes, case, tmp_path, *, exp01):
             chk.save_function(field.encode(), idx=0, timestepping_info=info)
         if exp01:
             chk.save_function(potential, idx=0, timestepping_info=info)
-    # Read back on the same parent: the file was written from it in this
-    # process, so `load_function` accepts it.
+    # Read back on a second load of the file, as a restarted driver does.
     stored_names = [f.stored.name() for f in encoded] + (["checkpoint_potential"] if exp01 else [])
     second = load_meshes(path, name)
     with fd.CheckpointFile(path, "r") as chk:
@@ -534,17 +578,16 @@ def _old_checkpoint_round_trip(meshes, case, tmp_path, *, exp01):
         state["history"] = loaded["checkpoint_internal_variables"]
     new.restore(state)
     for h in FOUR[2:3]:
-        old.dt.assign(h)
+        first.dt.assign(h)
         new.dt.assign(h)
-        old.solve()
+        first.solve()
         new.solve()
-    # Two solvers through a lossy encoding (the broken element of the old
-    # layout changes the last bit of some values): round-off, measured up to
-    # 1.2e-12.
-    assert relative(u, zs[0]) <= 1e-11
-    assert relative(psi, zs[layout.potential]) <= 1e-11
-    old_history = old.time_integrator.current[0] if old.time_integrator else zs[1]
-    assert relative(new.internal_variables, old_history) <= 1e-11
+    # The broken element of the old layout changes the last bit of some
+    # values, so the continued run agrees to round-off, not bit for bit
+    # (measured up to 1.2e-12 against the earlier solver).
+    assert relative(u, u_first) <= 1e-11
+    assert relative(psi, psi_first) <= 1e-11
+    assert relative(new.internal_variables, first.internal_variables) <= 1e-11
 
 
 @pytest.mark.parametrize("case", [Case(rotation=True),
@@ -552,7 +595,7 @@ def _old_checkpoint_round_trip(meshes, case, tmp_path, *, exp01):
                                        core="fluid", rotation=True, centre=True)],
                          ids=["DG-be-multiplier", "DG-bdf2-lowrank"])
 def test_a_dg_checkpoint_of_the_old_solver_converts(meshes, case, tmp_path):
-    """The old DG layout (history as `solution_1`), through a CheckpointFile."""
+    """The earlier DG layout (history as `solution_1`), through a CheckpointFile."""
     _old_checkpoint_round_trip(meshes, case, tmp_path, exp01=False)
 
 
@@ -662,7 +705,15 @@ def _density(sub, kind):
     return 1.0 + float(kind) * X[0]
 
 
-def _solver_with_density(meshes, kind, K):
+def _solver_with_density(meshes, kind, K, **kwargs):
+    """A fluid-core solver with the density `kind` and bulk modulus `K`.
+
+    Args:
+      meshes: the parent annulus and its mantle submesh.
+      kind: the density of `_density`.
+      K: the bulk modulus.
+      kwargs: further constructor arguments, for example `check_nullspace`.
+    """
     parent, sub = meshes
     material = gadopt.CompressibleInternalVariableApproximation(
         bulk_modulus=K, density=_density(sub, kind), g=1.0, B_mu=C.B_MU,
@@ -671,7 +722,7 @@ def _solver_with_density(meshes, kind, K):
                      fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
                      dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
                      couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-                     nullspace="rigid_rotation", solver_parameters="direct")
+                     nullspace="rigid_rotation", solver_parameters="direct", **kwargs)
 
 
 @pytest.mark.parametrize("K", [1.0, 1000.0])
@@ -733,6 +784,46 @@ def test_a_symmetric_configuration_passes_the_nullspace_check(meshes):
     lateral, ratio, ratio_t = solver.kernel_residuals[0]
     # Round-off of the degree-4 moments: about 1e-12.
     assert lateral < 1e-10 and max(ratio, ratio_t) < 1e-3
+
+
+def test_a_zero_time_step_at_construction_gives_a_finite_probe(meshes):
+    """A driver may assign the first step after construction.
+
+    The DG history equation divides by the time step, so at `dt = 0` the
+    history rows of `J e` are not finite, and a NaN ratio would pass every
+    bound without testing anything. The probe runs at a unit step instead,
+    gives the numbers of a positive step, and leaves the caller's zero.
+    """
+    case = Case(core="fluid", load=None)
+    dt = C.dt_function(meshes[1], 0.0)
+    solver, _, _ = C.build_new(meshes, case, dt=dt, nullspace="rigid_rotation")
+    reference, _, _ = C.build_new(meshes, case, nullspace="rigid_rotation")
+    assert float(dt) == 0.0
+    assert all(np.isfinite(solver.kernel_residuals[0]))
+    np.testing.assert_allclose(solver.kernel_residuals[0],
+                               reference.kernel_residuals[0], rtol=1e-8)
+
+
+def test_the_nullspace_check_can_be_skipped(meshes):
+    """`check_nullspace=False` skips the density and Jacobian measures.
+
+    A lateral density that the check refuses is accepted, the measures are
+    not taken, and a mode that violates a strong condition is still refused.
+    """
+    with pytest.raises(ValueError, match="moves density"):
+        _solver_with_density(meshes, "0.01", 1.0)
+    solver = _solver_with_density(meshes, "0.01", 1.0, check_nullspace=False)
+    assert solver.kernel_residuals == []
+    parent, sub = meshes
+    V = fd.VectorFunctionSpace(sub, "CG", 2)
+    X = fd.SpatialCoordinate(sub)
+    basis = fd.VectorSpaceBasis([fd.Function(V).interpolate(fd.as_vector([-X[1], X[0]]))])
+    basis.orthonormalize()
+    with pytest.raises(ValueError, match="strong displacement condition"):
+        NewSolver(fd.Function(V), fd.Function(fd.FunctionSpace(parent, "CG", 2)),
+                  C.approximation(Case()), dt=C.dt_function(sub),
+                  gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"u": 0.0}},
+                  nullspace=basis, solver_parameters="direct", check_nullspace=False)
 
 
 def test_backstress_refuses_a_displacement_condition(meshes):

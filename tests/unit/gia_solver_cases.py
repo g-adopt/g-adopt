@@ -297,6 +297,31 @@ def random_state(new, rng, amplitude=1e-3):
     return state
 
 
+def write_state(new, state, *, previous_dt):
+    """Write one fixed state into the new solver, field by field and by name.
+
+    Also prepares the time coefficients: a BDF2 solver with a previous step
+    `previous_dt` gets its BDF2 coefficients; `None` gives backward Euler.
+    The 2-D monopole datum is updated at this state.
+
+    Args:
+      new: a `SelfGravitatingGIASolver` of `gadopt.gia_solver`.
+      state: `{name: Function}` from `random_state`.
+      previous_dt: the length of the previous step, or `None`.
+    """
+    for name, index in new.field_index.items():
+        # The DG history unknown is the Newton iterate, a value of its own;
+        # the accepted levels are the integrator's.
+        source = state["history_iterate"] if name == "history" else state[name]
+        fill(new.solution.subfunctions[index], source)
+    fill(new.time_integrator.current[0], state["history"])
+    if new.time_integrator.previous is not None:
+        fill(new.time_integrator.previous[0], state["history_previous"])
+    new.time_integrator.previous_dt = previous_dt
+    new.time_integrator.prepare()
+    new.update_total_mass()
+
+
 def set_state(new, old, old_layout, state, *, previous_dt):
     """Write one fixed state into both solvers, field by field and by name.
 
@@ -403,3 +428,73 @@ def assert_fields_agree(per_field, rtol=FIELD_RTOL):
     """Assert every field block of a comparison agrees to round-off."""
     bad = {name: value for name, value in per_field.items() if value > rtol}
     assert not bad, f"field blocks differ: {bad}"
+
+
+def fingerprint(vector, index_of):
+    """`{field: [norm, probe]}` of a mixed residual or action vector.
+
+    `probe` is the dot product of the field block with a fixed vector drawn
+    from a generator seeded by the field name, so two vectors with the same
+    fingerprint agree in norm and in one fixed direction per block. Serial
+    only: the probe follows the local order of the degrees of freedom.
+
+    Args:
+      vector: a Cofunction on a mixed space.
+      index_of: `{field name: index in that mixed space}`.
+    """
+    import zlib
+    out = {}
+    for name, index in index_of.items():
+        values = np.ravel(vector.subfunctions[index].dat.data_ro)
+        probe = np.random.default_rng(zlib.crc32(name.encode())).random(values.shape) - .5
+        out[name] = [float(np.linalg.norm(values)), float(values @ probe),
+                     float(np.linalg.norm(probe))]
+    return out
+
+
+def fingerprint_differences(new, reference):
+    """`{field: relative difference}` of two fingerprints, block by block.
+
+    The difference of a block is the larger of the norm difference over the
+    reference norm and the probe difference over the largest probe value the
+    block can give (reference norm times probe norm). Both are near 1e-15
+    when the two vectors agree to round-off.
+
+    Args:
+      new: a fingerprint from `fingerprint`.
+      reference: a fingerprint of the same fields, for example from
+        `reference_values`.
+    """
+    assert set(new) == set(reference), (sorted(new), sorted(reference))
+    out = {}
+    for name, (norm, probe, probe_norm) in reference.items():
+        new_norm, new_probe, _ = new[name]
+        scale = norm if norm > 0 else 1e-300
+        out[name] = max(abs(new_norm - norm) / scale,
+                        abs(new_probe - probe) / (scale * probe_norm))
+    return out
+
+
+def assert_fingerprints_agree(new, reference, rtol=FIELD_RTOL):
+    """Assert two fingerprints agree to round-off, block by block."""
+    bad = {name: value for name, value in
+           fingerprint_differences(new, reference).items() if value > rtol}
+    assert not bad, f"field blocks differ from the reference: {bad}"
+
+
+#: The stored values that replace the old solver in the comparisons:
+#: `gia_gate_reference.json` holds the fingerprints of the residual and of two
+#: Jacobian actions per gate case (keys "2d" and "3d", then the case label),
+#: `gia_forward_reference.json` the fingerprints of the three-step forward
+#: states and the `Real` values after each step. Both were recorded from the
+#: old solver (`gadopt.gia_gravity`, commit 2f4b1397) in serial, with the
+#: generators the tests use, so the probes follow the serial order of the
+#: degrees of freedom and the comparisons run in serial only.
+REFERENCE_DIR = Path(__file__).resolve().parent / "data"
+
+
+def reference_values(kind):
+    """The stored reference values of `kind` ("gate" or "forward")."""
+    import json
+    with open(REFERENCE_DIR / f"gia_{kind}_reference.json") as f:
+        return json.load(f)

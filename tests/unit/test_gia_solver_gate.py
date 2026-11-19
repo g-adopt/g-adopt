@@ -1,28 +1,29 @@
-"""Gate 1: the new self-gravitating GIA solver writes the old solver's equations.
+"""Gate 1: the self-gravitating GIA solver writes the equations it was checked against.
 
-For every configuration the old solver (`gadopt.gia_gravity`) supports, both
-solvers are built on the same annulus, one fixed nonzero state is written
-into both (every field, both history levels, the BDF2 coefficients after a
-startup step), and the assembled residual and the Jacobian action on two
-random directions are compared field by field, mapped by name between the
-two mixed spaces. They must agree to round-off.
+For every configuration the earlier solver (`gadopt.gia_gravity`, removed
+after this comparison) supported, that solver and the present one were
+built on the same annulus, one fixed nonzero state was written into both
+(every field, both history levels, the BDF2 coefficients after a startup
+step), and the assembled residual and the Jacobian action on two random
+directions agreed field by field to round-off. The earlier solver's vectors
+are stored as fingerprints (`gia_solver_cases.fingerprint`: per field block
+the norm and the dot product with a fixed random vector) in
+`data/gia_gate_reference.json`, so this file now compares the present solver
+against those stored values. The state and the directions come from the same
+seeded generator as when they were recorded.
 
 On the Quadrature family the residual and the Jacobian are those of the
 step backend, after the local constitutive root is solved at the state: that
 is the system the step solves. On the low-rank DtN path the low-rank update
-`theta_psi B` is added to both, as the solver's callbacks add it.
+`theta_psi B` is added, as the solver's callbacks add it.
 
-Configurations the old solver reached only through its pointwise
-substitution (the condensed layout with `constitutive_method="pointwise"`,
-which accepts `un = 0`) are not compared: the new solver has no pointwise
-path. A rigid core is compared on the DG family. The old solver refuses a
-rigid core with backstress, and the Quadrature history with `un`.
+Configurations the earlier solver reached only through its pointwise
+substitution are not compared: the present solver has no pointwise path. A
+rigid core is compared on the DG family only.
 
-Set `GIA_GATE_REPORT` to a file name to append one JSON line per case.
+The probes follow the serial order of the degrees of freedom, so the
+comparison runs in serial only.
 """
-
-import json
-import os
 
 import firedrake as fd
 import numpy as np
@@ -70,8 +71,11 @@ CASES = [
 # load's term in the rotation row, is nonzero and compared.
 CASES = [c.but(load_mean=0.5) if c.load == "surface" else c for c in CASES]
 
-#: Round-off bound on the relative difference of the whole vector.
-RTOL = 1e-12
+#: Round-off bound on the relative difference of one field block.
+RTOL = C.FIELD_RTOL
+
+#: The stored fingerprints of the earlier solver, by case label.
+REFERENCE = C.reference_values("gate")["2d"]
 
 
 @pytest.fixture(scope="module")
@@ -79,67 +83,51 @@ def meshes():
     return C.annulus_meshes()
 
 
-def old_directions(old, layout, new, directions):
-    """The directions of the new space, mapped by name into the old space."""
-    out = []
-    for d in directions:
-        od = fd.Function(old.solution_space)
-        for i, name in enumerate(C.old_field_names(layout)):
-            C.fill(od.subfunctions[i], d.subfunctions[new.field_index[name]])
-        out.append(od)
-    return out
-
-
 def gate(meshes, case, *, perturb=None):
-    """Build both solvers at one fixed state and compare. Returns the numbers."""
+    """Build the solver at the fixed state of `case` and fingerprint its vectors.
+
+    Args:
+      meshes: the parent annulus and its mantle submesh.
+      case: the configuration.
+      perturb: `None`, or a function that changes the built solver (the
+        negative controls).
+
+    Returns:
+      Three fingerprints: the residual and the two Jacobian actions.
+    """
     sea = C.SeaFields(meshes[1], ice=True)
     new, _, _ = C.build_new(meshes, case, sea=sea)
-    old, _, layout = C.build_old(meshes, case, sea=sea)
     if perturb is not None:
         perturb(new)
+    # The generator, its seed and the order of the draws are those of the
+    # recording; a change here changes the state and the stored values no
+    # longer apply.
     rng = np.random.default_rng(20261119)
     state = C.random_state(new, rng)
-    C.set_state(new, old, layout, state,
-                previous_dt=0.07 if case.scheme == "bdf2" else None)
+    C.write_state(new, state, previous_dt=0.07 if case.scheme == "bdf2" else None)
     if case.scheme == "bdf2":
         # The BDF2 coefficients of a step after a startup step of 0.07.
         r = C.DT0 / .07
         assert abs(float(new.time_integrator.alpha) - (1 + 2 * r) / (1 + r)) < 1e-14
     directions = [C.random_function(new.solution_space, rng, 1.0) for _ in range(2)]
-    r_new, a_new = C.residual_and_actions(new, directions)
-    r_old, a_old = C.residual_and_actions(
-        old, old_directions(old, layout, new, directions))
-    comparisons = [C.compare(r_old, r_new, layout, new)]
-    comparisons += [C.compare(o, n, layout, new) for o, n in zip(a_old, a_new)]
-    result = {"case": case.label,
-              "residual": comparisons[0][:2],
-              "actions": [c[:2] for c in comparisons[1:]],
-              "per_field": [c[2] for c in comparisons]}
-    with r_old.dat.vec_ro as v:
-        result["residual_norm"] = v.norm()
-    return result
+    residual, actions = C.residual_and_actions(new, directions)
+    return [C.fingerprint(v, new.field_index) for v in [residual, *actions]]
 
 
+@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("case", CASES, ids=[c.label for c in CASES])
-def test_residual_and_jacobian_action_match_the_old_solver(meshes, case):
-    result = gate(meshes, case)
-    report = os.environ.get("GIA_GATE_REPORT")
-    if report and fd.COMM_WORLD.rank == 0:
-        with open(report, "a") as f:
-            f.write(json.dumps({k: (list(map(float, v)) if k == "residual" else
-                                    [list(map(float, a)) for a in v] if k == "actions"
-                                    else v) for k, v in result.items()
-                                if k != "per_field"}) + "\n")
-    print(result)
-    assert result["residual_norm"] > 0
-    overall, worst = result["residual"]
-    assert overall < RTOL, result
-    for overall, worst in result["actions"]:
-        assert overall < RTOL, result
-    # Every field block, so that a difference in a small block (a `Real`
-    # row) is not hidden in the norm of the whole vector.
-    for per_field in result["per_field"]:
-        C.assert_fields_agree(per_field)
+def test_residual_and_jacobian_action_match_the_reference(meshes, case):
+    """Residual and two Jacobian actions agree with the stored values in every block.
+
+    Every field block is compared, so that a difference in a small block (a
+    `Real` row) is not hidden in the norm of the whole vector.
+    """
+    fingerprints = gate(meshes, case)
+    reference = REFERENCE[case.label]
+    # The state is nonzero, so the residual is not trivially equal.
+    assert fingerprints[0]["displacement"][0] > 0
+    for new, ref in zip(fingerprints, reference):
+        C.assert_fingerprints_agree(new, ref, rtol=RTOL)
 
 
 def _add(term):
@@ -159,17 +147,21 @@ NEGATIVE = {
 }
 
 
+@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("row", list(NEGATIVE))
 def test_the_gate_sees_a_changed_row(meshes, row):
     """Negative controls: one small extra term in one row is seen in that block.
 
-    The block of the changed row differs far above round-off in the residual
-    and in the Jacobian actions, and every other block still agrees, so the
-    comparison maps the blocks by name and does not hide a small block.
+    The block of the changed row differs from the stored values far above
+    round-off in the residual and in the Jacobian actions, and every other
+    block still agrees, so the comparison maps the blocks by name and does
+    not hide a small block.
     """
-    result = gate(meshes, Case(rotation=True), perturb=_add(NEGATIVE[row]))
-    print(row, result["residual"], result["actions"])
-    for per_field in result["per_field"]:
-        assert per_field[row] > 1e3 * RTOL, (row, per_field[row])
-        others = {name: value for name, value in per_field.items() if name != row}
-        C.assert_fields_agree(others)
+    case = Case(rotation=True).but(load_mean=0.5)
+    fingerprints = gate(meshes, case, perturb=_add(NEGATIVE[row]))
+    for new, ref in zip(fingerprints, REFERENCE[case.label]):
+        differences = C.fingerprint_differences(new, ref)
+        print(row, f"{differences[row]:.1e}")
+        assert differences[row] > 1e2 * RTOL, (row, differences[row])
+        others = {name: value for name, value in differences.items() if name != row}
+        assert max(others.values()) <= RTOL, others
