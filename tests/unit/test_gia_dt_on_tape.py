@@ -19,10 +19,15 @@ Two things are checked on the 2-D case of `test_gia_transient_power_law_gate`
    3-step march only the change of `dt` can trigger a rebuild.
 2. A guarded Taylor test with respect to the initial sea level has rate 2
    across the change, and a replay at a new control equals a fresh march.
+
+The solver is `gadopt.gia_solver.SelfGravitatingGIASolver`, built here
+(`build`) with the case data of `test_gia_transient_power_law_gate`: its
+elements, power law, shoreline state, sea-level constants and tolerances.
 """
 
 import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
 import firedrake as fd
+import numpy as np
 import pytest
 from firedrake.adjoint import (
     Control,
@@ -35,8 +40,13 @@ from firedrake.adjoint import (
 from pyadjoint.tape import annotate_tape
 
 import gadopt.preconditioners as preconditioners
+from gadopt.approximations import CompressibleInternalVariableApproximation
+from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
+from gadopt.gia_presets import OMEGA_SQ_EARTH
+from gadopt.gia_solver import SelfGravitatingGIASolver
 import test_gia_transient_power_law_gate as gate
 import test_gia_gravity
+from test_gia_gravity import B_MU, CURVE_RC, CURVE_RE, LAMBDA, RC, RE, gravity_bcs
 
 from test_gravity_adjoint import assert_taylor_with_guards
 
@@ -47,6 +57,78 @@ meshes = test_gia_gravity.meshes
 #: The time step of each step of the march (units of t_bar). The change is
 #: at step 2; steps 2 and 3 share the shorter step.
 DTS = (1.0, 0.5, 0.5)
+
+#: The core density of the reference state: a uniform core of density 2
+#: inside `RC` and a unit-density mantle, as in the gate case.
+RHO_CORE = 2.0
+
+
+def gravity_of_r(r):
+    """`g(r) = Lambda M(<r) / (2 pi r)`, the 2-D Gauss law of the reference state."""
+    mass = RHO_CORE * np.pi * RC ** 2 + np.pi * (r ** 2 - RC ** 2)
+    return LAMBDA * mass / (2 * np.pi * r)
+
+
+def build(meshes, SL_init, I_init, I, dt):
+    """The coupled solver of the gate case, with the power law on.
+
+    Three Maxwell elements, the DG0 power law of Exp10 and Exp12, the
+    moving coastline, rotation (the polar moment only), the fluid core, the
+    centre-of-mass rows, the low-rank DtN representation, the rigid-rotation
+    nullspace and the iterative preset under Newton at the gate's
+    tolerances. The case data come from `test_gia_transient_power_law_gate`.
+
+    Args:
+      meshes: the module fixture (parent annulus, mantle submesh).
+      SL_init: the initial sea level, a CG2 Function on the mantle (the
+        control of the Taylor test).
+      I_init, I: the initial ice and the ice of the current step.
+      dt: the time step, a Function on the Real space of the mantle.
+
+    Returns:
+      The `SelfGravitatingGIASolver` and its `SeaLevel` coupling.
+    """
+    parent, sub = meshes
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    # One DG0 field per element; the viscosity of element j is mu_j tau_j.
+    Q = fd.FunctionSpace(sub, "DG", 0)
+    shear = [fd.Function(Q).assign(mu) for mu in gate.SHEAR_MODULI]
+    viscosity = [fd.Function(Q).assign(mu * tau)
+                 for mu, tau in zip(gate.SHEAR_MODULI, gate.MAXWELL_TIMES)]
+    Xm = fd.SpatialCoordinate(sub)
+    rm = fd.sqrt(fd.dot(Xm, Xm))
+    approximation = CompressibleInternalVariableApproximation(
+        bulk_modulus=1.0, density=1.0, shear_modulus=shear,
+        viscosity=viscosity, bulk_shear_ratio=1,
+        g=gravity_of_r(rm), B_mu=B_MU, self_gravity_number=LAMBDA,
+        exponent=gate.exponent_field(sub),
+        transition_stress=fd.Function(Q).assign(gate.transition_stress_value()),
+        background_stress=0.0)
+    dx_m = fd.Measure("dx", domain=sub,
+                      intersect_measures=(fd.Measure("dx", domain=parent),))
+    sea_level = SeaLevel(
+        boundary=CURVE_RE, rho_w=gate.RHO_W, rho_i=gate.RHO_I,
+        g_surface=gravity_of_r(RE), SL_init=SL_init, I=I, I_init=I_init,
+        N_init=fd.Constant(0.0), ur_init=fd.Constant(0.0),
+        softplus_width=gate.SOFTPLUS_WIDTH, fixed_ocean=False)
+    couplings = [
+        FluidCore(boundary=CURVE_RC, rho_core=RHO_CORE,
+                  g=fd.Constant(gravity_of_r(RC))),
+        Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m), Omega_sq=OMEGA_SQ_EARTH),
+        CentreOfMass(), sea_level]
+    solver = SelfGravitatingGIASolver(
+        u, psi, approximation, dt=dt, gravity_bcs=gravity_bcs(parent, sheet=False),
+        couplings=couplings, dtn_representation="lowrank",
+        nullspace="rigid_rotation",
+        # The iterative preset of production under Newton, at the gate's
+        # tight tolerances so that replay and Taylor remainders are not
+        # limited by the solve.
+        solver_parameters="iterative",
+        preset_options=dict(outer_rtol=gate.OUTER_RTOL, block0_rtol=1e-4,
+                            snes_rtol=gate.SNES_RTOL, snes_type="newtonls"),
+        solver_parameters_extra={"snes_atol": gate.SNES_ATOL})
+    return solver, sea_level
 
 
 @pytest.fixture(autouse=True)
@@ -72,7 +154,7 @@ def march(meshes, SL_init):
         _, I_init, ice = gate.shoreline_state(sub)
         I = fd.Function(I_init.function_space(), name="ice").assign(ice[0])
         dt = fd.Function(fd.FunctionSpace(sub, "R", 0), name="dt")
-        solver, _, _ = gate.build(meshes, SL_init, I_init, I, dt)
+        solver, sea_level = build(meshes, SL_init, I_init, I, dt)
     previous = None
     for k, value in enumerate(DTS, start=1):
         if value != previous:
@@ -84,9 +166,8 @@ def march(meshes, SL_init):
         reference, _, _ = gate.shoreline_state(sub)
         target = fd.Function(reference.function_space()).interpolate(
             reference + 0.1 * fd.sin(gate.polar_angle(sub) - gate.PHASE))
-    SL = solver.sea_level()
-    J = fd.assemble((SL - target) ** 2
-                    * solver.sea_level_measure()(gate.CURVE_RE))
+    SL = sea_level.sea_level()
+    J = fd.assemble((SL - target) ** 2 * sea_level.measure())
     return J, solver, dt
 
 

@@ -26,18 +26,25 @@ Design, mirroring `test_gravity_adjoint.py`:
     `__init__` never clutter the tape.
   * **Matfree-safe: first-order ladder only, no Hessian leg.**
 
-`nullspace=None` is deliberate for the primary test: `project_out_nullspace`
-is then a no-op and the tape holds the solve alone. With a nullspace declared,
-`project_out_nullspace` records the projection as a `KernelProjectionBlock`
-after the solve (`gadopt.nullspaces.project_out_kernel`). The nullspace-on
-case has its own test here, and the projection block itself is tested in
-`test_gia_nullspace_projection_adjoint.py`.
+`nullspace=None` is deliberate for the primary test: the kernel projection
+inside `solve` is then a no-op and the tape holds the solve alone. With
+`nullspace="rigid_rotation"`, `solve` records the projection as a
+`KernelProjectionBlock` after the solve (`gadopt.nullspaces.project_out_kernel`).
+The nullspace-on case has its own test here, and the projection block itself
+is tested in `test_gia_nullspace_projection_adjoint.py`.
+
+The solver is `gadopt.gia_solver.SelfGravitatingGIASolver`. The prescribed
+surface load is one `SurfaceLoad` coupling: it gives the traction
+`B_mu g sigma` to the momentum equation and the mass sheet `sigma` to the
+potential row.
 """
 
 import sys
 from pathlib import Path
 
+import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
 import firedrake as fd
+import numpy as np
 import pytest
 from firedrake.adjoint import (
     Control,
@@ -49,13 +56,26 @@ from firedrake.adjoint import (
 )
 from pyadjoint.tape import annotate_tape
 
+from gadopt.gia_couplings import CentreOfMass, FluidCore, SurfaceLoad
+from gadopt.gia_solver import SelfGravitatingGIASolver
+
 # Siblings on the test path (pytest puts tests/unit on sys.path): the guarded
-# Taylor driver and matfree-safe ladder, and the coupled-system builder.
+# Taylor driver and matfree-safe ladder, and the shared annulus constants,
+# boundary conditions of the potential and the approximation factory.
 from test_gravity_adjoint import (
     assert_taylor_with_guards,
     taylor_first_order_ladder,
 )
-from test_gia_gravity import build
+from test_gia_gravity import (
+    CURVE_RC,
+    CURVE_RE,
+    LAMBDA,
+    RC,
+    RE,
+    SIGMA_HAT,
+    approximation,
+    gravity_bcs,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +125,95 @@ def meshes():
 
 
 # ---------------------------------------------------------------------------
+# The coupled solvers
+# ---------------------------------------------------------------------------
+def build(meshes, *, declare_nullspace, approximation_kwargs=None,
+          solver_parameters="direct", solver_parameters_extra=None):
+    """The annulus solver of `test_gia_gravity`, without rotation.
+
+    A rigid core (`un = 0` at the CMB), the degree-2 load
+    `sigma = SIGMA_HAT cos(2 theta)` on the surface weighed with `g = 1`, the
+    low-rank DtN representation at truncation 3, DG history and `dt = 1`.
+
+    Args:
+      meshes: the `(parent, sub)` pair of the annulus fixture.
+      declare_nullspace: whether to declare `nullspace="rigid_rotation"`.
+      approximation_kwargs: approximation settings on top of the defaults of
+        `test_gia_gravity.approximation`; the control goes in here.
+      solver_parameters: the preset name or a complete dictionary.
+      solver_parameters_extra: extra PETSc options, added last.
+
+    Returns:
+      `(solver, u, psi)`.
+    """
+    parent, sub = meshes
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    Xm = fd.SpatialCoordinate(sub)
+    load = SurfaceLoad(
+        boundary=CURVE_RE, g_surface=1.0,
+        sigma=SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0])))
+    solver = SelfGravitatingGIASolver(
+        u, psi, approximation(**(approximation_kwargs or {})),
+        dt=fd.Constant(1.0), gravity_bcs=gravity_bcs(parent, sheet=False),
+        bcs={CURVE_RC: {"un": 0.0}}, couplings=[load],
+        dtn_representation="lowrank",
+        nullspace="rigid_rotation" if declare_nullspace else None,
+        solver_parameters=solver_parameters,
+        solver_parameters_extra=solver_parameters_extra)
+    return solver, u, psi
+
+
+#: The core density of the centre-of-mass configuration.
+RHO_CORE = 2.0
+
+
+def gravity_of_r(r):
+    """`g(r)` for a uniform core of `RHO_CORE` and a unit-density mantle.
+
+    The 2-D Gauss law of the test's own density, `g(r) = Lambda M(<r) / (2
+    pi r)`. With it a rigid translation costs no energy, which is the
+    configuration the centre-of-mass frame exists for.
+    """
+    mass = RHO_CORE * np.pi * RC ** 2 + np.pi * (r ** 2 - RC ** 2)
+    return LAMBDA * mass / (2 * np.pi * r)
+
+
+def build_frame(meshes, *, approximation_kwargs=None, **solver_kwargs):
+    """The centre-of-mass configuration of `test_gia_gravity`, degree-1 load.
+
+    A fluid core, the degree-1 load `SIGMA_HAT cos(theta)` weighed with the
+    surface gravity of the reference state (so that the load exerts no net
+    force), the centre-of-mass rows and the multiplier DtN representation.
+
+    Args:
+      meshes: the `(parent, sub)` pair of the annulus fixture.
+      approximation_kwargs: approximation settings on top of the reference
+        gravity of the frame.
+      solver_kwargs: passed to `SelfGravitatingGIASolver`.
+
+    Returns:
+      `(solver, u, psi)`.
+    """
+    parent, sub = meshes
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    Xm = fd.SpatialCoordinate(sub)
+    rm = fd.sqrt(fd.dot(Xm, Xm))
+    couplings = [
+        FluidCore(boundary=CURVE_RC, rho_core=RHO_CORE,
+                  g=fd.Constant(gravity_of_r(RC))),
+        CentreOfMass(),
+        SurfaceLoad(boundary=CURVE_RE, g_surface=gravity_of_r(RE),
+                    sigma=SIGMA_HAT * fd.cos(fd.atan2(Xm[1], Xm[0])))]
+    solver = SelfGravitatingGIASolver(
+        u, psi, approximation(g=gravity_of_r(rm), **(approximation_kwargs or {})),
+        dt=fd.Constant(1.0), gravity_bcs=gravity_bcs(parent, sheet=False),
+        couplings=couplings, dtn_representation="multiplier", **solver_kwargs)
+    return solver, u, psi
+
+
+# ---------------------------------------------------------------------------
 # Forward map and the Taylor driver
 # ---------------------------------------------------------------------------
 def _forward(control, meshes, *, declare_nullspace, approximation_kwargs=None,
@@ -120,7 +229,7 @@ def _forward(control, meshes, *, declare_nullspace, approximation_kwargs=None,
     Args:
       control: the Real-space `Function` that becomes `shear_modulus`.
       meshes: the `(parent, sub)` pair of the annulus fixture.
-      declare_nullspace: whether to declare `rigid_rotation_nullspace`.
+      declare_nullspace: whether to declare `nullspace="rigid_rotation"`.
       approximation_kwargs: extra approximation settings, merged on top of
         `shear_modulus`. A power-law test passes `exponent` and
         `transition_stress` here.
@@ -132,10 +241,8 @@ def _forward(control, meshes, *, declare_nullspace, approximation_kwargs=None,
     """
     _, sub = meshes
     with stop_annotating():
-        solver, _, layout = build(
+        solver, _, _ = build(
             meshes,
-            rotation=False,
-            condensed=False,
             declare_nullspace=declare_nullspace,
             approximation_kwargs={"shear_modulus": control,
                                   **(approximation_kwargs or {})},
@@ -143,7 +250,7 @@ def _forward(control, meshes, *, declare_nullspace, approximation_kwargs=None,
             solver_parameters_extra=solver_parameters_extra,
         )
     solver.solve()  # the taped variational solve
-    u = fd.split(solver.solution)[layout.displacement]
+    u = solver.field("displacement")
     return fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
 
 
@@ -185,7 +292,7 @@ def _reduced_functional(meshes, *, declare_nullspace, approximation_kwargs=None,
 
     Args:
       meshes: the `(parent, sub)` pair of the annulus fixture.
-      declare_nullspace: whether to declare `rigid_rotation_nullspace`.
+      declare_nullspace: whether to declare `nullspace="rigid_rotation"`.
       approximation_kwargs: extra approximation settings for `_forward`.
       solver_parameters_extra: extra PETSc options for `_forward`.
 
@@ -238,8 +345,8 @@ def test_coupled_adjoint_is_second_order(meshes):
 def test_coupled_adjoint_with_nullspace_declared(meshes):
     """The declared-nullspace production path also tapes to second order.
 
-    Declaring `rigid_rotation_nullspace` makes `solve()` call
-    `project_out_nullspace`, which records the projection as a
+    Declaring `nullspace="rigid_rotation"` makes `solve()` project the
+    rigid rotation out of the solution and record the projection as a
     `KernelProjectionBlock` after the taped solve.
 
     The rigid rotation this configuration projects out is a genuine kernel, so
@@ -317,10 +424,7 @@ def test_coupled_adjoint_through_the_centre_of_mass_rows(meshes):
     the sensitivity. The rows are UFL on the one taped solve, so no
     hand-written adjoint is involved; this pins that it stays that way.
     """
-    from test_gia_gravity import CURVE_RE, TestCentreOfMassFrame
-
     parent, sub = meshes
-    frame = TestCentreOfMassFrame()
     extra = {"dtn_fieldsplit_1_pc_type": "python",
              "dtn_fieldsplit_1_pc_python_type":
                  "gadopt.DtNMultiplierDenseSchurPC",
@@ -328,13 +432,12 @@ def test_coupled_adjoint_through_the_centre_of_mass_rows(meshes):
 
     def forward(control):
         with stop_annotating():
-            solver, _, layout = frame.build(
-                meshes, load_degree=1,
-                approximation_kwargs={"shear_modulus": control},
+            solver, _, _ = build_frame(
+                meshes, approximation_kwargs={"shear_modulus": control},
                 solver_parameters="direct", solver_parameters_extra=extra)
         solver.solve()
-        u = fd.split(solver.solution)[layout.displacement]
-        lam = fd.split(solver.solution)[layout.centre_of_mass[0]]
+        u = solver.field("displacement")
+        lam = solver.field("centre_of_mass_0")
         X = fd.SpatialCoordinate(sub)
         rhat = X / fd.sqrt(fd.dot(X, X))
         ds_re = fd.Measure("ds", domain=sub)(CURVE_RE)

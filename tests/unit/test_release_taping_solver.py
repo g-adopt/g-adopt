@@ -7,8 +7,8 @@ used again, but it keeps its own preconditioner tree: a third preconditioner
 set beside the two of the cached solvers.
 `gadopt.dtn_coupled_adjoint.release_taping_solver` frees it. These tests
 check three things on the GIAMIP Exp01 structure (low-rank DtN, moving
-coastline, rotation, fluid core, three Maxwell elements on the uncondensed
-layout with `CondensedBlockPC` on block 0 and the cached complement on
+coastline, rotation, fluid core, three Maxwell elements as a DG history
+field with `CondensedBlockPC` on block 0 and the cached complement on
 block 1), in a 2-D annulus with a march of `STEPS` steps:
 
 1. The release changes no number. The taped J, the replay J, the J of
@@ -57,6 +57,10 @@ from pyadjoint.tape import annotate_tape
 
 import gadopt.dtn_coupled_adjoint as dca
 import gadopt.preconditioners as pcs
+from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
+from gadopt.gia_presets import OMEGA_SQ_EARTH
+from gadopt.gia_solver import SelfGravitatingGIASolver
+from gadopt.solver_options_manager import DeleteParam
 import test_gia_gravity
 import test_gia_transient_power_law_gate as gate
 
@@ -146,17 +150,82 @@ def checkpoint_directory(comm):
     return comm.bcast(path, root=0)
 
 
+def build_solver(meshes, SL_init, I_init, I, dt):
+    """The coupled solver of the gate case without the power law.
+
+    The configuration of `test_gia_transient_power_law_gate.build` with
+    `power_law=False`: three Maxwell elements on the DG history (field 1 of
+    the mixed space), low-rank DtN with the iterative preset of production
+    (`CondensedBlockPC` on block 0, the cached complement on block 1,
+    `newtonls`), the moving coastline, rotation, the fluid core, the
+    centre-of-mass rows and the rigid-rotation nullspace. Only the data
+    helpers and constants of the gate module are used.
+
+    The preset prints a converged-reason line for every block-0 iteration;
+    four runs of a 6-step march make that the largest cost of the test on a
+    busy node. The keys change no number, so they are deleted from the
+    options after construction (as `--diagnostics` does in the Exp01
+    driver), which rebuilds the variational solver once before any solve.
+
+    Returns:
+      `(solver, sea)`, with `sea` the `SeaLevel` coupling.
+    """
+    parent, sub = meshes
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2))
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2))
+    # One DG0 field per element; the viscosity of element j is mu_j tau_j.
+    Q = fd.FunctionSpace(sub, "DG", 0)
+    shear = [fd.Function(Q).assign(mu) for mu in gate.SHEAR_MODULI]
+    viscosity = [fd.Function(Q).assign(mu * tau)
+                 for mu, tau in zip(gate.SHEAR_MODULI, gate.MAXWELL_TIMES)]
+    Xm = fd.SpatialCoordinate(sub)
+    rm = fd.sqrt(fd.dot(Xm, Xm))
+    approximation = gadopt.CompressibleInternalVariableApproximation(
+        bulk_modulus=1.0, density=1.0, shear_modulus=shear,
+        viscosity=viscosity, bulk_shear_ratio=1,
+        g=gate.FRAME.gravity_of_r(rm), B_mu=test_gia_gravity.B_MU,
+        self_gravity_number=test_gia_gravity.LAMBDA)
+    dx_m = fd.Measure("dx", domain=sub,
+                      intersect_measures=(fd.Measure("dx", domain=parent),))
+    sea = SeaLevel(
+        boundary=test_gia_gravity.CURVE_RE, rho_w=gate.RHO_W, rho_i=gate.RHO_I,
+        g_surface=gate.G_RE, SL_init=SL_init, I=I, I_init=I_init,
+        N_init=fd.Constant(0.0), ur_init=fd.Constant(0.0),
+        softplus_width=gate.SOFTPLUS_WIDTH, fixed_ocean=False)
+    couplings = [
+        FluidCore(boundary=test_gia_gravity.CURVE_RC,
+                  rho_core=gate.FRAME.RHO_CORE,
+                  g=fd.Constant(gate.FRAME.gravity_of_r(test_gia_gravity.RC))),
+        Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m), Omega_sq=OMEGA_SQ_EARTH),
+        CentreOfMass(), sea]
+    solver = SelfGravitatingGIASolver(
+        u, psi, approximation, dt=dt,
+        gravity_bcs=test_gia_gravity.gravity_bcs(parent, sheet=False), bcs={},
+        couplings=couplings, dtn_representation="lowrank",
+        nullspace="rigid_rotation", solver_parameters="iterative",
+        preset_options=dict(outer_rtol=gate.OUTER_RTOL, block0_rtol=1e-4,
+                            snes_rtol=gate.SNES_RTOL, snes_type="newtonls"),
+        solver_parameters_extra={"snes_atol": gate.SNES_ATOL})
+    solver.add_to_solver_config(
+        {key: DeleteParam for key in solver.solver_parameters
+         if key.endswith("converged_reason")}, reinit=True)
+    # The configuration the test is about, stated so that a change of a
+    # default cannot move it off it.
+    assert solver.family == "DG"
+    assert solver.dtn_representation == "lowrank"
+    assert solver.solver_parameters["snes_type"] == "newtonls"
+    return solver, sea
+
+
 def build_case(meshes):
     """The solver, the control and the forcing of the case, untaped.
 
     The gate case of `test_gia_transient_power_law_gate` without the power
-    law: three Maxwell elements, the uncondensed layout, the iterative preset
-    of production (`CondensedBlockPC` on block 0, the cached complement on
-    block 1), the moving coastline and rotation.
+    law (`build_solver`).
 
     Returns:
-      A dict with `solver`, `SL_init` (the control), `I`, `ice`, `dt`,
-      `target` and `h` (the Taylor direction).
+      A dict with `solver`, `sea` (its `SeaLevel` coupling), `SL_init` (the
+      control), `I`, `ice`, `dt`, `target` and `h` (the Taylor direction).
     """
     _, sub = meshes
     with stop_annotating():
@@ -166,25 +235,10 @@ def build_case(meshes):
             (1.0 - k * MELT) * I_init) for k in range(STEPS + 1)]
         I = fd.Function(V, name="ice").assign(ice[0])
         dt = fd.Function(fd.FunctionSpace(sub, "R", 0), name="dt")
-        # The preset prints a converged-reason line for every block-0
-        # iteration; four runs of a 6-step march make that the largest cost
-        # of the test on a busy node. The keys change no number, so the
-        # solver of this case is built without them (as `--diagnostics`
-        # does in the Exp01 driver).
-        preset = gate.selfgrav_dtn_iterative_solver_parameters
-
-        def quiet(*args, **kwargs):
-            return {key: value for key, value in preset(*args, **kwargs).items()
-                    if not key.endswith("converged_reason")}
-        gate.selfgrav_dtn_iterative_solver_parameters = quiet
-        try:
-            solver, _, _ = gate.build(meshes, SL_init, I_init, I, dt,
-                                      power_law=False)
-        finally:
-            gate.selfgrav_dtn_iterative_solver_parameters = preset
+        solver, sea = build_solver(meshes, SL_init, I_init, I, dt)
         target = gate.misfit_target(sub)
         h = gate.control_direction(sub)
-    return dict(solver=solver, SL_init=SL_init, I=I, ice=ice, dt=dt,
+    return dict(solver=solver, sea=sea, SL_init=SL_init, I=I, ice=ice, dt=dt,
                 target=target, h=h)
 
 
@@ -209,9 +263,9 @@ def tape_case(case, comm):
                 case["dt"].assign(gate.DT)
             case["I"].assign(case["ice"][k])
             solver.solve()
-        SL = solver.sea_level()
-        J = fd.assemble((SL - case["target"]) ** 2
-                        * solver.sea_level_measure()(gate.CURVE_RE))
+        sea = case["sea"]
+        J = fd.assemble((sea.sea_level() - case["target"]) ** 2
+                        * sea.measure())
     finally:
         pause_annotation()
     return ReducedFunctional(J, control), J

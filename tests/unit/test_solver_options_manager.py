@@ -14,7 +14,7 @@ literal that disagrees fails here rather than in a benchmark six weeks later.
 """
 import pytest
 
-from gadopt.gia_gravity import selfgrav_dtn_iterative_solver_parameters
+from gadopt.gia_presets import selfgrav_dtn_iterative_solver_parameters
 from gadopt.gravity_solver import (iterative_gravity_solver_parameters,
                                    lowrank_gravity_solver_parameters)
 from gadopt.solver_options_manager import GAMG_PARAMETERS, gamg_parameters

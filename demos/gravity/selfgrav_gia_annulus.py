@@ -1,6 +1,6 @@
 """The monolithic self-gravitating GIA prototype, on the Phase 2 annulus.
 
-Driver for `gadopt.gia_gravity.SelfGravitatingGIASolver`: builds the four-region
+Driver for `gadopt.gia_solver.SelfGravitatingGIASolver`: builds the four-region
 parent annulus of `generate_selfgrav_annulus.py`, extracts the mantle as a
 `Submesh`, couples the viscoelastic mechanics to the gravitational Poisson
 equation and the rotational closure in one mixed space, and solves.
@@ -23,18 +23,18 @@ Verified steady state on the coarse mesh:
     --dr 0.2 --nazim 32 --truncation 3 --dt 0.5 --steps 300 \\
       --fluid-limit --lam-factor 0.25
 
-reaches Airy isostasy `zeta = -sigma_hat/rho_0` in 187 steps, `-9.9955e-04`
+reaches Airy isostasy `zeta = -sigma_hat/rho_0` in 188 steps, `-9.9953e-04`
 against `-1.0e-03`.
 
 ## The load
 
-A `sigma_hat cos(2 phi)` mass sheet on the Earth's surface at Re. It appears
-twice, and the two must stay one object: as a `normal_stress` on the mechanics
-boundary, pressing the surface down, and as an `interior_sigma` sheet in the
-potential, attracting through its own mass. Re is an **interior** facet of the
-parent - that is the whole point of the stand-off geometry - so the sheet is a
-`dS` integral, and the shipped exterior-facet spelling would integrate over
-nothing and only warn.
+A `sigma_hat cos(2 phi)` mass sheet on the Earth's surface at Re, given once as
+a `SurfaceLoad` coupling. The solver uses that one object in every place the
+load acts: as the normal traction `B_mu g sigma` on the mechanics boundary,
+pressing the surface down, as a mass sheet in the potential, attracting through
+its own mass, and in the rotation row. Re is an **interior** facet of the
+parent - that is the whole point of the stand-off geometry - so the sheet in
+the potential is a `dS` integral of the parent, which the coupling builds.
 
 Degree two, and not by accident: it is the degree the rotational feedback reads,
 the degree the fluid-limit gates use, and a degree whose net mass over a circle
@@ -89,7 +89,15 @@ import sys
 import gadopt  # noqa: F401
 import numpy as np  # noqa: E402
 from gadopt import *  # noqa: E402
-from gadopt.gia_gravity import OMEGA_SQ_EARTH  # noqa: E402
+# The solver and its couplings by module, after the star import, so that
+# these names are the ones of `gadopt.gia_solver` and `gadopt.gia_couplings`.
+# `FluidCore` is the class the `fluid_core` argument of `build_solver` takes.
+from gadopt.gia_couplings import (Coupling, FluidCore,  # noqa: E402,F401
+                                  Rotation, SurfaceLoad)
+from gadopt.gia_presets import OMEGA_SQ_EARTH  # noqa: E402
+from gadopt.gia_solver import SelfGravitatingGIASolver  # noqa: E402
+from gadopt.internal_variable_equation import history_slices  # noqa: E402
+from gadopt.utility import scalar_value  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import generate_selfgrav_annulus as gen  # noqa: E402
@@ -128,13 +136,12 @@ def build_meshes(dr_mantle, n_azimuthal, path=None):
 
 
 def approximation(density=1.0, g=1.0, self_gravity_number=None):
-    """A fresh approximation object, and it must be fresh.
+    """A fresh approximation object for every solver.
 
-    `CoupledInternalVariableSolver.__init__` does
-    `approximation.mu = approximation.effective_viscosity(dt)`, mutating the
-    object. Two solvers built from one approximation at different time steps
-    silently share the later `mu`; G0 builds a second solver, so each gets its
-    own.
+    `SelfGravitatingGIASolver` does not write into the approximation, but the
+    plain `CoupledInternalVariableSolver` of gate G0 does
+    (`approximation.mu = approximation.effective_viscosity(dt)`), so G0 and
+    the coupled solver each get their own object.
 
     `g` and `self_gravity_number` are keywords with the production defaults, so
     that the gates which monkey-patch this function with a one-argument factory
@@ -148,11 +155,50 @@ def approximation(density=1.0, g=1.0, self_gravity_number=None):
         else self_gravity_number)
 
 
+class AiryRestoringStress(Coupling):
+    r"""The weight of the deflected surface, `B_mu rho_0 g_s u_r`, as a traction at Re.
+
+    A coupling with no `Real` field and no rows of its own: it adds one weak
+    `normal_stress` to the momentum equation through `mechanics_bcs`, where
+    the displacement unknown of the mixed solution is available. The solver
+    adds it to the traction of the `SurfaceLoad` on the same boundary. The
+    term is implicit in the unknown, so the Jacobian carries it. `g_s = 1` is
+    the surface gravity in the demo's units. See `build_solver` for why the
+    fluid-limit configuration needs it.
+
+    Args:
+      boundary: the surface tag on the mechanics mesh.
+    """
+
+    #: After the `Real` fields of every shipped coupling; it has none.
+    order = 90
+
+    def __init__(self, *, boundary):
+        super().__init__()
+        self.boundary = boundary
+
+    def mechanics_bcs(self, ctx):
+        X = SpatialCoordinate(ctx.mesh)
+        normal = X / sqrt(dot(X, X))
+        u_r = dot(ctx.fields["displacement"], normal)
+        return {self.boundary: {
+            "normal_stress": ctx.approximation.B_mu * ctx.approximation.density * u_r}}
+
+    def residual(self, ctx):
+        # No rows: the traction enters through `mechanics_bcs` only.
+        return Form([])
+
+
 def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
                  solver_parameters=None, solver_parameters_extra=None,
                  declare_nullspace=True, fluid_limit=False, lam_factor=1.0,
-                 fluid_core=None, dtn_representation=None, **solver_kwargs):
-    """The coupled solver, its mixed function, and the pieces a gate needs.
+                 fluid_core=None, dtn_representation="lowrank", **solver_kwargs):
+    """The coupled solver and the pieces a gate needs.
+
+    Returns `(solver, bcs, C)`: the solver; `bcs`, the mechanics conditions
+    that a plain mechanics solver needs for the same load and core (the load
+    as a `normal_stress`, and `un = 0` for the rigid core), which gate G0
+    uses; and the polar moment `C`.
 
     `declare_nullspace` is on by default and is defect D-2's fix. With free slip
     `un = 0` at the CMB and traction at the surface there is no condition on the
@@ -161,8 +207,8 @@ def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
     since it is divergence free, normal to neither circle, and contributes
     nothing to `dI_33`. Undeclared, the mode is annihilated only to
     `||J u_rot||/||u_rot|| ~ 2e-06` by facet geometry error, and two runs of the
-    same system land on different multiples of it. See
-    `gadopt.gia_gravity.rigid_rotation_nullspace`.
+    same system land on different multiples of it. `nullspace="rigid_rotation"`
+    declares it, and the solver checks at construction that it is a kernel.
 
     `fluid_limit` switches to the configuration V9 and V9b need, and it is a
     different physical configuration rather than a numerical option, so it is
@@ -194,8 +240,9 @@ def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
       parts, `oint rho_0 (u.n)(g u_r)`, with **no** `grad(rho_0)` in it, so it
       would supply this Airy term automatically at any `g != 0`. With `g = 0`
       the term vanishes and the hand-written stress is the whole of it, with
-      nothing to double-count. See `gadopt.gia_gravity.FluidCore` for the
-      measured 3-D version of exactly this bookkeeping.
+      nothing to double-count. See `gadopt.gia_couplings.FluidCore` for the
+      measured 3-D version of exactly this bookkeeping. The term is the
+      `AiryRestoringStress` coupling.
 
     The fluid limit is then Airy isostasy, `zeta = -sigma_hat / rho_0`, which is
     exactly what road-map V9b asserts, and it is reached: measured
@@ -207,29 +254,26 @@ def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
     has been set to zero, since the reference gravity that would stabilise it
     has gone with it. `lam_factor` scales `Lambda` for exactly that reason.
     Measured on the coarse mesh: unstable at `1.0`, and at `0.25` the coupled
-    system relaxes to `-9.9956e-04`, 4.4e-04 from Airy. Rotation is not
+    system relaxes to `-9.9953e-04`, 4.7e-04 from Airy. Rotation is not
     implicated - the divergence is identical with it switched off.
     """
-    X = SpatialCoordinate(parent)
-    sigma = SIGMA_HAT * cos(LOAD_DEGREE * atan2(X[1], X[0]))
     lam = LAMBDA * lam_factor
 
+    # The potential's conditions: the DtN boundaries of the parent only. The
+    # surface load is a coupling (below), not a sheet in this dictionary.
     gravity_bcs = {
         gen.CURVE_OUTER: {"dtn": CylindricalDtN(truncation)},
         gen.CURVE_INNER: {"dtn": CylindricalDtN(truncation)},
-        gen.CURVE_RE: {"interior_sigma": sigma},
     }
-    # `dtn_representation=None` is the library default (low-rank on this,
-    # the full, layout); the spikes that read multiplier rows name
-    # "multiplier" here.
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-        fluid_core=fluid_core is not None,
-        self_gravity_number=lam, dtn_representation=dtn_representation)
 
-    z = Function(Z)
-    z.subfunctions[layout.displacement].rename("displacement")
-    z.subfunctions[layout.potential].rename("potential")
+    # The two unknowns the user owns: the displacement on the mantle submesh
+    # and the potential on the whole parent, both P2. The solver builds the
+    # mixed space around them and writes the solution back into them after
+    # every step.
+    u = Function(VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = Function(FunctionSpace(parent, "CG", 2), name="potential")
+    # The time step as a `Real` Function, so that it can change between steps.
+    dt_function = Function(FunctionSpace(sub, "R", 0), name="dt").assign(dt)
 
     # Each keyword is passed only when it differs from the default, so that a
     # gate which has monkey-patched `approximation` with a one-argument factory
@@ -249,41 +293,65 @@ def build_solver(parent, sub, *, dt=1.0, truncation=5, rotation=True,
     # rho_0(r) has C = A identically.
     C = assemble(approx.density * dot(Xm, Xm) * dx_m)
 
+    # The load on the mechanics mesh. One object for the traction, the sheet
+    # in the potential and the rotation row; `g_surface = 1` in these units.
     sigma_m = SIGMA_HAT * cos(LOAD_DEGREE * atan2(Xm[1], Xm[0]))
-    surface_stress = sigma_m
+    couplings = [SurfaceLoad(boundary=gen.CURVE_RE, sigma=sigma_m,
+                             g_surface=1.0)]
     if fluid_limit:
         # The weight of the deflected surface mass sheet, `rho_0 g_s u_r`,
         # implicit in the unknown so the Jacobian carries it. The sign is
         # measured, not asserted: with the opposite one the deflection diverges
         # at 37 % per step within ten steps, so the rejection region is not
-        # subtle. `g_s = 1` is the surface gravity in the demo's units.
-        normal = Xm / sqrt(dot(Xm, Xm))
-        surface_stress = surface_stress + approx.density * dot(
-            split(z)[layout.displacement], normal)
-    bcs = {
-        # The load, pressing on the surface. Same amplitude and degree as the
-        # sheet in the potential; they are the same physical object.
-        gen.CURVE_RE: {"normal_stress": B_MU * surface_stress},
-    }
+        # subtle.
+        couplings.append(AiryRestoringStress(boundary=gen.CURVE_RE))
+    if rotation:
+        couplings.append(Rotation(C=C, Omega_sq=OMEGA_SQ_EARTH))
+
+    # The same load as a plain traction, for gate G0's mechanics-only solver.
+    bcs = {gen.CURVE_RE: {"normal_stress": B_MU * sigma_m}}
+    solver_bcs = {}
     if fluid_core is None:
-        # The legacy switch: the core is rigid, no radial displacement, which
-        # also kills the rho_below sheet the divergence form would otherwise
-        # need at the CMB. Retained so that the difference between the two CMB
-        # treatments stays a measured quantity - see `gadopt.gia_gravity.FluidCore`.
+        # The rigid core: no radial displacement, which also kills the
+        # rho_below sheet the divergence form would otherwise need at the CMB.
+        # Retained so that the difference between the two CMB treatments stays
+        # a measured quantity - see `gadopt.gia_couplings.FluidCore`.
         bcs[gen.CURVE_RC] = {"un": 0.0}
+        solver_bcs[gen.CURVE_RC] = {"un": 0.0}
     else:
-        solver_kwargs["fluid_core"] = fluid_core
+        couplings.append(fluid_core)
 
     if declare_nullspace and "nullspace" not in solver_kwargs:
-        solver_kwargs["nullspace"] = rigid_rotation_nullspace(Z, layout)
+        solver_kwargs["nullspace"] = "rigid_rotation"
 
     solver = SelfGravitatingGIASolver(
-        z, approx, layout=layout, dt=dt, bcs=bcs,
-        rotation_moments={"C": C}, Omega_sq=OMEGA_SQ_EARTH,
+        u, psi, approx, dt=dt_function, gravity_bcs=gravity_bcs,
+        bcs=solver_bcs, couplings=couplings,
+        dtn_representation=dtn_representation,
         solver_parameters=solver_parameters,
         solver_parameters_extra=solver_parameters_extra,
         **solver_kwargs)
-    return solver, z, layout, bcs, C
+    return solver, bcs, C
+
+
+def find_coupling(solver, cls):
+    """The coupling of class `cls` of `solver`, or `None`."""
+    found = [c for c in solver.couplings if isinstance(c, cls)]
+    return found[0] if found else None
+
+
+def enclosed_mass(solver):
+    """Everything the 2-D exterior DtN boundary encloses, as a number.
+
+    Read off the two `Real` scalars of the monopole datum that the solver
+    refreshes at the start of every step. Diagnostic only: a float read off
+    them is not on the tape.
+    """
+    gravity = solver.gravity
+    if not gravity.monopole_boundaries:
+        return 0.0
+    return (scalar_value(gravity.source_mass) + scalar_value(gravity.cavity_flux)
+            / (4.0 * np.pi * scalar_value(solver.form.G)))
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +371,7 @@ def deflection_amplitude(solver):
     sub = solver.mesh
     X = SpatialCoordinate(sub)
     n = X / sqrt(dot(X, X))
-    u_r = dot(solver.displacement, n)
+    u_r = dot(solver.u, n)
     dss = Measure("ds", domain=sub)(gen.CURVE_RE)
     length = assemble(Constant(1.0) * dss)
     return 2 * assemble(u_r * cos(LOAD_DEGREE * atan2(X[1], X[0])) * dss) / length
@@ -341,16 +409,14 @@ def fluid_limit_residual(solver, *, with_floor=False):
     reaches zero, and a check written against zero would never pass on any
     mesh.
     """
-    # The *sub-functions* and a plain submesh measure, not `solution_split` and
+    # The solved Functions and a plain submesh measure, not `solver.field` and
     # `dx_m`: this is a diagnostic on a state rather than a residual term, and
     # a `split` of a mixed function spanning two meshes carries both domains,
     # which `project` refuses with "Found multiple domains".
-    u = solver.displacement
-    # One combined (n, d, d) field holds every Maxwell element; the
-    # approximation takes one (d, d) expression per element.
-    from gadopt.internal_variable_equation import history_slices
-    ivs = history_slices(
-        solver.solution.subfunctions[solver.layout.internal_variable_field])
+    u = solver.u
+    # One combined (n, d, d) field holds every Maxwell element (the accepted
+    # history level); the approximation takes one (d, d) expression per element.
+    ivs = history_slices(solver.internal_variables)
     approx = solver.approximation
     s = approx.deviatoric_stress(u, ivs)
     e = approx.deviatoric_strain(u)
@@ -363,7 +429,10 @@ def fluid_limit_residual(solver, *, with_floor=False):
     if not with_floor:
         return residual
 
-    projected = Function(ivs[0].function_space()).project(e)
+    # The space of one Maxwell element of the history: DG tensors of the
+    # history degree on the mantle.
+    space = TensorFunctionSpace(solver.mesh, "DG", solver.history.degree)
+    projected = Function(space).project(e)
     floor = sqrt(assemble(
         inner(scale * (e - projected), scale * (e - projected)) * dxm)) / den
     return residual, floor
@@ -374,23 +443,14 @@ def run_to_steady_state(solver, *, dt, max_steps=200, rtol=1e-8,
     r"""Steps the coupled solver to the fluid limit and reports whether it got there.
 
     **The loop is here and not on the solver class, deliberately.**
-    `SelfGravitatingGIASolver` derives from `CoupledInternalVariableSolver`,
-    which carries the internal variables *inside* the mixed solution and reads
-    their old values through `solution_old_split`; `StokesSolverBase.solve`
-    starts with `solution_old.assign(self.solution)`. So the whole time-stepping
-    convention of that family is *one `solve()` call per step and nothing
-    else* - unlike `InternalVariableSolver`, which keeps the internal variables
-    outside the solution and interpolates them forward by hand. There is no
-    per-step bookkeeping for a driver to get wrong, and adding a loop to the
-    class would only hide that.
-
-    Keeping the solver a single-step object also keeps `dt` honest.
-    `approximation.mu = approximation.effective_viscosity(dt)` is evaluated in
-    the constructor and baked into the Nitsche penalty and the
-    internal-variable equations, so a solver cannot change its own time step -
-    growing `dt` towards the fluid limit means building a new solver and
-    discarding the block-0 factorisation. A single-step object makes that
-    impossible to do by accident.
+    `SelfGravitatingGIASolver.solve` is one time step: it sets the time
+    coefficients, solves, accepts the new history level and writes the
+    displacement and the potential into `u` and `psi`. So the whole
+    time-stepping convention is *one `solve()` call per step and nothing
+    else*. There is no per-step bookkeeping for a driver to get wrong, and
+    adding a loop to the class would only hide that. The time step is a
+    `Real` Function (`build_solver`), so a driver that wants to grow it
+    towards the fluid limit assigns a new value between steps.
 
     The criterion is the relative change of the *surface deflection* between
     consecutive steps. Backward Euler on this linear system relaxes
@@ -617,13 +677,19 @@ def gate_v4(solver):
     constant is a real `Function` of unit degrees of freedom so that the
     gradient is the discrete one and not UFL's symbolic zero.
     """
-    value = assemble(solver.source_mass_form())
-    u = solver.solution_split[solver.layout.displacement]
+    u = solver.field("displacement")
+    dx_m = solver.gravity.dx_m
+    # The constant is a `Function` in the potential's own space assigned 1,
+    # not a `Constant`: `grad` of a `Constant` folds to symbolic zero, and the
+    # gate would then test UFL instead of the discretisation.
+    one = Function(solver.solution_space[solver.potential_index]).assign(1.0)
+    value = assemble(scalar_value(solver.Lambda) * solver.approximation.density
+                     * dot(u, grad(one)) * dx_m)
     # An order-of-magnitude reference: the size of the source's own integrand
     # with the constant removed. `1` is the non-dimensional length scale, so no
     # division is written.
-    scale = float(solver.Lambda) * assemble(
-        solver.approximation.density * sqrt(dot(u, u)) * solver.dx_m)
+    scale = scalar_value(solver.Lambda) * assemble(
+        solver.approximation.density * sqrt(dot(u, u)) * dx_m)
     print("\nV4 - discrete mass conservation of the divergence source")
     print(f"  assemble(source form, v = 1)      {value:.6e}")
     print(f"  scale  Lambda int rho_0 |u| dx    {scale:.6e}")
@@ -634,16 +700,20 @@ def gate_v4(solver):
 
 def report(solver):
     """Diagnostics worth having every run, cheaply."""
-    layout = solver.layout
+    rotation = find_coupling(solver, Rotation)
     print("\nSolved")
-    print(f"  ||u||                             {norm(solver.displacement):.6e}")
-    print(f"  ||psi||                           {norm(solver.potential):.6e}")
+    print(f"  ||u||                             {norm(solver.u):.6e}")
+    print(f"  ||psi||                           {norm(solver.psi):.6e}")
     print(f"  net enclosed mass                 "
-          f"{solver.total_enclosed_mass():.6e}")
-    if layout.rotation:
-        print(f"  rotation                          {solver.rotation_values()}")
-        print(f"  inertia                           "
-              f"{solver.inertia_perturbation()}")
+          f"{enclosed_mass(solver):.6e}")
+    if rotation is not None:
+        # The rotation scalars are `Real` Functions and the inertia
+        # perturbations 0-forms; both are read as numbers here.
+        values = {name: float(f) for name, f in rotation.values().items()}
+        inertia = {name: assemble(form)
+                   for name, form in rotation.inertia_perturbation().items()}
+        print(f"  rotation                          {values}")
+        print(f"  inertia                           {inertia}")
 
     # The geoid at the surface, as an amplitude: the whole point of the project,
     # and the quantity `dphi` feeds into the sea-level equation.
@@ -664,10 +734,12 @@ def report(solver):
         print(f"  geoid at Re: mean                 {mean:.6e}")
         print(f"               cos 2phi amplitude   {cos2:.6e}")
 
+    # Each coefficient is a taped float on the low-rank path and a `Real`
+    # Function on the multiplier path; `float` reads either.
     for bc_id, modes in solver.coefficients().items():
-        strongest = max(modes.items(), key=lambda kv: abs(kv[1]))
+        strongest = max(modes.items(), key=lambda kv: abs(float(kv[1])))
         print(f"  boundary {bc_id}: strongest mode      "
-              f"{strongest[0]} = {strongest[1]:.6e}")
+              f"{strongest[0]} = {float(strongest[1]):.6e}")
 
 
 def main():
@@ -713,19 +785,23 @@ def main():
     monitors = {"snes_monitor": None, "ksp_monitor": None,
                 "snes_converged_reason": None,
                 "ksp_converged_reason": None} if args.monitor else None
-    solver, z, layout, bcs, C = build_solver(
+    solver, bcs, C = build_solver(
         parent, sub, dt=args.dt, truncation=args.truncation,
         rotation=not args.no_rotation, solver_parameters_extra=monitors,
         declare_nullspace=not args.no_nullspace,
         fluid_limit=args.fluid_limit, lam_factor=args.lam_factor)
-    print(f"fields {layout.n_fields}, dim {z.function_space().dim()}, "
-          f"{len(layout.multipliers)} multipliers, "
-          f"{len(layout.rotation)} rotation")
+    rotation = find_coupling(solver, Rotation)
+    n_rotation = len(rotation.values()) if rotation is not None else 0
+    print(f"fields {len(solver.field_names)}, dim {solver.solution_space.dim()}, "
+          f"{len(solver.multiplier_indices)} multipliers, "
+          f"{n_rotation} rotation")
     print(f"B_mu {B_MU}  Lambda {LAMBDA * args.lam_factor}  "
-          f"theta_psi {float(solver.theta_psi):.7f}")
-    if layout.rotation:
+          f"theta_psi {solver.theta_psi_value:.7f}")
+    if rotation is not None:
+        # Row 2 of the closure is the m3 row, the one row of a 2-D annulus.
+        theta_rot = scalar_value(rotation.theta_rot(solver.coupling_context, 2))
         print(f"Omega^2 {OMEGA_SQ_EARTH}  "
-              f"theta_rot(m3) {float(solver._theta_rot(2)):.7e}  C {C:.6f}")
+              f"theta_rot(m3) {theta_rot:.7e}  C {C:.6f}")
 
     if args.gates:
         gate_g0(parent, sub, bcs, dt=args.dt)
@@ -752,13 +828,12 @@ def main():
         # A mixed function spanning two meshes cannot go into one VTKFile: the
         # displacement is the submesh's, the potential the parent's, and the
         # Real fields have no visual output at all.
-        VTKFile(os.path.join(HERE, "selfgrav_gia_mantle.pvd")).write(
-            solver.displacement)
+        VTKFile(os.path.join(HERE, "selfgrav_gia_mantle.pvd")).write(solver.u)
         geoid = Function(
             FunctionSpace(parent, "CG", 2), name="geoid").interpolate(
                 solver.geoid())
         VTKFile(os.path.join(HERE, "selfgrav_gia_parent.pvd")).write(
-            solver.potential, geoid)
+            solver.psi, geoid)
 
 
 if __name__ == "__main__":

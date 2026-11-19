@@ -27,13 +27,18 @@ Each test says in its docstring which wrong implementation it catches.
   whose block 0 is `preonly` + assembled LU. `M0 = A00^{-1}` is then exact and
   linear, so `S` is exact, `P^{-1} A = I` holds to round-off, and the outer
   FGMRES must converge in one iteration. This is where the algebra is pinned.
-  `n = 13` `Real` rows (the DtN multipliers of the multiplier representation).
+  `n = 13` `Real` rows (the DtN multipliers of the multiplier representation);
+  the history is the DG family, a field of block 0.
 - **`iterative`**: the same annulus under
   `selfgrav_dtn_iterative_solver_parameters(condensed=False,
   block0="condensed", dtn_representation="lowrank")`, whose block 0 is
   `gadopt.CondensedBlockPC`. That class counts its own eliminations, one per
   block-0 application, which makes it the independent witness for every count
-  identity. `n = 2` `Real` rows, the same structure as production's 4.
+  identity. `n = 2` `Real` rows (the core pressure and the rotation row
+  `m3`), the same structure as production's 4.
+
+Every solver here is `gadopt.gia_solver.SelfGravitatingGIASolver`, built in
+this file (`build_direct`, `build_coupled`).
 
 **A 2-D annulus, and the 24-cell sphere at the end, establish that the
 construction works, never that it helps.** Nothing here measures wall clock,
@@ -53,14 +58,13 @@ from firedrake.petsc import PETSc
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import test_dtn_multiplier_dense_schur as td  # noqa: E402
-import test_gia_gravity_adjoint_lowrank as tl  # noqa: E402
-import test_gia_lowrank_block0 as tb  # noqa: E402
 from gadopt import CompressibleInternalVariableApproximation  # noqa: E402
 from gadopt import CylindricalDtN, SphericalDtN  # noqa: E402
-from gadopt.gia_gravity import (  # noqa: E402
-    FluidCore, OMEGA_SQ_EARTH, SelfGravitatingGIASolver,
-    self_gravitating_gia_space, selfgrav_dtn_iterative_solver_parameters,
+from gadopt.gia_couplings import FluidCore, Rotation, SurfaceLoad  # noqa: E402
+from gadopt.gia_presets import (  # noqa: E402
+    OMEGA_SQ_EARTH, selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_schur_solver_parameters)
+from gadopt.gia_solver import SelfGravitatingGIASolver  # noqa: E402
 from gadopt.preconditioners import _RebuildRule, _SchurAinvBCache  # noqa: E402
 import gadopt.preconditioners  # noqa: E402
 from gadopt.stokes_integrators import newton_stokes_solver_parameters  # noqa: E402
@@ -120,7 +124,7 @@ def meshes():
     The `.msh` file is cached in `/tmp` under the same name the other suites
     use, so it is generated at most once across the whole test run.
     """
-    return tl.meshes.__wrapped__()
+    return td.meshes.__wrapped__()
 
 
 def ainvb_cache(pc):
@@ -196,9 +200,9 @@ def build_direct(meshes, params, dt=1.0):
     """The coupled solver on the annulus under a `direct`-style dictionary.
 
     Mirrors `test_dtn_multiplier_dense_schur._build_solver` -- same geometry,
-    same constants, same space -- and differs only in taking the solver
-    parameters as an argument, because this file drives several arms of the
-    same fixture.
+    same constants, same space (DG history, multiplier DtN representation,
+    rigid core) -- and differs only in taking the solver parameters as an
+    argument, because this file drives several arms of the same fixture.
 
     Args:
       meshes: the `(parent, sub)` pair.
@@ -206,41 +210,34 @@ def build_direct(meshes, params, dt=1.0):
       dt: the time step, a float or a live `Constant`.
 
     Returns:
-      `(solver, z, layout, Z)`.
+      `(solver, u, psi)`: the solver, and the displacement and potential
+      Functions that it writes after every solve.
     """
     parent, sub = meshes
-    Xp = fd.SpatialCoordinate(parent)
     Xm = fd.SpatialCoordinate(sub)
+    # The DtN rows only; the load and its mass sheet are the SurfaceLoad.
     gravity_bcs = {
         td.CURVE_OUTER: {"dtn": CylindricalDtN(td.TRUNCATION)},
         td.CURVE_INNER: {"dtn": CylindricalDtN(td.TRUNCATION)},
-        td.CURVE_RE: {"interior_sigma":
-                      td.SIGMA_HAT * fd.cos(2 * fd.atan2(Xp[1], Xp[0]))},
     }
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs, rotation=False,
-        fluid_core=False, n_internal_variables=1,
-        condense_internal_variables=True, self_gravity_number=td.LAMBDA)
-    z = fd.Function(Z)
-
     approx = CompressibleInternalVariableApproximation(
         bulk_modulus=1.0, density=1.0, shear_modulus=1.0, viscosity=1.0,
         bulk_shear_ratio=100.0, g=td.G0, B_mu=td.B_MU,
         self_gravity_number=td.LAMBDA)
-
-    dx_m = fd.Measure("dx", domain=sub,
-                      intersect_measures=(fd.Measure("dx", domain=parent),))
-    mechanics_bcs = {
-        td.CURVE_RE: {"normal_stress":
-                      fd.Constant(td.B_MU) * td.SIGMA_HAT
-                      * fd.cos(2 * fd.atan2(Xm[1], Xm[0]))},
-        td.CURVE_RC: {"un": 0.0},
-    }
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    # `sigma = SIGMA_HAT cos(2 theta)`: the traction `B_mu g sigma` and the
+    # mass sheet of the potential row, from one expression.
+    load = SurfaceLoad(
+        boundary=td.CURVE_RE,
+        sigma=td.SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0])),
+        g_surface=td.G0)
     solver = SelfGravitatingGIASolver(
-        z, approx, layout=layout, dt=dt, bcs=mechanics_bcs,
-        rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
-        Omega_sq=OMEGA_SQ_EARTH, solver_parameters=params)
-    return solver, z, layout, Z
+        u, psi, approx, dt=dt, gravity_bcs=gravity_bcs,
+        bcs={td.CURVE_RC: {"un": 0.0}}, couplings=[load],
+        internal_variable_family="DG", dtn_representation="multiplier",
+        solver_parameters=params)
+    return solver, u, psi
 
 
 @pytest.fixture(scope="module")
@@ -250,11 +247,11 @@ def direct(meshes):
     The solve and the reference elimination are the expensive part of this
     section, so the seven tests below share one build.
     """
-    solver, z, layout, Z = build_direct(meshes, direct_params())
+    solver, _, _ = build_direct(meshes, direct_params())
     solver.solve()
-    return {"solver": solver, "z": z, "layout": layout, "Z": Z,
+    return {"solver": solver, "Z": solver.solution_space,
             "pc": outer_pc(solver),
-            "S_ref": td._reference_S(solver, z, Z)}
+            "S_ref": td._reference_S(solver)}
 
 
 def monolithic_field_indices(Z):
@@ -448,7 +445,7 @@ def test_a_rebuilt_cache_still_inverts_the_operator(meshes):
     carries this test for this reason.
     """
     dt = fd.Constant(1.0)
-    solver, _, _, _ = build_direct(meshes, direct_params(), dt=dt)
+    solver, _, _ = build_direct(meshes, direct_params(), dt=dt)
     solver.solve()
     # A live re-assignment, with the solver and its state untouched, which is
     # what a march does between steps.
@@ -501,7 +498,7 @@ def test_a_capped_block_zero_solve_leaves_the_next_step_solvable(meshes):
     params = direct_params(**{"dtn_fieldsplit_0_ksp_type": "fgmres",
                               "dtn_fieldsplit_0_ksp_max_it": 1,
                               "dtn_fieldsplit_0_ksp_rtol": 1e-30})
-    solver, _, _, _ = build_direct(meshes, params, dt=dt)
+    solver, _, _ = build_direct(meshes, params, dt=dt)
 
     for step, value in enumerate((1.0, 2.0, 3.0)):
         dt.assign(value)
@@ -652,6 +649,120 @@ def test_the_outer_krylov_converges_in_one_iteration(direct):
 # ===========================================================================
 # B. The production route in 2-D: counts of block-0 solves
 # ===========================================================================
+#: The outer tolerance of the production preset, tight so that the iteration
+#: counts compared below are counts of the same work and not of two different
+#: stopping points.
+OUTER_RTOL = 1e-10
+#: The block-0 tolerance of the production preset.
+BLOCK0_RTOL = 1e-4
+
+
+def preset(representation, **kwargs):
+    """The two-block iterative preset of the production configuration.
+
+    Block 0 is `gadopt.CondensedBlockPC` on the full (DG history) layout,
+    block 1 the dense complement; `kwargs` override any argument.
+
+    Args:
+      representation: the DtN representation, `"lowrank"` or `"multiplier"`.
+      kwargs: arguments of `selfgrav_dtn_iterative_solver_parameters`.
+
+    Returns:
+      The solver-parameter dictionary.
+    """
+    options = dict(condensed=False, block0="condensed",
+                   block0_rtol=BLOCK0_RTOL, outer_rtol=OUTER_RTOL,
+                   block0_max_it=200, snes_type="ksponly",
+                   multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+                   dtn_representation=representation)
+    options.update(kwargs)
+    return selfgrav_dtn_iterative_solver_parameters(**options)
+
+
+def build_coupled(meshes, representation, *, truncation=3, fluid_core=True,
+                  rotation=True, solver_parameters=None, dt=1.0,
+                  approximation_kwargs=None, shear_modulus=None):
+    """One coupled solver on the annulus, DG history, in either representation.
+
+    The configuration of the production route in 2-D: a fluid core (one
+    `Real` row, the core pressure) and the rotational closure (one `Real`
+    row, `m3`), so `n = 2` on the low-rank representation. The material
+    parameters are `Constant`s, as a driver writes them.
+
+    The surface load is one `SurfaceLoad`,
+    `sigma = SIGMA_HAT (cos(2 theta) + 0.25)` with a fluid core and
+    `SIGMA_HAT cos(2 theta)` with a rigid one. The mean `0.25` gives the
+    fluid-core pressure a uniform load to carry. The solver takes a load once
+    for every use of it, so the mean enters the traction, the potential's
+    mass sheet, the rotation row and the 2-D monopole datum.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      representation: the DtN representation, `"lowrank"` or `"multiplier"`.
+      truncation: the degree of the cylindrical DtN expansion.
+      fluid_core: a `FluidCore` at the CMB, or the rigid core `un = 0`.
+      rotation: the rotational closure, `Rotation(C=..., Omega_sq=...)`.
+      solver_parameters: a dictionary or a preset name; `None` gives
+        `preset(representation)`.
+      dt: the initial time step, held in a `Constant` that a test can assign.
+      approximation_kwargs: extra arguments of the approximation, for example
+        a power law.
+      shear_modulus: the shear modulus, for example a `Real` control on the
+        mantle mesh; `None` gives `Constant(1.0)`.
+
+    Returns:
+      `(solver, u, psi)`: the solver, and the displacement and potential
+      Functions that it writes after every solve.
+    """
+    parent, sub = meshes
+    Xm = fd.SpatialCoordinate(sub)
+    gravity_bcs = {
+        td.CURVE_OUTER: {"dtn": CylindricalDtN(truncation)},
+        td.CURVE_INNER: {"dtn": CylindricalDtN(truncation)},
+    }
+    mean = fd.Constant(0.25) if fluid_core else fd.Constant(0.0)
+    couplings = [SurfaceLoad(
+        boundary=td.CURVE_RE,
+        sigma=td.SIGMA_HAT * (fd.cos(2 * fd.atan2(Xm[1], Xm[0])) + mean),
+        g_surface=td.G0)]
+    mechanics_bcs = {}
+    if fluid_core:
+        couplings.append(FluidCore(boundary=td.CURVE_RC, rho_core=2.0))
+    else:
+        mechanics_bcs[td.CURVE_RC] = {"un": 0.0}
+    if rotation:
+        # The polar moment `C = int r^2 dx` of the unit-density mantle.
+        dx_m = fd.Measure("dx", domain=sub,
+                          intersect_measures=(fd.Measure("dx", domain=parent),))
+        couplings.append(Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m),
+                                  Omega_sq=OMEGA_SQ_EARTH))
+
+    approx = CompressibleInternalVariableApproximation(
+        bulk_modulus=1.0, density=fd.Constant(1.0),
+        shear_modulus=(fd.Constant(1.0) if shear_modulus is None
+                       else shear_modulus),
+        viscosity=fd.Constant(1.0), g=fd.Constant(td.G0),
+        B_mu=fd.Constant(td.B_MU), self_gravity_number=fd.Constant(td.LAMBDA),
+        **(approximation_kwargs or {}))
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    if solver_parameters is None:
+        solver_parameters = preset(representation)
+    solver = SelfGravitatingGIASolver(
+        u, psi, approx, dt=fd.Constant(dt), gravity_bcs=gravity_bcs,
+        bcs=mechanics_bcs, couplings=couplings,
+        internal_variable_family="DG", dtn_representation=representation,
+        solver_parameters=solver_parameters)
+    return solver, u, psi
+
+
+def block0_context(solver):
+    """The `gadopt.CondensedBlockPC` instance block 0 runs, after a solve."""
+    outer = solver.solver.snes.ksp.pc.getPythonContext()
+    block0, _ = outer.pc.getFieldSplitSchurGetSubKSP()
+    return block0.getPC().getPythonContext()
+
+
 def iterative_params(*, ainvb, representation="lowrank", **kwargs):
     """The two-block iterative preset, in one of two arms.
 
@@ -676,7 +787,7 @@ def iterative_params(*, ainvb, representation="lowrank", **kwargs):
     Returns:
       The solver-parameter dictionary.
     """
-    params = tb.preset(
+    params = preset(
         representation,
         multiplier_pc=("none" if ainvb
                        else "gadopt.DtNMultiplierDenseSchurPC"),
@@ -709,7 +820,7 @@ def block_zero_solves(solver):
     counter belongs to a different class from the one under test, which is
     what makes it a witness rather than a restatement.
     """
-    return tb.block0_context(solver).elimination_count
+    return block0_context(solver).elimination_count
 
 
 @pytest.fixture(scope="module")
@@ -717,14 +828,14 @@ def two_arms(meshes):
     """One solve of each arm on the iterative fixture, with their counts."""
     out = {}
     for name, ainvb in (("cached", True), ("reference", False)):
-        solver, z, layout = tb.build(
+        solver, _, _ = build_coupled(
             meshes, "lowrank", solver_parameters=iterative_params(ainvb=ainvb))
         solver.solve()
         out[name] = {
-            "solver": solver, "layout": layout,
+            "solver": solver,
             "iterations": outer_iterations(solver),
             "block0": block_zero_solves(solver),
-            "n": len(layout.real_fields),
+            "n": len(solver.real_indices),
         }
     return out
 
@@ -733,8 +844,8 @@ def test_the_apply_costs_one_block_zero_solve(two_arms):
     """`block-0 solves = n + outer iterations`, and not `n + 2 x outer`.
 
     This is the claim the whole design exists for. Both sides are read from
-    objects outside the class under test: `n` from the space's layout, the
-    iteration count from the outer KSP, the block-0 count from
+    objects outside the class under test: `n` from the solver's `Real`
+    fields, the iteration count from the outer KSP, the block-0 count from
     `CondensedBlockPC`. So a counter the new class keeps about itself cannot
     make this pass.
 
@@ -767,7 +878,7 @@ class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
 
     `selfgrav_dtn_iterative_solver_parameters` never sees the width unless a
     caller passes it, and `SelfGravitatingGIASolver` is the caller that does:
-    it passes `n_real=len(layout.real_fields)`. So the dictionary tests of
+    it passes `n_real=len(solver.real_indices)`. So the dictionary tests of
     `test_dtn_multiplier_pc.py` cannot see what the solver chooses, and these
     two can. Both run one solve and read the objects PETSc built.
     """
@@ -780,12 +891,12 @@ class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
         the complement, and the cached apply must not be installed on the
         outer PC at all.
         """
-        solver, _, layout = tb.build(
+        solver, _, _ = build_coupled(
             meshes, "multiplier", truncation=8, solver_parameters="iterative")
         # The vacuity guard: this truncation must actually be above the limit
         # the preset applies, or the test says nothing.
-        assert len(layout.real_fields) > 16, (
-            f"{len(layout.real_fields)} Real rows is not a wide block, so "
+        assert len(solver.real_indices) > 16, (
+            f"{len(solver.real_indices)} Real rows is not a wide block, so "
             "this test no longer exercises the rule it is about")
         assert "dtn_schur_ainvb" not in solver.solver_parameters
         assert solver.solver_parameters[
@@ -800,16 +911,17 @@ class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
 
         The count identity is the same one `test_the_apply_costs_one_block_
         zero_solve` states, read from objects outside the class under test:
-        `n` from the layout, the iterations from the outer KSP, the block-0
+        `n` from the solver's `Real` fields, the iterations from the outer
+        KSP, the block-0
         count from `gadopt.CondensedBlockPC`. One build, because this is one
         solve at one operator.
         """
-        solver, _, layout = tb.build(
+        solver, _, _ = build_coupled(
             meshes, "lowrank", solver_parameters="iterative")
         assert solver.solver_parameters["dtn_schur_ainvb"] is True
         solver.solve()
         cache = ainvb_cache(outer_pc(solver))
-        n = len(layout.real_fields)
+        n = len(solver.real_indices)
         assert cache.n == n
         assert cache.build_count == 1
         assert block_zero_solves(solver) == n + outer_iterations(solver), (
@@ -866,7 +978,7 @@ def marched(meshes):
     The three rebuild tests below share this one march, because each solve is
     the expensive part and the three claims are about one sequence.
     """
-    solver, z, layout = tb.build(
+    solver, _, _ = build_coupled(
         meshes, "lowrank", solver_parameters=iterative_params(ainvb=True),
         dt=1.0)
 
@@ -883,7 +995,7 @@ def marched(meshes):
     for _ in range(3):
         solver.solve()
     fixed_step_builds = builds()
-    block0_assemblies_before = tb.block0_context(solver).assembly_count
+    block0_assemblies_before = block0_context(solver).assembly_count
 
     solver.dt.assign(2.0)
     solver.solve()
@@ -892,7 +1004,7 @@ def marched(meshes):
         "fixed_step_builds": fixed_step_builds,
         "builds_after_dt_change": builds(),
         "block0_assemblies_before": block0_assemblies_before,
-        "block0_assemblies_after": tb.block0_context(solver).assembly_count,
+        "block0_assemblies_after": block0_context(solver).assembly_count,
     }
 
 
@@ -979,7 +1091,7 @@ def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
     """
     params = iterative_params(ainvb=True, snes_type="newtonls")
     params["gia_rebuild"] = "per_solve"
-    solver, _, _ = tb.build(
+    solver, _, _ = build_coupled(
         meshes, "lowrank", solver_parameters=params,
         approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
     solver.solve()
@@ -993,7 +1105,7 @@ def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
     assert cache.build_count == 2
     # Block 0 follows the same rule: one assembly per solve, not one per
     # Newton iteration.
-    assert tb.block0_context(solver).assembly_count == 2
+    assert block0_context(solver).assembly_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1025,15 +1137,15 @@ def power_law_arm(meshes, rebuild_rule):
       rebuild_rule: `"per_solve"` or `"always"`.
 
     Returns:
-      `(solver, z)` after one solve.
+      `(solver, state)` after one solve, `state` the mixed solution.
     """
     params = iterative_params(ainvb=True, snes_type="newtonls")
     params["gia_rebuild"] = rebuild_rule
-    solver, z, _ = tb.build(
+    solver, _, _ = build_coupled(
         meshes, "lowrank", solver_parameters=params,
         approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
     solver.solve()
-    return solver, z
+    return solver, solver.solution
 
 
 @pytest.fixture(scope="module")
@@ -1041,10 +1153,10 @@ def rebuild_rule_arms(meshes):
     """One power-law solve under each value of `gia_rebuild`."""
     out = {}
     for rule in ("per_solve", "always"):
-        solver, z = power_law_arm(meshes, rule)
+        solver, state = power_law_arm(meshes, rule)
         out[rule] = {
             "solver": solver,
-            "state": z.copy(deepcopy=True),
+            "state": state.copy(deepcopy=True),
             "builds": int(ainvb_cache(outer_pc(solver)).build_count),
             "newton": solver.solver.snes.getIterationNumber(),
         }
@@ -1354,16 +1466,16 @@ def lagged_march(meshes, rebuild_rule, solves, **lag):
         params["gia_rebuild"] = rebuild_rule
     for key, value in lag.items():
         params[f"gia_rebuild_{key}"] = value
-    solver, z, _ = tb.build(
+    solver, _, _ = build_coupled(
         meshes, "lowrank", solver_parameters=params,
         approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
     for _ in range(solves):
         solver.solve()
     return {
         "solver": solver,
-        "state": z.copy(deepcopy=True),
+        "state": solver.solution.copy(deepcopy=True),
         "builds": int(ainvb_cache(outer_pc(solver)).build_count),
-        "block0": int(tb.block0_context(solver).assembly_count),
+        "block0": int(block0_context(solver).assembly_count),
     }
 
 
@@ -1454,7 +1566,7 @@ def test_a_time_step_change_rebuilds_a_lagged_cache(meshes):
     """
     params = iterative_params(ainvb=True, snes_type="newtonls")
     params.update(gia_rebuild="lagged", gia_rebuild_every=100)
-    solver, _, _ = tb.build(
+    solver, _, _ = build_coupled(
         meshes, "lowrank", solver_parameters=params,
         approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
     solver.solve()
@@ -1537,22 +1649,21 @@ import sys
 sys.path.insert(0, {tests!r})
 import gadopt  # noqa
 import firedrake as fd
-import test_gia_gravity_adjoint_lowrank as tl
-import test_gia_lowrank_block0 as tb
+import test_dtn_multiplier_dense_schur as td
 import test_dtn_schur_ainvb as suite
 
 check = sys.argv[1]
-meshes = tl.meshes.__wrapped__()
+meshes = td.meshes.__wrapped__()
 
 if check == "fact_type":
     # `lower` asked for, `full` delivered: the arm would believe it measured
     # a factorisation it did not run.
-    solver, _, _, _ = suite.build_direct(meshes, suite.direct_params(
+    solver, _, _ = suite.build_direct(meshes, suite.direct_params(
         **{{"dtn_pc_fieldsplit_schur_fact_type": "lower"}}))
     call = solver.solve
 elif check == "block1_ksp":
     # A Krylov method configured on a block that is never solved.
-    solver, _, _, _ = suite.build_direct(meshes, suite.direct_params(
+    solver, _, _ = suite.build_direct(meshes, suite.direct_params(
         **{{"dtn_fieldsplit_1_ksp_type": "gmres",
             "dtn_fieldsplit_1_ksp_rtol": 1e-4,
             "dtn_fieldsplit_1_ksp_max_it": 200}}))
@@ -1560,7 +1671,7 @@ elif check == "block1_ksp":
 elif check == "transpose":
     # The production route: block 0 is gadopt.CondensedBlockPC, which has no
     # transpose application, so the transpose apply cannot run.
-    solver, _, _ = tb.build(
+    solver, _, _ = suite.build_coupled(
         meshes, "lowrank", solver_parameters=suite.iterative_params(ainvb=True))
     solver.solve()
     pc = suite.outer_pc(solver)
@@ -1837,14 +1948,14 @@ def test_two_ranks_build_the_same_complement(meshes):
     """
     comm = fd.COMM_WORLD
     assert comm.size == 2, "this test must run on exactly two ranks"
-    solver, _, layout = tb.build(
+    solver, _, _ = build_coupled(
         meshes, "lowrank", solver_parameters=iterative_params(ainvb=True))
     solver.solve()
     assert solver.solver.snes.ksp.getConvergedReason() > 0
 
     cache = ainvb_cache(outer_pc(solver))
     sizes = comm.allgather(int(cache.n))
-    assert sizes[0] == sizes[1] == len(layout.real_fields) > 0, (
+    assert sizes[0] == sizes[1] == len(solver.real_indices) > 0, (
         f"the per-rank Real block size disagrees: {sizes}")
     builds = comm.allgather(int(cache.build_count))
     assert builds[0] == builds[1] == 1, f"build counts disagree: {builds}"
@@ -1881,32 +1992,33 @@ class TestThreeDimensions:
         C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
         out = {}
         for name, ainvb in (("cached", True), ("reference", False)):
-            Z, layout = self_gravitating_gia_space(
-                mesh, mesh,
-                gravity_bcs={"top": {"dtn": SphericalDtN(1)},
-                             "bottom": {"dtn": SphericalDtN(1)}},
-                rotation=True, fluid_core=True,
-                condense_internal_variables=False, n_internal_variables=1,
-                self_gravity_number=tl.LAMBDA,
-                dtn_representation="lowrank")
-            z = fd.Function(Z)
+            # One mesh carries the displacement and the potential.
+            u = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 2),
+                            name="displacement")
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2), name="potential")
             approx = CompressibleInternalVariableApproximation(
                 bulk_modulus=1.0, density=fd.Constant(1.0),
                 shear_modulus=fd.Constant(1.0), viscosity=fd.Constant(1.0),
-                g=fd.Constant(tl.G0), B_mu=fd.Constant(tl.B_MU),
-                self_gravity_number=fd.Constant(tl.LAMBDA))
+                g=fd.Constant(td.G0), B_mu=fd.Constant(td.B_MU),
+                self_gravity_number=fd.Constant(td.LAMBDA))
+            # The traction on the surface carries no mass sheet: a plain
+            # `normal_stress`, which the solver accepts with a warning.
             solver = SelfGravitatingGIASolver(
-                z, approx, layout=layout, dt=fd.Constant(1.0),
-                bcs={"top": {"normal_stress": tl.SIGMA_HAT * X[2]}},
-                rotation_moments={"C": C, "C_minus_A": 0.1 * C},
-                fluid_core=FluidCore(boundary="bottom", rho_core=2.0),
+                u, psi, approx, dt=fd.Constant(1.0),
+                gravity_bcs={"top": {"dtn": SphericalDtN(1)},
+                             "bottom": {"dtn": SphericalDtN(1)}},
+                bcs={"top": {"normal_stress": td.SIGMA_HAT * X[2]}},
+                couplings=[FluidCore(boundary="bottom", rho_core=2.0),
+                           Rotation(C=C, C_minus_A=0.1 * C,
+                                    Omega_sq=OMEGA_SQ_EARTH)],
+                internal_variable_family="DG",
                 solver_parameters=iterative_params(ainvb=ainvb),
                 dtn_representation="lowrank")
             solver.solve()
-            out[name] = {"solver": solver, "z": z, "layout": layout,
+            out[name] = {"solver": solver, "u": u, "psi": psi,
                          "iterations": outer_iterations(solver),
                          "block0": block_zero_solves(solver),
-                         "n": len(layout.real_fields)}
+                         "n": len(solver.real_indices)}
         return out
 
     def test_the_construction_works_on_the_sphere(self, solved):
@@ -1935,10 +2047,9 @@ class TestThreeDimensions:
         # is known to have been built on this geometry.
         cache = ainvb_cache(outer_pc(cached["solver"]))
         assert cache.n == 4 and cache.build_count == 1
-        for field in ("displacement", "potential"):
-            a = cached["z"].subfunctions[getattr(cached["layout"], field)]
-            b = reference["z"].subfunctions[
-                getattr(reference["layout"], field)]
+        for field in ("u", "psi"):
+            a = cached[field]
+            b = reference[field]
             scale = fd.norm(b)
             assert scale > 0.0
             assert fd.norm(a - b) < 1e-8 * scale
@@ -1984,39 +2095,43 @@ def test_the_gradient_is_right_through_the_cached_path(meshes):
     the same linear system to the same outer tolerance, so they agree far
     closer than that.
     """
-    import test_gia_gravity_adjoint_lowrank as suite
-    from pyadjoint import get_working_tape
+    from pyadjoint import (Control, ReducedFunctional, continue_annotation,
+                           get_working_tape, pause_annotation,
+                           stop_annotating)
+    from gadopt.dtn_coupled_adjoint import adjoint_solver as find_adjoint_solver
 
-    value = suite.CONTROL_VALUES["shear_modulus"]
-    original = suite.SelfGravitatingGIASolver
+    _, sub = meshes
     gradients = {}
     cache_builds = None
     for name, ainvb in (("cached", True), ("reference", False)):
         params = iterative_params(ainvb=ainvb, outer_rtol=1e-11)
-
-        class Iterative(original):
-            """The suite builds with `solver_parameters="direct"`; swap ours in."""
-
-            def __init__(self, *args, _params=params, **kwargs):
-                if kwargs.get("solver_parameters") == "direct":
-                    kwargs["solver_parameters"] = _params
-                super().__init__(*args, **kwargs)
-
-        suite.SelfGravitatingGIASolver = Iterative
+        tape = get_working_tape()
+        tape.clear_tape()
+        # The control: the shear modulus, a `Real` Function on the mantle
+        # mesh, at 1. The objective is `J = ||u||^2` over the mantle, on the
+        # low-rank path with a fluid core and no rotation.
+        with stop_annotating():
+            control = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0)
+        continue_annotation()
         try:
-            functional, _, _, _, solver = suite.reduced_functional(
-                meshes, "shear_modulus", value, "lowrank", fluid_core=True)
-            gradients[name] = float(functional.derivative().dat.data_ro[0])
-            if ainvb:
-                # The stock or the cached adjoint solver, whichever this
-                # Firedrake builds.
-                from gadopt.dtn_coupled_adjoint import adjoint_solver as find_adjoint_solver
-                adjoint_solver = find_adjoint_solver(solver.adjoint_block)
-                cache_builds = ainvb_cache(
-                    adjoint_solver.snes.ksp.pc).build_count
-            get_working_tape().clear_tape()
+            m = Control(control)
+            with stop_annotating():
+                solver, u, _ = build_coupled(
+                    meshes, "lowrank", rotation=False,
+                    solver_parameters=params, shear_modulus=control)
+            solver.solve()
+            J = fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
+            functional = ReducedFunctional(J, m)
         finally:
-            suite.SelfGravitatingGIASolver = original
+            pause_annotation()
+        gradients[name] = float(functional.derivative().dat.data_ro[0])
+        if ainvb:
+            # The stock or the cached adjoint solver, whichever this
+            # Firedrake builds.
+            adjoint_solver = find_adjoint_solver(solver.adjoint_block)
+            cache_builds = ainvb_cache(
+                adjoint_solver.snes.ksp.pc).build_count
+        tape.clear_tape()
 
     # Vacuity guard: the gradient comparison alone would pass whether or not
     # the adjoint solve ever reached the cached path.

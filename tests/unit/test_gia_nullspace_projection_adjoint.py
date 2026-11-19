@@ -1,13 +1,13 @@
 """The kernel projection after a coupled GIA solve is on the tape.
 
-`SelfGravitatingGIASolver.solve` removes the declared rigid-rotation kernel
-from the solution after the solve (`project_out_nullspace`). The removal goes
-through the PETSc vector of the solution, so the solver records it with
-`gadopt.nullspaces.project_out_kernel` as a `KernelProjectionBlock`. If it
-were not recorded, a replay of the tape would skip it, and every recorded
-operation that reads the solution afterwards (the copy into `solution_old`,
-the next solve, the functional) would see a value that the replay does not
-reproduce.
+`gadopt.gia_solver.SelfGravitatingGIASolver.solve` removes the declared
+rigid-rotation kernel (`nullspace="rigid_rotation"`) from the solution after
+the solve. The removal goes through the PETSc vector of the solution, so the
+solver records it with `gadopt.nullspaces.project_out_kernel` as a
+`KernelProjectionBlock`. If it were not recorded, a replay of the tape would
+skip it, and every recorded operation that reads the solution afterwards (the
+history update, the copy into `u` and `psi`, the next solve, the functional)
+would see a value that the replay does not reproduce.
 
 What each test checks:
 
@@ -25,11 +25,10 @@ What each test checks:
 - `test_no_block_without_basis_or_annotation`,
   `test_non_orthonormal_basis_is_refused`: the bookkeeping and the refusal of
   a basis that would make the projection non-symmetric.
-- `test_gia_projection_is_recorded`: the coupled solver on the 2-D annulus of
-  `test_gia_gravity_adjoint_lowrank` (low-rank DtN, DG internal variables on
-  the uncondensed layout, a fluid core, `rigid_rotation_nullspace` declared as
-  nullspace and transpose nullspace, three time steps, a spatially varying
-  viscosity as control). Two functionals: a weighted integral of the
+- `test_gia_projection_is_recorded`: the coupled solver on the 2-D annulus
+  (`test_gia_lowrank_block0.build`: low-rank DtN, DG internal variables, a
+  fluid core, the rigid rotation declared as nullspace and transpose
+  nullspace, three time steps, a spatially varying viscosity as control). Two functionals: a weighted integral of the
   tangential surface displacement, which a rigid rotation changes, and the
   strain energy, which it does not. Checks replay against the recording and
   against a fresh run, the guarded Taylor test, and the tangent linear model
@@ -48,14 +47,15 @@ What each test checks:
   from its right-hand side (its transpose nullspace is the forward
   nullspace, whether or not a forward transpose nullspace is declared). The
   multiplier representation keeps the forward slots in its adjoint solve
-  (see `StokesSolverBase.adjoint_solve_keywords`), so there the block
-  adjoint is what removes the kernel when only `nullspace` is declared.
-  The coupled replay tests therefore cannot see the block adjoint on the
-  low-rank path, and this test applies the
+  (see `SelfGravitatingGIASolver.adjoint_solve_keywords`), so there the
+  block adjoint is what removes the kernel when a solve declares only a
+  forward nullspace. The coupled replay tests therefore cannot see the block
+  adjoint on the low-rank path, and this test applies the
   block's adjoint directly and checks it against its tangent with a
   dot-product test.
 """
 
+import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
 import firedrake as fd
 import numpy as np
 import pytest
@@ -71,15 +71,14 @@ from firedrake.adjoint import (
 
 from gadopt import KernelProjectionBlock, project_out_kernel
 
-# The annulus, the coupled solver builder and the tape fixture of the low-rank
-# acceptance suite. Importing the fixtures makes pytest use them here.
-from test_gia_gravity_adjoint_lowrank import (  # noqa: F401
-    CURVE_RE,
-    _build,
+# The annulus, its constants, the coupled solver builder, the iterative preset
+# and the tape fixture. Importing the fixtures makes pytest use them here.
+from test_gia_gravity import CURVE_RE, meshes  # noqa: F401
+from test_gia_lowrank_block0 import (  # noqa: F401
+    build,
     clean_tape,
-    meshes,
-    preset_parameters,
 )
+from test_gia_lowrank_block0 import preset as iterative_parameters
 from test_gravity_adjoint import assert_taylor_with_guards
 
 #: Number of coupled time steps. Three steps give two steps in which the
@@ -131,7 +130,7 @@ def _small_forward(Z, nullspace, control, project=True):
     The vector block is a nonlinear function of the control with a large
     rotation part, so the projection removes a large component and the
     Hessian of the functional is not zero. The copy after the projection is
-    the pattern of the solver (`solution_old.assign(solution)`).
+    the pattern of the solver (`u.assign(...)` after the projection).
 
     Args:
       Z: the mixed space.
@@ -284,7 +283,7 @@ def test_non_orthonormal_basis_is_refused():
 # ---------------------------------------------------------------------------
 # Part 2: the coupled GIA solver
 # ---------------------------------------------------------------------------
-def _functionals(z, layout, sub):
+def _functionals(solver, sub):
     """The tangential surface functional and the strain energy.
 
     `J_tan` weights the tangential displacement on the surface with
@@ -299,14 +298,13 @@ def _functionals(z, layout, sub):
     `J_str` does not see the projection.
 
     Args:
-      z: the mixed solution.
-      layout: its `GIASpaceLayout`.
+      solver: the solver; the functionals read its mixed solution.
       sub: the mantle mesh.
 
     Returns:
       A dict with the two functionals.
     """
-    u = fd.split(z)[layout.displacement]
+    u = solver.field("displacement")
     X = fd.SpatialCoordinate(sub)
     n = fd.FacetNormal(sub)
     tangent = fd.as_vector([-n[1], n[0]])
@@ -329,26 +327,28 @@ def _gia_forward(meshes, viscosity, seed, preset, n_steps=N_STEPS):  # noqa: F81
       seed: amplitude of a rigid rotation put into the initial
         displacement, relative to 1e-3 (the size of the response to the
         load). Zero for a start from rest.
-      preset: `"direct"` or `"iterative"`, as in the low-rank suite.
+      preset: `"direct"`, or `"iterative"` for the two-block iterative
+        preset with `gadopt.CondensedBlockPC` on block 0 at an outer
+        tolerance of 1e-11.
       n_steps: the number of time steps.
 
     Returns:
-      `(functionals, solver, layout)`.
+      `(functionals, solver)`.
     """
     parent, sub = meshes
+    X = fd.SpatialCoordinate(sub)
     with stop_annotating():
-        solver, z, layout = _build(
-            meshes, "viscosity", viscosity, "lowrank", fluid_core=True,
-            declare_nullspace=True, declare_transpose_nullspace=True,
-            solver_parameters=preset_parameters(preset, "lowrank",
-                                                fluid_core=True))
-        if seed:
-            X = fd.SpatialCoordinate(sub)
-            z.subfunctions[layout.displacement].interpolate(
-                seed * 1e-3 * fd.as_vector([-X[1], X[0]]))
+        solver, _, _ = build(
+            meshes, "lowrank", fluid_core=True, rotation=False,
+            approximation_kwargs={"viscosity": viscosity},
+            nullspace="rigid_rotation",
+            solver_parameters=("direct" if preset == "direct" else
+                               iterative_parameters("lowrank", outer_rtol=1e-11)),
+            initial_displacement=(seed * 1e-3 * fd.as_vector([-X[1], X[0]])
+                                  if seed else None))
     for _ in range(n_steps):
         solver.solve()
-    return _functionals(z, layout, sub), solver, layout
+    return _functionals(solver, sub), solver
 
 
 def _control_and_direction(sub):
@@ -375,7 +375,7 @@ def test_gia_projection_is_recorded(meshes, preset, seed):  # noqa: F811
     continue_annotation()
     try:
         control = Control(viscosity)
-        recorded, solver, _ = _gia_forward(meshes, viscosity, seed, preset)
+        recorded, solver = _gia_forward(meshes, viscosity, seed, preset)
     finally:
         pause_annotation()
 
@@ -385,8 +385,8 @@ def test_gia_projection_is_recorded(meshes, preset, seed):  # noqa: F811
     assert len(projections) == N_STEPS
 
     with stop_annotating():
-        fresh, _, _ = _gia_forward(meshes, viscosity.copy(deepcopy=True),
-                                   seed, preset)
+        fresh, _ = _gia_forward(meshes, viscosity.copy(deepcopy=True),
+                                seed, preset)
 
     for name, J in recorded.items():
         rf = ReducedFunctional(J, control)
@@ -457,22 +457,22 @@ def test_gia_block_adjoint_on_kernel_seed(meshes):  # noqa: F811
     continue_annotation()
     try:
         Control(viscosity)
-        _, solver, layout = _gia_forward(meshes, viscosity, 0.0, "direct",
-                                         n_steps=1)
+        _, solver = _gia_forward(meshes, viscosity, 0.0, "direct", n_steps=1)
     finally:
         pause_annotation()
     block = next(b for b in tape.get_blocks()
                  if isinstance(b, KernelProjectionBlock))
     dependency, output = block.get_dependencies()[0], block.get_outputs()[0]
-    basis = list(solver.nullspace)[layout.displacement]
+    disp = solver.field_index["displacement"]
+    basis = list(solver.nullspace)[disp]
     kernel = basis._vecs[0].dat.data_ro.copy()
     Z = solver.solution.function_space()
 
     rng = np.random.default_rng(20261118)
     seed = fd.Cofunction(Z.dual())
-    _random_fill(seed, rng, kernel, layout.displacement, 100.0)
+    _random_fill(seed, rng, kernel, disp, 100.0)
     tangent = fd.Function(Z)
-    _random_fill(tangent, rng, kernel, layout.displacement, 100.0)
+    _random_fill(tangent, rng, kernel, disp, 100.0)
 
     # Adjoint of the block applied to `seed`.
     tape.reset_variables()
@@ -484,7 +484,6 @@ def test_gia_block_adjoint_on_kernel_seed(meshes):  # noqa: F811
     block.evaluate_tlm()
     projected_tangent = output.tlm_value
 
-    disp = layout.displacement
     seed_content = abs(float(np.vdot(kernel, seed.subfunctions[disp].dat.data_ro)))
     left_content = abs(float(np.vdot(kernel, adjoint.subfunctions[disp].dat.data_ro)))
     print(f"    [block adjoint] kernel content of the seed {seed_content:.3e}, "

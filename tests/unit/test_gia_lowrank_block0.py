@@ -27,28 +27,48 @@ Most runs are on the 2-D annulus. `TestThreeDimensions` at the end is the
 24-cell cubed sphere: it proves that the construction works on extruded
 hexahedra with a fluid core and the rotational closure, and nothing about
 speed. Every 3-D performance number comes from Gadi.
-"""
-import sys
-from pathlib import Path
 
+The solver is `gadopt.gia_solver.SelfGravitatingGIASolver`. `build` here is
+also the annulus builder of `test_gia_nullspace_projection_adjoint.py`.
+"""
 import numpy as np
 import pytest
 
 import gadopt  # noqa: F401  - before firedrake, as the drivers do
 import firedrake as fd
+from firedrake.adjoint import (
+    Control,
+    ReducedFunctional,
+    continue_annotation,
+    get_working_tape,
+    pause_annotation,
+    stop_annotating,
+)
+from pyadjoint.tape import annotate_tape
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-import test_gia_gravity_adjoint_lowrank as tl  # noqa: E402
-from gadopt.approximations import (  # noqa: E402
-    CompressibleInternalVariableApproximation)
-from gadopt import SphericalDtN  # noqa: E402
-from gadopt.gia_gravity import (  # noqa: E402
-    FluidCore, SelfGravitatingGIASolver, self_gravitating_gia_space,
-    selfgrav_dtn_iterative_solver_parameters)
-from gadopt.internal_variable_equation import history_slices  # noqa: E402
-from gadopt.preconditioners import (  # noqa: E402
+from gadopt import CylindricalDtN, SphericalDtN
+from gadopt.approximations import CompressibleInternalVariableApproximation
+from gadopt.gia_couplings import FluidCore, Rotation, SurfaceLoad
+from gadopt.gia_presets import (
+    OMEGA_SQ_EARTH,
+    selfgrav_dtn_iterative_solver_parameters,
+)
+from gadopt.gia_solver import SelfGravitatingGIASolver
+from gadopt.internal_variable_equation import history_slices
+from gadopt.preconditioners import (
     LowRankPotentialPC, _LowRankPotentialOperator)
+
+# The annulus of the GIA suite (dr 0.2, 32 cells around) and its constants.
+from test_gia_gravity import (  # noqa: F401  (the fixture is used by name)
+    B_MU,
+    CURVE_INNER,
+    CURVE_OUTER,
+    CURVE_RC,
+    CURVE_RE,
+    LAMBDA,
+    SIGMA_HAT,
+    meshes,
+)
 
 
 # The outer tolerance is tight so that the iteration counts compared below are
@@ -56,11 +76,30 @@ from gadopt.preconditioners import (  # noqa: E402
 OUTER_RTOL = 1e-10
 BLOCK0_RTOL = 1e-4
 
+#: The reference gravity of the annulus, units of g_bar.
+G0 = 1.0
+#: The DtN truncation of the gradient tests.
+TRUNCATION = 3
+#: The central-difference step and the bar of the fresh-solve gradient check.
+#: With an outer tolerance of 1e-11 the quotient's floor is about 1e-11
+#: (round-off 1e-16/1e-5, truncation eps^2 ~ 1e-10), five orders under the
+#: bar.
+FD_EPS = 1e-5
+FD_GATE = 1e-6
+#: The low-rank term must carry at least this share of the residual norm
+#: before a gradient through it is believed (`b_liveness`).
+B_LIVENESS_FLOOR = 1e-3
 
-@pytest.fixture(scope="module")
-def meshes():
-    """The annulus pair of the low-rank suite, built once for this module."""
-    return tl.meshes.__wrapped__()
+
+@pytest.fixture(autouse=True)
+def clean_tape():
+    """A fresh tape for every test, and annotation off afterwards."""
+    tape = get_working_tape()
+    tape.clear_tape()
+    yield tape
+    if annotate_tape():
+        pause_annotation()
+    tape.clear_tape()
 
 
 def preset(representation, **kwargs):
@@ -76,53 +115,80 @@ def preset(representation, **kwargs):
 
 def build(meshes, representation, *, truncation=3, fluid_core=True,
           rotation=True, solver_parameters=None, dt=1.0,
-          approximation_kwargs=None):
+          approximation_kwargs=None, nullspace=None,
+          initial_displacement=None):
     """One coupled solver on the annulus, in either representation.
 
     Mirrors `NOTES/measurements/lowrank-iterative/lowrank_block0.py`, which is
     where the measurements in the finding come from, so that a count asserted
     here is the count recorded there.
+
+    The surface load is `SIGMA_HAT (cos 2 theta + m)` on Re, with the mean
+    `m = 0.25` on a fluid core and 0 on a rigid one. With a fluid core the
+    mean is the part of the load that the core pressure balances, so the
+    core-pressure row carries a nonzero value. The load is one `SurfaceLoad`:
+    the traction `B_mu g sigma` on the mechanics, the mass sheet in the
+    potential row, the rotation row and the 2-D monopole datum.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      representation: `"multiplier"` or `"lowrank"`.
+      truncation: the DtN truncation of both boundaries.
+      fluid_core: a `FluidCore` of density 2 at the CMB, or a rigid core
+        (`un = 0`).
+      rotation: the rotational closure with the polar moment of the mantle.
+      solver_parameters: a complete dictionary or a preset name; `None` is
+        `preset(representation)`.
+      dt: the time step, held in a `Constant`.
+      approximation_kwargs: approximation settings on top of the defaults;
+        a control (`shear_modulus`, `viscosity`) goes in here.
+      nullspace: the `nullspace` argument of the solver.
+      initial_displacement: UFL interpolated into the displacement before
+        construction, so it is the initial state of the first solve.
+
+    Returns:
+      `(solver, u, psi)`.
     """
     parent, sub = meshes
-    Xp = fd.SpatialCoordinate(parent)
     Xm = fd.SpatialCoordinate(sub)
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    if initial_displacement is not None:
+        u.interpolate(initial_displacement)
     gravity_bcs = {
-        tl.CURVE_OUTER: {"dtn": tl.CylindricalDtN(truncation)},
-        tl.CURVE_INNER: {"dtn": tl.CylindricalDtN(truncation)},
-        tl.CURVE_RE: {"interior_sigma":
-                      tl.SIGMA_HAT * fd.cos(2 * fd.atan2(Xp[1], Xp[0]))},
+        CURVE_OUTER: {"dtn": CylindricalDtN(truncation)},
+        CURVE_INNER: {"dtn": CylindricalDtN(truncation)},
     }
-    surface_load = fd.Constant(tl.B_MU) * tl.SIGMA_HAT * (
-        fd.cos(2 * fd.atan2(Xm[1], Xm[0]))
-        + (fd.Constant(0.25) if fluid_core else fd.Constant(0.0)))
-    mechanics_bcs = {tl.CURVE_RE: {"normal_stress": surface_load}}
-    if not fluid_core:
-        mechanics_bcs[tl.CURVE_RC] = {"un": 0.0}
+    mean = fd.Constant(0.25) if fluid_core else fd.Constant(0.0)
+    couplings = [SurfaceLoad(
+        boundary=CURVE_RE, g_surface=G0,
+        sigma=SIGMA_HAT * (fd.cos(2 * fd.atan2(Xm[1], Xm[0])) + mean))]
+    mechanics_bcs = {}
+    if fluid_core:
+        couplings.append(FluidCore(boundary=CURVE_RC, rho_core=2.0))
+    else:
+        mechanics_bcs[CURVE_RC] = {"un": 0.0}
+    if rotation:
+        dx_m = fd.Measure("dx", domain=sub,
+                          intersect_measures=(fd.Measure("dx", domain=parent),))
+        couplings.append(Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m),
+                                  Omega_sq=OMEGA_SQ_EARTH))
 
-    lam = fd.Constant(tl.LAMBDA)
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-        fluid_core=fluid_core, n_internal_variables=1,
-        condense_internal_variables=False, self_gravity_number=lam,
-        dtn_representation=representation)
-    z = fd.Function(Z)
-    approx = CompressibleInternalVariableApproximation(
+    settings = dict(
         bulk_modulus=1.0, density=fd.Constant(1.0),
         shear_modulus=fd.Constant(1.0), viscosity=fd.Constant(1.0),
-        g=fd.Constant(tl.G0), B_mu=fd.Constant(tl.B_MU),
-        self_gravity_number=lam, **(approximation_kwargs or {}))
-    dx_m = fd.Measure("dx", domain=sub,
-                      intersect_measures=(fd.Measure("dx", domain=parent),))
+        g=fd.Constant(G0), B_mu=fd.Constant(B_MU),
+        self_gravity_number=fd.Constant(LAMBDA))
+    settings.update(approximation_kwargs or {})
+    approx = CompressibleInternalVariableApproximation(**settings)
     if solver_parameters is None:
         solver_parameters = preset(representation)
     solver = SelfGravitatingGIASolver(
-        z, approx, layout=layout, dt=fd.Constant(dt), bcs=mechanics_bcs,
-        rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
-        fluid_core=(FluidCore(boundary=tl.CURVE_RC, rho_core=2.0)
-                    if fluid_core else None),
-        solver_parameters=solver_parameters,
-        dtn_representation=representation)
-    return solver, z, layout
+        u, psi, approx, dt=fd.Constant(dt), gravity_bcs=gravity_bcs,
+        bcs=mechanics_bcs, couplings=couplings,
+        dtn_representation=representation, nullspace=nullspace,
+        solver_parameters=solver_parameters)
+    return solver, u, psi
 
 
 def block0_context(solver):
@@ -203,12 +269,11 @@ def test_the_outer_count_matches_the_multiplier_path(meshes, truncation):
     than written down here, because the count is a property of the mesh and
     the tolerances and would otherwise drift into a number nobody can justify.
     """
-    reference, z_ref, layout = build(meshes, "multiplier",
-                                     truncation=truncation)
+    reference, *fields_ref = build(meshes, "multiplier", truncation=truncation)
     reference.solve()
     multiplier_its = outer_iterations(reference)
 
-    solver, z, _ = build(meshes, "lowrank", truncation=truncation)
+    solver, *fields = build(meshes, "lowrank", truncation=truncation)
     solver.solve()
 
     assert outer_iterations(solver) <= multiplier_its + 1
@@ -216,10 +281,9 @@ def test_the_outer_count_matches_the_multiplier_path(meshes, truncation):
     # The same state, to the outer tolerance. This is the check that the
     # iteration count above was bought with the right operator and not by
     # preconditioning a different problem.
-    for field in (layout.displacement, layout.potential):
-        reference_norm = fd.norm(z_ref.subfunctions[field])
-        assert abs(fd.norm(z.subfunctions[field]) - reference_norm) < (
-            1e-8 * reference_norm)
+    for field, field_ref in zip(fields, fields_ref):
+        reference_norm = fd.norm(field_ref)
+        assert abs(fd.norm(field) - reference_norm) < 1e-8 * reference_norm
 
 
 def test_the_update_is_applied_inside_block_zero(meshes):
@@ -362,19 +426,18 @@ def test_two_ranks_match_the_multiplier_path(meshes):
     """
     comm = fd.COMM_WORLD
     assert comm.size == 2, "this test must run on exactly two ranks"
-    reference, z_ref, layout = build(meshes, "multiplier")
+    reference, *fields_ref = build(meshes, "multiplier")
     reference.solve()
-    solver, z, _ = build(meshes, "lowrank")
+    solver, *fields = build(meshes, "lowrank")
     solver.solve()
     assert solver.solver.snes.ksp.getConvergedReason() > 0
     assert outer_iterations(solver) <= outer_iterations(reference) + 1
     condensed = block0_context(solver)
     assert isinstance(potential_pc(condensed), LowRankPotentialPC)
     assert potential_pc(condensed).column_builds == 1
-    for field in (layout.displacement, layout.potential):
-        reference_norm = fd.norm(z_ref.subfunctions[field])
-        assert abs(fd.norm(z.subfunctions[field]) - reference_norm) < (
-            1e-8 * reference_norm)
+    for field, field_ref in zip(fields, fields_ref):
+        reference_norm = fd.norm(field_ref)
+        assert abs(fd.norm(field) - reference_norm) < 1e-8 * reference_norm
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +484,7 @@ def test_a_capped_outer_solve_lets_newton_finish(meshes):
     FLOOR: the state agrees to 1e-3 relative, because Newton stops at
     `snes_rtol = 1e-4` on the residual and not at the outer tolerance.
     """
-    reference, z_ref, layout = build(
+    reference, *fields_ref = build(
         meshes, "lowrank",
         solver_parameters=preset("lowrank", snes_type="newtonls"))
     reference.solve()
@@ -433,15 +496,15 @@ def test_a_capped_outer_solve_lets_newton_finish(meshes):
 
     accepted = preset("lowrank", snes_type="newtonls", outer_max_it=2,
                       outer_accept_capped=True)
-    solver, z, _ = build(meshes, "lowrank", solver_parameters=accepted)
+    solver, *fields = build(meshes, "lowrank", solver_parameters=accepted)
     solver.solve()
     snes = solver.solver.snes
     assert snes.getConvergedReason() > 0
     # Vacuity guard: the cap really bound, so the option did something.
     assert snes.getLinearSolveIterations() >= 2 * snes.getIterationNumber()
-    for field in (layout.displacement, layout.potential):
-        reference_norm = fd.norm(z_ref.subfunctions[field])
-        difference = fd.norm(z.subfunctions[field] - z_ref.subfunctions[field])
+    for field, field_ref in zip(fields, fields_ref):
+        reference_norm = fd.norm(field_ref)
+        difference = fd.norm(field - field_ref)
         assert difference < 1e-3 * reference_norm
 
 
@@ -474,7 +537,8 @@ def test_a_low_rank_preset_on_a_multiplier_solver_is_refused(meshes):
     Without the check the failure is inside `PCSetUp`, reported as an
     unhandled Python exception under a PETSc error code.
     """
-    with pytest.raises(ValueError, match="carries no such update"):
+    with pytest.raises(ValueError,
+                       match="LowRankPotentialPC needs dtn_representation='lowrank'"):
         build(meshes, "multiplier", solver_parameters=preset("lowrank"))
 
 
@@ -486,7 +550,8 @@ def test_a_multiplier_preset_on_a_low_rank_solver_is_refused(meshes):
     method getinfo for Mat of type python`, an unhandled exception under a
     PETSc error code. The early check gives a message that names the fix.
     """
-    with pytest.raises(ValueError, match="plain GAMG"):
+    with pytest.raises(ValueError,
+                       match="low-rank solver needs gadopt.LowRankPotentialPC"):
         build(meshes, "lowrank", solver_parameters=preset("multiplier"))
 
 
@@ -577,40 +642,114 @@ def test_the_transpose_application_is_refused(meshes):
 #
 # Both are checked here by running the gradient, because both failures were
 # raised errors and a test that only builds the solver would not see them.
+def shear_modulus_forward(meshes, representation, control, solver_parameters):
+    """One solve with `shear_modulus = control`; returns `(J, solver)`.
+
+    The fluid-core annulus without rotation, the configuration of the
+    low-rank adjoint suite. `J = ||u||^2` over the mantle reads the solution
+    through the UFL component of the mixed solution, a reference the tape
+    owns. The solver is built without annotation; the caller decides whether
+    the solve and the functional are taped.
+    """
+    _, sub = meshes
+    with stop_annotating():
+        solver, _, _ = build(
+            meshes, representation, truncation=TRUNCATION, fluid_core=True,
+            rotation=False, solver_parameters=solver_parameters,
+            approximation_kwargs={"shear_modulus": control})
+    solver.solve()
+    u = solver.field("displacement")
+    return fd.assemble(fd.inner(u, u) * fd.dx(domain=sub)), solver
+
+
+def b_liveness(solver, representation):
+    """Assert that the DtN coupling carries a share of the residual.
+
+    On the low-rank arm, `||theta B z|| / ||F(z)||` at the converged state
+    must exceed `B_LIVENESS_FLOOR`; on the multiplier arm the norm of the DtN
+    multipliers takes the place of `theta B z`. A gradient test on an inert
+    coupling passes while measuring nothing.
+    """
+    residual = fd.assemble(solver.F)
+    with residual.dat.vec_ro as rv:
+        fnorm = rv.norm()
+    assert fnorm > 0.0, "residual is identically zero: nothing to measure"
+    z = solver.solution
+    if representation == "multiplier":
+        num = float(np.sqrt(sum(
+            float(np.sum(z.subfunctions[i].dat.data_ro ** 2))
+            for i in solver.multiplier_indices)))
+    else:
+        # `mult(x, y, theta=None)` gives `theta B0 z` on the monolithic mixed
+        # vector, the vector `F` is assembled on.
+        Bz = fd.Function(z.function_space())
+        with z.dat.vec_ro as xv, Bz.dat.vec_rw as yv:
+            solver.dtn_operator.mult(xv, yv, theta=None)
+            num = yv.norm()
+    assert num / fnorm > B_LIVENESS_FLOOR, (
+        f"the DtN coupling is inert: ratio {num / fnorm:.3e}")
+
+
+def shear_modulus_reduced_functional(meshes, representation, solver_parameters):
+    """Tape one solve with a `Real` shear-modulus control of value 1.
+
+    Returns:
+      `(Jhat, control, direction, J, solver)`; the direction is 0.1.
+    """
+    _, sub = meshes
+    R = fd.FunctionSpace(sub, "R", 0)
+    with stop_annotating():
+        control = fd.Function(R).assign(1.0)
+        direction = fd.Function(R).assign(0.1)
+    tape = get_working_tape()
+    tape.clear_tape()
+    continue_annotation()
+    try:
+        m = Control(control)
+        J, solver = shear_modulus_forward(meshes, representation, control,
+                                          solver_parameters)
+        Jhat = ReducedFunctional(J, m)
+    finally:
+        pause_annotation()
+    b_liveness(solver, representation)
+    return Jhat, control, direction, J, solver
+
+
 @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
 def test_the_gradient_is_right_through_this_preset(meshes, representation):
     """Gradient and Taylor rate, with the iterative preset in place of LU.
 
     The bars are the low-rank suite's own: the adjoint gradient within 1e-6
-    relative of a finite difference of fresh solves, and a Taylor rate of at
-    least 1.99.
+    relative of a central difference of fresh solves, and a Taylor rate of
+    at least 1.99. The fresh solves rebuild the solver at each control, so
+    a channel the tape misses shows here; a Taylor test replays the tape and
+    cannot see it.
     """
-    import test_gia_gravity_adjoint_lowrank as suite
     from pyadjoint import taylor_test
 
+    _, sub = meshes
     iterative = preset(representation, outer_rtol=1e-11)
-    original = suite.SelfGravitatingGIASolver
+    Jhat, control, direction, _, taped = shear_modulus_reduced_functional(
+        meshes, representation, iterative)
+    gradient = float(Jhat.derivative().dat.data_ro[0])
+    get_working_tape().clear_tape()
 
-    class Iterative(original):
-        """The suite builds with `solver_parameters="direct"`; swap in ours."""
+    def at(value):
+        with stop_annotating():
+            m = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(value)
+            J, fresh = shear_modulus_forward(meshes, representation, m, iterative)
+            assert fresh is not taped
+            return float(J)
 
-        def __init__(self, *args, **kwargs):
-            if kwargs.get("solver_parameters") == "direct":
-                kwargs["solver_parameters"] = iterative
-            super().__init__(*args, **kwargs)
+    difference = (at(1.0 + FD_EPS) - at(1.0 - FD_EPS)) / (2 * FD_EPS)
+    relative = abs(gradient - difference) / abs(difference)
+    print(f"    [fresh-FD/{representation}] adjoint {gradient:.10e} "
+          f"fresh {difference:.10e} rel {relative:.3e}")
+    assert relative < FD_GATE
 
-    suite.SelfGravitatingGIASolver = Iterative
-    try:
-        value = suite.CONTROL_VALUES["shear_modulus"]
-        _, _, relative = suite.gradient_against_fresh_solves(
-            meshes, "shear_modulus", value, representation, fluid_core=True)
-        assert relative < 1e-6
-
-        functional, control, direction, _, _ = suite.reduced_functional(
-            meshes, "shear_modulus", value, representation, fluid_core=True)
-        assert taylor_test(functional, control, direction) > 1.99
-    finally:
-        suite.SelfGravitatingGIASolver = original
+    Jhat, control, direction, _, _ = shear_modulus_reduced_functional(
+        meshes, representation, iterative)
+    assert taylor_test(Jhat, control, direction) > 1.99
 
 
 # ---------------------------------------------------------------------------
@@ -635,56 +774,42 @@ class TestThreeDimensions:
     """
 
     @staticmethod
-    def space(mesh, representation):
-        """The mixed space of `test_gia_nested_condensation.TestThreeDimensions.fluid_core_space`.
-
-        Rebuilt here with the representation as an argument and the mesh
-        passed in, so that both representations sit on one mesh object.
-
-        Args:
-          mesh: the extruded cubed sphere.
-          representation: `"multiplier"` or `"lowrank"`.
-
-        Returns:
-          `(Z, layout)`.
-        """
-        return self_gravitating_gia_space(
-            mesh, mesh,
-            gravity_bcs={"top": {"dtn": SphericalDtN(1)},
-                         "bottom": {"dtn": SphericalDtN(1)}},
-            rotation=True, fluid_core=True, condense_internal_variables=False,
-            n_internal_variables=1, self_gravity_number=tl.LAMBDA,
-            dtn_representation=representation)
-
-    @staticmethod
-    def solver(z, layout, mesh, C, representation):
-        """A Newtonian fluid-core solver on that space, under the iterative preset.
+    def solver(mesh, C, representation):
+        """A Newtonian fluid-core solver on the sphere, under the iterative preset.
 
         The CMB of a radially extruded sphere is its bottom surface, so the
-        fluid core is on `"bottom"`, and there is no `un` there because the
-        constructor refuses both on one boundary.
+        fluid core is on `"bottom"`, and there is no `un` there because a
+        fluid core and `un` on one boundary are refused. The surface load is
+        a traction with no mass sheet (`normal_stress` in `bcs`), which the
+        solver accepts with a warning.
 
         Args:
-          z: the mixed solution `Function` to solve into.
-          layout, mesh, C: the space's layout, the mesh and the polar moment.
+          mesh: the extruded cubed sphere, both the mechanics and the
+            potential mesh.
+          C: the polar moment.
           representation: `"multiplier"` or `"lowrank"`.
 
         Returns:
-          The `SelfGravitatingGIASolver`.
+          `(solver, u, psi)`.
         """
         X = fd.SpatialCoordinate(mesh)
+        u = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 2), name="displacement")
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2), name="potential")
         approx = CompressibleInternalVariableApproximation(
             bulk_modulus=1.0, density=fd.Constant(1.0),
             shear_modulus=fd.Constant(1.0), viscosity=fd.Constant(1.0),
-            g=fd.Constant(tl.G0), B_mu=fd.Constant(tl.B_MU),
-            self_gravity_number=fd.Constant(tl.LAMBDA))
-        return SelfGravitatingGIASolver(
-            z, approx, layout=layout, dt=fd.Constant(1.0),
-            bcs={"top": {"normal_stress": tl.SIGMA_HAT * X[2]}},
-            rotation_moments={"C": C, "C_minus_A": 0.1 * C},
-            fluid_core=FluidCore(boundary="bottom", rho_core=2.0),
+            g=fd.Constant(G0), B_mu=fd.Constant(B_MU),
+            self_gravity_number=fd.Constant(LAMBDA))
+        solver = SelfGravitatingGIASolver(
+            u, psi, approx, dt=fd.Constant(1.0),
+            gravity_bcs={"top": {"dtn": SphericalDtN(1)},
+                         "bottom": {"dtn": SphericalDtN(1)}},
+            bcs={"top": {"normal_stress": SIGMA_HAT * X[2]}},
+            couplings=[FluidCore(boundary="bottom", rho_core=2.0),
+                       Rotation(C=C, C_minus_A=0.1 * C, Omega_sq=OMEGA_SQ_EARTH)],
             solver_parameters=preset(representation),
             dtn_representation=representation)
+        return solver, u, psi
 
     @pytest.fixture(scope="class")
     def solved(self):
@@ -697,11 +822,10 @@ class TestThreeDimensions:
         C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
         out = {}
         for representation in ("multiplier", "lowrank"):
-            Z, layout = self.space(mesh, representation)
-            z = fd.Function(Z)
-            solver = self.solver(z, layout, mesh, C, representation)
+            with pytest.warns(UserWarning, match="normal_stress in bcs"):
+                solver, u, psi = self.solver(mesh, C, representation)
             solver.solve()
-            out[representation] = (solver, z, layout)
+            out[representation] = (solver, u, psi)
         return out
 
     def test_it_matches_the_multiplier_representation(self, solved):
@@ -712,20 +836,22 @@ class TestThreeDimensions:
         of 1e-8 is the one the multiplier 3-D test uses against its direct
         route, three to four orders above what is measured.
         """
-        reference, z_ref, layout_ref = solved["multiplier"]
-        solver, z, layout = solved["lowrank"]
+        reference, *fields_ref = solved["multiplier"]
+        solver, *fields = solved["lowrank"]
         for s in (reference, solver):
             assert s.solver.snes.getConvergedReason() > 0
             assert s.solver.snes.ksp.getConvergedReason() > 0
-        for field_ref, field in ((layout_ref.displacement, layout.displacement),
-                                 (layout_ref.potential, layout.potential)):
-            ref = fd.norm(z_ref.subfunctions[field_ref])
+        for field, field_ref in zip(fields, fields_ref):
+            ref = fd.norm(field_ref)
             assert ref > 0.0
-            assert fd.norm(z.subfunctions[field]
-                           - z_ref.subfunctions[field_ref]) < 1e-8 * ref
-        m_ref, = history_slices(
-            z_ref.subfunctions[layout_ref.internal_variable_field])
-        m, = history_slices(z.subfunctions[layout.internal_variable_field])
+            assert fd.norm(field - field_ref) < 1e-8 * ref
+
+        def history(s):
+            # The solved DG history unknown of the mixed solution.
+            return s.solution.subfunctions[s.field_index["history"]]
+
+        m_ref, = history_slices(history(reference))
+        m, = history_slices(history(solver))
         assert fd.norm(m - m_ref) < 1e-8 * fd.norm(m_ref)
 
     def test_the_outer_count_matches_the_multiplier_representation(self, solved):
@@ -773,11 +899,8 @@ def test_the_adjoint_solve_carries_both_augmentations(meshes):
     zero, that is if both operators carry `B`. The type is asserted after the
     solve so that a solver that quietly reverted to `ksponly` cannot pass.
     """
-    import test_gia_gravity_adjoint_lowrank as suite
-
-    value = suite.CONTROL_VALUES["shear_modulus"]
-    functional, _, _, _, solver = suite.reduced_functional(
-        meshes, "shear_modulus", value, "lowrank", fluid_core=True)
+    functional, _, _, _, solver = shear_modulus_reduced_functional(
+        meshes, "lowrank", "direct")
     # The adjoint solver of the adopted block: the stock block's
     # `_ad_solvers` entry, or the cached adjoint solver with Firedrake PR 4638.
     from gadopt.dtn_coupled_adjoint import adjoint_solver as find_adjoint_solver

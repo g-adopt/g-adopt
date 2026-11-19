@@ -1,25 +1,37 @@
 """The monolithic self-gravitating GIA solver: space layout, constants, gates.
 
 What these tests are for, and what they are not. They cover the *structure* of
-`gadopt.gia_gravity` - the space layout the preconditioner depends on, the two
-row-scaling constants, the identity that makes the rotational body force the
-transpose of the inertia row, the assertions that turn silently-empty measures
-into exceptions, and V4 - and they run the solver once end to end on a small
-mesh to show that it solves at all.
+`gadopt.gia_solver.SelfGravitatingGIASolver` and its couplings - the space
+layout the preconditioner depends on, the two row-scaling constants, the
+identity that makes the rotational body force the transpose of the inertia
+row, the assertions that turn silently-empty measures into exceptions, and V4 -
+and they run the solver once end to end on a small mesh to show that it solves
+at all.
 
 They are **not** the physics gates. V1 (per-block Jacobian symmetry), V3'
 (the potential against a closed form), V7 (the rotational closure), V8 (the
-geoid sign), V9 and V9b (the fluid limit) live elsewhere and are the next piece
-of work. The one gate here is V4, because it is a statement about the *form*
-rather than about a solution and belongs with the code that writes the form.
+geoid sign), V9 and V9b (the fluid limit) live elsewhere. The one gate here is
+V4, because it is a statement about the *form* rather than about a solution
+and belongs with the code that writes the form.
 
 The mesh is gmsh, and it has to be: the geometry stands the DtN boundaries off
 from the sources, which puts the Earth's surface *inside* the domain as a
 tagged interior facet, and only gmsh can tag one. It is coarse - the tests here
 are structural, and nothing in them is a convergence statement.
+
+## The module helpers other test files use
+
+`meshes`, `approximation`, `gravity_bcs`, `mechanics_bcs`, the constants and
+`REAL_BLOCK_ON_PARENT_FACETS` keep the meaning they have always had: the
+`gravity_bcs` sheet and the `mechanics_bcs` traction describe the load as the
+earlier solver took it, in two places. The new solver takes the load once, as a
+`SurfaceLoad` coupling, and refuses a sheet in its gravity conditions; `build`,
+`TestFluidCore.build_fluid` and `TestCentreOfMassFrame.build` construct the new
+solver that way and return `(solver, u, psi)`.
 """
 
 import tempfile
+import types
 from pathlib import Path
 
 import firedrake as fd
@@ -31,21 +43,24 @@ from gadopt import (
     CompressibleInternalVariableApproximation,
     CoupledInternalVariableSolver,
     CylindricalDtN,
-    SelfGravitatingGIASolver,
     rigid_body_modes,
-    rigid_rotation_nullspace,
-    self_gravitating_gia_space,
 )
-from gadopt.gia_gravity import (
+from gadopt.gia_couplings import (
+    CentreOfMass,
+    FluidCore,
+    Rotation,
+    SurfaceLoad,
+)
+from gadopt.gia_presets import (
     NULL_COUPLING_ROW_SCALE,
     OMEGA_SQ_EARTH,
-    FluidCore,
     selfgrav_dtn_iterative_solver_parameters,
-    selfgrav_dtn_schur_solver_parameters,
 )
+from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.internal_variable_equation import history_slices
 from gadopt.momentum_equation import rotational_potential
 from gadopt.nullspaces import apply_kernel_projection
+from gadopt.utility import scalar_value
 
 # Road-map §2.2 with the production constants.
 B_MU = 1.2769
@@ -116,7 +131,12 @@ def meshes():
 
 
 def approximation(**kwargs):
-    """A fresh approximation every time; the solver mutates `mu` in place."""
+    """A fresh approximation every time.
+
+    The earlier solver, which other test files still build, writes `mu` into
+    the approximation it is given; the new one does not, but a fresh object per
+    solver keeps both safe.
+    """
     settings = dict(
         bulk_modulus=1.0, density=1.0, shear_modulus=1.0, viscosity=1.0,
         g=1.0, B_mu=B_MU, self_gravity_number=LAMBDA)
@@ -125,6 +145,13 @@ def approximation(**kwargs):
 
 
 def gravity_bcs(parent, *, truncation=3, sheet=True):
+    """The potential's conditions: DtN on both stand-off circles.
+
+    `sheet=True` adds the `cos 2 phi` load as an `interior_sigma` on Re, the
+    form the earlier solver takes. The new solver refuses a sheet here; it
+    takes the load as a `SurfaceLoad` coupling, so `build` passes
+    `sheet=False`.
+    """
     X = fd.SpatialCoordinate(parent)
     bcs = {
         CURVE_OUTER: {"dtn": CylindricalDtN(truncation)},
@@ -137,6 +164,12 @@ def gravity_bcs(parent, *, truncation=3, sheet=True):
 
 
 def mechanics_bcs(sub):
+    """The rigid core (`un = 0` on Rc) and the `cos 2 phi` traction on Re.
+
+    The traction is the weight `B_mu g sigma` of the load with `g = 1`, the
+    form the earlier solver takes. The new solver writes that traction itself
+    from a `SurfaceLoad`, and refuses a `normal_stress` on the same boundary.
+    """
     Xm = fd.SpatialCoordinate(sub)
     return {
         CURVE_RC: {"un": 0.0},
@@ -150,37 +183,98 @@ def relative_difference(a, b):
     return fd.norm(a - b) / fd.norm(b)
 
 
-def build(meshes, *, rotation=True, n_internal_variables=1, truncation=3,
-          condensed=False, approximation_kwargs=None, declare_nullspace=False,
-          dtn_representation=None, **kwargs):
-    """The annulus solver. `dtn_representation=None` is the library default
-    (low-rank on the full layout, multiplier on the condensed one); a test
-    about one representation names it."""
+def load_density(mesh, degree=2):
+    """The prescribed surface density `SIGMA_HAT cos(degree phi)`, UFL on `mesh`."""
+    X = fd.SpatialCoordinate(mesh)
+    return SIGMA_HAT * fd.cos(degree * fd.atan2(X[1], X[0]))
+
+
+def new_fields(meshes):
+    """Fresh `(u, psi)`: P2 displacement on the mantle, P2 potential on the parent.
+
+    The degrees are those the earlier space factory used by default.
+    """
     parent, sub = meshes
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs(parent, truncation=truncation),
-        rotation=rotation, n_internal_variables=n_internal_variables,
-        condense_internal_variables=condensed,
-        self_gravity_number=LAMBDA, dtn_representation=dtn_representation)
-    z = fd.Function(Z)
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    return u, psi
+
+
+def polar_moment(meshes):
+    """`C = int_mantle r^2 dx`, the polar moment of the unit-density mantle (2-D)."""
+    parent, sub = meshes
     Xm = fd.SpatialCoordinate(sub)
     dx_m = fd.Measure("dx", domain=sub,
                       intersect_measures=(fd.Measure("dx", domain=parent),))
-    C = fd.assemble(fd.dot(Xm, Xm) * dx_m)
+    return fd.assemble(fd.dot(Xm, Xm) * dx_m)
+
+
+def coupling(solver, cls):
+    """The one coupling of class `cls` that `solver` holds."""
+    found = [c for c in solver.couplings if isinstance(c, cls)]
+    assert len(found) == 1, f"{len(found)} couplings of class {cls.__name__}"
+    return found[0]
+
+
+def build(meshes, *, rotation=True, truncation=3, sheet=True,
+          approximation_kwargs=None, declare_nullspace=False,
+          dtn_representation="lowrank", couplings=(), **kwargs):
+    """The annulus solver: rigid core, `cos 2 phi` load on Re, optional rotation.
+
+    Args:
+      meshes: the `(parent, sub)` pair of the module fixture.
+      rotation: add the `Rotation` coupling (`m3` only, in 2-D) with the
+        mantle's polar moment and the Earth's `Omega^2`.
+      truncation: the `CylindricalDtN` truncation on both DtN circles.
+      sheet: `True` gives the load as a `SurfaceLoad`, which loads the
+        mechanics, the potential and the rotation row. `False` gives the
+        traction of `mechanics_bcs` alone, a load with no mass (the solver
+        warns); a test that compares with a mechanics-only solver uses it.
+      approximation_kwargs: settings merged into `approximation`.
+      declare_nullspace: declare the rigid rotation, `nullspace="rigid_rotation"`.
+      dtn_representation: `"lowrank"` (the default of the solver) or
+        `"multiplier"`.
+      couplings: further couplings, appended to those above.
+      kwargs: passed to `SelfGravitatingGIASolver` (`solver_parameters`,
+        `solver_parameters_extra`, `scaling_factor`, `nullspace`,
+        `internal_variable_family`, ...). The Quadrature family refuses the
+        rigid core's `un` condition; build a fluid core for it
+        (`TestFluidCore.build_fluid`).
+
+    Returns:
+      `(solver, u, psi)`, with `u` and `psi` the Functions the solver writes
+      after every solve.
+    """
+    parent, sub = meshes
+    u, psi = new_fields(meshes)
+    if sheet:
+        bcs = {CURVE_RC: {"un": 0.0}}
+        # `g_surface = 1` writes the traction `B_mu SIGMA_HAT cos 2phi` of
+        # `mechanics_bcs` and puts the same density in the potential row.
+        loads = [SurfaceLoad(boundary=CURVE_RE, sigma=load_density(sub),
+                             g_surface=1.0)]
+    else:
+        bcs = mechanics_bcs(sub)
+        loads = []
+    if rotation:
+        # `Omega_sq` is the earlier solver's default, now required.
+        loads.append(Rotation(C=polar_moment(meshes), Omega_sq=OMEGA_SQ_EARTH))
     if declare_nullspace:
-        kwargs.setdefault("nullspace", rigid_rotation_nullspace(Z, layout))
+        kwargs.setdefault("nullspace", "rigid_rotation")
     solver = SelfGravitatingGIASolver(
-        z, approximation(**(approximation_kwargs or {})), layout=layout,
-        dt=1.0, bcs=mechanics_bcs(sub), rotation_moments={"C": C}, **kwargs)
-    return solver, z, layout
+        u, psi, approximation(**(approximation_kwargs or {})), dt=1.0,
+        gravity_bcs=gravity_bcs(parent, truncation=truncation, sheet=False),
+        bcs=bcs, couplings=[*loads, *couplings],
+        dtn_representation=dtn_representation, **kwargs)
+    return solver, u, psi
 
 
 @pytest.fixture(scope="module")
 def solved(meshes):
     """One coupled solve, shared by the tests that only read a result."""
-    solver, z, layout = build(meshes)
+    solver, u, psi = build(meshes)
     solver.solve()
-    return solver, z, layout
+    return solver, u, psi
 
 
 class TestSpaceLayout:
@@ -188,20 +282,21 @@ class TestSpaceLayout:
 
     def test_field_order_and_meshes(self, meshes):
         parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-            n_internal_variables=2, self_gravity_number=LAMBDA)
+        solver, _, _ = build(
+            meshes, approximation_kwargs={"shear_modulus": [.4, .6],
+                                          "viscosity": [.12, .6]})
+        Z = solver.solution_space
+        index = solver.field_index
 
-        assert layout.displacement == 0
+        assert index["displacement"] == 0
         # One combined field holds both Maxwell elements, shape (n, d, d).
-        assert layout.internal_variables == (1,)
-        assert layout.internal_variable_field == 1
-        assert layout.potential == 2
-        assert len(Z) == layout.n_fields
-        assert Z[layout.displacement].mesh() is sub
-        assert Z[layout.internal_variable_field].mesh() is sub
-        assert Z[layout.internal_variable_field].value_shape == (2, 2, 2)
-        assert Z[layout.potential].mesh() is parent
+        assert index["history"] == 1
+        assert index["potential"] == 2
+        assert len(Z) == len(solver.field_names)
+        assert Z[index["displacement"]].mesh() is sub
+        assert Z[index["history"]].mesh() is sub
+        assert Z[index["history"]].value_shape == (2, 2, 2)
+        assert Z[index["potential"]].mesh() is parent
 
     def test_real_fields_are_contiguous_and_last(self, meshes):
         """The invariant `DtNTwoBlockSchurPC.initialize` asserts.
@@ -209,54 +304,50 @@ class TestSpaceLayout:
         Anything else would leave sub-fields out of both of its two blocks,
         which is a silently wrong split rather than an error.
         """
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-            self_gravity_number=LAMBDA)
+        solver, _, _ = build(meshes, rotation=True)
+        Z = solver.solution_space
 
         real = [i for i, V in enumerate(Z)
                 if V.ufl_element().family() == "Real"]
         assert real == list(range(real[0], len(Z)))
-        assert tuple(real) == layout.real_fields
+        assert tuple(real) == solver.real_indices
         assert real[0] > 0
         # Multipliers first, rotation last, and the rotation scalars are the
         # very end of the space.
-        assert layout.multipliers == tuple(real[:len(layout.multipliers)])
-        assert sorted(layout.rotation.values()) == real[len(layout.multipliers):]
+        n_mult = len(solver.multiplier_indices)
+        assert solver.multiplier_indices == tuple(real[:n_mult])
+        assert [solver.field_index["m3"]] == real[n_mult:]
 
     @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
     @pytest.mark.parametrize("rotation", [False, True])
-    @pytest.mark.parametrize("condensed", [False, True])
+    @pytest.mark.parametrize("family", ["DG", "Quadrature"])
     def test_fluid_core_field_order(self, meshes, representation, rotation,
-                                    condensed):
+                                    family):
         """The core pressure stays between the DtN and rotation `Real` fields."""
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
-            rotation=rotation, condense_internal_variables=condensed,
-            self_gravity_number=LAMBDA,
+        parent, _ = meshes
+        solver, _, _ = TestFluidCore.build_fluid(
+            meshes, rotation=rotation, internal_variable_family=family,
             dtn_representation=representation)
+        Z = solver.solution_space
+        index = solver.field_index
 
-        assert layout.core_pressure is not None
-        assert Z[layout.core_pressure].mesh() is parent
-        assert Z[layout.core_pressure].ufl_element().family() == "Real"
-        assert layout.core_pressure == (
-            layout.multipliers[-1] + 1 if layout.multipliers
-            else layout.potential + 1)
-        if layout.rotation:
-            assert layout.core_pressure < min(layout.rotation.values())
+        core = index["core_pressure"]
+        assert Z[core].mesh() is parent
+        assert Z[core].ufl_element().family() == "Real"
+        assert core == (solver.multiplier_indices[-1] + 1
+                        if solver.multiplier_indices
+                        else index["potential"] + 1)
+        if rotation:
+            assert core < index["m3"]
         real = tuple(i for i, V in enumerate(Z)
                      if V.ufl_element().family() == "Real")
-        assert real == layout.real_fields
+        assert real == solver.real_indices
         assert real == tuple(range(real[0], len(Z)))
-        assert len(Z) == layout.n_fields
+        assert len(Z) == len(solver.field_names)
 
     def test_no_core_pressure_by_default(self, meshes):
-        parent, sub = meshes
-        _, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent),
-            self_gravity_number=LAMBDA)
-        assert layout.core_pressure is None
+        solver, _, _ = build(meshes, rotation=False)
+        assert "core_pressure" not in solver.field_index
 
     def test_real_spaces_live_on_the_parent(self, meshes):
         """Spike S2's decision, and it is not cosmetic.
@@ -267,26 +358,23 @@ class TestSpaceLayout:
         needs a specially intersected `ds`, and an intersected measure that
         finds nothing assembles to zero without raising.
         """
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-            self_gravity_number=LAMBDA)
-        for i in layout.real_fields:
-            assert Z[i].mesh() is parent
+        parent, _ = meshes
+        solver, _, _ = build(meshes, rotation=True,
+                             dtn_representation="multiplier")
+        assert solver.real_indices
+        for i in solver.real_indices:
+            assert solver.solution_space[i].mesh() is parent
 
     def test_multiplier_count_comes_from_the_boundaries(self, meshes):
         """`2M` on the exterior boundary, `2M + 1` on the interior one.
 
         And the side is *measured* from the mesh rather than declared, which is
-        why the space cannot be built before the boundary conditions are known
-        and why the factory takes them.
+        why the space cannot be built before the boundary conditions are known.
         """
-        parent, sub = meshes
         for M in (3, 5):
-            _, layout = self_gravitating_gia_space(
-                sub, parent, gravity_bcs=gravity_bcs(parent, truncation=M),
-                self_gravity_number=LAMBDA, dtn_representation="multiplier")
-            assert len(layout.multipliers) == (2 * M) + (2 * M + 1)
+            solver, _, _ = build(meshes, rotation=False, truncation=M,
+                                 dtn_representation="multiplier")
+            assert len(solver.multiplier_indices) == (2 * M) + (2 * M + 1)
 
     def test_rotation_is_named_m3_in_2d(self, meshes):
         """Index **2** of the rotation triple, never "the first rotation field".
@@ -297,48 +385,50 @@ class TestSpaceLayout:
         silently reindex on promotion to 3-D and every test reading a rotation
         coefficient by position would change meaning.
         """
-        parent, sub = meshes
-        _, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-            self_gravity_number=LAMBDA)
-        assert set(layout.rotation) == {"m3"}
-        assert layout.rotation_slots() == (None, None, layout.rotation["m3"])
+        solver, _, _ = build(meshes, rotation=True)
+        rotation = coupling(solver, Rotation)
+        names = set(solver.field_names)
+        assert "m3" in names and not {"m1", "m2"} & names
+        assert set(rotation.values()) == {"m3"}
+        assert rotation.slots(solver.coupling_context) == (None, None, "m3")
 
     def test_no_rotation_by_default(self, meshes):
-        parent, sub = meshes
-        _, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent),
-            self_gravity_number=LAMBDA)
-        assert layout.rotation == {}
-        assert layout.rotation_slots() == (None, None, None)
+        solver, _, _ = build(meshes, rotation=False)
+        assert not {"m1", "m2", "m3"} & set(solver.field_names)
+        assert not [c for c in solver.couplings if isinstance(c, Rotation)]
 
     def test_parent_must_declare_cartesian(self, meshes):
         """G-ADOPT reads `mesh.cartesian` everywhere and a file mesh has none.
 
-        Refused in the factory, where both meshes are in scope and the message
+        Refused at construction, where both meshes are in scope and the message
         can say what to set, rather than several frames deep in
         `upward_normal`.
         """
         _, sub = meshes
         undeclared = fd.UnitSquareMesh(2, 2)
         assert not hasattr(undeclared, "cartesian")
+        u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2))
+        psi = fd.Function(fd.FunctionSpace(undeclared, "CG", 2))
         with pytest.raises(ValueError, match="cartesian"):
-            self_gravitating_gia_space(
-                sub, undeclared, gravity_bcs={}, self_gravity_number=LAMBDA)
+            SelfGravitatingGIASolver(u, psi, approximation(), dt=1.0,
+                                     gravity_bcs={})
 
     def test_submesh_inherits_cartesian_from_the_parent(self, meshes):
         """`Submesh` does not inherit it, and the failure is far from the cause.
 
         Without it the first thing that asks the submesh whether it is
         Cartesian raises `AttributeError: 'MeshTopology' object has no
-        attribute 'cartesian'` from inside `upward_normal`.
+        attribute 'cartesian'` from inside `upward_normal`. The fresh submesh
+        is curved as the fixture's is, because the solver measures the
+        cross-mesh entity maps at construction and refuses a straight-sided
+        submesh.
         """
-        parent, sub = meshes
-        fresh = fd.Submesh(parent, 2, CELL_MANTLE)
+        from validate_selfgrav_annulus import curve_mesh
+
+        parent, _ = meshes
+        fresh = curve_mesh(fd.Submesh(parent, 2, CELL_MANTLE))
         assert not hasattr(fresh, "cartesian")
-        self_gravitating_gia_space(
-            fresh, parent, gravity_bcs=gravity_bcs(parent),
-            self_gravity_number=LAMBDA)
+        build((parent, fresh), rotation=False)
         assert fresh.cartesian == parent.cartesian
 
 
@@ -359,10 +449,10 @@ class TestScalingConstants:
     def test_theta_psi_carries_the_residual_scaling_factor(self, meshes):
         """The part neither design document mentions.
 
-        `CoupledInternalVariableSolver` multiplies the whole momentum residual
-        by `scaling_factor`, the two body forces included, so a `theta_psi`
-        that ignored it would make the coupled Jacobian asymmetric by exactly
-        that factor - which reads as a sign error in the new code.
+        The solver multiplies the whole momentum residual by `scaling_factor`,
+        the two body forces included, so a `theta_psi` that ignored it would
+        make the coupled Jacobian asymmetric by exactly that factor - which
+        reads as a sign error in the new code.
         """
         solver, _, _ = build(meshes, scaling_factor=3.0)
         assert float(solver.theta_psi) == pytest.approx(
@@ -377,13 +467,17 @@ class TestScalingConstants:
         the row with the negative scaling.
         """
         solver, _, _ = build(meshes)
+        rotation = coupling(solver, Rotation)
+        ctx = solver.coupling_context
         expected = -B_MU * OMEGA_SQ_EARTH
-        assert float(solver._theta_rot(2)) == pytest.approx(expected, rel=1e-14)
-        assert float(solver._theta_rot(2)) < 0.0
-        assert float(solver._theta_rot(0)) == pytest.approx(
+        assert float(rotation.theta_rot(ctx, 2)) == pytest.approx(
+            expected, rel=1e-14)
+        assert float(rotation.theta_rot(ctx, 2)) < 0.0
+        assert float(rotation.theta_rot(ctx, 0)) == pytest.approx(
             +B_MU * OMEGA_SQ_EARTH, rel=1e-14)
         # And it is not theta_psi, by three orders of magnitude.
-        assert abs(float(solver._theta_rot(2))) < 1e-2 * float(solver.theta_psi)
+        assert abs(float(rotation.theta_rot(ctx, 2))) < 1e-2 * float(
+            solver.theta_psi)
 
     def test_omega_sq_earth(self):
         """`Omega^2 L / g_bar`, recorded nowhere else."""
@@ -404,7 +498,7 @@ class TestInertiaTranspose:
     def test_polynomial_matches_the_rotational_potential_in_2d(self, meshes):
         _, sub = meshes
         X = fd.SpatialCoordinate(sub)
-        p3 = SelfGravitatingGIASolver.inertia_polynomial(2, X)
+        p3 = Rotation.inertia_polynomial(2, X)
         psi_rot = rotational_potential([1.0], sub, Omega_sq=1.0)
         assert fd.assemble((psi_rot - p3) ** 2 * fd.dx(domain=sub)) < 1e-24
 
@@ -415,27 +509,22 @@ class TestInertiaTranspose:
         X = fd.SpatialCoordinate(mesh)
         for i, m in enumerate([(1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
                                (0.0, 0.0, 1.0)]):
-            p_i = SelfGravitatingGIASolver.inertia_polynomial(i, X)
+            p_i = Rotation.inertia_polynomial(i, X)
             psi_rot = rotational_potential(list(m), mesh, Omega_sq=1.0)
             assert fd.assemble((psi_rot - p_i) ** 2 * fd.dx(domain=mesh)) < 1e-24
-
-    def test_2d_refuses_a_polar_wander_component(self):
-        mesh = fd.UnitSquareMesh(1, 1)
-        X = fd.SpatialCoordinate(mesh)
-        with pytest.raises(ValueError, match="third coordinate"):
-            SelfGravitatingGIASolver.inertia_polynomial(0, X)
 
     def test_inertia_of_a_cos2_sheet_vanishes(self, solved):
         """`int sigma (x^2 + y^2) dS` over a circle kills a `cos 2phi` load.
 
-        Not a tautology: it is the sheet half of `dI_33`, it goes through
-        `sheet_integral` on a tagged *interior* facet, and a sheet written on
-        the wrong kind of measure would give the same zero - which is why the
-        measure assertions exist separately.
+        Not a tautology: it is the sheet half of `dI_33`, it is integrated on
+        the load's measure, a tagged *interior* facet of the parent, and a
+        sheet written on the wrong kind of measure would give the same zero -
+        which is why the measure assertions exist separately.
         """
         solver, _, _ = solved
-        assert abs(solver.inertia_perturbation()["dI_33"]) < 1e-14
-        assert abs(solver.rotation_values()["m3"]) < 1e-14
+        rotation = coupling(solver, Rotation)
+        assert abs(fd.assemble(rotation.inertia_perturbation()["dI_33"])) < 1e-14
+        assert abs(float(rotation.values()["m3"])) < 1e-14
 
 
 class TestGeometryAssertions:
@@ -444,19 +533,21 @@ class TestGeometryAssertions:
     def test_a_sheet_on_the_wrong_kind_of_facet_is_refused(self, meshes):
         """Re is an interior facet of the parent; `sigma` would find nothing.
 
-        A load sheet written the shipped exterior-facet way contributes
-        nothing, warns rather than raising, and the solve converges with the
-        potential missing the largest single term in the geoid. Nothing
-        downstream looks: a sheet is a right-hand side with no Jacobian
-        contribution, so a symmetry test cannot see it, and two solvers sharing
-        the form omit it identically.
+        A load sheet written the exterior-facet way contributes nothing, warns
+        rather than raising, and the solve converges with the potential
+        missing the largest single term in the geoid. Nothing downstream
+        looks: a sheet is a right-hand side with no Jacobian contribution, so
+        a symmetry test cannot see it, and two solvers sharing the form omit
+        it identically. The boundary form refuses it while it is built, before
+        the solver's own refusal of any sheet in its gravity conditions.
         """
         parent, sub = meshes
         bcs = gravity_bcs(parent, sheet=False)
         bcs[CURVE_RE] = {"sigma": SIGMA_HAT}
+        u, psi = new_fields(meshes)
         with pytest.raises(ValueError, match="sheet measure is empty"):
-            self_gravitating_gia_space(
-                sub, parent, gravity_bcs=bcs, self_gravity_number=LAMBDA)
+            SelfGravitatingGIASolver(u, psi, approximation(), dt=1.0,
+                                     gravity_bcs=bcs, bcs=mechanics_bcs(sub))
 
     def test_dtn_boundary_measures_match_their_radii(self, solved):
         """What `check_geometry` asserts, restated so a reader can see it.
@@ -480,7 +571,7 @@ class TestGeometryAssertions:
         solver, _, _ = solved
         probe = fd.Function(
             fd.FunctionSpace(solver.potential_mesh, "CG", 1)).assign(1.0)
-        area = fd.assemble(probe * solver.dx_m)
+        area = fd.assemble(probe * solver.gravity.dx_m)
         assert area == pytest.approx(np.pi * (RE**2 - RC**2), rel=1e-3)
 
     def test_intersected_parent_measure_covers_the_whole_parent(self, solved):
@@ -491,105 +582,59 @@ class TestGeometryAssertions:
         solve with the stand-off buffer and both DtN boundaries absent.
         """
         solver, _, _ = solved
-        whole = fd.assemble(fd.Constant(1.0) * solver.dx_parent)
-        assert fd.assemble(fd.Constant(1.0) * solver.dx_g) == pytest.approx(
-            whole, rel=1e-12)
+        whole = fd.assemble(fd.Constant(1.0) * solver.gravity.dx_parent)
+        assert fd.assemble(fd.Constant(1.0) * solver.gravity.dx_g) \
+            == pytest.approx(whole, rel=1e-12)
         assert whole == pytest.approx(np.pi * ((2 * RE) ** 2 - (0.5 * RC) ** 2),
                                       rel=1e-3)
 
-    def test_lambda_must_agree_between_factory_and_approximation(self, meshes):
-        """The one error class a symmetry test provably cannot see.
+    def test_a_solver_without_a_declared_lambda_is_refused(self, meshes):
+        """The self-gravity number comes from the approximation alone.
 
-        The factory turns `Lambda` into the boundary form's `G = Lambda/(4 pi)`
-        because the sheets carry an explicit `4 pi G sigma` while the volume
-        source has it absorbed. A mismatch scales the sheet against the volume
-        source by a constant and the geoid is wrong by that factor with a
-        perfectly plausible magnitude.
+        The boundary form's `G = Lambda / (4 pi)` and the volume source's
+        `Lambda` are one number read from one place, so a missing one is
+        refused at construction instead of leaving the sheets unscaled.
         """
         parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent),
-            self_gravity_number=LAMBDA)
-        with pytest.raises(ValueError, match="self_gravity_number disagrees"):
+        u, psi = new_fields(meshes)
+        with pytest.raises(ValueError, match="self_gravity_number"):
             SelfGravitatingGIASolver(
-                fd.Function(Z), approximation(self_gravity_number=2 * LAMBDA),
-                layout=layout, dt=1.0, bcs=mechanics_bcs(sub))
-
-    def test_a_sheet_without_a_declared_lambda_is_refused(self, meshes):
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent))
-        with pytest.raises(ValueError, match="mass sheets"):
-            SelfGravitatingGIASolver(
-                fd.Function(Z), approximation(), layout=layout, dt=1.0,
-                bcs=mechanics_bcs(sub))
+                u, psi, approximation(self_gravity_number=None), dt=1.0,
+                gravity_bcs=gravity_bcs(parent, sheet=False),
+                bcs={CURVE_RC: {"un": 0.0}})
 
 
 class TestConstruction:
-    """What the base classes do on a mixed space spanning two meshes."""
+    """What the solver builds on a mixed space spanning two meshes."""
 
     def test_mesh_is_the_mechanics_mesh(self, solved):
-        """`StokesSolverBase.__init__` writes a `MeshSequenceGeometry` here.
+        """The solver's `mesh` is the displacement's mesh, not the parent.
 
-        It succeeds and then `upward_normal` raises one line later, so
-        re-assigning after `super().__init__` is not an option - it never
-        returns. The property discards anything that is not a real mesh.
+        G-ADOPT's terms read `solver.mesh` for the normals and the measures
+        of the momentum equation, which live on the mantle.
         """
-        solver, _, _ = solved
+        solver, u, _ = solved
         assert isinstance(solver.mesh, fd.MeshGeometry)
-        assert solver.mesh is solver.layout.mechanics_mesh
+        assert solver.mesh is u.function_space().mesh()
         assert solver.mesh is not solver.potential_mesh
-
-    @pytest.mark.parametrize("space_has_core,solver_has_core", [(True, False),
-                                                                  (False, True)])
-    def test_fluid_core_space_and_solver_must_agree(
-            self, meshes, space_has_core, solver_has_core):
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
-            fluid_core=space_has_core, self_gravity_number=LAMBDA)
-        core = (FluidCore(boundary=CURVE_RC, rho_core=2.0)
-                if solver_has_core else None)
-        with pytest.raises(ValueError, match="settings must agree"):
-            SelfGravitatingGIASolver(
-                fd.Function(Z), approximation(), layout=layout, dt=1.0,
-                bcs={}, fluid_core=core)
 
     def test_one_equation_per_mechanics_field(self, solved):
         """And not one per sub-field: the multipliers are not `Equation`s.
 
-        The parent's `set_form` zips equations against sub-fields, and here
+        The residual zips equations against the mechanics unknowns, and here
         that would truncate - correctly, by accident, which is exactly the kind
         of accident that stops being true when somebody reorders the space.
         """
-        solver, _, layout = solved
-        assert len(solver.equations) == 1 + len(layout.internal_variables)
-
-    def test_power_law_is_refused_on_the_condensed_layout(self, meshes):
-        """Pointwise substitution and a power law are a different linearisation.
-
-        The condensed layout writes the backward-Euler update `m(u)` into the
-        stress before differentiation. With a power law the factor is then a
-        function of `u` alone instead of an independent `m`, so the Newton
-        linearisation is not the one the uncondensed residual has, and
-        `set_equations` refuses the combination. That refusal fires from
-        `StokesSolverBase.__init__` before any solver options are read.
-        """
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent),
-            condense_internal_variables=True, self_gravity_number=LAMBDA)
-        with pytest.raises(NotImplementedError, match="Newtonian"):
-            SelfGravitatingGIASolver(
-                fd.Function(Z), approximation(exponent=3.0), layout=layout,
-                dt=1.0, bcs=mechanics_bcs(sub))
+        solver, _, _ = solved
+        assert len(solver.equations) == 1 + ("history" in solver.field_index)
+        assert len(solver.equations) == 2
 
     @pytest.mark.parametrize("solver_parameters", ["direct", "iterative", None])
     def test_power_law_is_accepted_on_the_uncondensed_layout(
             self, meshes, solver_parameters):
         """A power law is a supported configuration of every options path.
 
-        The uncondensed layout keeps the internal variables as unknowns, so the
+        The DG family keeps the internal variables as unknowns, so the
         power-law factor enters the history equation and pyadjoint tapes it,
         and the nested preconditioner follows the state-dependent Jacobian on
         its own: the inner fieldsplit re-runs its setup after every Jacobian
@@ -603,11 +648,11 @@ class TestConstruction:
         The `"iterative"` case carries one extra fact: on the preset's own
         default the displacement split stays `preonly` even under a power law.
         A power law makes the condensed displacement operator nonsymmetric in
-        2-D, and a short CG would be invalid on it, so
-        `_attach_condensation_context` replaces a CG by a GMRES of the same
-        length. The default writes no CG to replace: one GAMG V-cycle is not a
-        Krylov method and assumes no symmetry, so the switch does not fire and
-        no restart key is written. The prefix is the default block-0 route's,
+        2-D, and a short CG would be invalid on it, so the solver's
+        `_adjust_options` replaces a CG by a GMRES of the same length. The
+        default writes no CG to replace: one GAMG V-cycle is not a Krylov
+        method and assumes no symmetry, so the switch does not fire and no
+        restart key is written. The prefix is the default block-0 route's,
         `gadopt.CondensedBlockPC`, whose displacement split sits under
         `dtn_fieldsplit_0_condensed_fieldsplit_0_`.
         """
@@ -628,15 +673,14 @@ class TestConstruction:
         This is the other half of the test above. `u_ksp_max_it=4` puts a
         truncated CG on the displacement split, which is valid only on a
         symmetric operator, and a power law makes the condensed displacement
-        operator nonsymmetric. `_attach_condensation_context` must then
-        replace it by a GMRES whose restart is the cap the preset wrote, so
-        that the substitute costs the same Krylov vectors and the same number
-        of GAMG V-cycles per block-0 iteration.
+        operator nonsymmetric. `_adjust_options` must then replace it by a
+        GMRES whose restart is the cap the preset wrote, so that the substitute
+        costs the same Krylov vectors and the same number of GAMG V-cycles per
+        block-0 iteration.
 
         The options come in as a dictionary and not as the string
-        `"iterative"`, because the string reaches the preset with no arguments
-        and so cannot ask for the CG. That also exercises the `Mapping` branch
-        of the switch. The representation is named on both sides so that the
+        `"iterative"`, because that also exercises the dictionary branch of
+        the switch. The representation is named on both sides so that the
         dictionary describes the space `build` makes.
         """
         params = selfgrav_dtn_iterative_solver_parameters(
@@ -668,31 +712,24 @@ class TestConstruction:
     def test_power_law_is_accepted_on_the_lowrank_representation(self, meshes):
         """A power law builds and solves on the low-rank representation.
 
-        The combination was refused for want of a test. The test now exists:
         `test_gia_gravity_adjoint_lowrank.py::test_taylor_with_a_power_law`
         takes the gradient at exponent 3 on both presets. This one pins the
         acceptance itself, and that the Newton solve converges: `B` does not
         depend on the rheology and is reinstalled after every Jacobian
         assembly, so nothing in the low-rank path reads the exponent.
         """
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent),
-            self_gravity_number=LAMBDA, dtn_representation="lowrank")
-        z = fd.Function(Z)
-        solver = SelfGravitatingGIASolver(
-            z, approximation(exponent=3.0, transition_stress=1e-3),
-            layout=layout, dt=1.0, bcs=mechanics_bcs(sub),
-            dtn_representation="lowrank")
+        solver, u, _ = build(
+            meshes, rotation=False, dtn_representation="lowrank",
+            approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
         solver.solve()
         assert solver.solver.snes.getConvergedReason() > 0
-        assert fd.norm(solver.displacement) > 0.0
+        assert fd.norm(u) > 0.0
 
     def test_it_solves(self, solved):
-        solver, z, layout = solved
-        assert fd.norm(solver.displacement) > 0.0
-        assert fd.norm(solver.potential) > 0.0
-        assert np.isfinite(fd.norm(solver.potential))
+        solver, u, psi = solved
+        assert fd.norm(u) > 0.0
+        assert fd.norm(psi) > 0.0
+        assert np.isfinite(fd.norm(psi))
 
     def test_the_answer_is_degree_two(self, solved):
         """A `cos 2phi` load excites `cos 2phi` and nothing else.
@@ -726,34 +763,26 @@ class TestNewtonianLimit:
     """
 
     @staticmethod
-    def _fields(solver, z, layout, condensed):
+    def _fields(solver, u, psi):
         """The three states to compare: displacement, history, potential.
 
-        On the condensed layout the internal variables are stored `Function`s
-        on the solver rather than sub-fields of the mixed space, so they are
-        read from two different places and this helper hides the difference.
+        The history is the DG field of the mixed solution; with one Maxwell
+        element it holds one `(d, d)` slice.
 
         Args:
           solver: the solved `SelfGravitatingGIASolver`.
-          z: its mixed solution `Function`.
-          layout: the `GIASpaceLayout` the space was built with.
-          condensed: whether the internal variables are eliminated.
+          u: the displacement Function the solver writes.
+          psi: the potential Function the solver writes.
 
         Returns:
           A tuple `(u, m, psi)`.
         """
-        u = z.subfunctions[layout.displacement]
-        psi = z.subfunctions[layout.potential]
-        if condensed:
-            m, = history_slices(solver.internal_variables)
-        else:
-            m, = history_slices(
-                z.subfunctions[layout.internal_variable_field])
+        m, = history_slices(
+            solver.solution.subfunctions[solver.field_index["history"]])
         return u, m, psi
 
-    @pytest.mark.parametrize("condensed", [False, True])
     def test_exponent_one_with_power_law_parameters_is_the_newtonian_solve(
-            self, meshes, condensed):
+            self, meshes):
         """Exponent 1 makes the transition and background stresses inert.
 
         `power_law_factor` guards the `0^0` that UFL evaluates as 0 by
@@ -762,25 +791,17 @@ class TestNewtonianLimit:
         background stress, the zero background included. The two residuals are
         then the same form up to UFL simplification, and 1e-12 relative is the
         roundoff that simplification can cost.
-
-        The condensed case pins something weaker, and deliberately so. That
-        layout substitutes with `approximation.maxwell_times` unmodified; the
-        `maxwell_times` list that carries the factor is built for the
-        uncondensed history equation only. So the two stress parameters never
-        enter the condensed residual at all, and this case pins that they are
-        inert there rather than that the factor is 1.
         """
-        plain, z_plain, layout = build(
-            meshes, condensed=condensed, solver_parameters="direct")
-        power, z_power, _ = build(
-            meshes, condensed=condensed, solver_parameters="direct",
+        plain, u_plain, psi_plain = build(meshes, solver_parameters="direct")
+        power, u_power, psi_power = build(
+            meshes, solver_parameters="direct",
             approximation_kwargs={"exponent": 1, "transition_stress": 1e-4,
                                   "background_stress": 0.5})
         plain.solve()
         power.solve()
 
-        u_p, m_p, psi_p = self._fields(plain, z_plain, layout, condensed)
-        u_q, m_q, psi_q = self._fields(power, z_power, layout, condensed)
+        u_p, m_p, psi_p = self._fields(plain, u_plain, psi_plain)
+        u_q, m_q, psi_q = self._fields(power, u_power, psi_power)
         assert fd.norm(u_p) > 0.0
         assert fd.norm(m_p) > 0.0
         # Measured on this annulus, uncondensed: 7.0e-17 in `u`, 0 in `m`,
@@ -790,7 +811,7 @@ class TestNewtonianLimit:
                        "m": relative_difference(m_q, m_p),
                        "psi": relative_difference(psi_q, psi_p)}
         summary = "  ".join(f"{k}={v:.2e}" for k, v in differences.items())
-        print(f"\n    [exponent 1, condensed={condensed}] {summary}")
+        print(f"\n    [exponent 1] {summary}")
         for key, value in differences.items():
             assert value < 1e-12, f"{key} differs by {value:.3e}"
 
@@ -819,9 +840,8 @@ class TestNewtonianLimit:
         change to the guard that makes the zero-background case continuous
         fails here, and so gets read rather than absorbed.
         """
-        newtonian, z_newtonian, layout = build(
-            meshes, solver_parameters="direct")
-        near, z_near, _ = build(
+        newtonian, u_newtonian, _ = build(meshes, solver_parameters="direct")
+        near, u_near, _ = build(
             meshes, solver_parameters="direct",
             approximation_kwargs={"exponent": 1 + 1e-6,
                                   "transition_stress": 1e-3,
@@ -834,8 +854,6 @@ class TestNewtonianLimit:
         near.solve()
         assert near.solver.snes.getConvergedReason() > 0
 
-        u_newtonian = z_newtonian.subfunctions[layout.displacement]
-        u_near = z_near.subfunctions[layout.displacement]
         assert fd.norm(u_newtonian) > 0.0
         near_difference = relative_difference(u_near, u_newtonian)
         print(f"\n    [exponent 1+1e-6] background 1e-3: "
@@ -844,88 +862,15 @@ class TestNewtonianLimit:
 
         # The zero-background control: same exponent, same transition stress,
         # a model that is discontinuous at n = 1 and a state that says so.
-        zero_background, z_zero, _ = build(
+        zero_background, u_zero, _ = build(
             meshes, solver_parameters="direct",
             approximation_kwargs={"exponent": 1 + 1e-6,
                                   "transition_stress": 1e-3,
                                   "background_stress": 0.0})
         zero_background.solve()
-        u_zero = z_zero.subfunctions[layout.displacement]
         zero_difference = relative_difference(u_zero, u_newtonian)
         print(f"    [exponent 1+1e-6] background 0: u={zero_difference:.2e}")
         assert zero_difference > 1e-1
-
-
-class TestTheBlockOneDiagonalReachesTheAppctx:
-    """`DtNMultiplierDiagPC` reads its diagonal from the appctx, so the appctx
-    has to carry it on **every** way of specifying solver parameters.
-
-    It did not. The entry was built only after the `Mapping` early return, and
-    every 3-D driver passes a `Mapping` -- `b1_elastic.condensed_solver_
-    parameters`, `b4_polar_motion.coupled_solver_parameters`, the B2 probe --
-    so the shipped preconditioner was unreachable from all of them. Naming it
-    gave a bare `PETSc.Error: error code 101`, PETSc having flattened the
-    `ValueError`. Measured on Gadi at both coarse and medium (jobs 175339746,
-    175340813, 175340815) before the fix; the one number on record for that
-    preconditioner, 111 -> 48, came from the probe's own copy in `b2_pc.py`,
-    which takes its diagonal from a module-level global instead.
-
-    The first attempt at the fix ALSO failed, identically, and this class is
-    written the way it is because of that: building the dictionary *before*
-    calling the base class is silently undone, since
-    `StokesSolverBase.set_solver_options` assigns `self.appctx = {"mu": ...}`
-    as its first statement. So the assertion is on the state after
-    construction, which is the only thing a preconditioner ever sees, rather
-    than on any particular line having run.
-
-    2-D here, which is the point: the defect is dimension-independent, and the
-    configuration it broke costs a cluster job to reproduce.
-    """
-
-    @staticmethod
-    def _diagonal(solver):
-        return (solver.appctx or {}).get("dtn_block1_diagonal")
-
-    @pytest.mark.parametrize("params", [
-        None,
-        "direct",
-        "iterative",
-        pytest.param(dict(selfgrav_dtn_schur_solver_parameters), id="mapping"),
-    ])
-    def test_every_way_of_asking_leaves_the_diagonal_in_the_appctx(
-            self, meshes, params):
-        solver, _, layout = build(meshes, solver_parameters=params)
-        diag = self._diagonal(solver)
-        assert diag is not None, (
-            "no 'dtn_block1_diagonal' in the appctx, so "
-            "gadopt.DtNMultiplierDiagPC cannot be selected on this path")
-        assert len(diag) == len(layout.real_fields)
-        assert np.all(diag != 0.0)
-
-    def test_it_is_the_same_diagonal_however_it_was_asked_for(self, meshes):
-        """A present-but-different diagonal would be worse than a missing one.
-
-        The `Mapping` path reaches the appctx through two base classes; this
-        pins that it arrives carrying the same numbers as the string path,
-        rather than, say, a `theta_psi` recomputed somewhere along the way.
-        """
-        by_string = self._diagonal(build(meshes, solver_parameters="direct")[0])
-        by_mapping = self._diagonal(build(
-            meshes,
-            solver_parameters=dict(selfgrav_dtn_schur_solver_parameters))[0])
-        np.testing.assert_array_equal(by_string, by_mapping)
-
-    def test_the_base_class_entry_survives(self, meshes):
-        """The fix adds to the appctx; it must not replace it.
-
-        `"mu"` is what `FreeSurfaceMassInvPC` and the assembled blocks read,
-        and an earlier draft rebuilt the dictionary from scratch, which would
-        have dropped whatever the base class decided that entry should be.
-        """
-        solver, _, _ = build(
-            meshes,
-            solver_parameters=dict(selfgrav_dtn_schur_solver_parameters))
-        assert "mu" in solver.appctx
 
 
 # ---------------------------------------------------------------------------
@@ -964,7 +909,7 @@ SERIAL = fd.COMM_WORLD.size == 1
 PLANTED_EPS = 1e-9
 
 
-def real_block_index_sets(Z, layout):
+def real_block_index_sets(solver):
     """The block-1 index sets, taken the way `DtNTwoBlockSchurPC` takes them.
 
     `Z.field_ises[i_R:]`, i.e. Firedrake's own authority on where each
@@ -973,7 +918,7 @@ def real_block_index_sets(Z, layout):
     its "1" split, so a probe that reads through it exercises the
     preconditioner's own indexing rather than a second, parallel-untested one.
     """
-    return Z.field_ises[layout.real_fields[0]:]
+    return solver.solution_space.field_ises[solver.real_indices[0]:]
 
 
 def read_real_rows(cofunction, ises, comm):
@@ -1016,7 +961,7 @@ def read_real_rows(cofunction, ises, comm):
     return out
 
 
-def real_block(solver, z, layout, F=None):
+def real_block(solver, F=None):
     """The full `n x n` `Real` block of the Jacobian, by residual differencing.
 
     `F(e_j) - F(0)` read on the `Real` rows is the `j`th column exactly - the
@@ -1026,18 +971,25 @@ def real_block(solver, z, layout, F=None):
     against `mat_type="nest"` it agrees to 2.234e-16 relative.
 
     Differencing rather than nest assembly, and the reason is not stylistic:
-    both shipped presets run `mat_type: matfree`, and asking for a nest
+    the shipped presets run `mat_type: matfree`, and asking for a nest
     Jacobian materialises every block including `(u,u)` and `(psi,psi)`, which
     is the assembled operator the configuration exists to avoid. At production
     size that is the most likely explanation for the 180 GB that killed the job
     this gate was first attempted in. Here it costs `n + 1` residual
     assemblies, and nothing else.
+
+    Args:
+      solver: the solver; its mixed solution is overwritten (left at zero).
+      F: the residual to difference, `solver.F` by default.
+
+    Returns:
+      The block as a dense array, in `solver.real_indices` order.
     """
     F = solver.F if F is None else F
-    Z = z.function_space()
-    comm = Z.mesh().comm
-    ises = real_block_index_sets(Z, layout)
-    real = layout.real_fields
+    z = solver.solution
+    comm = solver.solution_space.mesh().comm
+    ises = real_block_index_sets(solver)
+    real = solver.real_indices
 
     z.assign(0.0)
     base = read_real_rows(fd.assemble(F), ises, comm)
@@ -1050,7 +1002,57 @@ def real_block(solver, z, layout, F=None):
     return block
 
 
-def assembly_floor(solver, z, layout):
+def predicted_real_diagonal(solver):
+    """The diagonal of the `Real` block as the derivation gives it, per field.
+
+    Written from the constants of the form, never assembled:
+
+    * a DtN multiplier: `theta_psi * (-scale_k * A_h)`, from
+      `DtNGravityForm.multiplier_diagonal`, which derives the sign and uses the
+      *discrete* boundary measure `A_h`;
+    * a rotation row: `theta_rot_i * K_i = s_i c B_mu Omega^2 K_i`, with
+      `K = (C - A, C - A, C)`; the row divides `K_i m_i` by the volume of the
+      measure it is integrated on, so the volume cancels from the entry;
+    * the core pressure and the centre-of-mass multipliers: exactly zero,
+      because they are Lagrange multipliers.
+
+    `theta_psi` is read as the solver's number, never recomputed, so that the
+    floor of `B_mu` at zero is the one the residual carries.
+
+    Args:
+      solver: the solver.
+
+    Returns:
+      The diagonal as an array in `solver.real_indices` order.
+    """
+    by_name = {}
+    names = solver.field_names
+    multipliers = [names[i] for i in solver.multiplier_indices]
+    if multipliers:
+        values = solver.theta_psi_value * solver.form.multiplier_diagonal()
+        assert len(values) == len(multipliers)
+        by_name.update(zip(multipliers, values))
+    rotations = [c for c in solver.couplings if isinstance(c, Rotation)]
+    if rotations:
+        rotation, = rotations
+        ctx = solver.coupling_context
+        for k, name in enumerate(rotation.slots(ctx)):
+            if name is None:
+                continue
+            by_name[name] = (rotation.CLOSURE_SIGNS[k]
+                             * scalar_value(solver.scaling_factor)
+                             * scalar_value(solver.row_scale_B_mu)
+                             * scalar_value(rotation.Omega_sq)
+                             * scalar_value(rotation.closure_constants[k]))
+    for name in names:
+        if name == "core_pressure" or name.startswith("centre_of_mass_"):
+            by_name[name] = 0.0
+    missing = [names[i] for i in solver.real_indices if names[i] not in by_name]
+    assert not missing, f"no predicted diagonal entry for {missing}"
+    return np.array([by_name[names[i]] for i in solver.real_indices])
+
+
+def assembly_floor(solver):
     """`max |F(0) - F(0)|` over the `Real` rows, from two identical assemblies.
 
     The reproducibility of the assembly itself, measured rather than assumed.
@@ -1061,14 +1063,14 @@ def assembly_floor(solver, z, layout):
     0.0 and only the `m_3` row is not. That ceiling matters - at 48 ranks the
     multiplier block acquires a spurious coupling of 5.7199e-05 where serial
     reads 0.0 (a different quantity from this one, but the same class of claim),
-    so "the multiplier rows are clean" must not be stated without a scale. `inertia_form`
-    carries `sheet_integral(nu * sigma * p_g)`, and for this configuration's
-    `cos 2phi` load `int cos(2 phi) r^2 ds` is **analytically zero** - the same
-    quantity `test_inertia_of_a_cos2_sheet_vanishes` asserts vanishes. What
-    survives is that integral's discrete remainder, scaled by `theta_rot`. So
-    the residual is not structurally zero; it is one physically-zero integral
-    failing to be discretely zero, in the one row carrying a prescribed sheet,
-    and it cancels in the differencing.
+    so "the multiplier rows are clean" must not be stated without a scale. The
+    rotation row carries the load sheet's `int nu sigma p_3 dS`, and for this
+    configuration's `cos 2phi` load `int cos(2 phi) r^2 ds` is **analytically
+    zero** - the same quantity `test_inertia_of_a_cos2_sheet_vanishes` asserts
+    vanishes. What survives is that integral's discrete remainder, scaled by
+    `theta_rot`. So the residual is not structurally zero; it is one
+    physically-zero integral failing to be discretely zero, in the one row
+    carrying a prescribed sheet, and it cancels in the differencing.
 
     **Its magnitude is not stable across partitions and is deliberately not
     recorded here.** A sum of cancelling terms lands wherever the summation
@@ -1080,16 +1082,15 @@ def assembly_floor(solver, z, layout):
     It is also the right shape for the production gate, which runs at 48 ranks
     where nobody has measured anything.
     """
-    z.assign(0.0)
-    ises = real_block_index_sets(z.function_space(), layout)
-    comm = z.function_space().mesh().comm
+    solver.solution.assign(0.0)
+    ises = real_block_index_sets(solver)
+    comm = solver.solution_space.mesh().comm
     first = read_real_rows(fd.assemble(solver.F), ises, comm)
     second = read_real_rows(fd.assemble(solver.F), ises, comm)
     return float(np.abs(first - second).max())
 
 
-def check_multiplier_alignment(solver, z, layout, *, silent_tol=1e-6,
-                               predicted_tol=1e-12):
+def check_multiplier_alignment(solver, *, silent_tol=1e-6, predicted_tol=1e-12):
     """Drive `psi` with each mode expression; assert the rows its key names fire.
 
     Shared by the 2-D annulus and the 3-D shell, because **the claim is the
@@ -1151,13 +1152,24 @@ def check_multiplier_alignment(solver, z, layout, *, silent_tol=1e-6,
     test of the mesh. Hence `silent_tol` is a parameter, set per configuration
     from the table above, and the gate that carries the claim is
     `predicted_tol`.
+
+    Args:
+      solver: a solver on the multiplier representation; its mixed solution is
+        overwritten (left at zero).
+      silent_tol: the bound on a row that the driven mode must not move,
+        relative to the weakest fired row.
+      predicted_tol: the bound on a fired row against its discrete prediction.
+
+    Returns:
+      `{"discrete", "analytic", "silent"}`: the worst relative deviations.
     """
-    Z = z.function_space()
-    comm = Z.mesh().comm
-    ises = real_block_index_sets(Z, layout)
+    z = solver.solution
+    comm = solver.solution_space.mesh().comm
+    ises = real_block_index_sets(solver)
     form = solver.form
     theta = float(solver.theta_psi)
-    psi_h = z.subfunctions[layout.potential]
+    psi_h = z.subfunctions[solver.field_index["potential"]]
+    multipliers = solver.multiplier_indices
 
     modes = {}
     for bc_id, dtn in form.dtn_boundaries:
@@ -1189,7 +1201,7 @@ def check_multiplier_alignment(solver, z, layout, *, silent_tol=1e-6,
             mode = modes[(bc_id, key)]
             discrete = theta * fd.assemble(psi_h * mode.expr * form.ds(bc_id))
             assert row[i] == pytest.approx(discrete, rel=predicted_tol), (
-                f"sub-field {layout.multipliers[i]} claims to be {keys[i]} but "
+                f"sub-field {multipliers[i]} claims to be {keys[i]} but "
                 "does not respond to it as one")
             worst_discrete = max(
                 worst_discrete, abs(row[i] - discrete) / abs(discrete))
@@ -1199,11 +1211,11 @@ def check_multiplier_alignment(solver, z, layout, *, silent_tol=1e-6,
         weakest = min(abs(row[i]) for i in fired)
         for i in silent:
             assert abs(row[i]) < silent_tol * weakest, (
-                f"driving {driven} moved sub-field {layout.multipliers[i]}, "
+                f"driving {driven} moved sub-field {multipliers[i]}, "
                 f"which claims to be {keys[i]}")
             worst_silent = max(worst_silent, abs(row[i]) / weakest)
         # And the rotation rows never see the potential at all.
-        for i in range(len(keys), len(layout.real_fields)):
+        for i in range(len(keys), len(solver.real_indices)):
             assert abs(row[i]) < silent_tol * weakest
     z.assign(0.0)
     return {"discrete": worst_discrete, "analytic": worst_analytic,
@@ -1251,21 +1263,15 @@ def block_asymmetry(F, z):
 
 
 class TestBlockZeroSymmetry:
-    """The condensed `(u, psi)` operator is symmetric, and the uncondensed is not.
+    """The DG family's `(u, M, psi)` block 0 is not symmetric.
 
-    Condensing the internal variables is what makes block 0 a symmetric
-    operator: the internal-variable rows are the asymmetric ones, and the
-    driver's own instrument reads `diff[0,1] = 4.768e-01` against
-    `size[0,1] = 3.576e-01` on the uncondensed annulus, a ratio of 1.333, i.e.
-    the `(u, sigma)` pair is not even close to transposing. That is not a defect
-    - `CoupledInternalVariableSolver`'s free-slip Nitsche terms carry `mu`
-    against `mu0`, recorded in `NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md` -
-    but it does mean the symmetry statement belongs to the condensed system
-    alone.
-
-    The `3.2e-02` quoted at `demos/gravity/selfgrav_gia_annulus.py:66` is a
-    different measurement: the whole matrix on a 4x4 Cartesian square, not the
-    annulus and not block 0.
+    The internal-variable rows are the asymmetric ones: the driver's own
+    instrument reads `diff[0,1] = 4.768e-01` against `size[0,1] = 3.576e-01`
+    on this annulus, a ratio of 1.333, i.e. the `(u, sigma)` pair is not even
+    close to transposing. That is not a defect - the free-slip Nitsche terms
+    carry `mu` against `mu0`, recorded in
+    `NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md` - but it does mean a
+    symmetry statement belongs to a system with the history eliminated.
 
     Serial, like every per-block measurement in this project: `block_asymmetry`
     builds a global dense transpose. The block-1 probe below has no such
@@ -1276,29 +1282,8 @@ class TestBlockZeroSymmetry:
         fd.COMM_WORLD.size > 1,
         reason="the per-block instrument needs a global dense transpose")
 
-    def test_the_condensed_block_is_symmetric(self, meshes):
-        """Relative, at 1e-12: measured 1.056e-16, so ~1e+04 of headroom.
-
-        Absolute would be meaningless - `max|A| = 1.346e+02` here and scales
-        with the mesh, the load and every material constant.
-        """
-        solver, z, layout = build(meshes, condensed=True)
-        block0 = [i for i in range(len(z.function_space()))
-                  if i not in layout.real_fields]
-        assert len(block0) == 2, (
-            "condensation should leave displacement and potential alone")
-        diff, size = block_asymmetry(solver.F, z)
-        window = np.ix_(block0, block0)
-        biggest = size[window].max()
-        assert biggest > 0.0
-        assert diff[window].max() <= 1e-12 * biggest
-
     def test_the_uncondensed_block_is_not(self, meshes):
-        """The rejecting partner for the test above, and only that.
-
-        Measured **2.528e-03** relative here against `1.056e-16` condensed:
-        thirteen orders apart, which is what makes the condensed `1e-12` a
-        statement about condensation rather than about a loose tolerance.
+        """Measured **2.528e-03** relative on this annulus.
 
         **One-sided on purpose.** An upper bound would turn a symptom of the
         separately-recorded `mu`/`mu0` Nitsche asymmetry
@@ -1313,12 +1298,12 @@ class TestBlockZeroSymmetry:
         Whoever first parametrises `dt` will walk this number down, and at small
         `dt` even this bound will eventually fail - correctly, and the fix then
         is to delete this test rather than to lower it again. If the Nitsche
-        asymmetry is fixed at source, likewise: delete, do not loosen. Its only
-        job is to keep the test above from being vacuous.
+        asymmetry is fixed at source, likewise: delete, do not loosen.
         """
-        solver, z, layout = build(meshes, condensed=False)
-        block0 = [i for i in range(len(z.function_space()))
-                  if i not in layout.real_fields]
+        solver, _, _ = build(meshes)
+        z = solver.solution
+        block0 = [i for i in range(len(solver.solution_space))
+                  if i not in solver.real_indices]
         assert len(block0) == 3
         diff, size = block_asymmetry(solver.F, z)
         window = np.ix_(block0, block0)
@@ -1326,24 +1311,25 @@ class TestBlockZeroSymmetry:
 
 
 class TestBlockOneIsTheDiagonalItClaims:
-    """`block1_diagonal()` against the assembled `Real` block, entry by entry.
+    """The assembled `Real` block against its derived diagonal, entry by entry.
 
-    Road map §9.6 lists `B_mu` as pinned by nothing and the block-1
-    preconditioner as unmeasured; this closes the second of those for the
-    *diagonal*, which is what `DtNMultiplierDiagPC` divides by. The whole block
-    is recovered, not just its diagonal, because a claim that a matrix "is" a
-    diagonal is two claims and the second one - that nothing else is there - is
-    the one nobody had checked.
+    The whole block is recovered, not just its diagonal, because a claim that
+    a matrix "is" a diagonal is two claims and the second one - that nothing
+    else is there - is the one nobody had checked. The block is that of the
+    multiplier representation, which has one `Real` row per DtN mode; it does
+    not depend on the history family, because eliminating the history touches
+    no constraint row.
 
     Three things are asserted and they are not equally strong:
 
     1. **The diagonal.** `theta_psi * (-scale_k * A_h)` per multiplier and
-       `theta_rot_i * K_i` per rotation row, against the assembled entry.
-       Measured 2.673e-15 relative with rotation, 2.045e-16 without.
+       `theta_rot_i * K_i` per rotation row (`predicted_real_diagonal`),
+       against the assembled entry. Measured 2.673e-15 relative with rotation,
+       2.045e-16 without.
 
        **The rotation row is already the worst row here, by an order**
        (2.664535e-15 against 2.0447e-16 for the multipliers), and that is not
-       noise: `rotation_residual` divides by a separately assembled mantle
+       noise: the rotation row divides by a separately assembled mantle
        volume, so its diagonal carries the ratio of two assemblies of the same
        integral under different quadrature rules. At production size the ratio
        is much further from 1 - `gate_phase1_diagonal_3d.py` measures
@@ -1361,17 +1347,15 @@ class TestBlockOneIsTheDiagonalItClaims:
        gives `1/(4 pi)` to every mode, so 3-D at L = 5 has **2 among 72**.
        Permuting the modes within a boundary therefore leaves the diagonal
        bit-identical. It does not leave `coefficients()` alone: that method
-       (`gia_gravity.py:1756`) zips `form.multiplier_keys` against
-       `layout.multipliers` to attribute each solved trace coefficient to a
-       mode, so a shuffle gives a silently wrong geoid spectrum with a
-       perfectly plausible magnitude.
+       zips `form.multiplier_keys` against the multiplier fields to attribute
+       each solved trace coefficient to a mode, so a shuffle gives a silently
+       wrong geoid spectrum with a perfectly plausible magnitude.
 
     What none of it establishes is recorded in
     `NOTES/measurements/PHASE1-DIAGONAL-GATE.md`; the short version is that a
-    flip of `CLOSURE_SIGNS` is invisible here, because `block1_diagonal` builds
-    the rotation entry as `_theta_rot(k) * _closure_constant(k)` and both
-    factors carry `s_i`, so a flip moves the prediction and the assembled row
-    together.
+    flip of `CLOSURE_SIGNS` is invisible here, because the rotation entry is
+    `theta_rot_i * K_i` and both factors carry `s_i`, so a flip moves the
+    prediction and the assembled row together.
     """
 
     @pytest.mark.parametrize("rotation", [True, False])
@@ -1385,12 +1369,12 @@ class TestBlockOneIsTheDiagonalItClaims:
         built by zipping two sequences is exactly the kind of thing that is
         right at one length and wrong at another.
         """
-        solver, z, layout = build(meshes, rotation=rotation,
-                                  truncation=truncation, condensed=True)
-        block = real_block(solver, z, layout)
-        claimed = solver.block1_diagonal()
+        solver, _, _ = build(meshes, rotation=rotation, truncation=truncation,
+                             dtn_representation="multiplier")
+        block = real_block(solver)
+        claimed = predicted_real_diagonal(solver)
 
-        assert len(claimed) == len(layout.real_fields)
+        assert len(claimed) == len(solver.real_indices)
         assert len(claimed) == (2 * truncation) + (2 * truncation + 1) + (
             1 if rotation else 0)
         assert np.all(np.abs(np.diag(block)) > 0.0), (
@@ -1436,13 +1420,6 @@ class TestBlockOneIsTheDiagonalItClaims:
         which integrate a parent `Real` test over the submesh, over-counted by
         48.000025, 47.999962 and 47.997255.
 
-        **So the shipped rotation row is affected.** An earlier version of this
-        docstring said it was clean; that rested on 2-4 ranks and is refuted.
-        Two withdrawn accounts, recorded so nobody re-derives them: that the
-        trigger is a `Real x Real` term, and that it is a `Real` row mixing a
-        cell with a facet integral. No static guard encoding either should be
-        added.
-
         **2-D cannot see the consequence that matters**, which is why this file
         keeps passing. The rotation row's volume terms are mismatched and its
         sheet term is matched, so the closure solves
@@ -1456,14 +1433,16 @@ class TestBlockOneIsTheDiagonalItClaims:
         The skip stays: a rank-dependent failure is the worst thing to have in
         CI, and what this test guards is a synthetic plant rather than the
         shipped behaviour, which is tracked in `FD-ISSUE.md` instead. Note also
-        that "the production residual has no `Real x Real` term" is false -
-        `dtn_form.py:959` and `gia_gravity.py:2121` are both such terms, and
+        that the production residual does carry `Real x Real` terms - the
+        multiplier rows and the rotation closure row are both such terms, and
         they are the diagonal this class gates.
         """
-        solver, z, layout = build(meshes, rotation=True, condensed=True)
-        Z = z.function_space()
-        real = layout.real_fields
-        n_mult = len(layout.multipliers)
+        solver, _, _ = build(meshes, rotation=True,
+                             dtn_representation="multiplier")
+        z = solver.solution
+        Z = solver.solution_space
+        real = solver.real_indices
+        n_mult = len(solver.multiplier_indices)
         dx_parent = fd.dx(domain=solver.potential_mesh)
         volume = fd.assemble(fd.Constant(1.0) * dx_parent)
 
@@ -1473,7 +1452,7 @@ class TestBlockOneIsTheDiagonalItClaims:
                    + PLANTED_EPS * source * tests[real[1]] * dx_parent
                    + PLANTED_EPS * source * tests[real[n_mult]] * dx_parent)
 
-        clean = real_block(solver, z, layout)
+        clean = real_block(solver)
         assert np.all(np.abs(np.diag(clean)) > 0.0), (
             "a zero diagonal would make offdiagonal_ratios inf or nan rather "
             "than fail, so it is checked before the ratio is taken")
@@ -1481,13 +1460,13 @@ class TestBlockOneIsTheDiagonalItClaims:
         # Against the assembly's own reproducibility, measured here rather than
         # asserted as bit zero: `F(0)` is 3.388e-21 on these rows even in
         # serial, it merely reproduces, and in parallel it does not.
-        floor = assembly_floor(solver, z, layout)
+        floor = assembly_floor(solver)
         assert abs(clean[1, 0]) <= floor and abs(clean[n_mult, 0]) <= floor
         assert floor < 1e-3 * PLANTED_EPS, (
             f"the assembly floor {floor:.3e} is not comfortably below the "
             f"plant {PLANTED_EPS:.3e}, so the partner proves nothing")
 
-        block = real_block(solver, z, layout, F=planted)
+        block = real_block(solver, F=planted)
         assert block[1, 0] == pytest.approx(PLANTED_EPS, rel=1e-9)
         assert block[n_mult, 0] == pytest.approx(PLANTED_EPS, rel=1e-9)
         # ... and the gate says so, on the multiplier row and on the rotation
@@ -1498,27 +1477,8 @@ class TestBlockOneIsTheDiagonalItClaims:
         assert ratios[n_mult] > OFFDIAG_TOL
         # The diagonal is untouched by the plant, so the claim stays true and
         # the two assertions are independent.
-        assert np.max(np.abs(solver.block1_diagonal() - np.diag(block))
+        assert np.max(np.abs(predicted_real_diagonal(solver) - np.diag(block))
                       / np.abs(np.diag(block))) <= DIAG_TOL
-
-    def test_condensation_does_not_move_the_block(self, meshes):
-        """Measured identical, so it is asserted rather than parametrised over.
-
-        Condensing eliminates the internal variables from block 0 and touches
-        no constraint row, so the `Real` block is the same matrix either way -
-        `max rel |d - diag(J)| = 4.113e-16` on both. Carrying every other test
-        in this class over both settings would double the cost to re-measure a
-        constant.
-        """
-        # Both layouts on the multiplier representation: the block under
-        # test is the multiplier block, and the full layout would otherwise
-        # take the library's low-rank default and have no such block.
-        condensed = real_block(*build(meshes, rotation=True, condensed=True,
-                                      dtn_representation="multiplier"))
-        uncondensed = real_block(*build(meshes, rotation=True, condensed=False,
-                                        dtn_representation="multiplier"))
-        assert np.abs(condensed - uncondensed).max() <= 1e-14 * np.abs(
-            condensed).max()
 
     def test_the_block_one_index_sets_are_what_the_split_assumes(self, meshes):
         """What `DtNTwoBlockSchurPC.initialize` merges, asserted here instead.
@@ -1535,21 +1495,21 @@ class TestBlockOneIsTheDiagonalItClaims:
         Runs under MPI, where it is not free: every entry here is rank-local,
         and on 2 ranks rank 0 owns all 14 while rank 1 owns none.
         """
-        _, z, layout = build(meshes, rotation=True)
-        Z = z.function_space()
+        solver, _, _ = build(meshes, rotation=True)
+        Z = solver.solution_space
         comm = Z.mesh().comm
-        i_R = layout.real_fields[0]
-        block1 = real_block_index_sets(Z, layout)
+        i_R = solver.real_indices[0]
+        block1 = real_block_index_sets(solver)
         block0 = Z.field_ises[:i_R]
 
-        assert len(block1) == len(layout.real_fields)
+        assert len(block1) == len(solver.real_indices)
         merged = np.concatenate([iset.getIndices() for iset in block1]) \
             if block1 else np.array([], dtype=int)
         assert np.all(np.diff(merged) > 0), (
             "the merged block-1 index set is not increasing, so it is not the "
             "in-order concatenation the matrix-free submatrix extraction needs")
         # One global degree of freedom per Real sub-field, summed over ranks.
-        assert comm.allreduce(len(merged)) == len(layout.real_fields)
+        assert comm.allreduce(len(merged)) == len(solver.real_indices)
 
         owned0 = np.concatenate([iset.getIndices() for iset in block0])
         assert not np.intersect1d(owned0, merged).size, (
@@ -1568,20 +1528,19 @@ class TestBlockOneIsTheDiagonalItClaims:
         descriptor's `modes` returns, and records that pairing in
         `multiplier_keys`.
 
-        **The sequence is written out as a literal, deliberately.** An earlier
-        version built the expectation by iterating `dtn_boundaries` and
-        `dtn.modes(...)` - which is verbatim the loop `boundary_bilinear` uses
-        (`dtn_form.py:946-955`), so it re-executed the implementation and
-        compared it with itself. That catches a post-hoc mutation of
-        `multiplier_keys` and cannot catch a reordering of either loop, because
-        the expectation reorders with it. For an *ordering*, a literal is a
-        specification and not a golden number, so it does not fall foul of this
-        file's rule against stored values: exterior boundary first, `cos` before
-        `sin` within an order, orders ascending, then the interior boundary with
-        its `mean` mode leading.
+        **The sequence is written out as a literal, deliberately.** An
+        expectation built by iterating `dtn_boundaries` and `dtn.modes(...)`
+        would re-execute the loop `boundary_bilinear` uses and compare it with
+        itself. That catches a post-hoc mutation of `multiplier_keys` and
+        cannot catch a reordering of either loop, because the expectation
+        reorders with it. For an *ordering*, a literal is a specification and
+        not a golden number, so it does not fall foul of this file's rule
+        against stored values: exterior boundary first, `cos` before `sin`
+        within an order, orders ascending, then the interior boundary with its
+        `mean` mode leading.
         """
-        solver, _, layout = build(meshes, rotation=True,
-                                  dtn_representation="multiplier")
+        solver, _, _ = build(meshes, rotation=True,
+                             dtn_representation="multiplier")
         assert solver.form.multiplier_keys == [
             (CURVE_OUTER, "cos1"), (CURVE_OUTER, "sin1"),
             (CURVE_OUTER, "cos2"), (CURVE_OUTER, "sin2"),
@@ -1591,7 +1550,7 @@ class TestBlockOneIsTheDiagonalItClaims:
             (CURVE_INNER, "cos2"), (CURVE_INNER, "sin2"),
             (CURVE_INNER, "cos3"), (CURVE_INNER, "sin3"),
         ]
-        assert len(solver.form.multiplier_keys) == len(layout.multipliers)
+        assert len(solver.form.multiplier_keys) == len(solver.multiplier_indices)
 
     @pytest.mark.parametrize("truncation", [3, 5])
     def test_each_multiplier_row_is_the_mode_its_key_names(self, meshes,
@@ -1602,12 +1561,12 @@ class TestBlockOneIsTheDiagonalItClaims:
         Both truncations, because that is the axis a zip-length error lives on,
         because 5 is production's `L`, and because the analytic deviation this
         test deliberately does *not* gate on grows 7.6x between them - which is
-        how the previous version of this test came to sit 6% inside its own
+        how an earlier version of this test came to sit 6% inside its own
         threshold at truncation 5 without anyone noticing.
         """
-        solver, z, layout = build(meshes, rotation=True, condensed=True,
-                                  truncation=truncation)
-        worst = check_multiplier_alignment(solver, z, layout)
+        solver, _, _ = build(meshes, rotation=True, truncation=truncation,
+                             dtn_representation="multiplier")
+        worst = check_multiplier_alignment(solver)
         # Recorded, not gated: this is the boundary's resolution of the mode.
         assert worst["analytic"] < 1e-2, (
             "the analytic deviation has grown far beyond the 1.2e-04 and "
@@ -1632,21 +1591,33 @@ class TestBlockOneInThreeDimensions:
     costs seconds.
 
     Cheap by construction: `CubedSphereMesh` extruded radially, so no gmsh and
-    no mesh file, and the same mesh passed twice to `self_gravitating_gia_space`
+    no mesh file, and the same mesh carries the displacement and the potential
     rather than a `Submesh`. That makes the mechanics and the potential share a
     domain, which the production geometry does not - the stand-off buffer is the
     whole point there - but nothing this class asserts is about the buffer.
 
-    It warns, and the warning is expected: `L h_max/R = 0.72` on a level-1
+    It warns, and the warnings are expected: `L h_max/R = 0.72` on a level-1
     cubed sphere is too coarse for the boundary rule to resolve `L = 1`, so
-    `DtNGravityForm` caps the quadrature degree and says so. Nothing here is a
-    statement about the boundary integrals' accuracy - the diagonal is
-    `-scale_k A_h` with `A_h` the *discrete* boundary measure, whatever that
-    measure happens to be on this mesh.
+    `DtNGravityForm` caps the quadrature degree and says so; and the top
+    traction is a `normal_stress` with no mass, which the solver accepts with a
+    warning. Nothing here is a statement about the boundary integrals'
+    accuracy - the diagonal is `-scale_k A_h` with `A_h` the *discrete*
+    boundary measure, whatever that measure happens to be on this mesh.
     """
 
     @staticmethod
-    def build(L=1, refinement_level=1):
+    def build(L=1, refinement_level=1, fluid_core=False):
+        """The shell solver: DG history, multiplier DtN, rotation with `C - A = 0.1 C`.
+
+        Args:
+          L: the `SphericalDtN` truncation on both shell surfaces.
+          refinement_level: the refinement of the `CubedSphereMesh` base.
+          fluid_core: replace the rigid core (`un = 0` on the bottom) by a
+            `FluidCore` there.
+
+        Returns:
+          `(solver, u, psi)`.
+        """
         from gadopt import SphericalDtN
 
         base = fd.CubedSphereMesh(radius=1.0,
@@ -1655,68 +1626,69 @@ class TestBlockOneInThreeDimensions:
                                extrusion_type="radial")
         mesh.cartesian = False
 
-        Z, layout = self_gravitating_gia_space(
-            mesh, mesh,
-            gravity_bcs={"top": {"dtn": SphericalDtN(L)},
-                         "bottom": {"dtn": SphericalDtN(L)}},
-            rotation=True, condense_internal_variables=True,
-            self_gravity_number=LAMBDA)
-        z = fd.Function(Z)
+        u = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 2), name="displacement")
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2), name="potential")
         X = fd.SpatialCoordinate(mesh)
         C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
+        bcs = {"top": {"normal_stress": SIGMA_HAT * X[2]}}
+        couplings = [
+            # Both moments, and it has to be both: the closure reads `C_minus_A`
+            # for the polar-wander pair and `C` for `m_3`. 0.1 C is not a
+            # physical dynamical ellipticity - it is a number that makes the
+            # two closure constants distinguishable in the diagonal, which is
+            # the point.
+            Rotation(C=C, C_minus_A=0.1 * C, Omega_sq=OMEGA_SQ_EARTH)]
+        if fluid_core:
+            couplings.append(FluidCore(boundary="bottom", rho_core=2.0))
+        else:
+            bcs["bottom"] = {"un": 0.0}
         solver = SelfGravitatingGIASolver(
-            z, approximation(), layout=layout, dt=1.0,
-            bcs={"bottom": {"un": 0.0},
-                 "top": {"normal_stress": SIGMA_HAT * X[2]}},
-            # Both moments, and it has to be both: `_closure_constant` reads
-            # `C_minus_A` for the polar-wander pair and `C` for `m_3`, and asks
-            # for whichever is missing by name. 0.1 C is not a physical
-            # dynamical ellipticity - it is a number that makes the two closure
-            # constants distinguishable in the diagonal, which is the point.
-            rotation_moments={"C": C, "C_minus_A": 0.1 * C})
-        return solver, z, layout
+            u, psi, approximation(), dt=1.0,
+            gravity_bcs={"top": {"dtn": SphericalDtN(L)},
+                         "bottom": {"dtn": SphericalDtN(L)}},
+            bcs=bcs, couplings=couplings, dtn_representation="multiplier")
+        return solver, u, psi
 
     def test_b1_near_nullspace_composes_with_core_pressure(self):
-        """B1's per-field basis loop includes the new trailing Real field."""
-        solver, _, _ = self.build()
-        mesh = solver.mesh
-        from gadopt import SphericalDtN
-        Z, layout = self_gravitating_gia_space(
-            mesh, mesh,
-            gravity_bcs={"top": {"dtn": SphericalDtN(1)},
-                         "bottom": {"dtn": SphericalDtN(1)}},
-            rotation=True, fluid_core=True,
-            condense_internal_variables=True,
-            self_gravity_number=LAMBDA)
-        V = Z.sub(layout.displacement)
+        """B1's per-field basis loop includes the trailing core-pressure field."""
+        solver, _, _ = self.build(fluid_core=True)
+        Z = solver.solution_space
+        index = solver.field_index
+        V = Z.sub(index["displacement"])
         rbm = rigid_body_modes(V, rotational=True, translations=[0, 1, 2])
         basis = fd.MixedVectorSpaceBasis(
-            Z, [rbm if i == layout.displacement else Z.sub(i)
+            Z, [rbm if i == index["displacement"] else Z.sub(i)
                 for i in range(len(Z))])
         entries = list(basis)
         assert len(entries) == len(Z)
-        assert entries[layout.displacement] is rbm
-        assert entries[layout.core_pressure] == Z.sub(layout.core_pressure)
+        assert entries[index["displacement"]] is rbm
+        assert entries[index["core_pressure"]] == Z.sub(index["core_pressure"])
 
     def test_the_case_is_the_small_one(self):
         """A tripwire on the cost, not a statement about the discretisation.
 
-        24 columns of two layers (48 cells) and 1971 degrees of freedom. If a
-        future edit makes this a refinement level larger it stops being a unit
-        test, and the rule this class is written under stops holding.
+        24 columns of two layers (48 cells) and 1971 degrees of freedom outside
+        the DG history field (the displacement, the potential and the 11
+        `Real` fields), and 2304 in the history: one symmetric `3 x 3` tensor
+        (6 stored components) on the 8 nodes of a DQ1 hexahedron, in each of
+        the 48 cells. If a future edit makes this a refinement level larger
+        it stops being a unit test, and the rule this class is written under
+        stops holding.
 
         The cell count is summed over `cells.owned.local_size`, the *owned*
         count, and not `num_cells()`, which is rank-local and includes the
         halo, so the obvious spelling is a test that passes only in serial.
         On an extruded mesh `cells` counts every cell of every layer.
         """
-        solver, z, layout = self.build()
-        assert z.function_space().dim() == 1971
+        solver, _, _ = self.build()
+        history = solver.solution_space[solver.field_index["history"]].dim()
+        assert solver.solution_space.dim() - history == 1971
+        assert history == 6 * 8 * 48
         assert solver.mesh.comm.allreduce(solver.mesh.cells.owned.local_size) == 48
-        assert len(layout.real_fields) == 11
+        assert len(solver.real_indices) == 11
         # (L+1)^2 = 4 modes on each of two boundaries, then m_1, m_2, m_3.
-        assert len(layout.multipliers) == 8
-        assert set(layout.rotation) == {"m1", "m2", "m3"}
+        assert len(solver.multiplier_indices) == 8
+        assert set(coupling(solver, Rotation).values()) == {"m1", "m2", "m3"}
 
     def test_the_block_is_the_claimed_diagonal(self):
         """Measured `max rel |d - diag(A)| = 1.787e-15`; gate at 1e-12.
@@ -1732,9 +1704,9 @@ class TestBlockOneInThreeDimensions:
         Spread over the whole block, rotation included: 295.5, against 235.7 in
         2-D. That is what the per-row off-diagonal form is for.
         """
-        solver, z, layout = self.build()
-        block = real_block(solver, z, layout)
-        claimed = solver.block1_diagonal()
+        solver, _, _ = self.build()
+        block = real_block(solver)
+        claimed = predicted_real_diagonal(solver)
         assert np.max(np.abs(claimed - np.diag(block))
                       / np.abs(np.diag(block))) <= DIAG_TOL
         assert offdiagonal_ratios(block).max() <= OFFDIAG_TOL
@@ -1744,7 +1716,7 @@ class TestBlockOneInThreeDimensions:
         if SERIAL:
             assert np.abs(off).max() == 0.0
         # Two distinct multiplier values, one per boundary, from 8 rows.
-        n_mult = len(layout.multipliers)
+        n_mult = len(solver.multiplier_indices)
         assert len(set(np.round(np.diag(block)[:n_mult], 12))) == 2
 
     @pytest.mark.parametrize("L, refinement, silent_tol",
@@ -1780,14 +1752,14 @@ class TestBlockOneInThreeDimensions:
         alignment is fine and it is discrete orthogonality that is not.
         `silent_tol` is set per row of `check_multiplier_alignment`'s table.
         """
-        solver, z, layout = self.build(L=L, refinement_level=refinement)
-        assert len(layout.multipliers) == 2 * (L + 1) ** 2
-        block = real_block(solver, z, layout)
-        n_mult = len(layout.multipliers)
+        solver, _, _ = self.build(L=L, refinement_level=refinement)
+        assert len(solver.multiplier_indices) == 2 * (L + 1) ** 2
+        block = real_block(solver)
+        n_mult = len(solver.multiplier_indices)
         assert len(set(np.round(np.diag(block)[:n_mult], 12))) == 2, (
             "the premise of this test: the diagonal cannot tell the modes "
             "apart, so if it suddenly can, read this docstring again")
-        check_multiplier_alignment(solver, z, layout, silent_tol=silent_tol)
+        check_multiplier_alignment(solver, silent_tol=silent_tol)
 
     def test_the_gate_scripts_copy_of_the_probe_agrees_with_this_one(self):
         """The duplication in `gate_phase1_diagonal_3d.py`, closed by measurement.
@@ -1799,17 +1771,22 @@ class TestBlockOneInThreeDimensions:
         this one, and without it "the two are pinned to agree" means somebody
         read two numbers off two screens.
 
-        The case of 24 columns of two layers, so it costs a second, and it is the same case the
-        script's own `--selfcheck` runs.
+        The script's `real_block` reads `real_fields` from a layout object;
+        the solver has no layout, so a namespace carrying the solver's
+        `real_indices` under that name stands in for it.
+
+        The case of 24 columns of two layers, so it costs a second, and it is
+        the same case the script's own `--selfcheck` runs.
         """
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]
                                / "demos" / "gravity" / "spikes"))
         import gate_phase1_diagonal_3d as gate
 
-        solver, z, layout = self.build()
-        mine = real_block(solver, z, layout)
-        theirs = gate.real_block(solver, z, layout)
+        solver, _, _ = self.build()
+        mine = real_block(solver)
+        layout = types.SimpleNamespace(real_fields=solver.real_indices)
+        theirs = gate.real_block(solver, solver.solution, layout)
         assert np.abs(mine - theirs).max() == 0.0, (
             "the gate script's copy of the probe no longer agrees with this "
             "file's; they have drifted and the production gate is measuring "
@@ -1831,9 +1808,9 @@ class TestBlockOneInThreeDimensions:
         product and **cannot** see a flip of `CLOSURE_SIGNS`, which moves the
         prediction and the assembled row together.
         """
-        solver, z, layout = self.build()
-        block = real_block(solver, z, layout)
-        n_mult = len(layout.multipliers)
+        solver, _, _ = self.build()
+        block = real_block(solver)
+        n_mult = len(solver.multiplier_indices)
         rotation = np.diag(block)[n_mult:]
 
         assert rotation[0] == pytest.approx(rotation[1], rel=1e-14)
@@ -1857,14 +1834,13 @@ class TestBlockOneInThreeDimensions:
 class TestPresetWiring:
     """`"iterative"` must reach the iterative preset, and be seen to.
 
-    It did not. The string was accepted, validated against the allowed set,
-    and then ignored: every branch handed back the direct dictionary, whose
-    own docstring says "2-D ONLY. Do not use this in 3-D". The failure is
+    The string was once accepted, validated against the allowed set, and then
+    ignored: every branch handed back the direct dictionary, whose own
+    docstring says "2-D ONLY. Do not use this in 3-D". The failure is
     invisible in 2-D (where direct is right anyway) and in any driver that
-    passes an explicit dictionary (which all of them did, because of this),
-    so nothing caught it and four hand-copies of the iterative dictionary
-    grew in the drivers instead. These tests exist so it cannot recur
-    silently: each asserts a key that only one of the two presets carries.
+    passes an explicit dictionary, so nothing caught it. These tests exist so
+    it cannot recur silently: each asserts a key that only one of the two
+    presets carries.
     """
 
     def test_iterative_selects_the_iterative_preset(self, meshes):
@@ -1881,10 +1857,11 @@ class TestPresetWiring:
         assert p["dtn_fieldsplit_0_assembled_pc_type"] == "lu"
 
     def test_the_two_presets_actually_differ(self, meshes):
-        """The rejecting partner: a test that passes on the old code is useless.
+        """The rejecting partner: a test that passes on broken wiring is useless.
 
-        Before the wiring, both strings produced byte-identical dictionaries
-        and every assertion above would have held for the wrong reason.
+        With the wiring broken, both strings produced byte-identical
+        dictionaries and every assertion above would have held for the wrong
+        reason.
         """
         a, _, _ = build(meshes, solver_parameters="direct")
         b, _, _ = build(meshes, solver_parameters="iterative")
@@ -1895,8 +1872,7 @@ class TestPresetWiring:
 
         These meshes are 2-D, so the default must still be the direct preset
         and no existing 2-D result moves. The 3-D half of the rule cannot be
-        exercised here - building a 3-D coupled space is not a unit test - so
-        it is asserted on the branch itself below.
+        exercised here - solving a 3-D coupled system is not a unit test.
         """
         solver, _, _ = build(meshes)
         assert solver.mesh.topological_dimension == 2
@@ -1905,19 +1881,19 @@ class TestPresetWiring:
 
     def test_the_block_zero_sweep_follows_the_layout_not_the_caller(
             self, meshes):
-        """`condensed` comes from the layout, so the mismatch is unreachable.
+        """The block-0 split of a dictionary matches the space's block-0 fields.
 
-        `_check_block0_split_matches_layout` exists because the preset's
-        `condensed` and the space's `condense_internal_variables` are
-        independent arguments that nothing reconciles. On the preset path they
-        are now the same fact, so the split count must match the space's
-        block-0 field count for free.
+        The preset's `condensed` and the space's history family are independent
+        arguments that nothing reconciles when the caller gives a dictionary.
+        For the DG family's `block0="pair"` route, the split count must match
+        the space's block-0 field count: the displacement, the history and the
+        potential.
 
         The route with a block-0 fieldsplit is `block0="pair"`; the default
         route names no `_fields` key at all and is guarded by the class name
         instead (`tests/unit/test_gia_condensed_block0.py`).
         """
-        solver, _, layout = build(
+        solver, _, _ = build(
             meshes,
             dtn_representation="multiplier",
             solver_parameters=selfgrav_dtn_iterative_solver_parameters(
@@ -1930,7 +1906,7 @@ class TestPresetWiring:
             for k, v in solver.solver_parameters.items()
             if k.startswith("dtn_fieldsplit_0_pc_fieldsplit_")
             and k.endswith("_fields"))
-        assert n_fields == 2 + len(layout.internal_variables)
+        assert n_fields == 2 + ("history" in solver.field_index)
 
     def test_the_displacement_split_gets_the_near_incompressible_pc(
             self, meshes):
@@ -1938,9 +1914,9 @@ class TestPresetWiring:
 
         A `near_nullspace` declared on the outer mixed space never reaches
         GAMG underneath `DtNTwoBlockSchurPC`; the modes are dropped with no
-        error and no warning. `b4_polar_motion` shipped exactly that. On the
-        condensed layout the displacement split carries the class that builds
-        the modes itself.
+        error and no warning. `b4_polar_motion` shipped exactly that. With the
+        history eliminated at quadrature points, the displacement split
+        carries the class that builds the modes itself.
 
         The class it carries is the near-incompressible one, which adds the
         low-degree divergence-free fields to the six rigid-body modes. The
@@ -1964,9 +1940,14 @@ class TestPresetWiring:
         number unchanged. A cap left behind on a `preonly` KSP would be inert
         and would read as a truncated solve to anyone auditing the dictionary,
         so the three keys of the CG must be absent and not merely unused.
+
+        The Quadrature family supports natural displacement boundaries only,
+        so this configuration has a fluid core instead of the rigid one; the
+        multiplier representation gives it the `(u, psi)` block-0 sweep.
         """
-        solver, _, _ = build(meshes, condensed=True,
-                             solver_parameters="iterative")
+        solver, _, _ = TestFluidCore.build_fluid(
+            meshes, internal_variable_family="Quadrature",
+            dtn_representation="multiplier", solver_parameters="iterative")
         p = solver.solver_parameters
         u_split = next(
             s for s in range(3)
@@ -1981,14 +1962,14 @@ class TestPresetWiring:
 
     def test_the_uncondensed_pair_split_condenses_and_seeds_near_incompressible_modes(
             self, meshes):
-        """With `block0="pair"` the uncondensed `(u, M)` is one split.
+        """With `block0="pair"` the DG family's `(u, M)` is one split.
 
         The condensed displacement operator is an assembled matrix, so no
         `AssembledPC` wraps it; GAMG is seeded through the near-nullspace
         provider the solver publishes, whose modes come from
-        `condensed_near_nullspace`.
+        `near_nullspace`.
 
-        Both layouts get the same modes and the same displacement split, so
+        Both routes get the same modes and the same displacement split, so
         that the wall-clock ratio between them measures the cost of the
         coupled residual and nothing else: 670 s against 271 s for a 500 yr
         step at matched settings (Gadi jobs 178765563 and 178765560, both with
@@ -1996,7 +1977,7 @@ class TestPresetWiring:
 
         The split is `u_ksp_max_it`, one argument for both block-0 routes, so
         the default reaches this route too and the assertions below are the
-        same three absences as on the condensed layout. A second default for
+        same three absences as on the condensed route. A second default for
         this route would break the comparison the route exists for.
         """
         solver, _, _ = build(
@@ -2016,7 +1997,7 @@ class TestPresetWiring:
         assert prefix + "ksp_max_it" not in p
         assert prefix + "ksp_rtol" not in p
         assert prefix + "ksp_converged_maxits" not in p
-        assert solver.condensed_near_nullspace == "incompressible"
+        assert solver.near_nullspace_modes == "incompressible"
         assert callable(solver.appctx["condensed_field_near_nullspace"])
         assert solver.appctx["operator_version"] == 0
 
@@ -2026,7 +2007,7 @@ class TestPresetWiring:
                 condensed=False, u_pc="firedrake.AssembledPC")
 
     # The displacement split sits at a different depth on each route: split 0
-    # of the block-0 sweep on the condensed layout, split 0 of
+    # of the block-0 sweep with the history condensed, split 0 of
     # `gadopt.CondensedBlockPC`'s own `(u, psi)` sweep on the full layout with
     # `block0="condensed"`, and split 0 of the `(u, M)` pair's condensed field
     # on the full layout with `block0="pair"`.
@@ -2092,14 +2073,11 @@ class TestPresetWiring:
                         u_ksp_max_it=0, **kwargs)), kwargs
 
     def test_the_iterative_preset_solves_the_same_system(self, meshes, solved):
-        """The one that is not about dictionaries: does the new path solve?
+        """The one that is not about dictionaries: does the iterative path solve?
 
-        Wiring a preset up is worth nothing if the path it now reaches does not
-        converge to the same answer, and this preset had never been exercised
-        *through this class* at all - every driver reached it by passing an
-        explicit dictionary, and the class itself always returned the direct
-        one. `solved` is the module fixture, which takes the default, which in
-        2-D is direct.
+        Wiring a preset up is worth nothing if the path it reaches does not
+        converge to the same answer. `solved` is the module fixture, which
+        takes the default, which in 2-D is direct.
 
         The tolerance is the iterative preset's own `outer_rtol` of 1e-6 and
         not a fudge: measured on this system the disagreement is 1.9e-06 at
@@ -2108,13 +2086,13 @@ class TestPresetWiring:
         discrete system rather than two close ones - a formulation difference
         would sit on a floor and refuse to move.
         """
-        reference, z_ref, layout = solved
-        solver, z, _ = build(meshes, solver_parameters="iterative")
+        reference, u_ref, psi_ref = solved
+        solver, u, psi = build(meshes, solver_parameters="iterative")
         solver.solve()
 
-        for field in (layout.displacement, layout.potential):
-            a = z_ref.subfunctions[field].dat.data_ro
-            b = z.subfunctions[field].dat.data_ro
+        for a_field, b_field in ((u_ref, u), (psi_ref, psi)):
+            a = a_field.dat.data_ro
+            b = b_field.dat.data_ro
             scale = max(abs(a).max(), 1e-300)
             assert abs(a - b).max() / scale < 1e-5
 
@@ -2151,10 +2129,44 @@ class TestPresetWiring:
         assert p["dtn_schur_ainvb"] is True
         assert "dtn_fieldsplit_1_ksp_converged_reason" not in p
         delegating, _, _ = build(
-            meshes, solver_parameters=selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, ainvb=False))
+            meshes, solver_parameters="iterative",
+            preset_options={"ainvb": False})
         assert "dtn_fieldsplit_1_ksp_converged_reason" \
             in delegating.solver_parameters
+
+
+def source_mass_form(solver):
+    """The volume source of the solver's potential row, against `v = 1`.
+
+    The potential row is `GravityPotential.residual`; its volume source is
+    `-Lambda int rho_0 u . grad(v) dx_m`, the only integral of the row on the
+    mantle's cells. The row is built here at the solution's displacement with
+    `v` a unit Function on the potential space, and the mantle cell integrals
+    are kept.
+
+    The constant is a `Function` assigned 1 and not a `Constant`: `grad` of a
+    `Constant` folds to symbolic zero and the test would then be a statement
+    about UFL rather than about the discretisation. This way the gradient is
+    the real one, evaluated from a full set of unit degrees of freedom, and
+    the zero it returns is the discrete statement that `v = 1` lies in the
+    test space.
+
+    Args:
+      solver: the solver.
+
+    Returns:
+      `(form, one)`: the source form and the unit Function in it.
+    """
+    space = solver.psi.function_space()
+    one = fd.Function(space).assign(1.0)
+    zero = fd.Function(space)
+    row = solver.gravity.residual(
+        zero, one, solver.field("displacement"),
+        density=solver.approximation.density, theta_psi=1.0)
+    source = [integral for integral in row.integrals()
+              if integral.integral_type() == "cell"
+              and integral.ufl_domain() == solver.mesh]
+    return fd.Form(source), one
 
 
 class TestV4:
@@ -2172,10 +2184,12 @@ class TestV4:
 
     def test_source_form_with_v_equal_one_is_machine_zero(self, solved):
         solver, _, _ = solved
-        value = fd.assemble(solver.source_mass_form())
-        u = solver.solution_split[solver.layout.displacement]
+        form, _ = source_mass_form(solver)
+        value = fd.assemble(form)
+        u = solver.field("displacement")
         scale = float(solver.Lambda) * fd.assemble(
-            solver.approximation.density * fd.sqrt(fd.dot(u, u)) * solver.dx_m)
+            solver.approximation.density * fd.sqrt(fd.dot(u, u))
+            * solver.gravity.dx_m)
         assert scale > 0.0, "the test is vacuous on a zero displacement"
         assert abs(value) < 1e-16 * scale
 
@@ -2183,30 +2197,35 @@ class TestV4:
         """Otherwise the test is a statement about UFL's constant folding.
 
         `grad(Constant(1))` folds to symbolic zero and the integral disappears
-        before anything is discretised. Built as a `Function` of unit degrees
-        of freedom, the gradient is the real one and the zero is the discrete
-        statement that `v = 1` lies in the test space.
+        before anything is discretised. With a `Function` of unit degrees of
+        freedom the source integral stays in the row, and the unit function is
+        one of its coefficients.
         """
         solver, _, _ = solved
-        form = solver.source_mass_form()
+        form, one = source_mass_form(solver)
         assert form.integrals(), "the source-mass form folded away entirely"
         # No family filter: on a quadrilateral mesh the continuous element is
         # reported as "Q", not "Lagrange".
         unit = [c for c in extract_coefficients(form)
                 if isinstance(c, fd.Function)
-                and c.function_space() is solver.solution_space[
-                    solver.layout.potential]
+                and c.function_space() is solver.psi.function_space()
                 and np.allclose(c.dat.data_ro, 1.0)]
-        assert unit, "no unit function on the potential space in the form"
+        assert unit and unit[0] is one, \
+            "no unit function on the potential space in the form"
 
     def test_net_enclosed_mass_is_the_sheets_alone(self, solved):
         """A `cos 2phi` sheet carries no net mass, so the datum is idle.
 
         The volume source contributes nothing by construction, which is the
-        whole difference from `GravitySolver`'s mass bookkeeping.
+        whole difference from `GravitySolver`'s mass bookkeeping. The enclosed
+        mass is the datum's `source_mass` plus the cavity flux in mass units.
         """
         solver, _, _ = solved
-        assert abs(solver.total_enclosed_mass()) < 1e-14
+        gravity = solver.gravity
+        enclosed = (scalar_value(gravity.source_mass)
+                    + scalar_value(gravity.cavity_flux)
+                    / (4.0 * np.pi * scalar_value(gravity.form.G)))
+        assert abs(enclosed) < 1e-14
 
 
 class TestNullCoupling:
@@ -2223,12 +2242,14 @@ class TestNullCoupling:
 
     def test_row_scalings_are_floored_and_not_zero(self, meshes):
         solver, _, _ = build(meshes, approximation_kwargs={"B_mu": 0.0})
+        rotation = coupling(solver, Rotation)
+        theta_rot = float(rotation.theta_rot(solver.coupling_context, 2))
         assert float(solver.theta_psi) == pytest.approx(
             NULL_COUPLING_ROW_SCALE / LAMBDA, rel=1e-14)
-        assert float(solver._theta_rot(2)) == pytest.approx(
+        assert theta_rot == pytest.approx(
             -NULL_COUPLING_ROW_SCALE * OMEGA_SQ_EARTH, rel=1e-14)
         assert float(solver.theta_psi) != 0.0
-        assert float(solver._theta_rot(2)) != 0.0
+        assert theta_rot != 0.0
 
     def test_a_nonzero_B_mu_is_untouched_to_the_bit(self, meshes):
         """The floor is a strict test on zero, so nothing production changes.
@@ -2249,8 +2270,10 @@ class TestNullCoupling:
         which builds a global dense block and is the reason every per-block
         measurement in this project is a serial one.
         """
-        solver, z, layout = build(meshes, approximation_kwargs={"B_mu": 0.0},
-                                  dtn_representation="multiplier")
+        solver, _, _ = build(meshes, approximation_kwargs={"B_mu": 0.0},
+                             dtn_representation="multiplier")
+        z = solver.solution
+        index = solver.field_index
         A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
 
         def amax(i, j):
@@ -2258,12 +2281,12 @@ class TestNullCoupling:
             return 0.0 if M is None else float(
                 np.abs(M.convert("dense").getDenseArray()).max())
 
-        assert amax(layout.potential, layout.potential) > 0.0
-        assert amax(layout.multipliers[0], layout.potential) > 0.0
+        assert amax(index["potential"], index["potential"]) > 0.0
+        assert amax(solver.multiplier_indices[0], index["potential"]) > 0.0
         # The coupling itself *is* off: the body force is gone.
-        assert amax(layout.displacement, layout.potential) == 0.0
+        assert amax(index["displacement"], index["potential"]) == 0.0
         # ... while the one-way leg survives, so psi is still driven by u.
-        assert amax(layout.potential, layout.displacement) > 0.0
+        assert amax(index["potential"], index["displacement"]) > 0.0
 
     def test_it_reproduces_the_uncoupled_solver(self, meshes):
         """V2, run as specified rather than around the defect.
@@ -2271,10 +2294,17 @@ class TestNullCoupling:
         Both sides declare the rigid-rotation kernel (defect D-2); without it
         the displacements agree only to ~1e-07, the difference being entirely
         that zero-energy mode.
+
+        The load is the traction of `mechanics_bcs` on both sides
+        (`sheet=False`). A `SurfaceLoad` weighs its sheet with the
+        approximation's `B_mu`, which is zero here, so it would apply no
+        traction at all; the mechanics-only reference has the traction
+        `B_MU g sigma`.
         """
         _, sub = meshes
-        solver, z, layout = build(
-            meshes, approximation_kwargs={"B_mu": 0.0}, declare_nullspace=True)
+        solver, u, psi = build(
+            meshes, sheet=False, approximation_kwargs={"B_mu": 0.0},
+            declare_nullspace=True)
         solver.solve()
 
         V = fd.VectorFunctionSpace(sub, "CG", 2)
@@ -2294,46 +2324,52 @@ class TestNullCoupling:
         # `basis.orthogonalize` with a read-write access to the vector.
         apply_kernel_projection(basis, zm.subfunctions[0])
 
-        uc = z.subfunctions[layout.displacement]
         ur = zm.subfunctions[0]
         assert fd.norm(ur) > 0.0
-        assert fd.norm(fd.assemble(uc - ur)) / fd.norm(ur) < 1e-11
+        assert fd.norm(fd.assemble(u - ur)) / fd.norm(ur) < 1e-11
         # The gravity space stores the history as one (n, d, d) field with
         # symmetric storage; the reference holds a (d, d) field. Compare
         # slice by slice as expressions.
-        stored = history_slices(z.subfunctions[layout.internal_variable_field])
+        stored = history_slices(
+            solver.solution.subfunctions[solver.field_index["history"]])
         for k, m in enumerate(stored):
             mr = zm.subfunctions[1 + k]
             assert fd.norm(m - mr) / fd.norm(mr) < 1e-11
         # ... and psi is still driven, so the test is not vacuous.
-        assert fd.norm(solver.potential) > 0.0
+        assert fd.norm(psi) > 0.0
 
 
-class TestSolutionOldAfterAStep:
-    """`solution_old` holds the accepted state when `solve` returns.
+class TestAcceptedStateAfterAStep:
+    """The accepted state is the solved state when `solve` returns.
 
-    `StokesSolverBase.solve` copies `solution` into `solution_old` before it
-    solves, so the forms see the right value with or without a later copy.
-    Code that reads `solution_old` between two steps (a checkpoint, a
-    diagnostic that assembles the residual) sees the accepted state only
-    because `SelfGravitatingGIASolver.solve` copies it again at the end. This
-    checks that copy on the non-direct path, with and without a declared
+    Code that reads the state between two steps (a checkpoint, a diagnostic
+    that assembles the residual) reads the accepted history level
+    `solver.internal_variables` and the Functions `u` and `psi`. After a step
+    each must hold exactly what the step solved, with and without a declared
     nullspace (the projection path and the path without it).
     """
 
     @pytest.mark.parametrize("declare_nullspace", [False, True])
-    def test_solution_old_is_the_accepted_state(self, meshes, declare_nullspace):
-        solver, z, layout = build(meshes, dtn_representation="multiplier",
-                                  declare_nullspace=declare_nullspace)
+    def test_the_accepted_state_is_the_solved_state(self, meshes,
+                                                    declare_nullspace):
+        solver, u, psi = build(meshes, dtn_representation="multiplier",
+                               declare_nullspace=declare_nullspace)
         solver.solve()
+        z = solver.solution
         # The solve moved away from the zero initial state, so equality is
         # not the trivial one of two zero vectors.
         with z.dat.vec_ro as current:
             assert current.norm() > 0.0
-        with solver.solution_old.dat.vec_ro as old, z.dat.vec_ro as current:
-            difference = old.copy()
-            difference.axpy(-1.0, current)
-            assert difference.norm() == 0.0
+        index = solver.field_index
+        pairs = ((solver.internal_variables, z.subfunctions[index["history"]]),
+                 (u, z.subfunctions[index["displacement"]]),
+                 (psi, z.subfunctions[index["potential"]]))
+        for accepted, solved_field in pairs:
+            with accepted.dat.vec_ro as old, solved_field.dat.vec_ro as current:
+                assert current.norm() > 0.0
+                difference = old.copy()
+                difference.axpy(-1.0, current)
+                assert difference.norm() == 0.0
 
 
 class TestRigidRotationNullspace:
@@ -2349,10 +2385,11 @@ class TestRigidRotationNullspace:
     def test_the_mode_is_nearly_annihilated_by_the_jacobian(self, meshes):
         """The measurement: `||J u_rot|| / ||u_rot||`, small but not zero."""
         _, sub = meshes
-        solver, z, layout = build(meshes)
+        solver, _, _ = build(meshes)
+        z = solver.solution
         X = fd.SpatialCoordinate(sub)
-        probe = fd.Function(z.function_space())
-        probe.subfunctions[layout.displacement].interpolate(
+        probe = fd.Function(solver.solution_space)
+        probe.subfunctions[solver.field_index["displacement"]].interpolate(
             fd.as_vector([-X[1], X[0]]))
         J = fd.assemble(fd.derivative(solver.F, z), mat_type="matfree")
         with probe.dat.vec_ro as xv:
@@ -2364,16 +2401,15 @@ class TestRigidRotationNullspace:
         assert 0.0 < ratio < 1e-3
 
     def test_it_spans_the_displacement_block_only(self, meshes):
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-            self_gravity_number=LAMBDA)
-        ns = rigid_rotation_nullspace(Z, layout)
-        bases = list(ns)
-        assert isinstance(bases[layout.displacement], fd.VectorSpaceBasis)
-        assert len(bases[layout.displacement]._petsc_vecs) == 1
+        """The declared kernel is one vector on the displacement and nothing else."""
+        solver, _, _ = build(meshes, rotation=True, declare_nullspace=True)
+        bases = list(solver.nullspace)
+        displacement = solver.field_index["displacement"]
+        assert len(bases) == len(solver.solution_space)
+        assert isinstance(bases[displacement], fd.VectorSpaceBasis)
+        assert len(bases[displacement]._petsc_vecs) == 1
         for i, entry in enumerate(bases):
-            if i != layout.displacement:
+            if i != displacement:
                 assert not isinstance(entry, fd.VectorSpaceBasis)
 
     def test_declaring_it_removes_it_from_the_answer(self, meshes):
@@ -2387,25 +2423,25 @@ class TestRigidRotationNullspace:
         _, sub = meshes
         X = fd.SpatialCoordinate(sub)
 
-        def rotation_content(solver):
-            V = solver.displacement.function_space()
+        def rotation_content(u):
+            V = u.function_space()
             r0 = fd.Function(V).interpolate(fd.as_vector([-X[1], X[0]]))
             dxm = fd.Measure("dx", domain=sub)
-            c = (fd.assemble(fd.dot(solver.displacement, r0) * dxm)
+            c = (fd.assemble(fd.dot(u, r0) * dxm)
                  / fd.assemble(fd.dot(r0, r0) * dxm))
-            return abs(c) * fd.norm(r0) / fd.norm(solver.displacement)
+            return abs(c) * fd.norm(r0) / fd.norm(u)
 
-        plain, _, _ = build(meshes)
+        plain, u_plain, _ = build(meshes)
         plain.solve()
-        declared, _, _ = build(meshes, declare_nullspace=True)
+        declared, u_declared, _ = build(meshes, declare_nullspace=True)
         declared.solve()
 
-        assert rotation_content(declared) < 1e-14
-        assert rotation_content(declared) < 1e-3 * rotation_content(plain)
+        assert rotation_content(u_declared) < 1e-14
+        assert rotation_content(u_declared) < 1e-3 * rotation_content(u_plain)
 
 
 class TestFluidCore:
-    """`FluidCore`: the CMB condition that replaces the legacy `un = 0`.
+    """`FluidCore`: the CMB condition that replaces the rigid `un = 0`.
 
     Structural only, as everything in this file is. The physics - the
     contrast-zero cancellation, the sign of the CMB stiffness, its magnitude
@@ -2413,30 +2449,54 @@ class TestFluidCore:
     `demos/gravity/spikes/gate_fluidcore.py`.
     """
 
+    #: The keywords of `build_fluid` that go to `FluidCore`; the rest go to
+    #: the solver.
+    FLUID_CORE_KEYS = ("boundary", "rho_core", "rho_mantle", "g",
+                       "buoyancy_density")
+
     @staticmethod
-    def build_fluid(meshes, **fluid_core_kwargs):
+    def build_fluid(meshes, *, rotation=False, sheet=True, extra_bcs=None,
+                    approximation_kwargs=None, **kwargs):
+        """The annulus with a fluid core on Rc and the `cos 2 phi` load on Re.
+
+        Args:
+          meshes: the `(parent, sub)` pair of the module fixture.
+          rotation: add the `Rotation` coupling with the mantle's polar moment.
+          sheet: `True` gives the load as a `SurfaceLoad`; `False` gives no
+            load, for a test that writes its own traction in `extra_bcs`.
+          extra_bcs: mechanics conditions merged into `bcs`.
+          approximation_kwargs: settings merged into `approximation`.
+          kwargs: `boundary`, `rho_core`, `rho_mantle`, `g` and
+            `buoyancy_density` go to `FluidCore` (defaults `CURVE_RC` and
+            2.0); everything else goes to `SelfGravitatingGIASolver`
+            (`dtn_representation`, `internal_variable_family`,
+            `solver_parameters`, `nullspace`, ...).
+
+        Returns:
+          `(solver, u, psi)`.
+        """
         parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
-            fluid_core=True,
-            self_gravity_number=LAMBDA)
-        z = fd.Function(Z)
-        Xm = fd.SpatialCoordinate(sub)
-        bcs = {CURVE_RE: {"normal_stress":
-                          B_MU * SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0]))}}
-        bcs.update(fluid_core_kwargs.pop("extra_bcs", {}))
-        approximation_kwargs = fluid_core_kwargs.pop("approximation_kwargs", {})
         settings = {"boundary": CURVE_RC, "rho_core": 2.0}
-        settings.update(fluid_core_kwargs)
+        settings.update({k: kwargs.pop(k)
+                         for k in TestFluidCore.FLUID_CORE_KEYS if k in kwargs})
+        u, psi = new_fields(meshes)
+        couplings = [FluidCore(**settings)]
+        if sheet:
+            couplings.append(SurfaceLoad(boundary=CURVE_RE,
+                                         sigma=load_density(sub),
+                                         g_surface=1.0))
+        if rotation:
+            couplings.append(Rotation(C=polar_moment(meshes),
+                                      Omega_sq=OMEGA_SQ_EARTH))
         solver = SelfGravitatingGIASolver(
-            z, approximation(**approximation_kwargs), layout=layout, dt=1.0,
-            bcs=bcs,
-            fluid_core=FluidCore(**settings))
-        return solver, z, layout
+            u, psi, approximation(**(approximation_kwargs or {})), dt=1.0,
+            gravity_bcs=gravity_bcs(parent, sheet=False),
+            bcs=dict(extra_bcs or {}), couplings=couplings, **kwargs)
+        return solver, u, psi
 
     def test_refuses_un_on_the_same_boundary(self, meshes):
-        """The two treatments are a switch, not layers: `un` pins `dot(u, n)`."""
-        with pytest.raises(ValueError, match="rigid-core switch"):
+        """The two treatments are alternatives, not layers: `un` pins `dot(u, n)`."""
+        with pytest.raises(ValueError, match="both a FluidCore and"):
             self.build_fluid(meshes, extra_bcs={CURVE_RC: {"un": 0.0}})
 
     def test_refuses_a_tag_that_is_not_a_mechanics_facet(self, meshes):
@@ -2450,32 +2510,32 @@ class TestFluidCore:
             self.build_fluid(meshes, boundary=CURVE_OUTER)
 
     def test_absent_by_default(self, meshes):
-        """No `fluid_core` means an empty form, not a zero-valued one."""
-        solver, z, _ = build(meshes, rotation=False)
-        assert solver.fluid_core is None
-        assert solver.core_pressure is None
-        assert solver.layout.core_pressure is None
-        assert solver.fluid_core_residual().empty()
+        """No `FluidCore` means no coupling and no core-pressure field."""
+        solver, _, _ = build(meshes, rotation=False)
+        assert not [c for c in solver.couplings if isinstance(c, FluidCore)]
+        assert "core_pressure" not in solver.field_index
+        assert "core_pressure" not in solver.state()
 
     def test_core_pressure_is_a_parent_real_field(self, meshes):
-        solver, _, layout = self.build_fluid(meshes)
-        assert solver.core_pressure is not None
-        assert solver.core_pressure is solver.solution.subfunctions[
-            layout.core_pressure]
-        assert solver.core_pressure.function_space().mesh() is \
-            layout.potential_mesh
-        assert solver.core_pressure.function_space().ufl_element().family() \
-            == "Real"
+        parent, _ = meshes
+        solver, _, _ = self.build_fluid(meshes)
+        pressure = coupling(solver, FluidCore).pressure()
+        assert pressure is solver.solution.subfunctions[
+            solver.field_index["core_pressure"]]
+        assert pressure.function_space().mesh() is parent
+        assert pressure.function_space().ufl_element().family() == "Real"
 
     @pytest.mark.skipif(
         fd.COMM_WORLD.size > 1,
         reason="the per-block instrument needs global dense blocks")
     @REAL_BLOCK_ON_PARENT_FACETS
     def test_core_pressure_blocks_form_an_exact_saddle_pair(self, meshes):
-        solver, z, layout = self.build_fluid(meshes)
-        A = fd.assemble(fd.derivative(solver.fluid_core_residual(), z),
+        solver, _, _ = self.build_fluid(meshes)
+        core = coupling(solver, FluidCore)
+        A = fd.assemble(fd.derivative(core.residual(solver.coupling_context),
+                                      solver.solution),
                         mat_type="nest").petscmat
-        iu, ic = layout.displacement, layout.core_pressure
+        iu, ic = solver.field_index["displacement"], solver.field_index["core_pressure"]
         up = A.getNestSubMatrix(iu, ic).convert("dense").getDenseArray()
         pu = A.getNestSubMatrix(ic, iu).convert("dense").getDenseArray()
         pp = A.getNestSubMatrix(ic, ic)
@@ -2489,28 +2549,33 @@ class TestFluidCore:
             assert y.norm() == 0.0
 
     def test_constraint_row_has_the_documented_scale(self, meshes):
-        solver, z, layout = self.build_fluid(meshes)
-        X = fd.SpatialCoordinate(layout.mechanics_mesh)
-        z.subfunctions[layout.displacement].interpolate(
-            X / fd.sqrt(fd.dot(X, X)))
-        residual = fd.assemble(solver.fluid_core_residual())
+        solver, _, _ = self.build_fluid(meshes)
+        core = coupling(solver, FluidCore)
+        _, sub = meshes
+        X = fd.SpatialCoordinate(sub)
+        displacement = solver.solution.subfunctions[
+            solver.field_index["displacement"]]
+        displacement.interpolate(X / fd.sqrt(fd.dot(X, X)))
+        residual = fd.assemble(core.residual(solver.coupling_context))
         row = float(residual.subfunctions[
-            layout.core_pressure].dat.data_ro[0])
+            solver.field_index["core_pressure"]].dat.data_ro[0])
         flux = fd.assemble(
-            fd.dot(solver.displacement, fd.FacetNormal(solver.mesh))
-            * solver.fluid_core_measure()(CURVE_RC))
+            fd.dot(displacement, fd.FacetNormal(solver.mesh)) * core.measure())
         row_scale = (float(solver.scaling_factor)
-                     * float(solver._row_scale_B_mu))
+                     * float(solver.row_scale_B_mu))
         assert row / row_scale == pytest.approx(flux, rel=1e-13)
 
     @REAL_BLOCK_ON_PARENT_FACETS
     def test_constraint_survives_at_zero_B_mu(self, meshes):
-        solver, z, layout = self.build_fluid(
+        solver, _, _ = self.build_fluid(
             meshes, approximation_kwargs={"B_mu": 0.0})
-        A = fd.assemble(fd.derivative(solver.fluid_core_residual(), z),
+        core = coupling(solver, FluidCore)
+        A = fd.assemble(fd.derivative(core.residual(solver.coupling_context),
+                                      solver.solution),
                         mat_type="nest").petscmat
-        iu, ip, ic = (layout.displacement, layout.potential,
-                      layout.core_pressure)
+        index = solver.field_index
+        iu, ip, ic = (index["displacement"], index["potential"],
+                      index["core_pressure"])
 
         def amax(i, j):
             block = A.getNestSubMatrix(i, j)
@@ -2548,16 +2613,20 @@ class TestFluidCore:
     )
     def test_zero_B_mu_matches_independently_constrained_mechanics(
             self, meshes):
-        """The zero-coupling solve keeps the physical core constraint."""
+        """The zero-coupling solve keeps the physical core constraint.
+
+        The load is a traction alone (`sheet=False` and a `normal_stress`),
+        because a `SurfaceLoad` weighs its sheet with the approximation's
+        `B_mu`, which is zero here.
+        """
         _, sub = meshes
         X = fd.SpatialCoordinate(sub)
         load = B_MU * SIGMA_HAT * (
             fd.cos(2 * fd.atan2(X[1], X[0])) + fd.Constant(0.25))
         surface_bcs = {CURVE_RE: {"normal_stress": load}}
-        solver, z, layout = self.build_fluid(
-            meshes, approximation_kwargs={"B_mu": 0.0},
-            dtn_representation="multiplier",
-            extra_bcs=surface_bcs)
+        solver, u, _ = self.build_fluid(
+            meshes, sheet=False, approximation_kwargs={"B_mu": 0.0},
+            dtn_representation="multiplier", extra_bcs=surface_bcs)
         solver.solve()
 
         V = fd.VectorFunctionSpace(sub, "CG", 2)
@@ -2598,48 +2667,44 @@ class TestFluidCore:
                 target_vec.waxpy(
                     reference_pressure, direction_vec, base_vec)
 
-        flux = fd.assemble(fd.dot(solver.displacement, n) * dss)
+        flux = fd.assemble(fd.dot(u, n) * dss)
         flux_ref = fd.assemble(
             fd.dot(constrained.subfunctions[0], n) * dss)
         assert abs(flux) < 1e-12
         assert abs(flux_ref) < 1e-12
-        assert float(solver.core_pressure) == pytest.approx(
+        assert float(coupling(solver, FluidCore).pressure()) == pytest.approx(
             reference_pressure, rel=1e-11, abs=1e-13)
 
         dxm = fd.Measure("dx", domain=sub)
-        displacement_error = solver.displacement - constrained.subfunctions[0]
+        displacement_error = u - constrained.subfunctions[0]
         error_strain = fd.sym(fd.grad(displacement_error))
         reference_strain = fd.sym(fd.grad(constrained.subfunctions[0]))
         relative_strain_error = np.sqrt(fd.assemble(
             fd.inner(error_strain, error_strain) * dxm) / fd.assemble(
                 fd.inner(reference_strain, reference_strain) * dxm))
         assert relative_strain_error < 1e-10
-        m, = history_slices(z.subfunctions[layout.internal_variable_field])
+        m, = history_slices(
+            solver.solution.subfunctions[solver.field_index["history"]])
         m_ref = constrained.subfunctions[1]
         assert fd.norm(m - m_ref) / fd.norm(m_ref) < 1e-10
 
-    def test_block1_diagonal_records_the_zero_constraint_entry(self, meshes):
-        solver, _, layout = self.build_fluid(meshes)
-        diagonal = solver.block1_diagonal()
-        position = layout.real_fields.index(layout.core_pressure)
-        assert diagonal[position] == 0.0
-
     def test_rigid_rotation_nullspace_composes_with_core_pressure(self, meshes):
-        solver, z, layout = self.build_fluid(meshes)
-        basis = list(rigid_rotation_nullspace(z.function_space(), layout))
-        assert len(basis) == len(z.function_space())
-        assert isinstance(basis[layout.displacement], fd.VectorSpaceBasis)
-        assert not isinstance(basis[layout.core_pressure], fd.VectorSpaceBasis)
+        solver, _, _ = self.build_fluid(meshes, nullspace="rigid_rotation")
+        basis = list(solver.nullspace)
+        index = solver.field_index
+        assert len(basis) == len(solver.solution_space)
+        assert isinstance(basis[index["displacement"]], fd.VectorSpaceBasis)
+        assert not isinstance(basis[index["core_pressure"]], fd.VectorSpaceBasis)
 
     def test_solve_enforces_zero_integrated_cmb_displacement(self, meshes):
-        solver, _, _ = self.build_fluid(meshes)
+        solver, u, _ = self.build_fluid(meshes)
         solver.solve()
-        dss = solver.fluid_core_measure()(CURVE_RC)
-        un = fd.dot(solver.displacement, fd.FacetNormal(solver.mesh))
+        dss = coupling(solver, FluidCore).measure()
+        un = fd.dot(u, fd.FacetNormal(solver.mesh))
         flux = fd.assemble(un * dss)
         scale = np.sqrt(fd.assemble(un * un * dss)
                         * fd.assemble(fd.Constant(1.0) * dss))
-        assert fd.norm(solver.displacement) > 0.0
+        assert fd.norm(u) > 0.0
         assert abs(flux) <= 1e-10 * scale + 1e-13
 
     @REAL_BLOCK_ON_PARENT_FACETS
@@ -2650,10 +2715,12 @@ class TestFluidCore:
         is the only spelling in which this cannot be got wrong, which is why
         the condition is written that way.
         """
-        solver, z, layout = self.build_fluid(meshes)
-        A = fd.assemble(fd.derivative(solver.fluid_core_residual(), z),
+        solver, _, _ = self.build_fluid(meshes)
+        core = coupling(solver, FluidCore)
+        A = fd.assemble(fd.derivative(core.residual(solver.coupling_context),
+                                      solver.solution),
                         mat_type="nest").petscmat
-        iu, ip = layout.displacement, layout.potential
+        iu, ip = solver.field_index["displacement"], solver.field_index["potential"]
         upsi = A.getNestSubMatrix(iu, ip).convert("dense").getDenseArray()
         psiu = A.getNestSubMatrix(ip, iu).convert("dense").getDenseArray()
         assert np.abs(upsi).max() > 0.0
@@ -2664,20 +2731,23 @@ class TestFluidCore:
 
         The prestress volume term supplies the mantle's `-0.5 rho_0 g u_r^2`
         half at the CMB (measured to 2.9e-15,
-        `NOTES/measurements/cmb_prestress_check.py`), so `fluid_core_energy`'s spring
-        must carry `rho_core` ALONE for the assembled net to be the physical
-        contrast. `buoyancy_density="contrast"` is the old, 7.3x-too-soft
+        `NOTES/measurements/cmb_prestress_check.py`), so the fluid-core
+        energy's spring must carry `rho_core` ALONE for the assembled net to be
+        the physical contrast. `buoyancy_density="contrast"` is the 7.3x-too-soft
         coefficient, kept only for baselines. With `rho_core=3`, `rho_mantle=1`
         the isolated block's core:contrast ratio is exactly `3 : (3-1)` = 1.5;
         every geometric and `B_mu`/`g_0` factor cancels in the ratio.
         """
+        _, sub = meshes
+
         def spring_quadratic(mode):
-            solver, z, layout = self.build_fluid(
+            solver, _, _ = self.build_fluid(
                 meshes, rho_core=3.0, rho_mantle=1.0, buoyancy_density=mode)
-            X = fd.SpatialCoordinate(layout.mechanics_mesh)
-            z.subfunctions[layout.displacement].interpolate(
+            z = solver.solution
+            X = fd.SpatialCoordinate(sub)
+            z.subfunctions[solver.field_index["displacement"]].interpolate(
                 X / fd.sqrt(fd.dot(X, X)))         # radial u; psi stays zero
-            fc = solver.fluid_core_residual()
+            fc = coupling(solver, FluidCore).residual(solver.coupling_context)
             # z^T J z with psi(z)=0 isolates the (u,u) buoyancy block.
             return fd.assemble(fd.action(
                 fd.action(fd.derivative(fc, z), z), z))
@@ -2689,7 +2759,7 @@ class TestFluidCore:
     def test_buoyancy_density_rejects_an_unknown_mode(self, meshes):
         """A typo in the switch must fail loudly, not silently pick a default.
 
-        The residual is assembled at construction, so the raise fires there.
+        `FluidCore` checks the switch when it is built, before any form.
         """
         with pytest.raises(ValueError, match="'core' or 'contrast'"):
             self.build_fluid(meshes, buoyancy_density="nonsense")
@@ -2704,7 +2774,7 @@ class TestFluidCore:
         """
         solver, _, _ = self.build_fluid(meshes)
         length = fd.assemble(
-            fd.Constant(1.0) * solver.fluid_core_measure()(CURVE_RC))
+            fd.Constant(1.0) * coupling(solver, FluidCore).measure())
         assert abs(length - 2 * np.pi * RC) < 1e-3 * 2 * np.pi * RC
 
     def test_the_sheet_reaches_the_inertia_row(self, meshes):
@@ -2719,32 +2789,44 @@ class TestFluidCore:
 
         With `u = rhat` the sheet is `rho_core` and `p_3 = x^2 + y^2 = Rc^2` on
         the CMB, so its contribution is `rho_core Rc^2 2 pi Rc`. Measured
-        against that, and against the same form with the core switched off.
+        against that, and against the same form with the core sheet taken out
+        of the context's list of sheets, which is what the rotation row reads.
         """
         rho_core = 2.0
-        solver, z, layout = self.build_fluid(meshes, rho_core=rho_core)
-        X = fd.SpatialCoordinate(layout.mechanics_mesh)
-        z.subfunctions[layout.displacement].interpolate(X / fd.sqrt(fd.dot(X, X)))
+        _, sub = meshes
+        solver, _, _ = self.build_fluid(meshes, rho_core=rho_core,
+                                        rotation=True)
+        core = coupling(solver, FluidCore)
+        rotation = coupling(solver, Rotation)
+        ctx = solver.coupling_context
+        X = fd.SpatialCoordinate(sub)
+        solver.solution.subfunctions[solver.field_index["displacement"]] \
+            .interpolate(X / fd.sqrt(fd.dot(X, X)))
 
         predicted = rho_core * RC ** 2 * 2 * np.pi * RC
-        with_core = fd.assemble(solver.inertia_form(2))
-        solver.fluid_core, saved = None, solver.fluid_core
-        without = fd.assemble(solver.inertia_form(2))
-        solver.fluid_core = saved
+        with_core = fd.assemble(rotation.inertia_form(ctx, 2))
+        saved = list(ctx.sheets)
+        ctx.sheets[:] = [s for s in saved if s.name != "fluid core"]
+        try:
+            assert len(ctx.sheets) == len(saved) - 1
+            without = fd.assemble(rotation.inertia_form(ctx, 2))
+        finally:
+            ctx.sheets[:] = saved
 
         assert with_core - without == pytest.approx(predicted, rel=1e-4)
-        assert fd.assemble(solver.fluid_core_sheet_integral(
-            solver.inertia_polynomial(2, X))) == pytest.approx(
-                predicted, rel=1e-4)
+        sheet_integral = (Rotation.inertia_polynomial(2, X)
+                          * core.sheet_density(ctx.fields["displacement"])
+                          * core.measure())
+        assert fd.assemble(sheet_integral) == pytest.approx(predicted, rel=1e-4)
 
     def test_the_sheet_reaches_the_monopole_datum(self, meshes):
         """The 2-D enclosed-mass datum must see the core's volume change.
 
         The 2-D exterior DtN needs a monopole datum carrying *all* the enclosed
         mass; the divergence-form volume source contributes identically zero
-        (V4), so the datum is the sheets alone - and the CMB sheet is not in
-        `sigma_bcs`, so `enclosed_mass_forms` has to add it by hand. Nothing
-        else looks: the potential stays smooth, the geoid is merely wrong.
+        (V4), so the datum is the sheets alone - and the CMB sheet must reach
+        it as one of the couplings' sheets. Nothing else looks: the potential
+        stays smooth, the geoid is merely wrong.
 
         Exercised where the term is *nonzero*, which needs saying. With the
         prototype's `cos 2 phi` load the net CMB sheet mass is 8.3e-16, because
@@ -2755,25 +2837,29 @@ class TestFluidCore:
         sheet contributing nothing to a net mass).
         """
         rho_core = 2.0
-        solver, z, layout = self.build_fluid(meshes, rho_core=rho_core)
-        X = fd.SpatialCoordinate(layout.mechanics_mesh)
-        z.subfunctions[layout.displacement].interpolate(X / fd.sqrt(fd.dot(X, X)))
+        _, sub = meshes
+        solver, _, _ = self.build_fluid(meshes, rho_core=rho_core)
+        X = fd.SpatialCoordinate(sub)
+        solver.solution.subfunctions[solver.field_index["displacement"]] \
+            .interpolate(X / fd.sqrt(fd.dot(X, X)))
 
         solver.update_total_mass()
-        assert float(solver.source_mass) == pytest.approx(
+        assert float(solver.gravity.source_mass) == pytest.approx(
             rho_core * 2 * np.pi * RC, rel=1e-4)
 
     def test_the_datum_is_unmoved_without_a_fluid_core(self, meshes):
         """The same state, rigid core: the datum sees the load sheet alone.
 
-        The guard against the fix having changed the configuration everything
-        else in this project was measured on.
+        The guard against the core sheet having changed the configuration
+        everything else in this project was measured on.
         """
-        solver, z, layout = build(meshes, rotation=False)
-        X = fd.SpatialCoordinate(layout.mechanics_mesh)
-        z.subfunctions[layout.displacement].interpolate(X / fd.sqrt(fd.dot(X, X)))
+        _, sub = meshes
+        solver, _, _ = build(meshes, rotation=False)
+        X = fd.SpatialCoordinate(sub)
+        solver.solution.subfunctions[solver.field_index["displacement"]] \
+            .interpolate(X / fd.sqrt(fd.dot(X, X)))
         solver.update_total_mass()
-        assert abs(float(solver.source_mass)) < 1e-12
+        assert abs(float(solver.gravity.source_mass)) < 1e-12
 
     @REAL_BLOCK_ON_PARENT_FACETS
     def test_the_rotation_pair_transposes(self, meshes):
@@ -2782,31 +2868,17 @@ class TestFluidCore:
         The fluid core's sheet enters `dI`, so it enters the `(m_i, u)` block;
         its transpose partner is a CMB traction proportional to `psi_rot`, and
         `rotational_potential_term` is a *volume* term with no such piece.
-        Measured before `fluid_core_rotational_traction` existed:
-        `max|A(u,m3) - A(m3,u)^T| = 9.07e-04` against a block maximum of
-        9.32e-04, where the rigid core gives 2.6e-15.
+        Measured without that traction: `max|A(u,m3) - A(m3,u)^T| = 9.07e-04`
+        against a block maximum of 9.32e-04, where the rigid core gives
+        2.6e-15.
 
         It went unseen because every transpose gate in the fluid core's suite
-        ran with `rotation=False`. This test exists so that cannot recur.
+        ran without rotation. This test exists so that cannot recur.
         """
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-            fluid_core=True,
-            self_gravity_number=LAMBDA)
-        z = fd.Function(Z)
-        Xm = fd.SpatialCoordinate(sub)
-        dx_m = fd.Measure("dx", domain=sub,
-                          intersect_measures=(fd.Measure("dx", domain=parent),))
-        solver = SelfGravitatingGIASolver(
-            z, approximation(), layout=layout, dt=1.0,
-            bcs={CURVE_RE: {"normal_stress": B_MU * SIGMA_HAT * fd.cos(
-                2 * fd.atan2(Xm[1], Xm[0]))}},
-            rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
-            fluid_core=FluidCore(boundary=CURVE_RC, rho_core=2.0))
-
-        A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
-        iu, im = layout.displacement, layout.rotation["m3"]
+        solver, _, _ = self.build_fluid(meshes, rotation=True)
+        A = fd.assemble(fd.derivative(solver.F, solver.solution),
+                        mat_type="nest").petscmat
+        iu, im = solver.field_index["displacement"], solver.field_index["m3"]
         um = A.getNestSubMatrix(iu, im).convert("dense").getDenseArray()
         mu = A.getNestSubMatrix(im, iu).convert("dense").getDenseArray()
         scale = max(np.abs(um).max(), np.abs(mu).max())
@@ -2838,7 +2910,7 @@ class TestCentreOfMassFrame:
         return LAMBDA * mass / (2 * np.pi * r)
 
     def build(self, meshes, *, load_degree=1, rotation=False,
-              approximation_kwargs=None, dtn_representation=None,
+              approximation_kwargs=None, dtn_representation="multiplier",
               **solver_kwargs):
         """The frame configuration: fluid core, degree-`load_degree` sheet on Re.
 
@@ -2848,95 +2920,58 @@ class TestCentreOfMassFrame:
             has a mass dipole, which the frame multipliers must cancel.
           rotation: carry the rotation closure and its moment of inertia.
           approximation_kwargs: extra keywords for the approximation.
-          dtn_representation: the DtN representation, given to the space and
-            to the solver. `None` takes the library default, which is
-            `"multiplier"` for the frame without sea level.
+          dtn_representation: the DtN representation. `"multiplier"` by
+            default, the representation the frame tests have always used.
           solver_kwargs: passed to `SelfGravitatingGIASolver`.
 
         Returns:
-          `(solver, z, layout)`.
+          `(solver, u, psi)`.
         """
         parent, sub = meshes
-        # The representation reaches the space and the solver only when a
-        # test names it, so the tests that name nothing keep checking the
-        # library default.
-        if dtn_representation is not None:
-            solver_kwargs["dtn_representation"] = dtn_representation
-        X = fd.SpatialCoordinate(parent)
-        bcs_psi = gravity_bcs(parent, sheet=False)
-        bcs_psi[CURVE_RE] = {"interior_sigma": SIGMA_HAT * fd.cos(
-            load_degree * fd.atan2(X[1], X[0]))}
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=bcs_psi, rotation=rotation,
-            fluid_core=True, centre_of_mass=True,
-            self_gravity_number=LAMBDA, dtn_representation=dtn_representation)
-        z = fd.Function(Z)
         Xm = fd.SpatialCoordinate(sub)
         rm = fd.sqrt(fd.dot(Xm, Xm))
-        moments = {}
-        if rotation:
-            dx_m = fd.Measure(
-                "dx", domain=sub,
-                intersect_measures=(fd.Measure("dx", domain=parent),))
-            moments["C"] = fd.assemble(fd.dot(Xm, Xm) * dx_m)
-        solver = SelfGravitatingGIASolver(
-            z, approximation(g=self.gravity_of_r(rm),
-                             **(approximation_kwargs or {})),
-            layout=layout, dt=1.0,
+        u, psi = new_fields(meshes)
+        couplings = [
+            FluidCore(boundary=CURVE_RC, rho_core=self.RHO_CORE,
+                      g=fd.Constant(self.gravity_of_r(RC))),
+            CentreOfMass(),
             # The weight of the sheet with the surface gravity of this
             # reference state, so that the load exerts no net force.
-            bcs={CURVE_RE: {"normal_stress": B_MU * self.gravity_of_r(RE)
-                            * SIGMA_HAT * fd.cos(
-                                load_degree * fd.atan2(Xm[1], Xm[0]))}},
-            rotation_moments=moments,
-            fluid_core=FluidCore(boundary=CURVE_RC, rho_core=self.RHO_CORE,
-                                 g=fd.Constant(self.gravity_of_r(RC))),
+            SurfaceLoad(boundary=CURVE_RE,
+                        sigma=load_density(sub, load_degree),
+                        g_surface=self.gravity_of_r(RE))]
+        if rotation:
+            couplings.append(Rotation(C=polar_moment(meshes),
+                                      Omega_sq=OMEGA_SQ_EARTH))
+        solver = SelfGravitatingGIASolver(
+            u, psi,
+            approximation(g=self.gravity_of_r(rm), **(approximation_kwargs or {})),
+            dt=1.0, gravity_bcs=gravity_bcs(parent, sheet=False), bcs={},
+            couplings=couplings, dtn_representation=dtn_representation,
             **solver_kwargs)
-        return solver, z, layout
+        return solver, u, psi
 
     @pytest.mark.parametrize("rotation", [False, True])
     def test_fields_are_last_and_one_per_direction(self, meshes, rotation):
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=rotation,
-            fluid_core=True, centre_of_mass=True,
-            self_gravity_number=LAMBDA)
-        assert len(layout.centre_of_mass) == 2
-        assert layout.centre_of_mass == tuple(range(len(Z) - 2, len(Z)))
-        assert len(Z) == layout.n_fields
+        solver, _, _ = self.build(meshes, rotation=rotation)
+        Z = solver.solution_space
+        frame = [solver.field_index[f"centre_of_mass_{i}"] for i in range(2)]
+        assert not {"centre_of_mass_2"} & set(solver.field_names)
+        assert frame == list(range(len(Z) - 2, len(Z)))
+        assert len(Z) == len(solver.field_names)
         real = tuple(i for i, V in enumerate(Z)
                      if V.ufl_element().family() == "Real")
-        assert real == layout.real_fields
+        assert real == solver.real_indices
         assert real == tuple(range(real[0], len(Z)))
 
     def test_absent_by_default(self, meshes):
-        parent, sub = meshes
-        _, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
-            self_gravity_number=LAMBDA)
-        assert layout.centre_of_mass == ()
+        solver, _, _ = TestFluidCore.build_fluid(meshes)
+        assert not [name for name in solver.field_names
+                    if name.startswith("centre_of_mass_")]
 
     def test_refuses_a_rigid_core(self, meshes):
-        parent, sub = meshes
-        with pytest.raises(ValueError, match="requires fluid_core=True"):
-            self_gravitating_gia_space(
-                sub, parent, gravity_bcs=gravity_bcs(parent),
-                centre_of_mass=True, self_gravity_number=LAMBDA)
-
-    def test_resolves_to_the_multiplier_representation_by_default(
-            self, meshes):
-        """The frame alone, with no named representation, is the multiplier path.
-
-        The low-rank path carries the frame as well (the next test), but the
-        default for the frame without sea level is the multiplier path. Only
-        `sea_level=True` resolves to the low-rank path by default
-        (`test_sea_level.py::TestLayout`).
-        """
-        parent, sub = meshes
-        _, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), fluid_core=True,
-            centre_of_mass=True, self_gravity_number=LAMBDA)
-        assert layout.dtn_representation == "multiplier"
+        with pytest.raises(ValueError, match="requires a FluidCore"):
+            build(meshes, rotation=False, couplings=[CentreOfMass()])
 
     @pytest.mark.parametrize("rotation", [False, True])
     def test_the_lowrank_space_carries_the_frame_fields(self, meshes, rotation):
@@ -2947,32 +2982,34 @@ class TestCentreOfMassFrame:
         multiplier per direction, contiguous and last. `DtNTwoBlockSchurPC`
         needs that run contiguous and last.
         """
-        parent, sub = meshes
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent), rotation=rotation,
-            fluid_core=True, centre_of_mass=True, dtn_representation="lowrank",
-            self_gravity_number=LAMBDA)
-        assert layout.dtn_representation == "lowrank"
-        assert layout.multipliers == ()
-        assert len(Z) == layout.n_fields
+        solver, _, _ = self.build(meshes, rotation=rotation,
+                                  dtn_representation="lowrank")
+        Z = solver.solution_space
+        index = solver.field_index
+        assert solver.dtn_representation == "lowrank"
+        assert solver.multiplier_indices == ()
+        assert len(Z) == len(solver.field_names)
         real = tuple(i for i, V in enumerate(Z)
                      if V.ufl_element().family() == "Real")
         # Core pressure, then the rotation scalar, then the two directions.
-        assert real == (layout.core_pressure,
-                        *layout.rotation.values(),
-                        *layout.centre_of_mass)
+        expected = (index["core_pressure"],
+                    *([index["m3"]] if rotation else []),
+                    index["centre_of_mass_0"], index["centre_of_mass_1"])
+        assert real == expected
         assert real == tuple(range(real[0], len(Z)))
-        assert real == layout.real_fields
+        assert real == solver.real_indices
 
     def test_translation_moment_is_the_total_mass(self, meshes):
         """`D[u = e] = (rho_0 V_mantle + rho_core V_core) e`, per direction.
 
-        The load sheet is switched off by a zero amplitude, because its moment
-        is a constant and would hide an error in the two displacement terms.
+        The load sheet is taken out of the context's list of sheets, because
+        its moment is a constant and would hide an error in the two
+        displacement terms.
         """
-        solver, z, layout = self.build(meshes, load_degree=1)
+        solver, _, _ = self.build(meshes, load_degree=1)
         _, sub = meshes
-        solver.form.sigma_bcs[:] = []
+        centre = coupling(solver, CentreOfMass)
+        ctx = solver.coupling_context
         mantle = fd.assemble(fd.Constant(1.0) * fd.dx(domain=sub))
         # The core volume from the discrete CMB circle, the same geometry the
         # core sheet is integrated on.
@@ -2981,13 +3018,19 @@ class TestCentreOfMassFrame:
         radius = fd.assemble(fd.sqrt(fd.dot(Xm, Xm)) * ds_c) / fd.assemble(
             fd.Constant(1.0) * ds_c)
         mass = mantle + self.RHO_CORE * np.pi * radius ** 2
-        for i, e in enumerate(([1.0, 0.0], [0.0, 1.0])):
-            u = fd.Function(z.function_space().sub(layout.displacement))
-            u.interpolate(fd.as_vector(e))
-            D = [fd.assemble(solver.mass_dipole_form(j, u=u))
-                 for j in range(2)]
-            assert abs(D[i] - mass) < 1e-6 * mass
-            assert abs(D[1 - i]) < 1e-10 * mass
+        saved = list(ctx.sheets)
+        ctx.sheets[:] = [s for s in saved if s.name != "surface load"]
+        try:
+            assert len(ctx.sheets) == len(saved) - 1
+            displacement = solver.solution.subfunctions[
+                solver.field_index["displacement"]]
+            for i, e in enumerate(([1.0, 0.0], [0.0, 1.0])):
+                displacement.interpolate(fd.as_vector(e))
+                D = [fd.assemble(centre.dipole_form(ctx, j)) for j in range(2)]
+                assert abs(D[i] - mass) < 1e-6 * mass
+                assert abs(D[1 - i]) < 1e-10 * mass
+        finally:
+            ctx.sheets[:] = saved
 
     @pytest.mark.skipif(
         fd.COMM_WORLD.size > 1,
@@ -2995,26 +3038,22 @@ class TestCentreOfMassFrame:
     @pytest.mark.parametrize("rotation", [False, True])
     @REAL_BLOCK_ON_PARENT_FACETS
     def test_blocks_form_an_exact_saddle_pair(self, meshes, rotation):
-        solver, z, layout = self.build(meshes, rotation=rotation)
-        A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
-        iu = layout.displacement
-        for il in layout.centre_of_mass:
+        solver, _, _ = self.build(meshes, rotation=rotation)
+        A = fd.assemble(fd.derivative(solver.F, solver.solution),
+                        mat_type="nest").petscmat
+        iu = solver.field_index["displacement"]
+        frame = [solver.field_index[f"centre_of_mass_{i}"] for i in range(2)]
+        for il in frame:
             ul = A.getNestSubMatrix(iu, il).convert("dense").getDenseArray()
             lu = A.getNestSubMatrix(il, iu).convert("dense").getDenseArray()
             scale = max(np.abs(ul).max(), np.abs(lu).max())
             assert scale > 0.0
             assert np.abs(ul - lu.T).max() / scale < 1e-14
-            for jl in layout.centre_of_mass:
+            for jl in frame:
                 ll = A.getNestSubMatrix(il, jl)
                 if ll is not None:
                     assert np.abs(ll.convert("dense").getDenseArray()).max() \
                         == 0.0
-
-    def test_block1_diagonal_is_zero_on_the_new_rows(self, meshes):
-        solver, _, layout = self.build(meshes)
-        d = solver.block1_diagonal()
-        where = [layout.real_fields.index(i) for i in layout.centre_of_mass]
-        assert np.all(d[where] == 0.0)
 
     @pytest.mark.parametrize("dtn_representation", ["multiplier", "lowrank"])
     def test_solve_holds_the_centre_of_mass(self, meshes, dtn_representation):
@@ -3027,46 +3066,56 @@ class TestCentreOfMassFrame:
         that solves the frame without sea level on the low-rank path, and that
         is the configuration of the 3-D frame run G0-on. The multiplier arm
         uses the default solver parameters of the solver. The low-rank arm
-        uses the iterative preset on the full layout with the dense Schur
-        complement on the `Real` block, as `test_sea_level.solve_settings`
-        does, with an outer relative tolerance of 1e-12 and a Newton relative
-        tolerance of 1e-10, so that the bound on `D` below is set by the
-        discretisation and not by an inexact linear solve.
+        uses the iterative preset with the dense Schur complement on the
+        `Real` block, as `test_sea_level.solve_settings` does, with an outer
+        relative tolerance of 1e-12 and a Newton relative tolerance of 1e-10,
+        so that the bound on `D` below is set by the discretisation and not by
+        an inexact linear solve.
         """
         solver_kwargs = {}
         if dtn_representation == "lowrank":
-            solver_kwargs["solver_parameters"] = \
-                selfgrav_dtn_iterative_solver_parameters(
-                    condensed=False,
+            solver_kwargs = dict(
+                solver_parameters="iterative",
+                preset_options=dict(
                     multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
-                    outer_rtol=1e-12, block0_rtol=1e-4, snes_rtol=1e-10,
-                    dtn_representation="lowrank")
-        solver, _, layout = self.build(
+                    outer_rtol=1e-12, block0_rtol=1e-4, snes_rtol=1e-10))
+        solver, _, _ = self.build(
             meshes, load_degree=1, dtn_representation=dtn_representation,
             **solver_kwargs)
-        # The space and the solver run on the named representation.
-        assert layout.dtn_representation == dtn_representation
+        # The solver runs on the named representation.
+        assert solver.dtn_representation == dtn_representation
+        centre = coupling(solver, CentreOfMass)
         load_moment = SIGMA_HAT * np.pi * RE ** 2
         solver.solve()
-        D = solver.mass_dipole()
+        D = [fd.assemble(form) for form in centre.dipole()]
         assert abs(D[0]) < 1e-8 * load_moment
         assert abs(D[1]) < 1e-8 * load_moment
-        assert all(np.isfinite(solver.centre_of_mass_multipliers()))
+        assert all(np.isfinite([float(lam) for lam in centre.multipliers()]))
 
     def test_residual_is_the_variation_of_the_energy(self, meshes):
         """The written-out residual equals `derivative` of the energy.
 
         The residual is written term by term for a Slate reason (see
-        `centre_of_mass_residual`). This pins that it is still the variation
-        of `centre_of_mass_energy`, on a state where every unknown is nonzero.
+        `CentreOfMass.residual`). This pins that it is still the variation of
+        the energy `c beta sum_i lambda_i D_i`, on a state where every unknown
+        is nonzero. The energy is built from `CentreOfMass.dipole_form` with
+        the multiplier as the weight and the row scaling as the scale, so the
+        sheets and their restrictions are those of the residual.
         """
-        solver, z, layout = self.build(meshes, rotation=False)
+        solver, _, _ = self.build(meshes, rotation=False)
+        centre = coupling(solver, CentreOfMass)
+        ctx = solver.coupling_context
+        z = solver.solution
         rng = np.random.default_rng(3)
         for sub_z in z.subfunctions:
             sub_z.dat.data[:] = rng.standard_normal(sub_z.dat.data.shape)
-        written = fd.assemble(solver.centre_of_mass_residual())
-        derived = fd.assemble(fd.derivative(solver.centre_of_mass_energy(),
-                                            solver.solution))
+        beta = ctx.scaling_factor * ctx.row_scale_B_mu
+        energy = sum(
+            centre.dipole_form(ctx, i, weight=ctx.fields[f"centre_of_mass_{i}"],
+                               scale=beta)
+            for i in range(2))
+        written = fd.assemble(centre.residual(ctx))
+        derived = fd.assemble(fd.derivative(energy, z, fd.TestFunction(ctx.space)))
         for a, b in zip(written.subfunctions, derived.subfunctions):
             scale = max(np.abs(b.dat.data_ro).max(), 1e-300)
             assert np.abs(a.dat.data_ro - b.dat.data_ro).max() / scale < 1e-13
@@ -3080,7 +3129,9 @@ class TestCentreOfMassFrame:
         The production geometry passes one extruded mesh for both roles and
         reaches the core boundary through `"bottom"`. No solve, by this file's
         rule for 3-D. The mesh is the small `CubedSphereMesh` of the Real-block
-        diagonal tests.
+        diagonal tests. The top traction carries no mass (a `normal_stress`,
+        which the solver accepts with a warning), so the only sheet is the
+        core's.
         """
         from gadopt import SphericalDtN
 
@@ -3088,22 +3139,24 @@ class TestCentreOfMassFrame:
         mesh = fd.ExtrudedMesh(base, layers=2, layer_height=0.5,
                                extrusion_type="radial")
         mesh.cartesian = False
-        Z, layout = self_gravitating_gia_space(
-            mesh, mesh,
+        u = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 2), name="displacement")
+        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2), name="potential")
+        solver = SelfGravitatingGIASolver(
+            u, psi, approximation(), dt=1.0,
             gravity_bcs={"top": {"dtn": SphericalDtN(1)},
                          "bottom": {"dtn": SphericalDtN(1)}},
-            fluid_core=True, centre_of_mass=True, self_gravity_number=LAMBDA)
-        assert len(layout.centre_of_mass) == 3
-        assert layout.centre_of_mass == tuple(range(len(Z) - 3, len(Z)))
-        z = fd.Function(Z)
-        solver = SelfGravitatingGIASolver(
-            z, approximation(), layout=layout, dt=1.0,
             bcs={"top": {"normal_stress": B_MU * SIGMA_HAT}},
-            fluid_core=FluidCore(boundary="bottom", rho_core=self.RHO_CORE))
+            couplings=[FluidCore(boundary="bottom", rho_core=self.RHO_CORE),
+                       CentreOfMass()],
+            dtn_representation="multiplier")
+        Z = solver.solution_space
+        frame = [solver.field_index[f"centre_of_mass_{i}"] for i in range(3)]
+        assert frame == list(range(len(Z) - 3, len(Z)))
 
-        A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
-        iu = layout.displacement
-        for il in layout.centre_of_mass:
+        A = fd.assemble(fd.derivative(solver.F, solver.solution),
+                        mat_type="nest").petscmat
+        iu = solver.field_index["displacement"]
+        for il in frame:
             ul = A.getNestSubMatrix(iu, il).convert("dense").getDenseArray()
             lu = A.getNestSubMatrix(il, iu).convert("dense").getDenseArray()
             scale = max(np.abs(ul).max(), np.abs(lu).max())
@@ -3113,17 +3166,19 @@ class TestCentreOfMassFrame:
         # The whole mass of the body: the unit-density shell plus the core
         # inside the discrete bottom sphere, whose volume is taken from its
         # own area and mean radius (V = A r / 3 for a sphere).
+        centre = coupling(solver, CentreOfMass)
+        ctx = solver.coupling_context
         shell = fd.assemble(fd.Constant(1.0) * fd.dx(domain=mesh))
-        ds_b = solver.fluid_core_measure()("bottom")
+        ds_b = coupling(solver, FluidCore).measure()
         X = fd.SpatialCoordinate(mesh)
         area = fd.assemble(fd.Constant(1.0) * ds_b)
         radius = fd.assemble(fd.sqrt(fd.dot(X, X)) * ds_b) / area
         mass = shell + self.RHO_CORE * area * radius / 3
+        displacement = solver.solution.subfunctions[iu]
         for i in range(3):
             e = [0.0, 0.0, 0.0]
             e[i] = 1.0
-            u = fd.Function(Z.sub(iu)).interpolate(fd.as_vector(e))
-            D = [fd.assemble(solver.mass_dipole_form(j, u=u))
-                 for j in range(3)]
+            displacement.interpolate(fd.as_vector(e))
+            D = [fd.assemble(centre.dipole_form(ctx, j)) for j in range(3)]
             assert abs(D[i] - mass) < 1e-2 * mass
             assert max(abs(D[j]) for j in range(3) if j != i) < 1e-10 * mass

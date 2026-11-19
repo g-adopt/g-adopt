@@ -1,4 +1,13 @@
-"""Direct elimination in the complete two-mesh GIA/sea-level mixed system."""
+"""Direct elimination in the complete two-mesh GIA/sea-level mixed system.
+
+The Quadrature family of `SelfGravitatingGIASolver` eliminates the history
+at the quadrature points by a local Newton solve and condenses the Jacobian.
+These tests compare it with an unreduced reference that keeps the history
+as an unknown on the same quadrature points and solves the full mixed system
+by Newton with a Jacobian assembled here, block by block.
+"""
+from unittest import mock
+
 import gadopt
 import firedrake as fd
 import numpy as np
@@ -7,7 +16,10 @@ import pytest
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
                               pause_annotation, get_working_tape, stop_annotating)
 from pyadjoint.tape import annotate_tape
-from gadopt.gia_gravity import FluidCore, SeaLevel
+import gadopt.gia_history as gia_history
+from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
+from gadopt.gia_presets import OMEGA_SQ_EARTH
+from gadopt.gia_solver import SelfGravitatingGIASolver
 import test_gia_gravity as base
 from test_gravity_adjoint import assert_taylor_with_guards
 
@@ -42,17 +54,58 @@ def clean_tape():
     get_working_tape().clear_tape()
 
 
+#: The quadrature degree of the history and of the volume integrals, on both
+#: the Quadrature-family solver and its reference.
+QUAD_DEGREE = 4
+
+
+def quadrature_history_space(mesh, n_maxwell, degree=1, symmetric=True, family="DG"):
+    """The space of `internal_variable_space`, always on the degree-4 Quadrature element.
+
+    Patched into `gadopt.gia_history` while the reference solver is built,
+    so that its DG-family history unknown (field 1 of the mixed space, with
+    the weak history equation of the approximation) lives at the same
+    quadrature points as the eliminated history of the Quadrature family.
+    The history equation tested with the Quadrature basis at a degree-4 rule
+    is then the pointwise constitutive equation at every point, which is the
+    equation the Quadrature family eliminates.
+    """
+    from gadopt.internal_variable_equation import internal_variable_space
+    return internal_variable_space(mesh, n_maxwell, QUAD_DEGREE, symmetric,
+                                   family="Quadrature")
+
+
 def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False, model='maxwell',
           representation='multiplier', gravity_control=None, moving_coastline=False,
-          options_extra=None, constitutive_method=None, timestep=None, initial_sea_level=None):
+          options_extra=None, timestep=None, initial_sea_level=None):
+    """The fluid-core, rotation, centre-of-mass and sea-level case on the triangle annulus.
+
+    Args:
+      meshes: the module fixture (parent annulus, mantle submesh).
+      control: a field that scales the viscosity by `exp(control)`.
+      direct: True builds the Quadrature family (the history eliminated by
+        the local Newton solve). False builds the unreduced reference: the
+        history is an unknown of the mixed space on the same quadrature
+        points, and the step is a Newton solve with the unreduced mixed
+        Jacobian assembled here (`ReferenceNewton`).
+      exponent: the power-law exponent, or "spatial" for a DG0 exponent of 3
+        on one half and 1 on the other.
+      scheme: "bdf2" or "backward_euler".
+      iterative: the iterative preset instead of the direct one.
+      model: "maxwell" (two elements) or "backstress".
+      representation: the DtN representation.
+      gravity_control: a `B_mu` value (a `Real` Function for a control).
+      moving_coastline: the live coastline instead of a fixed ocean.
+      options_extra: options added last.
+      timestep: a `Real` time step to use instead of a new one.
+      initial_sea_level: `SL_init` to use instead of `0.005 cos(phi)`.
+
+    Returns:
+      `(solver, dt, ice)`.
+    """
     parent, sub = meshes
-    Z, layout = gadopt.self_gravitating_gia_space(
-        sub, parent, gravity_bcs=base.gravity_bcs(parent, sheet=False), rotation=True,
-        fluid_core=True, centre_of_mass=True, sea_level=True,
-        n_internal_variables=2, condense_internal_variables=direct,
-        internal_variable_family='Quadrature', internal_variable_degree=4,
-        self_gravity_number=base.LAMBDA, dtn_representation=representation)
-    state = fd.Function(Z)
+    u = fd.Function(fd.VectorFunctionSpace(sub, 'CG', 2))
+    psi = fd.Function(fd.FunctionSpace(parent, 'CG', 2))
     dt = (fd.Function(fd.FunctionSpace(sub, 'R', 0)).assign(STEPS[0])
           if timestep is None else timestep)
     Q = fd.FunctionSpace(sub, 'CG', 2)
@@ -80,17 +133,42 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
         N_init=fd.Constant(0.), ur_init=fd.Constant(0.), fixed_ocean=not moving_coastline, softplus_width=.001)
     X = fd.SpatialCoordinate(sub)
     measure = fd.Measure('dx', domain=sub, intersect_measures=(fd.dx(domain=parent),))
+    couplings = [FluidCore(boundary=base.CURVE_RC, rho_core=1.2, g=1.),
+                 Rotation(C=fd.assemble(fd.dot(X, X)*measure), Omega_sq=OMEGA_SQ_EARTH),
+                 CentreOfMass(), sea]
     options = dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11,
         ksp_error_if_not_converged=True)
     if options_extra:
         options.update(options_extra)
-    nullspace = gadopt.rigid_rotation_nullspace(Z, layout)
-    solver = gadopt.SelfGravitatingGIASolver(state, material, layout=layout, dt=dt,
-        time_scheme=scheme, constitutive_method=constitutive_method or ('direct' if direct else 'pointwise'),
-        bcs={}, fluid_core=FluidCore(boundary=base.CURVE_RC, rho_core=1.2, g=1.),
-        sea_level=sea, rotation_moments={'C': fd.assemble(fd.dot(X, X)*measure)},
-        nullspace=nullspace, transpose_nullspace=nullspace, quad_degree=4,
-        solver_parameters='iterative' if iterative else 'direct', solver_parameters_extra=options)
+    arguments = dict(
+        dt=dt, time_scheme=scheme, gravity_bcs=base.gravity_bcs(parent, sheet=False),
+        bcs={}, couplings=couplings, dtn_representation=representation,
+        nullspace='rigid_rotation', quad_degree=QUAD_DEGREE,
+        solver_parameters='iterative' if iterative else 'direct',
+        solver_parameters_extra=options)
+    if direct:
+        solver = SelfGravitatingGIASolver(
+            u, psi, material, internal_variable_family='Quadrature', **arguments)
+    else:
+        # The DG family on the Quadrature element (`quadrature_history_space`):
+        # the same discrete equations as the Quadrature family, with the
+        # history kept as an unknown instead of eliminated.
+        #
+        # The construction check of the declared rotation mode
+        # (`_check_kernel`) is skipped here. It assembles the Jacobian of the
+        # solver's own residual, which TSFC cannot compile with a Quadrature
+        # field inside the mixed coefficient (the reason `ReferenceNewton`
+        # below differentiates a copy with separate fields). The same mode on
+        # the same mesh, boundaries and couplings is checked when the
+        # Quadrature-family solver of the same case is built.
+        with mock.patch.object(gia_history, 'internal_variable_space',
+                               quadrature_history_space), \
+                mock.patch.object(SelfGravitatingGIASolver, '_check_kernel',
+                                  lambda self, basis: None):
+            solver = SelfGravitatingGIASolver(
+                u, psi, material, internal_variable_family='DG', **arguments)
+    state = solver.solution
+    Z = state.function_space()
     if not direct:
         # TSFC attempts to differentiate the entire mixed coefficient when
         # transferring grad(u) across meshes, including quadrature histories.
@@ -206,7 +284,10 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
                     ksp.destroy()
                     A.destroy()
                 raise RuntimeError(f'Reference Newton failed, residual={norm}')
-        solver.solver = ReferenceNewton()
+        # The step solves with the reference Newton instead of Firedrake's
+        # variational solver; the rest of `solve` (time coefficients, monopole
+        # datum, kernel projection, history accept) is the solver's own.
+        solver._step.solver = ReferenceNewton()
     return solver, dt, ice
 
 
@@ -228,17 +309,22 @@ def test_direct_matches_coupled_quadrature(meshes, exponent, model):
         ice.interpolate(.001*(1+.2*k)*(1+.5*fd.cos(2*fd.atan2(X[1], X[0]))))
         cice.assign(ice)
         direct.solve()
-        coupled.solve()
+        # The reference Newton is not a taped solve.
+        with stop_annotating():
+            coupled.solve()
         for index in ('displacement', 'potential'):
-            a = direct.solution.subfunctions[getattr(direct.layout, index)]
-            b = coupled.solution.subfunctions[getattr(coupled.layout, index)]
+            a = direct.solution.subfunctions[direct.field_index[index]]
+            b = coupled.solution.subfunctions[coupled.field_index[index]]
             np.testing.assert_allclose(a.dat.data_ro, b.dat.data_ro, rtol=5e-7, atol=2e-9)
         np.testing.assert_allclose(direct.internal_variables.dat.data_ro,
-            coupled.solution.subfunctions[coupled.layout.internal_variable_field].dat.data_ro,
+            coupled.solution.subfunctions[coupled.field_index['history']].dat.data_ro,
             rtol=5e-7, atol=2e-9)
-        for i, j in zip(direct.layout.real_fields, coupled.layout.real_fields):
-            np.testing.assert_allclose(direct.solution.subfunctions[i].dat.data_ro,
-                coupled.solution.subfunctions[j].dat.data_ro, rtol=5e-7, atol=2e-9)
+        # The `Real` fields, by name; both solvers hold the same ones.
+        names = [direct.field_names[i] for i in direct.real_indices]
+        assert names == [coupled.field_names[j] for j in coupled.real_indices]
+        for name in names:
+            np.testing.assert_allclose(direct.real_field(name).dat.data_ro,
+                coupled.real_field(name).dat.data_ro, rtol=5e-7, atol=2e-9)
 
 
 def march(meshes, control, *, direct, model='maxwell', checkpoint_dir=None):
@@ -261,11 +347,11 @@ def march(meshes, control, *, direct, model='maxwell', checkpoint_dir=None):
         ice.interpolate(.001*(1+.2*k)*(1+.5*fd.cos(2*fd.atan2(X[1], X[0]))))
         solver.solve()
     sub = meshes[1]
-    u = fd.split(solver.solution)[solver.layout.displacement]
+    u = solver.field('displacement')
     if direct:
         histories = solver.internal_variables
     else:
-        histories = fd.split(solver.solution)[solver.layout.internal_variable_field]
+        histories = solver.field('history')
     measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree':4},
                          intersect_measures=(fd.dx(domain=meshes[0]),))
     return fd.assemble((fd.inner(u,u)+.1*fd.inner(histories,histories))*measure)

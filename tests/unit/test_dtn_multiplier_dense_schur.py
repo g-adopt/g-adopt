@@ -3,8 +3,9 @@
 `gadopt.DtNMultiplierDenseSchurPC` forms the multiplier Schur complement `S`
 once at setup, factors it, and applies the factors from then on. This file is
 the shipped-code gate for it, on the same 2-D coupled annulus the adjoint suite
-uses (`test_gia_gravity_adjoint_lowrank._build`): parent annulus + mantle
-submesh, `SelfGravitatingGIASolver`, `TRUNCATION = 3`, `N_AZIMUTHAL = 32`.
+uses (`test_gia_gravity_adjoint_lowrank`): parent annulus + mantle submesh,
+`gadopt.gia_solver.SelfGravitatingGIASolver` with a DG history and the
+multiplier DtN representation, `TRUNCATION = 3`, `N_AZIMUTHAL = 32`.
 
 **A 2-D annulus establishes that the construction works, never that it helps.**
 Performance is a separate Gadi step; nothing here measures wall clock or sweeps.
@@ -36,15 +37,11 @@ from gadopt import (
     CompressibleInternalVariableApproximation,
     CylindricalDtN,
     DtNMultiplierDenseSchurPC,
-    SelfGravitatingGIASolver,
-    self_gravitating_gia_space,
 )
+from gadopt.gia_couplings import FluidCore, SurfaceLoad
+from gadopt.gia_presets import selfgrav_dtn_schur_solver_parameters
+from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.preconditioners import _DenseLU
-from gadopt.gia_gravity import (
-    FluidCore,
-    OMEGA_SQ_EARTH,
-    selfgrav_dtn_schur_solver_parameters,
-)
 from gadopt.stokes_integrators import newton_stokes_solver_parameters
 # The xfail marker of the tests that assemble a `Real` block on the parent's
 # interior facets (the sibling test module, on the test path).
@@ -115,41 +112,54 @@ def _build_solver(meshes, block1_pc="gadopt.DtNMultiplierDenseSchurPC",
                   dt=None, fluid_core=False):
     """The coupled solver on the annulus, block 1 preconditioned by `block1_pc`.
 
-    Mirrors `test_gia_gravity_adjoint_lowrank._build` but drives the iterative
-    Schur path (`DtNTwoBlockSchurPC` with a full Schur factorisation) rather than
-    the monolithic direct preset, so that the block-1 python PC is handed the
-    `MATSCHURCOMPLEMENT` as its `Amat`.
+    Drives the iterative Schur path (`DtNTwoBlockSchurPC` with a full Schur
+    factorisation) and not the monolithic direct preset, so that the block-1
+    python PC is handed the `MATSCHURCOMPLEMENT` as its `Amat`.
+
+    The history is the DG family, an unknown of the mixed space, so the
+    residual `solver.F` is a plain UFL form whose Jacobian the reference
+    `_reference_S` can assemble. The DtN boundary is the multiplier
+    representation: one `Real` row per retained mode, which is the block the
+    dense complement is built for. The surface load is one `SurfaceLoad`,
+    `sigma = SIGMA_HAT cos(2 theta)` on the mechanics mesh: the traction
+    `B_mu g sigma` on the momentum equation and the mass sheet in the
+    potential row.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      block1_pc: the python type of the block-1 preconditioner.
+      dt: the time step, a float or a live `Constant`; `None` gives 1.
+      fluid_core: a `FluidCore` at the CMB (one more `Real` row, the core
+        pressure) instead of the rigid core `un = 0`.
+
+    Returns:
+      `(solver, u, psi)`: the solver, and the displacement and potential
+      Functions that it writes after every solve.
     """
     parent, sub = meshes
-    Xp = fd.SpatialCoordinate(parent)
     Xm = fd.SpatialCoordinate(sub)
+    # Only the DtN rows: the new solver takes the load sheet from the
+    # SurfaceLoad coupling and refuses a sheet in `gravity_bcs`.
     gravity_bcs = {
         CURVE_OUTER: {"dtn": CylindricalDtN(TRUNCATION)},
         CURVE_INNER: {"dtn": CylindricalDtN(TRUNCATION)},
-        CURVE_RE: {"interior_sigma":
-                   SIGMA_HAT * fd.cos(2 * fd.atan2(Xp[1], Xp[0]))},
     }
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs, rotation=False,
-        fluid_core=fluid_core,
-        n_internal_variables=1, condense_internal_variables=True,
-        self_gravity_number=LAMBDA)
-    z = fd.Function(Z)
 
     approx = CompressibleInternalVariableApproximation(
         bulk_modulus=1.0, density=1.0, shear_modulus=1.0, viscosity=1.0,
         bulk_shear_ratio=100.0, g=G0, B_mu=B_MU, self_gravity_number=LAMBDA)
 
-    dx_m = fd.Measure("dx", domain=sub,
-                      intersect_measures=(fd.Measure("dx", domain=parent),))
-    mechanics_bcs = {
-        CURVE_RE: {"normal_stress":
-                   fd.Constant(B_MU) * SIGMA_HAT
-                   * fd.cos(2 * fd.atan2(Xm[1], Xm[0]))},
-    }
-    core = None
+    # The degree-2 displacement on the mantle and potential on the parent.
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+
+    couplings = [SurfaceLoad(
+        boundary=CURVE_RE,
+        sigma=SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0])),
+        g_surface=G0)]
+    mechanics_bcs = {}
     if fluid_core:
-        core = FluidCore(boundary=CURVE_RC, rho_core=2.0)
+        couplings.append(FluidCore(boundary=CURVE_RC, rho_core=2.0))
     else:
         mechanics_bcs[CURVE_RC] = {"un": 0.0}
 
@@ -158,11 +168,10 @@ def _build_solver(meshes, block1_pc="gadopt.DtNMultiplierDenseSchurPC",
 
     dt = 1.0 if dt is None else dt
     solver = SelfGravitatingGIASolver(
-        z, approx, layout=layout, dt=dt, bcs=mechanics_bcs,
-        fluid_core=core,
-        rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
-        Omega_sq=OMEGA_SQ_EARTH, solver_parameters=params)
-    return solver, z, layout, Z
+        u, psi, approx, dt=dt, gravity_bcs=gravity_bcs, bcs=mechanics_bcs,
+        internal_variable_family="DG", couplings=couplings,
+        dtn_representation="multiplier", solver_parameters=params)
+    return solver, u, psi
 
 
 def _dense_ctx(solver):
@@ -177,14 +186,23 @@ def _dense_ctx(solver):
     return ksp_real, ksp_real.getPC().getPythonContext()
 
 
-def _reference_S(solver, z, Z):
+def _reference_S(solver):
     """`S_ref = D - C @ inv(A00) @ B` from the assembled coupled Jacobian.
 
     Independent of the code under test: it assembles the coupled Jacobian as a
     PETSc `nest` (the one matrix type that tolerates the `Real` blocks), reads
     every sub-block into a dense monolithic array with the same strong boundary
     conditions the solve applies, and eliminates block 0 exactly.
+
+    Args:
+      solver: a solved `SelfGravitatingGIASolver` on the multiplier path,
+        whose residual `solver.F` holds every term (no low-rank update).
+
+    Returns:
+      The dense `n x n` complement of the `Real` block, `n` the number of
+      `Real` fields.
     """
+    z, Z = solver.solution, solver.solution_space
     J = derivative(solver.F, z, TrialFunction(Z))
     Jn = fd.assemble(J, bcs=solver.strong_bcs, mat_type="nest").petscmat
 
@@ -226,12 +244,12 @@ def built(meshes):
     Module-scoped: the solve and the reference assembly are the expensive part,
     so T1-T4 share this one build.
     """
-    solver, z, layout, Z = _build_solver(meshes)
+    solver, _, _ = _build_solver(meshes)
     solver.solve()
     ksp_real, ctx = _dense_ctx(solver)
-    S_ref = _reference_S(solver, z, Z)
+    S_ref = _reference_S(solver)
     return {
-        "solver": solver, "z": z, "layout": layout, "Z": Z,
+        "solver": solver,
         "ksp_real": ksp_real, "ctx": ctx,
         "S_pc": ctx._S.copy(), "S_ref": S_ref,
     }
@@ -360,7 +378,7 @@ def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
     independent elimination of the Jacobian at the new time step.
     """
     dt = fd.Constant(1.0)
-    solver, z, layout, Z = _build_solver(meshes, dt=dt)
+    solver, _, _ = _build_solver(meshes, dt=dt)
     solver.solve()
     _, ctx = _dense_ctx(solver)
     old_S_id = id(ctx._S)
@@ -369,7 +387,7 @@ def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
     dt.assign(2.0)
     solver.solve()
     _, ctx2 = _dense_ctx(solver)
-    S_ref = _reference_S(solver, z, Z)
+    S_ref = _reference_S(solver)
 
     assert ctx2 is ctx, "the PC instance changed after dt.assign"
     assert id(ctx2._S) != old_S_id, "the dense complement did not rebuild"
@@ -381,20 +399,21 @@ def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
 @REAL_BLOCK_ON_PARENT_FACETS
 def test_T4c_fluid_core_pressure_joins_the_dense_complement(meshes):
     """The physical zero diagonal gains its inverse through the Schur term."""
-    solver, z, layout, Z = _build_solver(meshes, fluid_core=True)
+    solver, u, _ = _build_solver(meshes, fluid_core=True)
     solver.solve()
     _, ctx = _dense_ctx(solver)
-    reference = _reference_S(solver, z, Z)
+    reference = _reference_S(solver)
     relative = np.linalg.norm(ctx._S - reference) / np.linalg.norm(reference)
 
-    assert layout.core_pressure is not None
-    assert ctx._n == len(layout.real_fields)
+    assert "core_pressure" in solver.field_index
+    assert ctx._n == len(solver.real_indices)
     assert relative < PARITY_FLOOR
     assert np.linalg.matrix_rank(ctx._S) == ctx._n
 
-    dss = solver.fluid_core_measure()(CURVE_RC)
-    flux = fd.assemble(fd.dot(
-        solver.displacement, fd.FacetNormal(solver.mesh)) * dss)
+    # The core keeps its volume: the net normal displacement through the CMB
+    # is zero, which is the row of the core pressure.
+    core = next(c for c in solver.couplings if isinstance(c, FluidCore))
+    flux = fd.assemble(fd.dot(u, fd.FacetNormal(solver.mesh)) * core.measure())
     assert abs(flux) < 1e-12
 
 
@@ -544,7 +563,7 @@ def test_T7_parallel_build_keys_on_global_size(meshes, fluid_core):
     comm = fd.COMM_WORLD
     assert comm.size == 2, "T7 must run on exactly 2 ranks"
 
-    solver, z, layout, Z = _build_solver(meshes, fluid_core=fluid_core)
+    solver, _, _ = _build_solver(meshes, fluid_core=fluid_core)
     # If the build keyed on the local size, this solve raises on the rank that
     # owns no Real dofs (and the other blocks in the collective MatMult).
     solver.solve()

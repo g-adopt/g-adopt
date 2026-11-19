@@ -31,7 +31,7 @@ import numpy as np
 import pytest
 
 from gadopt import CylindricalDtN, DtNGravityForm
-from gadopt.gia_gravity import (selfgrav_dtn_iterative_solver_parameters,
+from gadopt.gia_presets import (selfgrav_dtn_iterative_solver_parameters,
                                 selfgrav_dtn_schur_solver_parameters)
 from gadopt.preconditioners import DtNMultiplierDiagPC
 from test_gravity_interior_sheet import (
@@ -431,7 +431,7 @@ class TestItChangesNoDefault:
         # on an assembled matrix, where a block-1 PC that needs a sub-DM
         # crashes. The low-rank variant must differ from the multiplier preset
         # in block 1 only.
-        from gadopt.gia_gravity import (
+        from gadopt.gia_presets import (
             selfgrav_dtn_schur_lowrank_solver_parameters as lowrank)
         assert lowrank["dtn_fieldsplit_1_pc_type"] == "none"
         assert "dtn_fieldsplit_1_pc_python_type" not in lowrank
@@ -484,177 +484,6 @@ class TestTheSolveAgrees:
         assert rel < 1e-9, f"the preconditioner moved the answer by {rel:.3e}"
         # and the answer is not trivially zero, which would make that pass
         assert den > 1e-12
-
-
-class TestTheGuardRefusesWhatItCannotDescribe:
-    """`block1_diagonal` must raise, not silently mis-describe, if the Real
-    block ever stops being 'multipliers, core pressure, then rotation rows'.
-
-    Exercised against a stand-in rather than a coupled solver, because the
-    thing under test is the accounting, and building a 2-D coupled solver here
-    would test the solver instead.
-    """
-
-    @staticmethod
-    def _fake(real_in_space, multipliers, rotation, core_pressure=None):
-        """A stand-in whose Real block can be laid out arbitrarily."""
-        from gadopt.gia_gravity import SelfGravitatingGIASolver
-
-        class _El:
-            def __init__(self, fam):
-                self._f = fam
-
-            def family(self):
-                return self._f
-
-        class _Sub:
-            def __init__(self, fam):
-                self._e = _El(fam)
-
-            def ufl_element(self):
-                return self._e
-
-        n_total = (max(real_in_space) + 1) if real_in_space else 2
-
-        class _Space:
-            def __len__(self):
-                return n_total
-
-            def sub(self, i):
-                return _Sub("Real" if i in real_in_space else "Lagrange")
-
-        class _Sol:
-            def function_space(self):
-                return _Space()
-
-        class _Form:
-            multiplier_keys = tuple(range(len(multipliers)))
-
-            @staticmethod
-            def multiplier_diagonal():
-                return np.ones(len(multipliers))
-
-        class _Layout:
-            gravity_form = _Form()
-            rotation_names = ("m1", "m2", "m3")
-            # The solver reads layout.dtn_representation (gia_gravity.py); this
-            # double represents the multiplier layout the diagonal PC serves.
-            dtn_representation = "multiplier"
-
-            def __init__(self):
-                self.multipliers = tuple(multipliers)
-                self.core_pressure = core_pressure
-                self.rotation = dict(rotation)
-
-            @property
-            def real_fields(self):
-                core = (() if self.core_pressure is None
-                        else (self.core_pressure,))
-                return tuple(self.multipliers) + core + tuple(
-                    self.rotation[n] for n in self.rotation_names
-                    if n in self.rotation)
-
-        class _Fake(SelfGravitatingGIASolver):
-            # The CURRENT mechanism: `block1_diagonal` reads `theta_psi_value`,
-            # which the solver computes from its live factors
-            # (`scaling_factor * B_mu / Lambda`). The double drives it through
-            # `scaling_factor` so a test can vary one factor and watch the
-            # diagonal scale, rather than overriding the composite property that
-            # no longer feeds the diagonal.
-            scaling_factor = 1.0
-
-            def __init__(self):
-                pass
-
-            @property
-            def theta_psi_value(self):
-                return self.scaling_factor
-
-            def _theta_rot(self, i):
-                return self.scaling_factor
-
-            def _closure_constant(self, i):
-                return 2.0
-
-        obj = _Fake()
-        obj.solution = _Sol()
-        obj.layout = _Layout()
-        return obj
-
-    def test_it_raises_when_a_foreign_real_field_appears(self):
-        """Five Real fields, four accounted for: the count tripwire."""
-        obj = self._fake(real_in_space=(2, 3, 4, 5, 6),
-                         multipliers=(2, 3, 4, 5), rotation={})
-        with pytest.raises(RuntimeError, match="Real sub-fields"):
-            obj.block1_diagonal()
-
-    def test_it_raises_on_a_rotation_first_layout(self):
-        """The case a COUNT check waves through and order-proofing catches.
-
-        Four Real fields, four accounted for -- the count agrees -- but the
-        rotation row is first. A positional build would emit a correctly-sized,
-        wrongly-ordered diagonal.
-        """
-        obj = self._fake(real_in_space=(1, 2, 3, 4),
-                         multipliers=(2, 3, 4), rotation={"m3": 1})
-        with pytest.raises(RuntimeError, match="Real sub-fields"):
-            obj.block1_diagonal()
-
-    def test_it_raises_on_an_interleaved_real_block(self):
-        """Non-contiguous Real fields, right count."""
-        obj = self._fake(real_in_space=(1, 3), multipliers=(1, 3), rotation={})
-        with pytest.raises(RuntimeError, match="contiguous|Real sub-fields"):
-            obj.block1_diagonal()
-
-    def test_a_well_formed_layout_is_ordered_multipliers_then_rotation(self):
-        obj = self._fake(real_in_space=(1, 2, 3), multipliers=(1, 2),
-                         rotation={"m3": 3})
-        d = obj.block1_diagonal()
-        assert d.shape == (3,)
-        # multipliers carry theta_psi * 1.0, the rotation row theta_rot * K
-        assert np.allclose(d[:2], 1.0)
-        assert np.isclose(d[2], 2.0)
-
-    def test_core_pressure_has_its_physical_zero_diagonal(self):
-        obj = self._fake(real_in_space=(1, 2, 3, 4), multipliers=(1, 2),
-                         core_pressure=3, rotation={"m3": 4})
-        diagonal = obj.block1_diagonal()
-        assert np.allclose(diagonal[:2], 1.0)
-        assert diagonal[2] == 0.0
-        assert diagonal[3] == 2.0
-
-    def test_rotation_and_multiplier_rows_scale_together(self):
-        """`scaling_factor` is structurally covered, not merely documented.
-
-        A *uniform* scale error on a diagonal PC is invisible and harmless --
-        Krylov spaces are scale-invariant. What would bite is a *relative*
-        error between the `theta_psi` rows and the `theta_rot` rows, and that
-        would be a silent inefficacy on exactly the rows this project measured
-        as least-resolved.
-
-        It cannot happen by construction, because `scaling_factor` sits inside
-        **both** the multiplier prefactor `theta_psi = scaling_factor * B_mu /
-        Lambda` and the rotation prefactor `_theta_rot = s_i * scaling_factor *
-        B_mu * Omega_sq`. Changing it moves both rows by the same factor. The
-        double drives both off one `scaling_factor` attribute, so varying that
-        one factor and asserting the whole diagonal scales proves the coverage
-        rather than inferring it from reading two properties.
-        """
-        base = self._fake(real_in_space=(1, 2, 3), multipliers=(1, 2),
-                          rotation={"m3": 3})
-        d1 = base.block1_diagonal()
-
-        # A different `scaling_factor` multiplies the multiplier rows (through
-        # `theta_psi_value`) and the rotation row (through `_theta_rot`) by the
-        # same factor, so the whole diagonal scales.
-        factor = 3.0
-        base.scaling_factor = factor
-        d2 = base.block1_diagonal()
-        assert np.allclose(d2, factor * d1, rtol=1e-14), (d1, d2)
-
-    def test_it_returns_none_on_an_empty_real_block(self):
-        obj = self._fake(real_in_space=(), multipliers=(), rotation={})
-        assert obj.block1_diagonal() is None
 
 
 class TestItIsScopedToTheCoupledSolver:
@@ -763,97 +592,9 @@ class TestTheNullCouplingConfiguration:
     """`B_mu = 0` is supported, and it is where a recomputed theta_psi bites."""
 
     def test_the_row_scale_is_floored_and_not_zero(self):
-        from gadopt.gia_gravity import NULL_COUPLING_ROW_SCALE
+        from gadopt.gia_presets import NULL_COUPLING_ROW_SCALE
 
         assert NULL_COUPLING_ROW_SCALE != 0.0
-
-    def test_the_diagonal_scales_with_theta_psi_rather_than_recomputing_it(
-            self, sheet_mesh):
-        """Proves the property is *read*.
-
-        At `B_mu = 0` the property is floored through `_row_scale_B_mu`; a
-        reimplementation as `scaling_factor * B_mu / Lambda` would give zero
-        and hand the preconditioner a diagonal of zeros to divide by. The test
-        is that the output is exactly proportional to whatever `theta_psi`
-        returns, including a floored value.
-        """
-        from gadopt.gia_gravity import SelfGravitatingGIASolver
-
-        form, W, w, F = build(sheet_mesh)
-        n = form.n_multipliers
-
-        class _El:
-            def __init__(self, fam):
-                self._f = fam
-
-            def family(self):
-                return self._f
-
-        class _Sub:
-            def __init__(self, fam):
-                self._e = _El(fam)
-
-            def ufl_element(self):
-                return self._e
-
-        class _Space:
-            def __init__(self):
-                self._subs = [_Sub("Lagrange")] + [_Sub("Real")] * n
-
-            def __len__(self):
-                return len(self._subs)
-
-            def sub(self, i):
-                return self._subs[i]
-
-        class _Sol:
-            def function_space(self):
-                return _Space()
-
-        class _Layout:
-            gravity_form = form
-            multipliers = tuple(range(1, 1 + n))
-            core_pressure = None
-            rotation = {}
-            rotation_names = ("m1", "m2", "m3")
-            # The solver reads layout.dtn_representation (gia_gravity.py); this
-            # double represents the multiplier layout the diagonal PC serves.
-            dtn_representation = "multiplier"
-
-            @property
-            def real_fields(self):
-                return tuple(self.multipliers)
-
-        class _Fake(SelfGravitatingGIASolver):
-            theta = 1.0
-
-            def __init__(self):
-                pass
-
-            @property
-            def theta_psi_value(self):
-                # `block1_diagonal` reads `theta_psi_value`, which the solver
-                # computes from its factors and floors through `_row_scale_B_mu`
-                # at `B_mu = 0`. The double stands in for whatever number that
-                # returns, floored value included, so the test measures that the
-                # diagonal is proportional to it and never recomputes it.
-                return self.theta
-
-        obj = _Fake()
-        obj.solution = _Sol()
-        obj.layout = _Layout()
-
-        obj.theta = 1.0
-        one = obj.block1_diagonal()
-        obj.theta = 2.5
-        two = obj.block1_diagonal()
-
-        assert np.all(one != 0.0)
-        assert np.allclose(two, 2.5 * one, rtol=1e-14)
-        # and the floored null-coupling value gives a usable, nonzero diagonal
-        from gadopt.gia_gravity import NULL_COUPLING_ROW_SCALE
-        obj.theta = float(NULL_COUPLING_ROW_SCALE)
-        assert np.all(obj.block1_diagonal() != 0.0)
 
 
 #: Every key `selfgrav_dtn_iterative_solver_parameters()` wrote at its defaults
@@ -1186,7 +927,7 @@ class TestTheBlockOneChoiceKeysOnTheNumberOfRealRows:
             u_ksp_max_it=4))) == KEYS_AT_C24685AC
 
     def test_a_negative_count_or_limit_is_refused(self):
-        """A count comes from `len(layout.real_fields)` and cannot be negative.
+        """A count comes from `len(solver.real_indices)` and cannot be negative.
 
         A negative value means whatever computed it has a bug, and silently
         taking the `"none"` branch would hide that.

@@ -21,11 +21,15 @@ error, and not zero to the solver tolerance
 the sheet and the tests that need the rounding itself are in
 `test_sea_level_sheet.py`.
 
-The configuration is the one of `TestCentreOfMassFrame.build` in
+The solver is `gadopt.gia_solver.SelfGravitatingGIASolver` with the couplings
+of `gadopt.gia_couplings`, and the sea-level equation is its `SeaLevel`
+coupling. The configuration is the centre-of-mass frame configuration of
 `test_gia_gravity.py`: the coarse P2-curved annulus (dr 0.2, 32 azimuthal
-cells), a fluid core, the centre-of-mass multipliers and the reference gravity
-of the 2-D Gauss law for the test's own density. Rotation is off except where a
-test says otherwise.
+cells), a `FluidCore`, the `CentreOfMass` multipliers and the reference gravity
+of the 2-D Gauss law for the test's own density (`gravity_of_r`). Rotation is
+off except where a test says otherwise. `build` returns the solver, its mixed
+solution and the `SeaLevel` coupling, which holds the sea-level diagnostics
+(`sea_level()`, `sheet()`, `measure()`, `energy()`, `shift()`).
 
 ## Four surface states
 
@@ -58,11 +62,11 @@ The tests that assert physics run on both DtN representations through the
 low-rank path with the iterative preset, letting the preset choose block 1
 itself (`solve_settings`), which at this width is the cached apply of
 `gadopt.DtNTwoBlockSchurPC` under `schur_fact_type full`. `TestRepresentationParity` compares the two
-converged shoreline states. The layout tests of `TestLayout` that check the
-position of `Shift` and of the frame multipliers run on both representations,
-because the two spaces differ in their multiplier fields. The other structural
-tests (sheet, transposes, the energy) read `Real` rows of the multiplier space
-and stay on that path.
+converged shoreline states. The tests of `TestLayout` that check the position
+of `Shift` and of the frame multipliers in the solver's mixed space run on both
+representations, because the two spaces differ in their multiplier fields. The
+other structural tests (sheet, transposes, the energy) read `Real` rows of the
+multiplier space and stay on that path.
 
 ## What these tests are not
 
@@ -91,9 +95,19 @@ from firedrake.adjoint import (
 )
 from pyadjoint.tape import annotate_tape
 
-from gadopt import SelfGravitatingGIASolver, self_gravitating_gia_space
-from gadopt import gia_gravity
-from gadopt.gia_gravity import FluidCore, selfgrav_dtn_iterative_solver_parameters
+from gadopt.gia_couplings import (
+    CentreOfMass,
+    FluidCore,
+    Rotation,
+    SeaLevel,
+    SurfaceLoad,
+)
+from gadopt.gia_presets import (
+    OMEGA_SQ_EARTH,
+    selfgrav_dtn_iterative_solver_parameters,
+)
+from gadopt.gia_solver import SelfGravitatingGIASolver
+from gadopt.utility import scalar_value
 import test_gia_gravity
 from test_gia_gravity import (  # noqa: E402  (module-level fixture and helpers)
     B_MU,
@@ -119,13 +133,36 @@ from test_gia_gravity import (  # noqa: E402  (module-level fixture and helpers)
 RHO_W = 1000.0 / 4978.0
 RHO_I = 931.0 / 4978.0
 
-#: The reference state of `TestCentreOfMassFrame`: a core of density 2 inside
-#: Rc and a unit-density mantle. `G_RE` is the surface gravity of that state,
-#: about 1.19 in the non-dimensional units of the solver.
-# Reached through the module and not imported by name: a `Test*` class in this
-# module's namespace would be collected and run a second time here.
-FRAME = test_gia_gravity.TestCentreOfMassFrame()
-G_RE = FRAME.gravity_of_r(RE)
+#: The reference state of the centre-of-mass frame tests of
+#: `test_gia_gravity.py`: a core of density `RHO_CORE` inside Rc and a
+#: unit-density mantle.
+RHO_CORE = 2.0
+
+
+def gravity_of_r(r):
+    """`g(r) = Lambda M(<r) / (2 pi r)`, the 2-D Gauss law of the reference state.
+
+    With the constant `g = 1` of other tests a rigid translation costs energy
+    and the frame multipliers would carry a real force. With this `g` the
+    translation is a near-kernel, which is the configuration the frame exists
+    for.
+
+    Args:
+      r: a radius, a number or UFL.
+
+    Returns:
+      The reference gravity at `r`, of the same kind as `r`.
+    """
+    mass = RHO_CORE * np.pi * RC ** 2 + np.pi * (r ** 2 - RC ** 2)
+    return LAMBDA * mass / (2 * np.pi * r)
+
+
+#: The surface gravity of the reference state, about 1.19 in the
+#: non-dimensional units of the solver.
+G_RE = gravity_of_r(RE)
+
+#: The name of the `Shift` field of the mixed space (`solver.field_index`).
+SHIFT = "sea_level_shift"
 
 #: A deep uniform ocean and a thick grounded ice sheet, in units of the mantle
 #: thickness D. The values are not physical. They keep every quadrature point
@@ -203,8 +240,11 @@ def solve_settings(representation):
     The multiplier path uses the direct preset with `TIGHT`, which needs two
     outer iterations per Newton step there.
 
-    The low-rank path uses the iterative preset on the full layout and names
-    no block-1 preconditioner, so the preset chooses one. At the width of this
+    The low-rank path uses the iterative preset (`solver_parameters=
+    "iterative"`, which on the DG family is the full layout) and names no
+    block-1 preconditioner, so the preset chooses one. The solver supplies
+    the `Real` width, `condensed` and the representation to the preset; the
+    test gives the tolerances through `preset_options`. At the width of this
     `Real` block that choice is the cached apply of
     `gadopt.DtNTwoBlockSchurPC` under `schur_fact_type full`, which is the
     configuration the Martinec driver runs in production. Naming a class here
@@ -240,19 +280,23 @@ def solve_settings(representation):
       representation: `"multiplier"` or `"lowrank"`.
 
     Returns:
-      A dictionary of `SelfGravitatingGIASolver` keywords.
+      A new dictionary of `SelfGravitatingGIASolver` keywords:
+      `solver_parameters`, `solver_parameters_extra` and, on the low-rank
+      path, `preset_options`. Every call returns fresh dictionaries, so a
+      caller can add an option to `solver_parameters_extra` (for example
+      `snes_type`) without changing another test's settings.
     """
     if representation == "multiplier":
-        return dict(solver_parameters="direct", solver_parameters_extra=TIGHT)
-    parameters = selfgrav_dtn_iterative_solver_parameters(
-        condensed=False,
-        outer_rtol=TIGHT["ksp_rtol"], block0_rtol=1e-4,
-        snes_rtol=SNES_RTOL, dtn_representation="lowrank")
-    # The preset sets `snes_atol` itself. It is set here again from the
-    # module constant, so that the thresholds of the tests read the value the
-    # solver uses.
-    parameters["snes_atol"] = SNES_ATOL
-    return dict(solver_parameters=parameters)
+        return dict(solver_parameters="direct",
+                    solver_parameters_extra=dict(TIGHT))
+    return dict(
+        solver_parameters="iterative",
+        preset_options=dict(outer_rtol=TIGHT["ksp_rtol"], block0_rtol=1e-4,
+                            snes_rtol=SNES_RTOL),
+        # The preset sets `snes_atol` itself. It is set here again from the
+        # module constant, so that the thresholds of the tests read the value
+        # the solver uses.
+        solver_parameters_extra={"snes_atol": SNES_ATOL})
 
 
 def sheet():
@@ -262,11 +306,6 @@ def sheet():
     the whole file. At call time each test fails on its own.
     """
     return importlib.import_module("gadopt.sea_level_sheet")
-
-
-def sea_level_class():
-    """`gadopt.gia_gravity.SeaLevel`, read at call time for the same reason."""
-    return gia_gravity.SeaLevel
 
 
 def polar_angle(mesh):
@@ -358,110 +397,135 @@ def surface_fields(sub, state, *, d_ice=0.0, sl_init=None):
 
 
 def make_sea_level(fields, **overrides):
-    """A `SeaLevel` on the Re tag with the test's densities and gravity."""
+    """A `SeaLevel` coupling on the Re tag with the test's densities and gravity.
+
+    Args:
+      fields: `surface_fields(...)` or `coastline_fields(...)`.
+      overrides: extra or replaced `SeaLevel` keywords, for example
+        `fixed_ocean` or `softplus_width`.
+
+    Returns:
+      An unbound `gadopt.gia_couplings.SeaLevel`.
+    """
     settings = dict(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
                     g_surface=G_RE, softplus_width=EPS)
     settings.update(fields)
     settings.update(overrides)
-    return sea_level_class()(**settings)
+    return SeaLevel(**settings)
+
+
+def unit_time_step(mesh):
+    """`dt = 1` as a `Real` Function on `mesh`, so a test can change it with `assign`."""
+    return fd.Function(fd.FunctionSpace(mesh, "R", 0)).assign(1.0)
 
 
 def build(meshes, fields=None, *, rotation=False, lam=LAMBDA, stiff=False,
-          earth=None, sea_level=True, surface_bcs=None, gravity_sheet=None,
+          earth=None, sea_level=True, surface_bcs=None, surface_load=None,
           quad_degree=None, sea_level_overrides=None,
-          representation="multiplier", **solver_kwargs):
-    """The frame configuration of `TestCentreOfMassFrame.build`, with sea level.
+          representation="multiplier", centre_of_mass=True, **solver_kwargs):
+    """The centre-of-mass frame configuration with sea level, on the new solver.
+
+    The mechanics live on the mantle submesh and the potential on the parent;
+    the couplings are a `FluidCore` that carries the reference gravity at Rc,
+    the `CentreOfMass` multipliers, and on request `Rotation`, `SeaLevel` and
+    a prescribed `SurfaceLoad` on Re. No nullspace is declared: with rotation
+    off the rigid rotation of the mantle is fixed only by the facet geometry
+    error, which `remove_rigid_rotation` accounts for where two solves are
+    compared.
 
     Args:
       meshes: the module fixture.
-      representation: the DtN representation, given to the factory and to
-        the solver. `"multiplier"` by default, so the structural tests that
-        read the `Real` rows of the multiplier space name nothing. The physics
-        tests pass the `representation` fixture.
       fields: `surface_fields(...)`; required when `sea_level` is true.
-      rotation: carry the rotation closure.
-      lam: `Lambda`, given to the factory and to the approximation. The
-        reference gravity `g(r)` keeps the value of the frame tests, so a small
-        `lam` removes self-attraction and keeps the load weight.
+      rotation: carry the rotation closure, with the polar moment of the
+        unit-density mantle and the Earth's `Omega_sq`.
+      lam: `Lambda` of the approximation. The reference gravity `g(r)` keeps
+        the value of the frame tests, so a small `lam` removes
+        self-attraction and keeps the load weight.
       stiff: shear and bulk modulus 1e6 and a viscosity of 1e18, so the
         Maxwell time is 1e12 against `dt = 1` and the step is elastic. The
         uplift then scales as 1e-6 of the default Earth.
       earth: extra keywords for the approximation (moduli, viscosity), applied
         after `stiff`. `None` keeps the default Earth.
-      sea_level: whether the space and the solver carry the sea-level equation.
-        With `False` the solver is built without the new keyword at all, so
-        the comparison solvers of the sign tests run on the current code.
+      sea_level: whether the solver carries a `SeaLevel` coupling.
       surface_bcs: mechanics `bcs`; empty by default because the ice load is
         part of the sea-level sheet.
-      gravity_sheet: an `interior_sigma` on Re for the potential, or `None`.
-      quad_degree: the boundary quadrature degree of the factory.
+      surface_load: a prescribed surface density on Re (UFL on the mechanics
+        mesh), given as `SurfaceLoad(g_surface=G_RE)`, or `None`. It loads
+        the momentum equation with `B_mu G_RE sigma` and the potential with
+        the sheet `sigma`.
+      quad_degree: the boundary quadrature degree (`dtn_quad_degree`), or
+        `None` for the DtN form's default.
       sea_level_overrides: extra `SeaLevel` keywords.
+      representation: the DtN representation. `"multiplier"` by default, so
+        the structural tests that read the `Real` rows of the multiplier space
+        name nothing. The physics tests pass the `representation` fixture.
+        `None` leaves the solver's own default.
+      centre_of_mass: carry the `CentreOfMass` coupling. `False` only for the
+        refusal of a sea level without the frame.
       solver_kwargs: passed to `SelfGravitatingGIASolver`.
 
     Returns:
-      `(solver, z, layout)`.
+      `(solver, z, sea)`: the solver, its mixed solution `solver.solution`,
+      and the `SeaLevel` coupling (`None` without sea level).
     """
     parent, sub = meshes
-    bcs_psi = gravity_bcs(parent, sheet=False)
-    if gravity_sheet is not None:
-        bcs_psi[CURVE_RE] = {"interior_sigma": gravity_sheet}
-    space_kwargs = dict(gravity_bcs=bcs_psi, rotation=rotation,
-                        fluid_core=True, centre_of_mass=True,
-                        self_gravity_number=lam,
-                        dtn_representation=representation)
-    if quad_degree is not None:
-        space_kwargs["quad_degree"] = quad_degree
-    if sea_level:
-        space_kwargs["sea_level"] = True
-    Z, layout = self_gravitating_gia_space(sub, parent, **space_kwargs)
-    z = fd.Function(Z)
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
 
     Xm = fd.SpatialCoordinate(sub)
     rm = fd.sqrt(fd.dot(Xm, Xm))
-    approximation_kwargs = dict(g=FRAME.gravity_of_r(rm),
-                                self_gravity_number=lam)
+    approximation_kwargs = dict(g=gravity_of_r(rm), self_gravity_number=lam)
     if stiff:
         approximation_kwargs.update(shear_modulus=1e6, bulk_modulus=1e6,
                                     viscosity=1e18)
     if earth is not None:
         approximation_kwargs.update(earth)
-    moments = {}
+
+    # The core boundary carries the reference gravity at Rc, as in the frame
+    # tests of `test_gia_gravity.py`.
+    couplings = [FluidCore(boundary=CURVE_RC, rho_core=RHO_CORE,
+                           g=fd.Constant(gravity_of_r(RC)))]
+    if centre_of_mass:
+        couplings.append(CentreOfMass())
     if rotation:
+        # The polar moment `C = int r^2 dx` of the unit-density mantle.
         dx_m = fd.Measure("dx", domain=sub,
                           intersect_measures=(fd.Measure("dx", domain=parent),))
-        moments["C"] = fd.assemble(fd.dot(Xm, Xm) * dx_m)
+        couplings.append(Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m),
+                                  Omega_sq=OMEGA_SQ_EARTH))
+    sea = None
     if sea_level:
-        solver_kwargs["sea_level"] = make_sea_level(
-            fields, **(sea_level_overrides or {}))
+        sea = make_sea_level(fields, **(sea_level_overrides or {}))
+        couplings.append(sea)
+    if surface_load is not None:
+        couplings.append(SurfaceLoad(boundary=CURVE_RE, sigma=surface_load,
+                                     g_surface=G_RE))
+    if representation is not None:
+        solver_kwargs["dtn_representation"] = representation
+    if quad_degree is not None:
+        solver_kwargs["dtn_quad_degree"] = quad_degree
     solver = SelfGravitatingGIASolver(
-        z, approximation(**approximation_kwargs), layout=layout, dt=1.0,
-        bcs=surface_bcs or {}, rotation_moments=moments,
-        # The core boundary carries the reference gravity at Rc, as in
-        # `TestCentreOfMassFrame.build`.
-        fluid_core=FluidCore(boundary=CURVE_RC, rho_core=FRAME.RHO_CORE,
-                             g=fd.Constant(FRAME.gravity_of_r(RC))),
-        dtn_representation=representation,
-        **solver_kwargs)
-    return solver, z, layout
+        u, psi, approximation(**approximation_kwargs), dt=unit_time_step(sub),
+        gravity_bcs=gravity_bcs(parent, sheet=False), bcs=surface_bcs or {},
+        couplings=couplings, **solver_kwargs)
+    return solver, solver.solution, sea
+
+
+def coupling(solver, cls):
+    """The one coupling of class `cls` that `solver` carries."""
+    found = [c for c in solver.couplings if isinstance(c, cls)]
+    assert len(found) == 1, f"{solver} carries {len(found)} {cls.__name__}"
+    return found[0]
 
 
 def re_measure(solver):
-    """The solver's sea-level measure, restricted to the Re tag.
-
-    The task describes `sea_level_measure()` as the generalisation of
-    `fluid_core_measure`, which returns a measure that the caller restricts to
-    a tag. This helper accepts either spelling: a measure that is not yet
-    restricted is called on `CURVE_RE`.
-    """
-    measure = solver.sea_level_measure()
-    if measure.subdomain_id() == "everywhere":
-        measure = measure(CURVE_RE)
-    return measure
+    """The solver's sea-level measure, already restricted to the Re tag."""
+    return coupling(solver, SeaLevel).measure()
 
 
-def real_value(z, index):
-    """The one number of a `Real` sub-field."""
-    return float(z.subfunctions[index].dat.data_ro[0])
+def real_value(field):
+    """The one number of a `Real` Function, for example `sea.shift()`."""
+    return float(field.dat.data_ro[0])
 
 
 def perturb(z, amplitude, seed):
@@ -492,143 +556,142 @@ def solver_converged(solver):
 
 
 # ---------------------------------------------------------------------------
-# Layout and refusals
+# The mixed space and refusals
 # ---------------------------------------------------------------------------
 
+_LAYOUT_SOLVERS = {}
+
+
+def layout_solver(meshes, *, rotation=False, representation="multiplier"):
+    """An unsolved sea-level solver on the ocean state, cached per configuration.
+
+    The tests of `TestLayout` read the mixed space of the solver and nothing
+    else, so one solver per `(rotation, representation)` serves all of them.
+
+    Args:
+      meshes: the module fixture.
+      rotation: carry the rotation closure.
+      representation: the DtN representation, or `None` for the solver's
+        default.
+
+    Returns:
+      `(solver, sea)`.
+    """
+    key = (id(meshes[0]), rotation, representation)
+    if key not in _LAYOUT_SOLVERS:
+        solver, _, sea = build(meshes, surface_fields(meshes[1], "ocean"),
+                               rotation=rotation,
+                               representation=representation)
+        _LAYOUT_SOLVERS[key] = (solver, sea)
+    return _LAYOUT_SOLVERS[key]
+
+
+def real_indices_of_space(solver):
+    """The indices of the `Real` sub-spaces of the solver's mixed space, in order."""
+    return tuple(i for i, V in enumerate(solver.solution_space)
+                 if V.ufl_element().family() == "Real")
+
+
 class TestLayout:
-    """`self_gravitating_gia_space(..., sea_level=True)` and its refusals."""
+    """Where `Shift` and the frame multipliers sit in the solver's mixed space.
 
-    @staticmethod
-    def space(meshes, **kwargs):
-        parent, sub = meshes
-        settings = dict(gravity_bcs=gravity_bcs(parent, sheet=False),
-                        fluid_core=True, centre_of_mass=True,
-                        self_gravity_number=LAMBDA)
-        settings.update(kwargs)
-        return self_gravitating_gia_space(sub, parent, **settings)
+    `DtNTwoBlockSchurPC` needs the `Real` fields contiguous and last. Their
+    order is fixed by the couplings' `order`: the core pressure, the rotation
+    scalar, the frame multipliers, then `Shift`.
 
-    # The next four tests name the representation explicitly and run on both.
-    # `sea_level=True` with no named representation resolves to the low-rank
-    # space on the full layout, so a test that names nothing checks only that
-    # space. The multiplier space carries the DtN multiplier fields in front of
-    # the frame multipliers and `Shift`, and the position of `Shift` must hold
-    # there too.
+    The first four tests name the representation explicitly and run on both.
+    The multiplier space carries the DtN multiplier fields in front of the
+    frame multipliers and `Shift`, and the position of `Shift` must hold there
+    too.
+    """
 
     @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     @pytest.mark.parametrize("rotation", [False, True])
     def test_shift_is_the_last_field(self, meshes, rotation,
                                      dtn_representation):
         """`Shift` is last in the space, after the centre-of-mass multipliers."""
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
-                               dtn_representation=dtn_representation)
-        assert layout.dtn_representation == dtn_representation
-        assert layout.sea_level == len(Z) - 1
+        solver, _ = layout_solver(meshes, rotation=rotation,
+                                  representation=dtn_representation)
+        assert solver.dtn_representation == dtn_representation
+        assert solver.field_index[SHIFT] == len(solver.solution_space) - 1
 
     @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     @pytest.mark.parametrize("rotation", [False, True])
     def test_the_frame_multipliers_stay_just_before_the_shift(
             self, meshes, rotation, dtn_representation):
         """The two frame multipliers are the two fields just before `Shift`."""
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
-                               dtn_representation=dtn_representation)
-        assert layout.dtn_representation == dtn_representation
-        assert layout.centre_of_mass == (len(Z) - 3, len(Z) - 2)
+        solver, _ = layout_solver(meshes, rotation=rotation,
+                                  representation=dtn_representation)
+        n = len(solver.solution_space)
+        assert solver.dtn_representation == dtn_representation
+        assert (solver.field_index["centre_of_mass_0"],
+                solver.field_index["centre_of_mass_1"]) == (n - 3, n - 2)
 
     @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     @pytest.mark.parametrize("rotation", [False, True])
     def test_shift_is_a_real_field_in_the_accounting(self, meshes, rotation,
                                                      dtn_representation):
-        """`n_fields` and `real_fields` count the new field, in space order."""
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
-                               dtn_representation=dtn_representation)
-        assert layout.dtn_representation == dtn_representation
-        real = tuple(i for i, V in enumerate(Z)
-                     if V.ufl_element().family() == "Real")
-        assert len(Z) == layout.n_fields
-        assert real == layout.real_fields
-        assert real[-1] == layout.sea_level
+        """`field_names` and `real_indices` count the new field, in space order."""
+        solver, _ = layout_solver(meshes, rotation=rotation,
+                                  representation=dtn_representation)
+        assert solver.dtn_representation == dtn_representation
+        real = real_indices_of_space(solver)
+        assert len(solver.solution_space) == len(solver.field_names)
+        assert real == solver.real_indices
+        assert real[-1] == solver.field_index[SHIFT]
 
     @pytest.mark.parametrize("dtn_representation", REPRESENTATIONS)
     def test_shift_lives_on_the_parent(self, meshes, dtn_representation):
         """Like every other `Real` field, so its rows assemble on parent measures."""
-        Z, layout = self.space(meshes, sea_level=True,
-                               dtn_representation=dtn_representation)
-        assert layout.dtn_representation == dtn_representation
-        assert Z[layout.sea_level].mesh() is meshes[0]
+        solver, _ = layout_solver(meshes, representation=dtn_representation)
+        assert solver.dtn_representation == dtn_representation
+        space = solver.solution_space[solver.field_index[SHIFT]]
+        assert space.mesh() is meshes[0]
 
     def test_absent_by_default(self, meshes):
-        _, layout = self.space(meshes)
-        assert layout.sea_level is None
+        """A solver without a `SeaLevel` coupling has no `Shift` field."""
+        solver, _, sea = build(meshes, sea_level=False)
+        assert sea is None
+        assert SHIFT not in solver.field_index
 
     def test_refuses_sea_level_without_the_frame(self, meshes):
         """An ocean load always has degree-1 content; the frame must fix it."""
-        with pytest.raises(ValueError, match="centre_of_mass"):
-            self.space(meshes, centre_of_mass=False, sea_level=True)
+        with pytest.raises(ValueError, match="CentreOfMass"):
+            build(meshes, surface_fields(meshes[1], "ocean"),
+                  centre_of_mass=False)
 
     @pytest.mark.parametrize("rotation", [False, True])
     def test_the_lowrank_space(self, meshes, rotation):
         """The low-rank space: no DtN multipliers, and the `Real` run contiguous and last.
 
         The low-rank path eliminates the DtN multipliers into a low-rank
-        update of the potential block, so the layout has none. The `Real`
+        update of the potential block, so the space has none. The `Real`
         fields are then the core pressure, the rotation scalar if present, the
         two frame multipliers and `Shift`, in that order, contiguous and last.
         `DtNTwoBlockSchurPC` requires that run contiguous and last.
         """
-        Z, layout = self.space(meshes, rotation=rotation, sea_level=True,
-                               dtn_representation="lowrank")
-        assert layout.dtn_representation == "lowrank"
-        assert layout.multipliers == ()
-        assert len(Z) == layout.n_fields
-        real = tuple(i for i, V in enumerate(Z)
-                     if V.ufl_element().family() == "Real")
-        assert real == (layout.core_pressure, *layout.rotation.values(),
-                        *layout.centre_of_mass, layout.sea_level)
-        assert real == tuple(range(real[0], len(Z)))
-        assert real == layout.real_fields
-        assert layout.sea_level == len(Z) - 1
+        solver, _ = layout_solver(meshes, rotation=rotation,
+                                  representation="lowrank")
+        assert solver.dtn_representation == "lowrank"
+        assert solver.multiplier_indices == ()
+        names = (["core_pressure"] + (["m3"] if rotation else [])
+                 + ["centre_of_mass_0", "centre_of_mass_1", SHIFT])
+        real = real_indices_of_space(solver)
+        assert real == tuple(solver.field_index[name] for name in names)
+        assert real == tuple(range(real[0], len(solver.solution_space)))
+        assert real == solver.real_indices
+        assert solver.field_index[SHIFT] == len(solver.solution_space) - 1
 
     def test_sea_level_resolves_to_the_lowrank_representation(self, meshes):
-        """`sea_level=True` with no named representation is the low-rank path.
+        """A sea-level solver that names no representation is on the low-rank path.
 
         Sia's decision of 2026-09-17 (`NOTES/DECISIONS.md`): the 3-D sea-level
         runs use the low-rank path, because the multiplier path does not fit
         one node at a truncation of 20.
         """
-        _, layout = self.space(meshes, sea_level=True)
-        assert layout.dtn_representation == "lowrank"
-        assert layout.multipliers == ()
-
-    def test_the_frame_alone_resolves_to_the_multiplier_representation(
-            self, meshes):
-        """`centre_of_mass=True` without sea level stays on the multiplier path."""
-        _, layout = self.space(meshes)
-        assert layout.dtn_representation == "multiplier"
-        assert len(layout.multipliers) > 0
-
-    def test_sea_level_on_the_condensed_layout_resolves_to_the_multiplier(
-            self, meshes):
-        """The condensed layout has no low-rank route, so its default stays.
-
-        `selfgrav_dtn_iterative_solver_parameters` refuses the low-rank path
-        on the condensed layout. A caller who names nothing there must not be
-        given a representation that no preset accepts.
-        """
-        _, layout = self.space(meshes, sea_level=True,
-                               condense_internal_variables=True)
-        assert layout.dtn_representation == "multiplier"
-
-    def test_block1_diagonal_accounts_for_the_shift(self, meshes):
-        """`block1_diagonal` describes the new row and does not raise.
-
-        The value on the row is not asserted: the task asks for zero, but the
-        assembled `(Shift, Shift)` entry is `-c B_mu g_0 rho_w int B C dS`,
-        which is not zero. See the open questions of the handoff file.
-        """
-        solver, _, layout = build(meshes, surface_fields(meshes[1], "ocean"))
-        diagonal = solver.block1_diagonal()
-        assert len(diagonal) == len(layout.real_fields)
-        assert np.all(np.isfinite(diagonal))
+        solver, _ = layout_solver(meshes, representation=None)
+        assert solver.dtn_representation == "lowrank"
+        assert solver.multiplier_indices == ()
 
 
 class TestRefusals:
@@ -640,38 +703,23 @@ class TestRefusals:
             build(meshes, surface_fields(sub, "ocean"),
                   surface_bcs={CURVE_RE: {"normal_stress": B_MU * 1e-3}})
 
-    def test_refuses_a_gravity_sheet_on_re(self, meshes):
-        parent, sub = meshes
+    def test_refuses_a_surface_load_on_re(self, meshes):
+        """A prescribed load sheet on Re would be a second copy of the ice load."""
+        _, sub = meshes
         with pytest.raises(ValueError, match=r"(?i)sea.level"):
-            build(meshes, surface_fields(sub, "ocean"), gravity_sheet=1e-3)
+            build(meshes, surface_fields(sub, "ocean"),
+                  surface_load=fd.Constant(1e-3))
 
     def test_refuses_a_boundary_quadrature_degree_below_2p(self, meshes):
         """Degree 3 is below `2 p = 4` for the P2 displacement and potential.
 
         The sheet contains polynomials of degree `p` and their products, which
-        the surface quadrature must integrate. The factory's `quad_degree` sets
-        the boundary degree that the sea-level measure uses.
+        the surface quadrature must integrate. `dtn_quad_degree` sets the
+        boundary degree that the sea-level measure uses.
         """
         _, sub = meshes
         with pytest.raises((AssertionError, ValueError), match=r"(?i)degree"):
             build(meshes, surface_fields(sub, "ocean"), quad_degree=3)
-
-    def test_a_space_without_the_field_refuses_a_sea_level(self, meshes):
-        """A `SeaLevel` with no `Shift` field has no row for mass conservation."""
-        _, sub = meshes
-        parent = meshes[0]
-        Z, layout = self_gravitating_gia_space(
-            sub, parent, gravity_bcs=gravity_bcs(parent, sheet=False),
-            fluid_core=True, centre_of_mass=True, self_gravity_number=LAMBDA)
-        Xm = fd.SpatialCoordinate(sub)
-        with pytest.raises(ValueError):
-            SelfGravitatingGIASolver(
-                fd.Function(Z),
-                approximation(g=FRAME.gravity_of_r(fd.sqrt(fd.dot(Xm, Xm)))),
-                layout=layout, dt=1.0, bcs={},
-                fluid_core=FluidCore(boundary=CURVE_RC,
-                                     rho_core=FRAME.RHO_CORE),
-                sea_level=make_sea_level(surface_fields(sub, "ocean")))
 
 
 class TestSeaLevelDataclass:
@@ -687,8 +735,8 @@ class TestSeaLevelDataclass:
         _, sub = meshes
         fields = surface_fields(sub, "ocean")
         with pytest.raises(TypeError, match="softplus_width"):
-            sea_level_class()(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
-                              g_surface=G_RE, **fields)
+            SeaLevel(boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I,
+                     g_surface=G_RE, **fields)
 
     def test_a_width_given_as_a_constant_is_accepted(self, meshes):
         _, sub = meshes
@@ -715,7 +763,7 @@ class TestMeasure:
 
         The facet-to-facet intersection is what makes this true. The parent's
         cell measure gives 26.42 against 33.62 for `x^2` over Re, with no
-        warning (`fluid_core_measure` docstring). The reference is the same
+        warning (`CouplingContext.surface_measure` docstring). The reference is the same
         integral on the parent's own interior facets at the same degree.
         Measured on this mesh at degree 10, the two agree to 0.0, so the
         tolerance is round-off, 1e-12 relative.
@@ -756,7 +804,7 @@ class TestSeaLevelExpression:
     def test_each_term_enters_with_its_sign(self, meshes, which):
         _, sub = meshes
         fields = surface_fields(sub, "ocean", sl_init=0.0)
-        solver, z, layout = build(
+        solver, z, sea = build(
             meshes, fields, sea_level_overrides={"g_surface": self.G_SURFACE})
         dss = re_measure(solver)
         n = fd.FacetNormal(sub)
@@ -766,14 +814,14 @@ class TestSeaLevelExpression:
             expected = fd.Constant(0.3)
         elif which == "psi":
             # N = psi / g_surface with rotation off.
-            z.subfunctions[layout.potential].assign(0.2)
+            z.subfunctions[solver.potential_index].assign(0.2)
             expected = fd.Constant(0.2 / self.G_SURFACE)
         elif which == "u":
-            u = z.subfunctions[layout.displacement]
+            u = z.subfunctions[solver.field_index["displacement"]]
             u.interpolate(0.1 * Xm / fd.sqrt(fd.dot(Xm, Xm)))
             expected = -fd.dot(u, n)
         elif which == "Shift":
-            z.subfunctions[layout.sea_level].assign(0.05)
+            sea.shift().assign(0.05)
             expected = fd.Constant(0.05)
         elif which == "N_init":
             fields["N_init"].assign(0.07)
@@ -781,7 +829,7 @@ class TestSeaLevelExpression:
         else:
             fields["ur_init"].assign(0.04)
             expected = fd.Constant(0.04)
-        got = fd.assemble(solver.sea_level() * dss)
+        got = fd.assemble(sea.sea_level() * dss)
         want = fd.assemble(expected * dss)
         # 1e-12 relative: each side is an assembled integral of the same
         # field on the same measure.
@@ -806,14 +854,16 @@ class TestSeaLevelExpression:
         """
         _, sub = meshes
         fields = surface_fields(sub, "ocean", sl_init=0.0)
-        solver, z, layout = build(
+        solver, z, sea = build(
             meshes, fields, rotation=True,
             sea_level_overrides={"g_surface": self.G_SURFACE})
-        z.subfunctions[layout.rotation["m3"]].assign(10.0)
+        coupling(solver, Rotation).values()["m3"].assign(10.0)
         dss = re_measure(solver)
-        expected = (solver.rotational_potential_expression(sub)
-                    / self.G_SURFACE)
-        got = fd.assemble(solver.sea_level() * dss)
+        # The rotational potential that the couplings share, on the facets of
+        # the sheet: `m3` is a `Real` field of the parent, restricted there.
+        expected = (solver.coupling_context.rotational_potential(
+            sub, facet=True) / self.G_SURFACE)
+        got = fd.assemble(sea.sea_level() * dss)
         want = fd.assemble(expected * dss)
         # Guard: the reference is not zero, so the comparison is not vacuous.
         assert abs(want) > 1e-3 * 2 * np.pi * RE
@@ -821,7 +871,7 @@ class TestSeaLevelExpression:
 
 
 class TestSurfaceLoadSheet:
-    """`surface_load_sheet()` in saturated states, where it has a closed form."""
+    """`SeaLevel.sheet()` in saturated states, where it has a closed form."""
 
     S = 1e-2
 
@@ -833,11 +883,11 @@ class TestSurfaceLoadSheet:
     ])
     def test_the_water_sheet(self, meshes, state, density_per_unit):
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, state))
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, surface_fields(sub, state))
+        sea.shift().assign(self.S)
         dss = re_measure(solver)
         length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(solver.surface_load_sheet() * dss)
+        got = fd.assemble(sea.sheet() * dss)
         # Absolute 1e-12 of the water sheet scale: the DEEP = 25 datum cancels
         # in `B C SL - B_init C_init SL_init`, which costs 25 * 1e-16 relative
         # to a sea-level change of 1e-2, that is 3e-13.
@@ -850,11 +900,11 @@ class TestSurfaceLoadSheet:
         fields = surface_fields(sub, "ocean")
         fields["I"].assign(10.0)
         fields["I_init"].assign(10.0)
-        solver, z, layout = build(meshes, fields)
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, fields)
+        sea.shift().assign(self.S)
         dss = re_measure(solver)
         length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(solver.surface_load_sheet() * dss)
+        got = fd.assemble(sea.sheet() * dss)
         assert got == pytest.approx(RHO_W * self.S * length, rel=1e-10)
 
     def test_grounded_ice_loads_with_its_thickness_change(self, meshes):
@@ -862,13 +912,13 @@ class TestSurfaceLoadSheet:
         _, sub = meshes
         d_ice = 0.5
         fields = surface_fields(sub, "cap", d_ice=d_ice)
-        solver, z, layout = build(meshes, fields)
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, fields)
+        sea.shift().assign(self.S)
         dss = re_measure(solver)
         cap = indicator(sub, "cap")
         expected = fd.assemble(
             (RHO_I * d_ice * cap + RHO_W * self.S * (1 - cap)) * dss)
-        got = fd.assemble(solver.surface_load_sheet() * dss)
+        got = fd.assemble(sea.sheet() * dss)
         assert got == pytest.approx(expected, rel=1e-10)
 
     def test_the_sheet_is_the_softplus_column_difference_at_a_shoreline(
@@ -883,9 +933,9 @@ class TestSurfaceLoadSheet:
         _, sub = meshes
         m = sheet()
         fields = surface_fields(sub, "shoreline")
-        solver, z, layout = build(meshes, fields)
+        solver, z, sea = build(meshes, fields)
         shift = 0.05
-        z.subfunctions[layout.sea_level].assign(shift)
+        sea.shift().assign(shift)
         SL0, I, I0 = fields["SL_init"], fields["I"], fields["I_init"]
         expected = (m.softplus_column(I, SL0 + shift, EPS, RHO_W, RHO_I)
                     - m.softplus_column(I0, SL0, EPS, RHO_W, RHO_I))
@@ -893,17 +943,28 @@ class TestSurfaceLoadSheet:
         weight.dat.data[:] = np.random.default_rng(7).uniform(
             0.5, 1.5, weight.dat.data.shape)
         dss = re_measure(solver)
-        got = fd.assemble(weight * solver.surface_load_sheet() * dss)
+        got = fd.assemble(weight * sea.sheet() * dss)
         want = fd.assemble(weight * expected * dss)
         assert got == pytest.approx(want, rel=1e-11)
 
     def test_the_sheet_integral_is_the_integrand_times_the_sheet(self, meshes):
+        """The sheet the consumers integrate is `sheet()` on the sea-level measure.
+
+        The rotation rows, the frame rows and the 2-D monopole datum read the
+        sea level through the `MassSheet` it publishes in the solver's
+        context. A weighted integral of that record must equal the same
+        integral of `sheet()` on `measure()`, to round-off.
+        """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"))
-        z.subfunctions[layout.sea_level].assign(0.05)
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"))
+        sea.shift().assign(0.05)
         X = fd.SpatialCoordinate(sub)
-        got = fd.assemble(solver.surface_load_sheet_integral(X[0] ** 2))
-        want = fd.assemble(X[0] ** 2 * solver.surface_load_sheet()
+        published = [record for record in solver.coupling_context.sheets
+                     if record.name == "sea level"]
+        assert len(published) == 1
+        record = published[0]
+        got = fd.assemble(X[0] ** 2 * record.density * record.measure)
+        want = fd.assemble(X[0] ** 2 * sea.sheet()
                            * re_measure(solver))
         assert got == pytest.approx(want, rel=1e-12)
 
@@ -913,7 +974,7 @@ class TestSurfaceLoadSheet:
 # ---------------------------------------------------------------------------
 
 class TestConsumers:
-    """The sheet reaches `mass_dipole_form`, `inertia_form` and the net-mass scale.
+    """The sheet reaches the mass dipole, the inertia row and the net-mass scale.
 
     It does not reach the 2-D monopole datum (`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 1). The
     datum is refreshed at the start of `solve`, so it would hold the net sheet
@@ -933,27 +994,29 @@ class TestConsumers:
         The `"cap"` state has an asymmetric ocean, so both moments are nonzero.
         """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "cap"))
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, surface_fields(sub, "cap"))
+        sea.shift().assign(self.S)
         X = fd.SpatialCoordinate(sub)
         ocean = 1 - indicator(sub, "cap")
         dss = re_measure(solver)
         for i in range(2):
             expected = fd.assemble(RHO_W * self.S * ocean * X[i] * dss)
-            got = fd.assemble(solver.mass_dipole_form(i))
+            got = fd.assemble(coupling(solver, CentreOfMass).dipole_form(
+                solver.coupling_context, i))
             assert abs(expected) > 1e-3 * RHO_W * self.S
             assert got == pytest.approx(expected, rel=1e-10)
 
     def test_the_sheet_reaches_the_inertia_row(self, meshes):
         """`dI_33 = int sigma (x^2 + y^2) dS` from the sheet, rotation on."""
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "ocean"),
-                                  rotation=True)
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, surface_fields(sub, "ocean"),
+                               rotation=True)
+        sea.shift().assign(self.S)
         X = fd.SpatialCoordinate(sub)
         expected = fd.assemble(RHO_W * self.S * (X[0] ** 2 + X[1] ** 2)
                                * re_measure(solver))
-        got = fd.assemble(solver.inertia_form(2))
+        got = fd.assemble(coupling(solver, Rotation).inertia_form(
+            solver.coupling_context, 2))
         assert got == pytest.approx(expected, rel=1e-10)
 
     def test_the_sea_level_sheet_is_not_in_the_monopole_datum(self, meshes):
@@ -970,15 +1033,15 @@ class TestConsumers:
         in, the datum equals `rho_w S L`, a relative value of 1.
         """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "ocean"))
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, surface_fields(sub, "ocean"))
+        sea.shift().assign(self.S)
         sheet_mass = fd.assemble(RHO_W * self.S * re_measure(solver))
         # Guard: the hand-set state really carries a net sheet mass, so a zero
         # datum is a statement about the datum and not about the state.
-        assert fd.assemble(solver.surface_load_sheet() * re_measure(solver)) \
+        assert fd.assemble(sea.sheet() * re_measure(solver)) \
             == pytest.approx(sheet_mass, rel=1e-10)
         solver.update_total_mass()
-        assert abs(float(solver.source_mass)) <= 1e-12 * sheet_mass
+        assert abs(float(solver.gravity.source_mass)) <= 1e-12 * sheet_mass
 
     def test_the_sheet_sets_the_scale_of_the_net_mass_check(self, meshes):
         """`check_net_mass` reads a net mass against a scale that has the sheet.
@@ -1004,26 +1067,28 @@ class TestConsumers:
         """
         _, sub = meshes
         d_ice = 1e-2
-        solver, z, layout = build(meshes, surface_fields(sub, "caps",
-                                                         d_ice=d_ice))
+        solver, z, sea = build(meshes, surface_fields(sub, "caps",
+                                                      d_ice=d_ice))
         dss = re_measure(solver)
         caps = indicator(sub, "caps")
         ice_length = fd.assemble(caps * dss)
         ocean_length = fd.assemble((1 - caps) * dss)
         # The uniform ocean rise that balances the ice growth on the caps.
         conserving = -RHO_I * d_ice * ice_length / (RHO_W * ocean_length)
-        z.subfunctions[layout.sea_level].assign(conserving)
+        sea.shift().assign(conserving)
         # A CMB displacement of 1e-9 (units of D) that vanishes at Re, so the
         # sea-level sheet does not see it through `u_r`.
         X = fd.SpatialCoordinate(sub)
         r = fd.sqrt(fd.dot(X, X))
-        z.subfunctions[layout.displacement].interpolate(
+        z.subfunctions[solver.field_index["displacement"]].interpolate(
             1e-9 * (RE - r) / (RE - RC) * X / r)
 
-        core_measure = solver.fluid_core_measure()(CURVE_RC)
-        core_net = abs(fd.assemble(solver.fluid_core_sheet() * core_measure))
-        core_scale = fd.assemble(abs(solver.fluid_core_sheet()) * core_measure)
-        sheet_scale = fd.assemble(abs(solver.surface_load_sheet()) * dss)
+        core = coupling(solver, FluidCore)
+        core_measure = core.measure()
+        core_sheet = core.sheet_density(solver.field("displacement"))
+        core_net = abs(fd.assemble(core_sheet * core_measure))
+        core_scale = fd.assemble(abs(core_sheet) * core_measure)
+        sheet_scale = fd.assemble(abs(sea.sheet()) * dss)
         # Guard: without the sea-level scale, no warning (relative near 1).
         assert core_net / core_scale > 1e-4
         # Guard: with the sea-level scale, the relative value is in the band.
@@ -1074,22 +1139,22 @@ class TestRepeatedSolve:
         """
         _, sub = meshes
         d_ice = 1e-2
-        solver, z, layout = build(meshes, surface_fields(sub, "caps",
-                                                         d_ice=d_ice),
-                                  earth=WILL_EARTH,
-                                  representation=representation,
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, surface_fields(sub, "caps",
+                                                      d_ice=d_ice),
+                               earth=WILL_EARTH,
+                               representation=representation,
+                               **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
-        shift_first = real_value(z, layout.sea_level)
-        psi_first = z.subfunctions[layout.potential].dat.data_ro.copy()
+        shift_first = real_value(sea.shift())
+        psi_first = z.subfunctions[solver.potential_index].dat.data_ro.copy()
 
         solver.solve()
         # A second solve that starts converged can stop at iteration 0, which
         # PETSc reports as a positive reason as well.
         assert solver_converged(solver)
-        shift_second = real_value(z, layout.sea_level)
-        psi_second = z.subfunctions[layout.potential].dat.data_ro
+        shift_second = real_value(sea.shift())
+        psi_second = z.subfunctions[solver.potential_index].dat.data_ro
 
         # Guard: a nonzero Shift, so a relative comparison has meaning.
         assert abs(shift_first) > 1e-3
@@ -1106,12 +1171,14 @@ class TestRepeatedSolve:
 class TestSheetSigns:
     """The ocean sheet enters the rows as an existing sheet of the same density.
 
-    The comparison solver has no sea level: its load is an `interior_sigma` of
-    density `rho_w S` on the potential and a `normal_stress` of
-    `B_mu g(Re) rho_w S` on the mechanics, which is the convention of every
-    load in `test_gia_gravity.py`. The sea-level solver has the uniform deep
-    ocean and `Shift = S`, so its sheet is `rho_w S`. At `u = psi = 0` the
-    residual rows of both are the load terms alone.
+    The comparison solver has no sea level. For the potential row its load is
+    a `SurfaceLoad` of density `rho_w S`, whose potential row is the
+    convention of every prescribed sheet; for the mechanics row it is a plain
+    `normal_stress` of `B_mu g(Re) rho_w S` in `bcs`, the convention of every
+    load in `test_gia_gravity.py` (the solver accepts it with a warning). The
+    sea-level solver has the uniform deep ocean and `Shift = S`, so its sheet
+    is `rho_w S`. At `u = psi = 0` the residual rows of both are the load
+    terms alone.
 
     This is the check that `NOTES/DESIGN-SEA-LEVEL.md` asks for: a flipped
     geoid sign in `sea_level()` flips the sign of the ocean sheet in the
@@ -1121,37 +1188,41 @@ class TestSheetSigns:
 
     S = 1e-2
 
-    def test_the_potential_row_matches_an_interior_sigma(self, meshes):
+    def test_the_potential_row_matches_a_prescribed_sheet(self, meshes):
         _, sub = meshes
-        sea, z_sea, layout = build(meshes, surface_fields(sub, "ocean"))
-        z_sea.subfunctions[layout.sea_level].assign(self.S)
-        row_sea = fd.assemble(sea.sea_level_residual()).subfunctions[
-            layout.potential].dat.data_ro
+        solver, _, sea = build(meshes, surface_fields(sub, "ocean"))
+        sea.shift().assign(self.S)
+        row_sea = fd.assemble(sea.residual(sea.context)).subfunctions[
+            solver.potential_index].dat.data_ro
 
-        plain, _, plain_layout = build(meshes, sea_level=False,
-                                       gravity_sheet=RHO_W * self.S)
-        row_plain = fd.assemble(plain.potential_residual()).subfunctions[
-            plain_layout.potential].dat.data_ro
+        plain, _, _ = build(meshes, sea_level=False,
+                            surface_load=fd.Constant(RHO_W * self.S))
+        load = coupling(plain, SurfaceLoad)
+        row_plain = fd.assemble(load.residual(plain.coupling_context)) \
+            .subfunctions[plain.potential_index].dat.data_ro
         scale = np.abs(row_plain).max()
         assert scale > 0.0
         # 1e-10 relative: the same facets, the same `avg` and the same degree.
         # The two spellings agreed to the last bit for the fluid core
-        # (`fluid_core_measure` docstring). The DEEP datum costs 3e-13.
+        # (`CouplingContext.surface_measure`). The DEEP datum costs 3e-13.
         assert np.abs(row_sea - row_plain).max() <= 1e-10 * scale
 
     def test_the_mechanics_row_matches_a_normal_stress(self, meshes):
         _, sub = meshes
-        sea, z_sea, layout = build(meshes, surface_fields(sub, "ocean"))
-        z_sea.subfunctions[layout.sea_level].assign(self.S)
-        row_sea = fd.assemble(sea.sea_level_residual()).subfunctions[
-            layout.displacement].dat.data_ro
+        solver, _, sea = build(meshes, surface_fields(sub, "ocean"))
+        sea.shift().assign(self.S)
+        row_sea = fd.assemble(sea.residual(sea.context)).subfunctions[
+            solver.field_index["displacement"]].dat.data_ro
 
-        plain, _, plain_layout = build(
-            meshes, sea_level=False,
-            surface_bcs={CURVE_RE: {"normal_stress": B_MU * G_RE * RHO_W
-                                    * self.S}})
+        # A traction with no mass is what this comparison wants, so the
+        # solver's warning about a `normal_stress` in `bcs` is expected.
+        with pytest.warns(UserWarning, match="normal_stress"):
+            plain, _, _ = build(
+                meshes, sea_level=False,
+                surface_bcs={CURVE_RE: {"normal_stress": B_MU * G_RE * RHO_W
+                                        * self.S}})
         row_plain = fd.assemble(plain.F).subfunctions[
-            plain_layout.displacement].dat.data_ro
+            plain.field_index["displacement"]].dat.data_ro
         scale = np.abs(row_plain).max()
         assert scale > 0.0
         # 1e-6 relative: `Equation` integrates the normal stress at degree 6
@@ -1183,28 +1254,41 @@ def jacobian(meshes, state, rotation=False):
 
     The perturbation is 1e-3, so the shoreline coast stays inside its facets
     and the saturated states stay saturated.
+
+    Returns:
+      `(A, solver)`: the nest matrix and the solver whose `field_index` names
+      its blocks.
     """
     key = (state, rotation)
     if key not in _JACOBIANS:
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, state,
-                                                         d_ice=0.5),
-                                  rotation=rotation)
+        solver, z, sea = build(meshes, surface_fields(sub, state,
+                                                      d_ice=0.5),
+                               rotation=rotation)
         perturb(z, 1e-3, seed=11)
         A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
-        _JACOBIANS[key] = (A, layout)
+        _JACOBIANS[key] = (A, solver)
     return _JACOBIANS[key]
 
 
-def _pair_indices(layout, pair):
-    """Field indices of a named block pair. `"rot"` is the 2-D scalar `m3`."""
-    names = {"u": layout.displacement, "psi": layout.potential,
-             "Shift": layout.sea_level,
-             "lambda_x": layout.centre_of_mass[0],
-             "lambda_y": layout.centre_of_mass[1]}
-    if layout.rotation:
-        names["rot"] = layout.rotation["m3"]
-    return names[pair[0]], names[pair[1]]
+#: The short names of the block pairs, mapped to the solver's field names.
+_PAIR_FIELDS = {"u": "displacement", "psi": "potential", "Shift": SHIFT,
+                "lambda_x": "centre_of_mass_0", "lambda_y": "centre_of_mass_1",
+                "rot": "m3"}
+
+
+def _pair_indices(solver, pair):
+    """Field indices of a named block pair. `"rot"` is the 2-D scalar `m3`.
+
+    Args:
+      solver: the solver whose mixed space the indices refer to.
+      pair: two short names from `"u"`, `"psi"`, `"Shift"`, `"lambda_x"`,
+        `"lambda_y"` and `"rot"`.
+
+    Returns:
+      `(i, j)`, indices into `solver.field_index`.
+    """
+    return tuple(solver.field_index[_PAIR_FIELDS[name]] for name in pair)
 
 
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
@@ -1226,8 +1310,8 @@ class TestTransposes:
         ("Shift", "lambda_x"), ("Shift", "lambda_y"),
     ])
     def test_the_pair_transposes(self, meshes, state, pair):
-        A, layout = jacobian(meshes, state)
-        i, j = _pair_indices(layout, pair)
+        A, solver = jacobian(meshes, state)
+        i, j = _pair_indices(solver, pair)
         ij = dense_block(A, i, j)
         ji = dense_block(A, j, i)
         assert ij is not None and ji is not None, (
@@ -1258,8 +1342,8 @@ class TestRotationTransposes:
     @pytest.mark.parametrize("pair", [("u", "rot"), ("psi", "rot"),
                                       ("Shift", "rot")])
     def test_the_rotation_pair_transposes(self, meshes, pair):
-        A, layout = jacobian(meshes, "shoreline", rotation=True)
-        i, j = _pair_indices(layout, pair)
+        A, solver = jacobian(meshes, "shoreline", rotation=True)
+        i, j = _pair_indices(solver, pair)
         ij = dense_block(A, i, j)
         ji = dense_block(A, j, i)
         assert ij is not None and ji is not None, (
@@ -1279,8 +1363,8 @@ class TestRotationTransposes:
         residual scaling. The threshold is 1e-10 of the `(Shift, Shift)`
         diagonal, far below that and far above round-off.
         """
-        A, layout = jacobian(meshes, "shoreline", rotation=True)
-        i_s, i_r = _pair_indices(layout, ("Shift", "rot"))
+        A, solver = jacobian(meshes, "shoreline", rotation=True)
+        i_s, i_r = _pair_indices(solver, ("Shift", "rot"))
         shift_shift = abs(dense_block(A, i_s, i_s)[0, 0])
         assert shift_shift > 0.0
         assert abs(dense_block(A, i_s, i_r)[0, 0]) > 1e-10 * shift_shift
@@ -1290,7 +1374,7 @@ class TestRotationTransposes:
 class TestResidualIsTheVariationOfTheEnergy:
 
     def test_written_residual_equals_the_derivative_of_the_energy(self, meshes):
-        """At a saturated sheet, `sea_level_residual() = derivative(E_sl)`.
+        """At a saturated sheet, `SeaLevel.residual = derivative(E_sl)`.
 
         The residual is written term by term for the Slate reason of handover
         B trap 3.4.2. This pins that it is still the variation of the energy,
@@ -1300,17 +1384,18 @@ class TestResidualIsTheVariationOfTheEnergy:
         relative. Tolerance 1e-11 relative per sub-field.
         """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "cap",
-                                                         d_ice=0.5))
+        solver, z, sea = build(meshes, surface_fields(sub, "cap",
+                                                      d_ice=0.5))
         perturb(z, 1e-1, seed=5)
-        written = fd.assemble(solver.sea_level_residual())
-        derived = fd.assemble(fd.derivative(solver.sea_level_energy(),
+        written = fd.assemble(sea.residual(sea.context))
+        derived = fd.assemble(fd.derivative(sea.energy(),
                                             solver.solution))
         checked = 0
         for i, (a, b) in enumerate(zip(written.subfunctions,
                                        derived.subfunctions)):
             scale = np.abs(b.dat.data_ro).max()
-            if i in (layout.displacement, layout.potential, layout.sea_level):
+            if i in (solver.field_index["displacement"],
+                     solver.potential_index, solver.field_index[SHIFT]):
                 assert scale > 0.0, f"sub-field {i} has no sea-level term"
             tolerance = 1e-11 * max(scale, 1e-300)
             assert np.abs(a.dat.data_ro - b.dat.data_ro).max() <= tolerance
@@ -1342,7 +1427,7 @@ class TestEustaticLimit:
         """
         _, sub = meshes
         d_ice = -1e-2
-        solver, z, layout = build(
+        solver, z, sea = build(
             meshes, surface_fields(sub, "caps", d_ice=d_ice), lam=1e-6,
             stiff=True, representation=representation,
             **solve_settings(representation))
@@ -1353,7 +1438,7 @@ class TestEustaticLimit:
         eustatic = (-(RHO_I / RHO_W) * fd.assemble(d_ice * caps * dss)
                     / fd.assemble((1 - caps) * dss))
         assert eustatic > 0.0  # melting raises the sea
-        assert real_value(z, layout.sea_level) == pytest.approx(eustatic,
+        assert real_value(sea.shift()) == pytest.approx(eustatic,
                                                                 rel=1e-4)
 
 
@@ -1375,20 +1460,20 @@ def solve_shoreline(meshes, representation):
       representation: `"multiplier"` or `"lowrank"`.
 
     Returns:
-      `(solver, z, layout, initial_norm)`.
+      `(solver, z, sea, initial_norm)`, with `sea` the `SeaLevel` coupling.
     """
     if representation not in _SHORELINE:
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  representation=representation,
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                               representation=representation,
+                               **solve_settings(representation))
         initial_norm = vector_norm(fd.assemble(solver.F))
         solver.solve()
         iterations = solver.solver.snes.getIterationNumber()
         print(f"shoreline live-coastline solve, {representation}: {iterations} "
               f"Newton iterations, reason "
               f"{solver.solver.snes.getConvergedReason()}")
-        _SHORELINE[representation] = (solver, z, layout, initial_norm)
+        _SHORELINE[representation] = (solver, z, sea, initial_norm)
     return _SHORELINE[representation]
 
 
@@ -1419,7 +1504,7 @@ class TestLiveCoastlineSolve:
 
             -c B_mu g_s int sigma dS + c B_mu sum_i lambda_i int x_i dsigma/dShift dS
 
-        because `centre_of_mass_residual` keeps the column `lambda . dD/dShift`
+        because the `CentreOfMass` rows keep the column `lambda . dD/dShift`
         (`NOTES/findings/FINDING-2d-sea-level-build.md`, decision 2), so the residual stays the
         gradient of one Lagrangian. At convergence the row is zero, and the
         common factor `c B_mu` of both terms cancels:
@@ -1447,19 +1532,19 @@ class TestLiveCoastlineSolve:
         The bound is checked to be small against the sheet itself, so the test
         cannot pass with a large multiplier.
         """
-        solver, z, layout, initial_norm = shoreline_solved
-        scale_factor = gia_gravity.scalar_value(solver.scaling_factor)
+        solver, z, sea, initial_norm = shoreline_solved
+        scale_factor = scalar_value(solver.scaling_factor)
         row_scale = scale_factor * B_MU * G_RE
         dss = re_measure(solver)
-        sigma = solver.surface_load_sheet()
+        sigma = sea.sheet()
         # `dsigma/dShift`: the Gateaux derivative of the sheet in the direction
         # of the unit `Shift`, with a live coastline.
         direction = fd.Function(z.function_space())
-        direction.subfunctions[layout.sea_level].assign(1.0)
+        direction.subfunctions[solver.field_index[SHIFT]].assign(1.0)
         dsigma_dshift = expand_derivatives(
             ufl.derivative(sigma, solver.solution, direction))
         X = fd.SpatialCoordinate(solver.mesh)
-        lam = [real_value(z, index) for index in layout.centre_of_mass]
+        lam = [real_value(f) for f in coupling(solver, CentreOfMass).multipliers()]
         frame_term = sum(abs(lam_i) * fd.assemble(abs(X[i] * dsigma_dshift)
                                                   * dss)
                          for i, lam_i in enumerate(lam))
@@ -1484,13 +1569,14 @@ class TestLiveCoastlineSolve:
         `c B_mu g_s int |sigma| dS`, so that the test cannot pass on a loose
         tolerance.
         """
-        solver, z, layout, initial_norm = shoreline_solved
+        solver, z, sea, initial_norm = shoreline_solved
         residual = fd.assemble(solver.F)
-        row = float(residual.subfunctions[layout.sea_level].dat.data_ro[0])
+        row = float(residual.subfunctions[solver.field_index[SHIFT]]
+                    .dat.data_ro[0])
         bound = 10 * max(SNES_RTOL * initial_norm, SNES_ATOL)
-        scale_factor = gia_gravity.scalar_value(solver.scaling_factor)
+        scale_factor = scalar_value(solver.scaling_factor)
         row_scale = scale_factor * B_MU * G_RE
-        magnitude = fd.assemble(abs(solver.surface_load_sheet())
+        magnitude = fd.assemble(abs(sea.sheet())
                                 * re_measure(solver))
         assert bound < 1e-6 * row_scale * magnitude
         assert abs(row) <= bound
@@ -1502,11 +1588,12 @@ class TestLiveCoastlineSolve:
         Scale: the first moment of the sheet alone, `int |x_i sigma| dS`, which
         the displacement has to cancel. 1e-8 of it, as the frame test uses.
         """
-        solver, _, _, _ = shoreline_solved
+        solver, _, sea, _ = shoreline_solved
         X = fd.SpatialCoordinate(solver.mesh)
-        sigma = solver.surface_load_sheet()
+        sigma = sea.sheet()
         dss = re_measure(solver)
-        D = solver.mass_dipole()
+        D = [fd.assemble(form)
+             for form in coupling(solver, CentreOfMass).dipole()]
         for i in range(2):
             moment = fd.assemble(abs(X[i] * sigma) * dss)
             assert moment > 0.0
@@ -1554,8 +1641,8 @@ class TestRepresentationParity:
         tolerance of 1e-9 is well above the last printed digit. Measured
         difference between the paths: 1.0e-14 relative.
         """
-        shifts = {name: real_value(z, layout.sea_level)
-                  for name, (_, z, layout, _) in states.items()}
+        shifts = {name: real_value(sea.shift())
+                  for name, (_, _, sea, _) in states.items()}
         for value in shifts.values():
             assert value == pytest.approx(self.PROBE_SHIFT, rel=1e-9)
         assert shifts["lowrank"] == pytest.approx(shifts["multiplier"],
@@ -1571,8 +1658,9 @@ class TestRepresentationParity:
         printed 5 digits, so the comparison with it is to 5e-5 relative.
         Measured difference between the paths: 2.4e-10 and 9.3e-12 relative.
         """
-        lam = {name: [real_value(z, i) for i in layout.centre_of_mass]
-               for name, (_, z, layout, _) in states.items()}
+        lam = {name: [real_value(f) for f in
+                      coupling(solver, CentreOfMass).multipliers()]
+               for name, (solver, _, _, _) in states.items()}
         for values in lam.values():
             for got, probe in zip(values, self.PROBE_MULTIPLIERS):
                 assert got == pytest.approx(probe, rel=5e-5)
@@ -1585,9 +1673,8 @@ class TestRepresentationParity:
         The net mass is of order the multipliers (`TestLiveCoastlineSolve`), so it
         has the same relative accuracy. Measured difference: 5.2e-9 relative.
         """
-        net = {name: fd.assemble(solver.surface_load_sheet()
-                                 * re_measure(solver))
-               for name, (solver, _, _, _) in states.items()}
+        net = {name: fd.assemble(sea.sheet() * re_measure(solver))
+               for name, (solver, _, sea, _) in states.items()}
         assert abs(net["multiplier"]) > 0.0
         assert net["lowrank"] == pytest.approx(net["multiplier"], rel=1e-6)
 
@@ -1605,9 +1692,14 @@ class TestRepresentationParity:
         path gives an error of order the coefficient itself. Measured largest
         difference over scale: 1.4e-14 on the exterior boundary, 2.3e-15 on
         the interior one.
+
+        The multiplier path returns `Real` Functions and the low-rank path
+        taped floats; both are read as numbers here.
         """
-        coefficients = {name: solver.coefficients()
-                        for name, (solver, _, _, _) in states.items()}
+        coefficients = {
+            name: {bc_id: {key: float(value) for key, value in modes.items()}
+                   for bc_id, modes in solver.coefficients().items()}
+            for name, (solver, _, _, _) in states.items()}
         multiplier, lowrank = coefficients["multiplier"], coefficients["lowrank"]
         assert multiplier.keys() == lowrank.keys()
         for bc_id in multiplier:
@@ -1645,13 +1737,13 @@ class TestSignAgainstPhysics:
         _, sub = meshes
         d_ice = 1e-2
         fields = surface_fields(sub, "caps", d_ice=d_ice)
-        solver, z, layout = build(meshes, fields, stiff=True,
-                                  representation=representation,
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, fields, stiff=True,
+                               representation=representation,
+                               **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         dss = re_measure(solver)
-        delta = solver.sea_level() - fields["SL_init"]
+        delta = sea.sea_level() - fields["SL_init"]
         near, far = indicator(sub, "near"), indicator(sub, "far")
         mean_near = fd.assemble(near * delta * dss) / fd.assemble(near * dss)
         mean_far = fd.assemble(far * delta * dss) / fd.assemble(far * dss)
@@ -1720,20 +1812,20 @@ class TestAgainstWillScott:
         parent, sub = meshes
         d_ice = 1e-2
         fields = surface_fields(sub, "caps", d_ice=d_ice)
-        solver, z, layout = build(meshes, fields, earth=WILL_EARTH,
-                                  representation=representation,
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, fields, earth=WILL_EARTH,
+                               representation=representation,
+                               **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
-        shift_ours = real_value(z, layout.sea_level)
+        shift_ours = real_value(sea.shift())
 
         circle = fd.CircleManifoldMesh(32, radius=RE, degree=1)
         V = fd.FunctionSpace(circle, "CG", 2)
         Vv = fd.VectorFunctionSpace(circle, "CG", 2)
         psi_c = fd.assemble(fd.interpolate(
-            solver.solution.subfunctions[layout.potential], V))
+            solver.psi, V))
         u_c = fd.assemble(fd.interpolate(
-            solver.solution.subfunctions[layout.displacement], Vv))
+            solver.u, Vv))
         Xc = fd.SpatialCoordinate(circle)
         du_r = fd.Function(V).interpolate(
             fd.dot(u_c, Xc / fd.sqrt(fd.dot(Xc, Xc))))
@@ -1792,10 +1884,9 @@ class TestNestedCondensation:
         #
         # `dtn_representation`: the nested route `block0="pair"` has no
         # low-rank route, and `selfgrav_dtn_iterative_solver_parameters`
-        # refuses the pair `block0="pair"` with `"lowrank"`. The preset's own
-        # default is `"lowrank"` on the full layout, and so is the default of a
-        # sea-level space. This test therefore names `"multiplier"` here, and
-        # `build` gives the same value to the space and the solver.
+        # refuses the pair `block0="pair"` with `"lowrank"`. The solver's own
+        # default is `"lowrank"`. This test therefore names `"multiplier"`
+        # here, which is also `build`'s default.
         #
         # `block0`: `InternalVariableSCPC` is reached through the `"pair"`
         # route, whose block 0 is a multiplicative fieldsplit. The default
@@ -1804,12 +1895,13 @@ class TestNestedCondensation:
         # find its sub-KSP there. `test_gia_nested_condensation.py` names the
         # same value for the same reason. The default route has its own test
         # underneath this one.
-        parameters = selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
-            outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8,
-            dtn_representation="multiplier", block0="pair")
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  solver_parameters=parameters)
+        options = dict(multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+                       outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8,
+                       block0="pair")
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                               representation="multiplier",
+                               solver_parameters="iterative",
+                               preset_options=options)
         solver.solve()
         assert solver_converged(solver)
         condensation_context(solver)
@@ -1838,15 +1930,15 @@ class TestNestedCondensation:
         level on.
         """
         _, sub = meshes
-        parameters = selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
-            outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8,
-            dtn_representation=representation)
-        assert parameters["dtn_fieldsplit_0_pc_python_type"] == \
-            "gadopt.CondensedBlockPC"
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  representation=representation,
-                                  solver_parameters=parameters)
+        options = dict(multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+                       outer_rtol=1e-8, block0_rtol=1e-4, snes_rtol=1e-8)
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                               representation=representation,
+                               solver_parameters="iterative",
+                               preset_options=options)
+        # Guard: the preset the solver called chose the default block-0 route.
+        assert solver.solver_parameters["dtn_fieldsplit_0_pc_python_type"] \
+            == "gadopt.CondensedBlockPC"
         solver.solve()
         assert solver_converged(solver)
 
@@ -1858,11 +1950,11 @@ class TestNestedCondensation:
 def rebuild_parameters(preset=None, **overrides):
     """The iterative preset on the low-rank path, for the cache-rule tests.
 
-    The same dictionary `solve_settings("lowrank")` builds, so the tolerances
-    and the converged state are those every other live-coastline test of this file
-    reads. It is built here rather than taken from `solve_settings` because
-    each of these tests needs its own copy to write an option into, and
-    because they all name the low-rank representation: that is the path whose
+    The same settings `solve_settings("lowrank")` builds, so the tolerances
+    and the converged state are those every other live-coastline test of this
+    file reads. They are built here rather than taken from `solve_settings`
+    because each of these tests needs its own preset arguments and options,
+    and because they all name the low-rank representation: that is the path whose
     block 0 is `gadopt.CondensedBlockPC` with `gadopt.LowRankPotentialPC` on
     its potential split, which is where both caches of this section live. The
     multiplier path here runs the direct preset, whose block 0 is one LU with
@@ -1871,22 +1963,22 @@ def rebuild_parameters(preset=None, **overrides):
     Args:
       preset: extra keyword arguments of
         `selfgrav_dtn_iterative_solver_parameters`, for example
-        `u_ksp_max_it` or `multiplier_pc`.
-      overrides: extra entries written into the dictionary the preset
-        returned, for example `lowrank_reuse_rtol` or `gia_rebuild`.
-        These are plain PETSc options that no preset argument names.
+        `u_ksp_max_it` or `multiplier_pc`, given as `preset_options`.
+      overrides: extra options added after the preset
+        (`solver_parameters_extra`), for example `lowrank_reuse_rtol` or
+        `gia_rebuild`. These are plain PETSc options that no preset argument
+        names.
 
     Returns:
-      A solver parameters dictionary.
+      A dictionary of `SelfGravitatingGIASolver` keywords
+      (`representation`, `solver_parameters`, `preset_options`,
+      `solver_parameters_extra`) for `build`.
     """
-    parameters = selfgrav_dtn_iterative_solver_parameters(
-        condensed=False,
-        outer_rtol=TIGHT["ksp_rtol"], block0_rtol=1e-4,
-        snes_rtol=SNES_RTOL, dtn_representation="lowrank",
-        **(preset or {}))
-    parameters["snes_atol"] = SNES_ATOL
-    parameters.update(overrides)
-    return parameters
+    settings = solve_settings("lowrank")
+    settings["preset_options"].update(preset or {})
+    settings["solver_parameters_extra"].update(overrides)
+    settings["representation"] = "lowrank"
+    return settings
 
 
 def block0_and_potential(solver):
@@ -1929,7 +2021,7 @@ class TestLiveCoastlineRebuildRules:
     water and ice columns of the current sea level, so the surface load sheet
     follows the unknowns and the Jacobian moves inside
     one nonlinear solve, exactly as it does for a power law.
-    `SelfGravitatingGIASolver._jacobian_depends_on_solution` says so, which has
+    `SelfGravitatingGIASolver.jacobian_depends_on_solution` says so, which has
     one correctness consequence and one cost consequence.
 
     The correctness one is that `snes_type ksponly` - one linear solve at the
@@ -1958,29 +2050,31 @@ class TestLiveCoastlineRebuildRules:
         Class-scoped: three tests read it and the solve is the expensive part.
 
         Returns:
-            `(solver, z, layout)`.
+            `(solver, z, sea)`.
         """
         _, sub = meshes
-        solver, z, layout = build(
-            meshes, surface_fields(sub, "shoreline"), representation="lowrank",
-            solver_parameters=rebuild_parameters(gia_rebuild="always"))
+        solver, z, sea = build(
+            meshes, surface_fields(sub, "shoreline"),
+            **rebuild_parameters(gia_rebuild="always"))
         solver.solve()
         assert solver_converged(solver)
-        return solver, z, layout
+        return solver, z, sea
 
     def test_the_jacobian_is_declared_state_dependent(self, live_exact):
         """The predicate is true with a live coastline on a Newtonian Earth.
 
-        Both the method itself and the copy of its answer that
-        `_attach_condensation_context` publishes for the preconditioners to
-        read before the first solve.
+        Both the attribute itself and the copy of its answer that the solver
+        publishes in the application context for the preconditioners to read
+        before the first solve. The rheology is Newtonian
+        (`rheology_nonlinear` is false), so the live coastline is the whole of
+        the reason.
         """
-        solver, _, _ = live_exact
-        assert solver._live_coastline()
-        assert solver._jacobian_depends_on_solution()
+        solver, _, sea = live_exact
+        assert not sea.fixed_ocean
+        assert solver.jacobian_depends_on_solution
         assert solver.appctx["gia_jacobian_depends_on_solution"] is True
         # The rheology is Newtonian, so the coastline is the whole of the reason.
-        assert solver._newtonian_rheology()
+        assert not solver.rheology_nonlinear
 
     def test_block_zero_symmetry_is_unchanged(self, meshes, live_exact):
         """A live coastline does not make the condensed block-0 operator nonsymmetric.
@@ -1995,9 +2089,9 @@ class TestLiveCoastlineRebuildRules:
         one energy `E_sl` generates all three sea-level rows and its second
         variation is symmetric whatever the sheet does
         (`NOTES/DESIGN-SEA-LEVEL.md` section 3).
-        `condensed_operator_symmetric` reads `_newtonian_rheology` directly
-        and not `_jacobian_depends_on_solution`, so the override reaches it by
-        no path at all.
+        The symmetry of the condensed operator follows `rheology_nonlinear`,
+        which reads the material alone and not `jacobian_depends_on_solution`,
+        so the live coastline reaches it by no path at all.
 
         The assertion is made on the answer and on its consequence. The
         consequence is the Krylov method the options carry on the condensed
@@ -2008,16 +2102,19 @@ class TestLiveCoastlineRebuildRules:
         """
         _, sub = meshes
         solver, _, _ = live_exact
-        assert solver.condensed_operator_symmetric()
+        assert not solver.rheology_nonlinear
 
         key = "dtn_fieldsplit_0_condensed_fieldsplit_0_ksp_type"
-        parameters = rebuild_parameters(preset=dict(u_ksp_max_it=5))
-        assert parameters[key] == "cg"
+        settings = rebuild_parameters(preset=dict(u_ksp_max_it=5))
+        # Guard: the preset asks for the truncated CG with these arguments.
+        preset = selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, dtn_representation="lowrank",
+            **settings["preset_options"])
+        assert preset[key] == "cg"
         truncated, _, _ = build(meshes, surface_fields(sub, "shoreline"),
-                                representation="lowrank",
-                                solver_parameters=parameters)
-        assert truncated._jacobian_depends_on_solution()
-        assert truncated.condensed_operator_symmetric()
+                                **settings)
+        assert truncated.jacobian_depends_on_solution
+        assert not truncated.rheology_nonlinear
         assert truncated.solver_parameters[key] == "cg"
         # And solve it. Without this the test pins the code path and not the
         # mathematics: every assertion above would hold if the live-coastline
@@ -2061,10 +2158,9 @@ class TestLiveCoastlineRebuildRules:
         """
         _, sub = meshes
         solver, _, _ = build(meshes, surface_fields(sub, "shoreline"),
-                             representation="lowrank",
                              sea_level_overrides=fixed(),
-                             solver_parameters=rebuild_parameters())
-        assert not solver._jacobian_depends_on_solution()
+                             **rebuild_parameters())
+        assert not solver.jacobian_depends_on_solution
         solver.solve()
         assert solver_converged(solver)
         block0, potential = block0_and_potential(solver)
@@ -2085,17 +2181,19 @@ class TestLiveCoastlineRebuildRules:
         nothing in the log. The refusal is raised while the options are set,
         so it arrives before any solve.
 
-        The message is asserted on as well as the refusal. The exponent is 1
-        here, so a message that named the power-law factor would send the
-        reader to look at a rheology that is already right.
+        The message is asserted on as well as the refusal. It must name the
+        live sea-level sheet among the causes and `SeaLevel(fixed_ocean=True)`
+        as the way out. The exponent is 1 here, so a message
+        that named the power-law exponent would send the reader to look at a
+        rheology that is already right.
         """
         _, sub = meshes
         with pytest.raises(ValueError) as raised:
             build(meshes, surface_fields(sub, "shoreline"),
-                  representation="lowrank",
-                  solver_parameters=rebuild_parameters(snes_type="ksponly"))
+                  **rebuild_parameters(snes_type="ksponly"))
         message = str(raised.value)
-        assert "fixed_ocean" in message
+        assert "ksponly" in message
+        assert "SeaLevel(fixed_ocean=True)" in message
         assert "sea-level sheet" in message
         assert "exponent" not in message
 
@@ -2116,7 +2214,7 @@ class TestLiveCoastlineRebuildRules:
         makes, and it is what lets the production value be chosen on cost
         alone.
         """
-        exact_solver, z_exact, layout = live_exact
+        exact_solver, _, _ = live_exact
         _, sub = meshes
         _, exact_potential = block0_and_potential(exact_solver)
         # Vacuity guard: with the exact rule the columns really are rebuilt,
@@ -2125,18 +2223,17 @@ class TestLiveCoastlineRebuildRules:
 
         # The same `always` rule as `live_exact`, so the blocks move at every
         # Newton iteration and the tolerance is what holds the columns.
-        solver, z, _ = build(
+        solver, _, _ = build(
             meshes, surface_fields(sub, "shoreline"),
-            representation="lowrank",
-            solver_parameters=rebuild_parameters(lowrank_reuse_rtol=1e-3,
-                                                 gia_rebuild="always"))
+            **rebuild_parameters(lowrank_reuse_rtol=1e-3,
+                                 gia_rebuild="always"))
         solver.solve()
         assert solver_converged(solver)
         _, potential = block0_and_potential(solver)
         print(f"lowrank_reuse_rtol: column_builds {potential.column_builds} "
               f"against {exact_potential.column_builds} with the exact rule")
         assert potential.column_builds == 1
-        assert solved_fields_agree(z, z_exact, layout, rel=1e-6) == []
+        assert solved_fields_agree(solver, exact_solver, rel=1e-6) == []
 
     @pytest.mark.parametrize("rule,builds", [
         ("lagged", 1), ("per_solve", 1), ("always", 3)])
@@ -2160,12 +2257,11 @@ class TestLiveCoastlineRebuildRules:
         the second case into the first without failing.
         """
         _, sub = meshes
-        parameters = rebuild_parameters(
+        settings = rebuild_parameters(
             preset=dict(multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"),
             gia_rebuild=rule)
         solver, _, _ = build(meshes, surface_fields(sub, "shoreline"),
-                             representation="lowrank",
-                             solver_parameters=parameters)
+                             **settings)
         solver.solve()
         assert solver_converged(solver)
         iterations = solver.solver.snes.getIterationNumber()
@@ -2186,21 +2282,30 @@ def taylor_forward(control, meshes, *, rotation, representation,
     ocean load. The weights make the two parts of similar size.
 
     Args:
+      control: the ice thickness, a CG2 `Function` on the mechanics mesh.
+      meshes: the module fixture.
+      rotation: carry the rotation closure.
+      representation: `"multiplier"` or `"lowrank"`.
       fixed_ocean: the `SeaLevel.fixed_ocean` setting. `False` tapes the
         live-coastline solve.
+
+    Returns:
+      The functional, a taped `AdjFloat`.
     """
     parent, sub = meshes
     with stop_annotating():
         fields = surface_fields(sub, "shoreline")
         fields["I"] = control
-        solver, _, layout = build(meshes, fields, rotation=rotation,
-                                  representation=representation,
-                                  sea_level_overrides=dict(
-                                      fixed_ocean=fixed_ocean),
-                                  **solve_settings(representation))
+        solver, _, _ = build(meshes, fields, rotation=rotation,
+                             representation=representation,
+                             sea_level_overrides=dict(
+                                 fixed_ocean=fixed_ocean),
+                             **solve_settings(representation))
     solver.solve()
-    u = fd.split(solver.solution)[layout.displacement]
-    shift = fd.split(solver.solution)[layout.sea_level]
+    # The UFL components of the solved mixed solution, so the functional
+    # depends on the solve on the tape.
+    u = solver.field("displacement")
+    shift = solver.field(SHIFT)
     X = fd.SpatialCoordinate(sub)
     rhat = X / fd.sqrt(fd.dot(X, X))
     ds_re = fd.Measure("ds", domain=sub)(CURVE_RE)
@@ -2280,12 +2385,12 @@ class TestRotation:
 
     def test_the_rotating_case_solves(self, meshes, representation):
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  rotation=True, representation=representation,
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                               rotation=True, representation=representation,
+                               **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
-        assert np.isfinite(real_value(z, layout.sea_level))
+        assert np.isfinite(real_value(sea.shift()))
 
     def test_the_rotating_case_passes_the_taylor_test(
             self, meshes, representation):
@@ -2340,7 +2445,7 @@ def remove_rigid_rotation(du, mesh):
 
     A rigid rotation of the whole mantle about the centre is strain free,
     divergence free and tangential on every concentric circle or sphere
-    (`gia_gravity.rigid_rotation_nullspace`). With rotation off and no
+    (the solver's `nullspace="rigid_rotation"`). With rotation off and no
     nullspace declared, only the facet geometry error of the curved mesh acts
     on it. So the multiple of that mode in a solution is set by the Krylov
     path and by round-off, and not by the physics. Two solves of the same
@@ -2382,11 +2487,11 @@ def remove_rigid_rotation(du, mesh):
     return residual
 
 
-def solved_fields_agree(z_a, z_b, layout, rel):
-    """Whether the displacement, potential and `Shift` of two states agree.
+def solved_fields_agree(solver_a, solver_b, rel):
+    """Whether the displacement, potential and `Shift` of two solved states agree.
 
-    Each sub-field is compared in the max norm, relative to the max norm of
-    the same sub-field of `z_b`. The displacement difference is compared
+    Each field is compared in the max norm, relative to the max norm of the
+    same field of `solver_b`. The displacement difference is compared
     after `remove_rigid_rotation`. The rigid rotation of the mantle is not
     fixed by any physical term of these equations. Its multiple follows the
     Krylov path, so a comparison that keeps it tests round-off and not the
@@ -2397,29 +2502,32 @@ def solved_fields_agree(z_a, z_b, layout, rel):
     discretisation error of order 1e-9, so the solver tolerance is not small
     against their size.
 
+    Args:
+      solver_a, solver_b: two solved solvers on the same meshes.
+      rel: the relative tolerance of each field.
+
     Returns:
-      A list of `(index, difference, scale)` for the sub-fields that fail.
-      The measured relative differences are printed for every sub-field, so
-      a run with `-s` records the margin.
+      A list of `(name, difference, scale)` for the fields that fail. The
+      measured relative differences are printed for every field, so a run
+      with `-s` records the margin.
     """
     failures = []
-    for index in (layout.displacement, layout.potential, layout.sea_level):
-        f_a = z_a.subfunctions[index]
-        f_b = z_b.subfunctions[index]
+    for name in ("displacement", "potential", SHIFT):
+        f_a = solver_a.solution.subfunctions[solver_a.field_index[name]]
+        f_b = solver_b.solution.subfunctions[solver_b.field_index[name]]
         b = f_b.dat.data_ro
         scale = np.abs(b).max()
-        if index == layout.displacement:
+        if name == "displacement":
             du = fd.Function(f_b.function_space()).assign(f_a - f_b)
             difference = np.abs(
-                remove_rigid_rotation(du, layout.mechanics_mesh).dat.data_ro
-            ).max()
+                remove_rigid_rotation(du, solver_b.mesh).dat.data_ro).max()
         else:
             difference = np.abs(f_a.dat.data_ro - b).max()
-        print(f"solved_fields_agree: sub-field {index}, relative difference "
+        print(f"solved_fields_agree: {name}, relative difference "
               f"{difference / scale if scale > 0.0 else np.inf:.3e}",
               flush=True)
         if not (scale > 0.0 and difference <= rel * scale):
-            failures.append((index, difference, scale))
+            failures.append((name, difference, scale))
     return failures
 
 
@@ -2463,16 +2571,16 @@ class TestFixedOcean:
         fields = coastline_fields(sub, "cap", d_ice=1e-2)
         states = {}
         for fixed_ocean in (False, True):
-            solver, z, layout = build(
+            solver, z, sea = build(
                 meshes, fields, representation=representation,
                 sea_level_overrides=dict(fixed_ocean=fixed_ocean),
                 **solve_settings(representation))
             solver.solve()
             assert solver_converged(solver)
-            states[fixed_ocean] = z
+            states[fixed_ocean] = solver
         # Guard: a nonzero Shift, so the comparison has a scale.
-        assert abs(real_value(states[False], layout.sea_level)) > 1e-4
-        assert solved_fields_agree(states[True], states[False], layout,
+        assert abs(real_value(states[False].real_field(SHIFT))) > 1e-4
+        assert solved_fields_agree(states[True], states[False],
                                    rel=1e-8) == []
 
     def test_ice_over_the_ocean_changes_nothing(self, meshes, representation):
@@ -2495,22 +2603,22 @@ class TestFixedOcean:
         for ocean_ice in (0.0, GROUNDED):
             fields = coastline_fields(sub, "cap", d_ice=1e-2,
                                       ocean_ice=ocean_ice)
-            solver, z, layout = build(meshes, fields,
-                                      representation=representation,
-                                      sea_level_overrides=fixed(),
-                                      **solve_settings(representation))
+            solver, z, sea = build(meshes, fields,
+                                   representation=representation,
+                                   sea_level_overrides=fixed(),
+                                   **solve_settings(representation))
             solver.solve()
             assert solver_converged(solver)
-            states[ocean_ice] = (solver, z)
+            states[ocean_ice] = solver
 
-        solver, _ = states[GROUNDED]
+        solver = states[GROUNDED]
         dss = re_measure(solver)
         land = indicator(sub, "cap")
         ocean_ice_mass = fd.assemble(RHO_I * GROUNDED * (1 - land) * dss)
         land_ice_mass = fd.assemble(RHO_I * 1e-2 * land * dss)
         assert ocean_ice_mass > 100 * land_ice_mass
-        assert solved_fields_agree(states[GROUNDED][1], states[0.0][1],
-                                   layout, rel=1e-8) == []
+        assert solved_fields_agree(states[GROUNDED], states[0.0],
+                                   rel=1e-8) == []
 
     def test_newton_converges_in_one_iteration(self, meshes, representation):
         """The fixed-coastline residual is linear: one Newton step from zero.
@@ -2523,44 +2631,40 @@ class TestFixedOcean:
         same state takes more (`TestLiveCoastlineSolve`).
         """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  representation=representation,
-                                  sea_level_overrides=fixed(),
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                               representation=representation,
+                               sea_level_overrides=fixed(),
+                               **solve_settings(representation))
         assert solver.solver.snes.getType() == "newtonls"
         solver.solve()
         assert solver_converged(solver)
         assert solver.solver.snes.getIterationNumber() <= 1
-        assert abs(real_value(z, layout.sea_level)) > 0.0
+        assert abs(real_value(sea.shift())) > 0.0
 
     def test_the_jacobian_is_not_state_dependent_and_ksponly_is_accepted(
             self, meshes, representation):
         """With a fixed coastline and a Newtonian Earth, `ksponly` solves the step.
 
-        Item 5 of W2: the solver does not declare the Jacobian state-dependent,
-        so `_refuse_ksponly_on_a_nonlinear_residual` accepts `snes_type
-        ksponly`, and the one linear solve gives the `newtonls` solution to
-        1e-8 relative.
+        Item 5 of W2: the solver does not declare the Jacobian state-dependent
+        (`jacobian_depends_on_solution`), so its `ksponly` refusal accepts
+        `snes_type ksponly`, and the one linear solve gives the `newtonls`
+        solution to 1e-8 relative.
         """
         _, sub = meshes
         states = {}
         for snes_type in ("newtonls", "ksponly"):
             settings = solve_settings(representation)
-            if representation == "multiplier":
-                settings["solver_parameters_extra"] = dict(
-                    settings["solver_parameters_extra"], snes_type=snes_type)
-            else:
-                settings["solver_parameters"]["snes_type"] = snes_type
-            solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                      representation=representation,
-                                      sea_level_overrides=fixed(), **settings)
-            assert not solver._jacobian_depends_on_solution()
+            settings["solver_parameters_extra"]["snes_type"] = snes_type
+            solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                                   representation=representation,
+                                   sea_level_overrides=fixed(), **settings)
+            assert not solver.jacobian_depends_on_solution
             solver.solve()
             assert solver_converged(solver)
             assert solver.solver.snes.getType() == snes_type
-            states[snes_type] = z
+            states[snes_type] = solver
         assert solved_fields_agree(states["ksponly"], states["newtonls"],
-                                   layout, rel=1e-8) == []
+                                   rel=1e-8) == []
 
     def test_the_shift_is_the_eustatic_value(self, meshes, representation):
         """`Shift = -rho_i int (1 - C0) dI dS / (rho_w int C0 dS)` on a rigid Earth.
@@ -2591,12 +2695,12 @@ class TestFixedOcean:
         d_ice = 1e-2
         fields = coastline_fields(sub, "caps", d_ice=d_ice,
                                   ocean_ice=GROUNDED)
-        solver, z, layout = build(meshes, fields, lam=1e-6, stiff=True,
-                                  earth=dict(shear_modulus=1e8,
+        solver, z, sea = build(meshes, fields, lam=1e-6, stiff=True,
+                               earth=dict(shear_modulus=1e8,
                                              bulk_modulus=1e8),
-                                  representation=representation,
-                                  sea_level_overrides=fixed(),
-                                  **solve_settings(representation))
+                               representation=representation,
+                               sea_level_overrides=fixed(),
+                               **solve_settings(representation))
         solver.solve()
         assert solver_converged(solver)
         dss = re_measure(solver)
@@ -2605,7 +2709,7 @@ class TestFixedOcean:
         eustatic = (-RHO_I * fd.assemble((1 - C0) * dI * dss)
                     / (RHO_W * fd.assemble(C0 * dss)))
         assert eustatic < 0.0  # ice that grows lowers the sea
-        shift = real_value(z, layout.sea_level)
+        shift = real_value(sea.shift())
         print(f"fixed-ocean eustatic, {representation}: Shift {shift:.12e}, "
               f"formula {eustatic:.12e}, relative "
               f"{abs(shift - eustatic) / abs(eustatic):.3e}")
@@ -2613,7 +2717,7 @@ class TestFixedOcean:
 
     def test_written_residual_equals_the_derivative_of_the_energy(
             self, meshes, representation):
-        """`sea_level_residual() = derivative(sea_level_energy(), solution)` exactly.
+        """`SeaLevel.residual = derivative(SeaLevel.energy(), solution)` exactly.
 
         With a fixed coastline the energy
         `G = rho_i (I_eff - I_eff_init) Delta + 0.5 rho_w C0 Delta^2` is exact
@@ -2623,19 +2727,20 @@ class TestFixedOcean:
         `TestResidualIsTheVariationOfTheEnergy`.
         """
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, "shoreline"),
-                                  representation=representation,
-                                  sea_level_overrides=fixed(),
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
+                               representation=representation,
+                               sea_level_overrides=fixed(),
+                               **solve_settings(representation))
         perturb(z, 1e-1, seed=7)
-        written = fd.assemble(solver.sea_level_residual())
-        derived = fd.assemble(fd.derivative(solver.sea_level_energy(),
+        written = fd.assemble(sea.residual(sea.context))
+        derived = fd.assemble(fd.derivative(sea.energy(),
                                             solver.solution))
         checked = 0
         for i, (a, b) in enumerate(zip(written.subfunctions,
                                        derived.subfunctions)):
             scale = np.abs(b.dat.data_ro).max()
-            if i in (layout.displacement, layout.potential, layout.sea_level):
+            if i in (solver.field_index["displacement"],
+                     solver.potential_index, solver.field_index[SHIFT]):
                 assert scale > 0.0, f"sub-field {i} has no sea-level term"
             tolerance = 1e-11 * max(scale, 1e-300)
             assert np.abs(a.dat.data_ro - b.dat.data_ro).max() <= tolerance

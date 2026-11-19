@@ -40,8 +40,9 @@ from firedrake.adjoint import (
 )
 from pyadjoint import taylor_to_dict
 
-from gadopt import gia_gravity
 from gadopt import sea_level_sheet as sls
+from gadopt.gia_couplings import CentreOfMass
+from gadopt.utility import scalar_value
 import test_sea_level as tsl
 from test_sea_level import (  # noqa: F401  (pytest fixtures)
     B_MU,
@@ -51,10 +52,12 @@ from test_sea_level import (  # noqa: F401  (pytest fixtures)
     PHASE,
     RHO_I,
     RHO_W,
+    SHIFT,
     SNES_ATOL,
     SNES_RTOL,
     build,
     clean_tape,
+    coupling,
     indicator,
     meshes,
     perturb,
@@ -231,7 +234,7 @@ class TestSoftplusColumn:
 # ---------------------------------------------------------------------------
 
 class TestSurfaceLoadSheet:
-    """`surface_load_sheet()` of the softplus sheet in states with a closed form.
+    """`SeaLevel.sheet()` of the softplus sheet in states with a closed form.
 
     The states are those of `test_sea_level.TestSurfaceLoadSheet`, and the
     expected values are the same: in a saturated state the two sheets agree.
@@ -245,12 +248,12 @@ class TestSurfaceLoadSheet:
     ])
     def test_the_water_sheet(self, meshes, state, density_per_unit):
         _, sub = meshes
-        solver, z, layout = build(meshes, surface_fields(sub, state),
-                                  sea_level_overrides=width())
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, surface_fields(sub, state),
+                               sea_level_overrides=width())
+        sea.shift().assign(self.S)
         dss = re_measure(solver)
         length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(solver.surface_load_sheet() * dss)
+        got = fd.assemble(sea.sheet() * dss)
         # The DEEP = 25 datum cancels between the two columns, which costs
         # 25 * 1e-16 relative to a sea-level change of 1e-2.
         assert abs(got - density_per_unit * self.S * length) \
@@ -261,26 +264,26 @@ class TestSurfaceLoadSheet:
         fields = surface_fields(sub, "ocean")
         fields["I"].assign(10.0)
         fields["I_init"].assign(10.0)
-        solver, z, layout = build(meshes, fields,
-                                  sea_level_overrides=width())
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes, fields,
+                               sea_level_overrides=width())
+        sea.shift().assign(self.S)
         dss = re_measure(solver)
         length = fd.assemble(fd.Constant(1.0) * dss)
-        got = fd.assemble(solver.surface_load_sheet() * dss)
+        got = fd.assemble(sea.sheet() * dss)
         assert got == pytest.approx(RHO_W * self.S * length, rel=1e-10)
 
     def test_grounded_ice_loads_with_its_thickness_change(self, meshes):
         _, sub = meshes
         d_ice = 0.5
-        solver, z, layout = build(meshes,
-                                  surface_fields(sub, "cap", d_ice=d_ice),
-                                  sea_level_overrides=width())
-        z.subfunctions[layout.sea_level].assign(self.S)
+        solver, z, sea = build(meshes,
+                               surface_fields(sub, "cap", d_ice=d_ice),
+                               sea_level_overrides=width())
+        sea.shift().assign(self.S)
         dss = re_measure(solver)
         cap = indicator(sub, "cap")
         expected = fd.assemble(
             (RHO_I * d_ice * cap + RHO_W * self.S * (1 - cap)) * dss)
-        got = fd.assemble(solver.surface_load_sheet() * dss)
+        got = fd.assemble(sea.sheet() * dss)
         assert got == pytest.approx(expected, rel=1e-10)
 
     def test_the_sheet_is_the_softplus_column_difference_pointwise(
@@ -290,10 +293,10 @@ class TestSurfaceLoadSheet:
         two kernels."""
         _, sub = meshes
         fields = surface_fields(sub, "shoreline")
-        solver, z, layout = build(meshes, fields,
-                                  sea_level_overrides=width())
+        solver, z, sea = build(meshes, fields,
+                               sea_level_overrides=width())
         shift = 0.05
-        z.subfunctions[layout.sea_level].assign(shift)
+        sea.shift().assign(shift)
         SL0, I, I0 = fields["SL_init"], fields["I"], fields["I_init"]
         expected = (sls.softplus_column(I, SL0 + shift, EPS, RHO_W, RHO_I)
                     - sls.softplus_column(I0, SL0, EPS, RHO_W, RHO_I))
@@ -301,13 +304,13 @@ class TestSurfaceLoadSheet:
         weight.dat.data[:] = np.random.default_rng(7).uniform(
             0.5, 1.5, weight.dat.data.shape)
         dss = re_measure(solver)
-        got = fd.assemble(weight * solver.surface_load_sheet() * dss)
+        got = fd.assemble(weight * sea.sheet() * dss)
         want = fd.assemble(weight * expected * dss)
         assert got == pytest.approx(want, rel=1e-11)
 
     def test_the_water_fraction_is_one_in_the_ocean_and_zero_under_ice(
             self, meshes):
-        """`sea_level_water_fraction()` on the cap state: the ocean length.
+        """`SeaLevel.water_fraction()` on the cap state: the ocean length.
 
         Under the grounded cap it is 0 and in the deep ocean 1, so its integral
         is the length of Re outside the cap, for the live sheet. With a fixed
@@ -317,16 +320,16 @@ class TestSurfaceLoadSheet:
         """
         _, sub = meshes
         fields = surface_fields(sub, "cap")
-        live, _, _ = build(meshes, fields)
-        fixed, _, _ = build(meshes, fields,
-                            sea_level_overrides=dict(fixed_ocean=True))
+        live, _, live_sea = build(meshes, fields)
+        fixed, _, fixed_sea = build(meshes, fields,
+                                    sea_level_overrides=dict(fixed_ocean=True))
         dss = re_measure(live)
         cap = indicator(sub, "cap")
         length = fd.assemble(fd.Constant(1.0) * dss)
         ocean_length = fd.assemble((1 - cap) * dss)
-        assert fd.assemble(live.sea_level_water_fraction() * dss) == \
+        assert fd.assemble(live_sea.water_fraction() * dss) == \
             pytest.approx(ocean_length, rel=1e-12)
-        assert fd.assemble(fixed.sea_level_water_fraction() * dss) == \
+        assert fd.assemble(fixed_sea.water_fraction() * dss) == \
             pytest.approx(length, rel=1e-12)
 
     def test_ocean_fraction_is_the_water_fraction_without_ice(
@@ -347,7 +350,7 @@ class TestResidualIsTheVariationOfTheEnergy:
     @pytest.mark.parametrize("state", ["cap", "shoreline"])
     def test_written_residual_equals_the_derivative_of_the_energy(
             self, meshes, state):
-        """`sea_level_residual() = derivative(sea_level_energy())` at any state.
+        """`SeaLevel.residual = derivative(SeaLevel.energy())` at any state.
 
         The energy of the softplus sheet is the tangent of the sheet at a
         frozen copy of the solution, so the identity holds at the state where
@@ -355,17 +358,18 @@ class TestResidualIsTheVariationOfTheEnergy:
         rounding active at its coast. Tolerance 1e-11 relative per sub-field.
         """
         _, sub = meshes
-        solver, z, layout = build(meshes,
-                                  surface_fields(sub, state, d_ice=0.5),
-                                  sea_level_overrides=width())
+        solver, z, sea = build(meshes,
+                               surface_fields(sub, state, d_ice=0.5),
+                               sea_level_overrides=width())
         perturb(z, 1e-1, seed=5)
-        written = fd.assemble(solver.sea_level_residual())
-        derived = fd.assemble(fd.derivative(solver.sea_level_energy(),
+        written = fd.assemble(sea.residual(sea.context))
+        derived = fd.assemble(fd.derivative(sea.energy(),
                                             solver.solution))
         for i, (a, b) in enumerate(zip(written.subfunctions,
                                        derived.subfunctions)):
             scale = np.abs(b.dat.data_ro).max()
-            if i in (layout.displacement, layout.potential, layout.sea_level):
+            if i in (solver.field_index["displacement"],
+                     solver.potential_index, solver.field_index[SHIFT]):
                 assert scale > 0.0, f"sub-field {i} has no sea-level term"
             assert np.abs(a.dat.data_ro - b.dat.data_ro).max() \
                 <= 1e-11 * max(scale, 1e-300)
@@ -386,12 +390,12 @@ class TestTransposes:
     @pytest.fixture(scope="class")
     def assembled(self, meshes):
         _, sub = meshes
-        solver, z, layout = build(meshes,
-                                  surface_fields(sub, "shoreline"),
-                                  sea_level_overrides=width())
+        solver, z, sea = build(meshes,
+                               surface_fields(sub, "shoreline"),
+                               sea_level_overrides=width())
         perturb(z, 1e-3, seed=11)
         A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
-        return A, layout
+        return A, solver
 
     @pytest.mark.parametrize("pair", [
         ("u", "psi"), ("u", "Shift"), ("psi", "Shift"),
@@ -400,8 +404,8 @@ class TestTransposes:
         ("Shift", "lambda_x"), ("Shift", "lambda_y"),
     ])
     def test_the_pair_transposes(self, assembled, pair):
-        A, layout = assembled
-        i, j = tsl._pair_indices(layout, pair)
+        A, solver = assembled
+        i, j = tsl._pair_indices(solver, pair)
         ij = tsl.dense_block(A, i, j)
         ji = tsl.dense_block(A, j, i)
         assert ij is not None and ji is not None
@@ -438,24 +442,29 @@ def marine_fields(sub):
                 ur_init=zero.copy(True))
 
 
-def assert_mass_conserved(solver, z, layout, initial_norm):
+def assert_mass_conserved(solver, sea, initial_norm):
     """`|int sigma dS|` is bounded by the frame multipliers and Newton.
 
     The bound of `test_sea_level.TestLiveCoastlineSolve.
     test_mass_is_conserved_to_order_lambda`, which derives it from the `Shift`
     row: at convergence `int sigma = sum_i lambda_i int x_i dsigma/dShift / g_s`
     plus what Newton leaves.
+
+    Args:
+      solver: a solved solver.
+      sea: its `SeaLevel` coupling.
+      initial_norm: the residual norm at the zero state, before the solve.
     """
-    scale_factor = gia_gravity.scalar_value(solver.scaling_factor)
+    scale_factor = scalar_value(solver.scaling_factor)
     row_scale = scale_factor * B_MU * G_RE
     dss = re_measure(solver)
-    sigma = solver.surface_load_sheet()
-    direction = fd.Function(z.function_space())
-    direction.subfunctions[layout.sea_level].assign(1.0)
+    sigma = sea.sheet()
+    direction = fd.Function(solver.solution.function_space())
+    direction.subfunctions[solver.field_index[SHIFT]].assign(1.0)
     dsigma_dshift = expand_derivatives(
         ufl.derivative(sigma, solver.solution, direction))
     X = fd.SpatialCoordinate(solver.mesh)
-    lam = [real_value(z, index) for index in layout.centre_of_mass]
+    lam = [real_value(f) for f in coupling(solver, CentreOfMass).multipliers()]
     frame_term = sum(abs(lam_i) * fd.assemble(abs(X[i] * dsigma_dshift) * dss)
                      for i, lam_i in enumerate(lam))
     newton_term = 10 * max(SNES_RTOL * initial_norm, SNES_ATOL)
@@ -473,25 +482,26 @@ def solve_state(meshes, representation, which):
     """One softplus solve of `"shoreline"` or `"marine"`, cached per case.
 
     Returns:
-      `(solver, z, layout, initial_norm, iterations)`.
+      `(solver, z, sea, initial_norm, iterations)`, with `sea` the
+      `SeaLevel` coupling.
     """
     key = (representation, which)
     if key not in _SOLVED:
         _, sub = meshes
         fields = (surface_fields(sub, "shoreline") if which == "shoreline"
                   else marine_fields(sub))
-        solver, z, layout = build(meshes, fields,
-                                  representation=representation,
-                                  sea_level_overrides=width(),
-                                  **solve_settings(representation))
+        solver, z, sea = build(meshes, fields,
+                               representation=representation,
+                               sea_level_overrides=width(),
+                               **solve_settings(representation))
         initial_norm = vector_norm(fd.assemble(solver.F))
         solver.solve()
         iterations = solver.solver.snes.getIterationNumber()
         print(f"softplus {which} solve, {representation}: {iterations} "
               f"Newton iterations, reason "
               f"{solver.solver.snes.getConvergedReason()}, Shift "
-              f"{real_value(z, layout.sea_level):.6e}")
-        _SOLVED[key] = (solver, z, layout, initial_norm, iterations)
+              f"{real_value(sea.shift()):.6e}")
+        _SOLVED[key] = (solver, z, sea, initial_norm, iterations)
     return _SOLVED[key]
 
 
@@ -510,9 +520,9 @@ class TestSolves:
     @pytest.mark.parametrize("which", ["shoreline", "marine"])
     def test_mass_is_conserved_to_order_lambda(self, meshes, representation,
                                                which):
-        solver, z, layout, initial_norm, _ = solve_state(meshes,
-                                                         representation, which)
-        assert_mass_conserved(solver, z, layout, initial_norm)
+        solver, _, sea, initial_norm, _ = solve_state(meshes,
+                                                      representation, which)
+        assert_mass_conserved(solver, sea, initial_norm)
 
     def test_the_marine_grounding_line_moves(self, meshes):
         """The marine case exercises the rounding at the grounding line.
@@ -521,11 +531,10 @@ class TestSolves:
         reference state and the solved state, so the case is not a fixed
         grounding line. Read on the multiplier path.
         """
-        solver, _, _, _, _ = solve_state(meshes, "multiplier", "marine")
-        sl = solver.sea_level_parameters
+        solver, _, sea, _, _ = solve_state(meshes, "multiplier", "marine")
         dss = re_measure(solver)
-        W_now = solver.sea_level_water_fraction()
-        W_ref = sls.water_fraction(sl.I_init, sl.SL_init, EPS, RHO_W, RHO_I)
+        W_now = sea.water_fraction()
+        W_ref = sls.water_fraction(sea.I_init, sea.SL_init, EPS, RHO_W, RHO_I)
         # The arc length over which the water fraction changed, integrated.
         # Two grounding lines that each move by one facet of the 32-cell
         # annulus give two facet lengths; half a facet length in total is the
@@ -543,7 +552,7 @@ class TestSolves:
         """
         _, sub = meshes
         d_ice = -1e-2
-        solver, z, layout = build(
+        solver, z, sea = build(
             meshes, surface_fields(sub, "caps", d_ice=d_ice), lam=1e-6,
             stiff=True, representation=representation,
             sea_level_overrides=width(),
@@ -555,7 +564,7 @@ class TestSolves:
         eustatic = (-(RHO_I / RHO_W) * fd.assemble(d_ice * caps * dss)
                     / fd.assemble((1 - caps) * dss))
         assert eustatic > 0.0
-        assert real_value(z, layout.sea_level) == pytest.approx(eustatic,
+        assert real_value(sea.shift()) == pytest.approx(eustatic,
                                                                 rel=1e-4)
 
 
@@ -609,16 +618,16 @@ def taped_solve(meshes, which, representation, eps):
         fields = (surface_fields(sub, "shoreline") if which == "shoreline"
                   else marine_fields(sub))
         fields["I"] = control
-        solver, _, layout = build(meshes, fields,
-                                  representation=representation,
-                                  sea_level_overrides=width(eps),
-                                  **solve_settings(representation))
+        solver, _, _ = build(meshes, fields,
+                             representation=representation,
+                             sea_level_overrides=width(eps),
+                             **solve_settings(representation))
     continue_annotation()
     try:
         m = Control(control)
         solver.solve()
-        u = fd.split(solver.solution)[layout.displacement]
-        shift = fd.split(solver.solution)[layout.sea_level]
+        u = solver.field("displacement")
+        shift = solver.field(SHIFT)
         X = fd.SpatialCoordinate(sub)
         rhat = X / fd.sqrt(fd.dot(X, X))
         ds_re = fd.Measure("ds", domain=sub)(tsl.CURVE_RE)
@@ -717,13 +726,13 @@ class TestSheetHessianAgainstWidth:
                 fields = marine_fields(sub)
                 control = fields["I"]
             direction = fd.Function(V).interpolate(fd.sin(phi - PHASE))
-            solver, z, layout = build(
+            solver, z, sea = build(
                 meshes, fields, sea_level_overrides=width(eps))
-            z.subfunctions[layout.sea_level].assign(0.05)
+            sea.shift().assign(0.05)
         continue_annotation()
         try:
             m = Control(control)
-            sigma = solver.surface_load_sheet()
+            sigma = sea.sheet()
             J = fd.assemble((sigma + sigma * sigma) * re_measure(solver))
             Jhat = ReducedFunctional(J, m)
         finally:
