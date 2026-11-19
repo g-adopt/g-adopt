@@ -346,17 +346,15 @@ moisture_content = soil_curve.moisture_content
 hydraulic_conductivity = soil_curve.hydraulic_conductivity
 
 # The initial pressure head is the hydrostatic profile
-# $h(x, z, 0) = 0.65 - 1.001\, z$. The factor $1.001$, rather than exactly unity,
-# ensures that the upper portion of the domain starts marginally dry
-# rather than at the saturation boundary; this avoids an artificial
-# singularity in $C(h)$ at $t = 0$. Two Firedrake ``Function`` objects
+# $h(x, z, 0) = 0.65 - z$, in equilibrium with the water table at
+# $z = 0.65$ m. Two Firedrake ``Function`` objects
 # are allocated: $h$ for the current solution, and $h_{\mathrm{old}}$
 # as a buffer for the pre-step state that is used by the retry
 # protocol.
 
 water_table_height = vauclin_solution.WATER_TABLE_HEIGHT
 h_ic = Function(V, name="InitialCondition").interpolate(
-    water_table_height - 1.001 * X[1]
+    water_table_height - X[1]
 )
 h = Function(V, name="PressureHead").interpolate(h_ic)
 h_old = Function(V, name="PreviousSolution").interpolate(h_ic)
