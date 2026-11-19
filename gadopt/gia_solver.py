@@ -1102,13 +1102,31 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     # -- Operator reuse ------------------------------------------------------------------
 
     def _current_fingerprint(self) -> tuple:
-        """A rank-local snapshot of every Jacobian coefficient but the solution."""
+        """A rank-local snapshot of every Jacobian coefficient but the solution.
+
+        A Function on the `Real` space enters by its values, every other
+        Function and every `Constant` by its `dat_version`. The time integrator assigns its `Real` coefficients (`alpha`, `dt`) before
+        every solve, also when the value does not change, and every `assign`
+        moves `dat_version`. Keyed on the version, the cached preconditioner
+        pieces (dense Schur, the cached block-1 apply, the condensed block)
+        would be rebuilt at every step at a fixed time step. A `Real`
+        Function holds a few numbers that are the same on every rank, so a
+        comparison by value costs nothing. A field Function keeps the
+        version, because a comparison of its values would cost a copy of the
+        field per solve. The rebuild once per tape sweep does not depend on
+        this snapshot (`_RebuildRule` reads the sweep marker).
+        """
         snapshot = []
         for coefficient in self._jacobian_coefficients:
             if coefficient is self.solution:
                 continue
-            version = getattr(getattr(coefficient, "dat", None), "dat_version", None)
-            if version is not None:
+            dat = getattr(coefficient, "dat", None)
+            version = getattr(dat, "dat_version", None)
+            if (isinstance(coefficient, Function)
+                    and coefficient.function_space().ufl_element().family() == "Real"):
+                # Copy the values: `data_ro` is a view that a later assign changes.
+                snapshot.append(("values", tuple(dat.data_ro.ravel().tolist())))
+            elif version is not None:
                 snapshot.append(("version", version))
             elif hasattr(coefficient, "values"):
                 snapshot.append(("values", tuple(coefficient.values())))
