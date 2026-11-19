@@ -22,13 +22,19 @@ are printed.
 Usage:
     python compare_records.py A.json B.json [--rows iterations|gradients|both]
                               [--all-fields] [--fields J gradient_norm ...]
-                              [--solves] [--quiet]
+                              [--solves] [--max-rows N] [--quiet]
 
 ``--solves`` also compares the Krylov solve records that the iteration rows hold
 (``krylov_solves``), paired by position over the iteration rows that both records
 hold: every numeric field that both solve records hold, and the lists of residual
 norms and Ritz values entry by entry. A field that only one record holds, for
 example a field that a newer recording adds, is not compared.
+
+``--max-rows N`` compares only the first N rows of each table (and, with
+``--solves``, the solves of the first N iteration rows). Use it when two runs are
+meant to agree up to a known iteration and then part, for example a run that
+changes the Hessian shift, which acts only after the first negative-curvature
+solve.
 
 Exit status 0 when every compared field is bitwise equal in every paired row, 1
 otherwise. Only the standard library is used, so the script runs on any machine.
@@ -65,6 +71,8 @@ def parse_args(argv=None):
     parser.add_argument("--solves", action="store_true",
                         help="also compare the Krylov solve records of the paired "
                              "iteration rows")
+    parser.add_argument("--max-rows", type=int, default=None,
+                        help="compare only the first N rows of each table")
     parser.add_argument("--quiet", action="store_true",
                         help="print the summary table only, not one line per row")
     return parser.parse_args(argv)
@@ -256,12 +264,13 @@ def main(argv=None):
 
     tables = ("iterations", "gradients") if args.rows == "both" else (args.rows,)
     identical = True
+    limit = slice(None, args.max_rows)
     for table in tables:
-        identical &= compare_table(table, record_a.get(table, []),
-                                   record_b.get(table, []), args)
+        identical &= compare_table(table, record_a.get(table, [])[limit],
+                                   record_b.get(table, [])[limit], args)
     if args.solves:
-        identical &= compare_solves(record_a.get("iterations", []),
-                                    record_b.get("iterations", []))
+        identical &= compare_solves(record_a.get("iterations", [])[limit],
+                                    record_b.get("iterations", [])[limit])
     return 0 if identical else 1
 
 
