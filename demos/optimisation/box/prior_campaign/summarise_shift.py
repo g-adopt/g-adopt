@@ -94,6 +94,9 @@ def parse_args(argv=None):
                         default=[1e-3, 1e-4, 1e-5, 1e-6], help="values of J")
     parser.add_argument("--reference", default="a",
                         help="run whose work-to-J is the denominator of table 2")
+    parser.add_argument("--group", action="append", default=[], metavar="NAME=RUN,RUN,...",
+                        help="a group of runs whose work to reach J is summarised by the "
+                             "median of the lower and of the upper ends of the intervals")
     parser.add_argument("--levels", nargs="+", type=float, default=[200, 400, 600, 800],
                         help="common work levels of the initial_misfit table")
     parser.add_argument("--plot", default=None,
@@ -304,6 +307,55 @@ def stalls(record, run_length=3, fraction=0.1):
     return out
 
 
+def short_solves(record, max_its=3, fraction=0.02, long_its=20):
+    """Short RTOL solves with a tiny step, and whether a long solve came just before.
+
+    After a long Krylov solve the active set often changes, and the next solve can
+    stop on its relative tolerance after 1 to 3 iterations with a step far inside
+    the trust radius, because the residual sits in the top of the spectrum. Such a
+    solve costs a whole outer iteration (a forward and an adjoint sweep, plus its
+    Hessian products) for almost no step.
+
+    Args:
+        record: a JSON record of ``inverse.py``, with work already re-priced.
+        max_its: largest iteration count of a short solve.
+        fraction: a short solve has ``step_norm < fraction * trust_radius``.
+        long_its: a solve with at least this many iterations counts as long.
+
+    Returns:
+        list of dicts: ``iteration``, ``its``, ``step_norm``, ``trust_radius``,
+        ``ritz_max``, ``after_long`` (bool), ``active_change`` (active count
+        against the solve before), ``work`` (work of that outer iteration).
+    """
+    rows = record["iterations"]
+    work_of = {r["iteration"]: r["work"] for r in rows}
+    previous = None
+    out = []
+    for row in rows:
+        for s in row.get("krylov_solves", []):
+            if (s.get("reason_name") == "CONVERGED_RTOL" and s["iterations"] <= max_its
+                    and s.get("step_norm") is not None and s.get("trust_radius")
+                    and s["step_norm"] < fraction * s["trust_radius"]):
+                out.append({
+                    "iteration": row["iteration"], "its": s["iterations"],
+                    "step_norm": s["step_norm"], "trust_radius": s["trust_radius"],
+                    "ritz_max": s.get("ritz_max"),
+                    "after_long": previous is not None and previous["iterations"] >= long_its,
+                    "active_change": (None if previous is None
+                                      else s["active"] - previous["active"]),
+                    "work": work_of[row["iteration"]] - work_of.get(row["iteration"] - 1, 0.0),
+                })
+            previous = s
+    return out
+
+
+def _median(values):
+    """Median of a non-empty list of numbers."""
+    v = sorted(values)
+    n = len(v)
+    return v[n // 2] if n % 2 else 0.5 * (v[n // 2 - 1] + v[n // 2])
+
+
 def _fmt(value, spec):
     """Format a number, or a dash for None."""
     return "-" if value is None else format(value, spec)
@@ -439,6 +491,45 @@ def main(argv=None):
                 cells.append(f"({row['iteration']:2d}) {row['initial_misfit']:.3e}".rjust(18))
         print(f"{name:>8s} " + " ".join(cells))
     print("   (iteration in brackets; 'stop' marks a run that stopped below that level)")
+
+    print("\n== initial_misfit at common work, split: total / wall rows (bottom + top) / interior")
+    for name, record in records.items():
+        cells = []
+        for level in args.levels:
+            row = at_work(record["iterations"], level)
+            if row is None or row.get("initial_misfit_interior") is None:
+                cells.append(f"{'-':>32s}")
+                continue
+            walls = row["initial_misfit_bottom"] + row["initial_misfit_top"]
+            cells.append(f"{row['initial_misfit']:.2e}/{walls:.2e}/"
+                         f"{row['initial_misfit_interior']:.2e}".rjust(32))
+        print(f"{name:>8s} " + " ".join(cells))
+    print("   levels: " + " ".join(f"{level:.0f}" for level in args.levels))
+
+    for item in args.group:
+        group, _, members = item.partition("=")
+        members = [m for m in members.split(",") if m in records]
+        print(f"\n== group {group} ({', '.join(members)}): median work to reach J")
+        for t in args.thresholds:
+            brackets = [work_bracket(reached[(m, t)]) for m in members]
+            shown = ", ".join("-" if b is None else f"{b[0]:.1f}-{b[1]:.1f}" for b in brackets)
+            if any(b is None for b in brackets):
+                print(f"   J<={t:.0e}: not reached by every member ({shown})")
+                continue
+            print(f"   J<={t:.0e}: median lower {_median([b[0] for b in brackets]):7.1f}, "
+                  f"median upper {_median([b[1] for b in brackets]):7.1f}   ({shown})")
+
+    print("\n== short RTOL solves (<= 3 iterations, step < 0.02 trust radius)")
+    for name, record in records.items():
+        found = short_solves(record)
+        after = [f for f in found if f["after_long"]]
+        print(f"{name:>8s} {len(found)} short, {len(after)} after a long solve (>= 20 its), "
+              f"work of those iterations {sum(f['work'] for f in found):.1f}")
+        for f in found:
+            print(f"           it {f['iteration']:3d} its {f['its']} step {f['step_norm']:.2e} "
+                  f"radius {f['trust_radius']:.3g} ritz_max {_fmt(f['ritz_max'], '.2e')} "
+                  f"active change {f['active_change']} work {f['work']:.1f} "
+                  f"{'after long' if f['after_long'] else ''}")
 
     print("\n== stalls: runs of >= 3 consecutive CONVERGED_RTOL solves with step norm "
           "< 0.1 trust radius")
