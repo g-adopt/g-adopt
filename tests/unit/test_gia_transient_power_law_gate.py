@@ -8,9 +8,9 @@ The three experiments run a combination that no other test runs together:
   cells and exactly `3.5` in others (the depth rule of Exp10 and Exp12), with a
   DG0 transition stress that is positive in every cell and no background
   stress;
-- the low-rank DtN representation on the uncondensed layout, with the
-  iterative preset of production (`selfgrav_dtn_iterative_solver_parameters`)
-  and Newton (`newtonls`);
+- the low-rank DtN representation on the DG history family, with the
+  iterative preset of production (`solver_parameters="iterative"`, which
+  calls `selfgrav_dtn_iterative_solver_parameters`) and Newton (`newtonls`);
 - the sea-level equation with a moving coastline (`fixed_ocean=False`),
   rotation, the fluid core, the centre-of-mass rows and the rigid-rotation
   nullspace declared on both sides, as `exp01_common.build_solver` does;
@@ -67,17 +67,10 @@ from firedrake.adjoint import (
 )
 from pyadjoint.tape import annotate_tape
 
-from gadopt import (
-    CompressibleInternalVariableApproximation,
-    SelfGravitatingGIASolver,
-    rigid_rotation_nullspace,
-    self_gravitating_gia_space,
-)
-from gadopt.gia_gravity import (
-    FluidCore,
-    SeaLevel,
-    selfgrav_dtn_iterative_solver_parameters,
-)
+from gadopt import CompressibleInternalVariableApproximation
+from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
+from gadopt.gia_presets import OMEGA_SQ_EARTH
+from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.internal_variable_equation import history_slices
 import test_gia_gravity
 from test_gia_gravity import (
@@ -243,6 +236,15 @@ def build(meshes, SL_init, I_init, I, dt, *, power_law=True,
           maxwell_times=MAXWELL_TIMES, time_scheme="backward_euler"):
     """The coupled solver of the gate case.
 
+    Three Maxwell elements on the DG history family (one field of shape
+    `(3, 2, 2)`), the power law of `exponent_field` (unless `power_law` is
+    False), the low-rank DtN with the iterative preset of production and
+    `newtonls`, and the couplings of `exp01_common.build_solver`: the fluid
+    core, rotation (the polar moment `C` only, the one rotation row of the
+    annulus), the centre-of-mass rows and the sea level with a moving
+    coastline. The rigid-rotation nullspace is declared on both sides
+    (`nullspace="rigid_rotation"`).
+
     Args:
       meshes: the module fixture (parent annulus, mantle submesh).
       SL_init: the initial sea level, a CG2 Function on the mantle (the
@@ -251,18 +253,16 @@ def build(meshes, SL_init, I_init, I, dt, *, power_law=True,
       dt: the time step, a Function on the Real space of the mantle.
       power_law: False builds the Newtonian twin (exponent 1 everywhere).
       maxwell_times: the Maxwell times of the elements, units of t_bar.
+      time_scheme: the time scheme of the solver.
 
     Returns:
-      `(solver, layout, approximation)`.
+      `(solver, sea, approximation)`, with `sea` the `SeaLevel` coupling.
     """
     parent, sub = meshes
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs(parent, sheet=False),
-        n_internal_variables=len(SHEAR_MODULI), rotation=True,
-        fluid_core=True, centre_of_mass=True, sea_level=True,
-        self_gravity_number=LAMBDA, condense_internal_variables=False,
-        dtn_representation="lowrank")
-    z = fd.Function(Z)
+    # P2 displacement on the mantle submesh and P2 potential on the parent
+    # annulus; the solver builds the mixed space around them.
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2))
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2))
 
     # One DG0 field per element, as the prepare scripts write them; the
     # viscosity of element j is mu_j tau_j.
@@ -284,35 +284,36 @@ def build(meshes, SL_init, I_init, I, dt, *, power_law=True,
         g=FRAME.gravity_of_r(rm), B_mu=B_MU, self_gravity_number=LAMBDA,
         **power)
 
-    sea_level = SeaLevel(
+    sea = SeaLevel(
         boundary=CURVE_RE, rho_w=RHO_W, rho_i=RHO_I, g_surface=G_RE,
         SL_init=SL_init, I=I, I_init=I_init,
         N_init=fd.Constant(0.0), ur_init=fd.Constant(0.0),
         softplus_width=SOFTPLUS_WIDTH, fixed_ocean=False)
 
-    parameters = selfgrav_dtn_iterative_solver_parameters(
-        condensed=False, outer_rtol=OUTER_RTOL, block0_rtol=1e-4,
-        snes_rtol=SNES_RTOL, snes_type="newtonls",
-        dtn_representation="lowrank", n_real=len(layout.real_fields))
-    parameters["snes_atol"] = SNES_ATOL
-    # The configuration the gate is about, stated here so a change of a
-    # default cannot move the test off it.
-    assert not layout.condensed
-    assert parameters["snes_type"] == "newtonls"
-
+    # The polar moment C = int r^2 dx of the unit-density mantle, on the
+    # mantle cells of the parent; the annulus has only the m3 rotation row.
     dx_m = fd.Measure("dx", domain=sub,
                       intersect_measures=(fd.Measure("dx", domain=parent),))
-    nullspace = rigid_rotation_nullspace(Z, layout)
+    couplings = [
+        FluidCore(boundary=CURVE_RC, rho_core=FRAME.RHO_CORE,
+                  g=fd.Constant(FRAME.gravity_of_r(RC))),
+        Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m), Omega_sq=OMEGA_SQ_EARTH),
+        CentreOfMass(), sea]
     solver = SelfGravitatingGIASolver(
-        z, approximation, layout=layout, dt=dt, bcs={}, time_scheme=time_scheme,
-        fluid_core=FluidCore(boundary=CURVE_RC, rho_core=FRAME.RHO_CORE,
-                             g=fd.Constant(FRAME.gravity_of_r(RC))),
-        sea_level=sea_level, dtn_representation="lowrank",
-        rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
-        nullspace=nullspace, transpose_nullspace=nullspace,
-        solver_parameters=parameters)
+        u, psi, approximation, dt=dt,
+        gravity_bcs=gravity_bcs(parent, sheet=False), bcs={},
+        couplings=couplings, internal_variable_family="DG",
+        dtn_representation="lowrank", time_scheme=time_scheme,
+        nullspace="rigid_rotation", solver_parameters="iterative",
+        preset_options=dict(outer_rtol=OUTER_RTOL, block0_rtol=1e-4,
+                            snes_rtol=SNES_RTOL, snes_type="newtonls"),
+        solver_parameters_extra={"snes_atol": SNES_ATOL})
+    # The configuration the gate is about, stated here so a change of a
+    # default cannot move the test off it.
+    assert solver.family == "DG"
     assert solver.dtn_representation == "lowrank"
-    return solver, layout, approximation
+    assert solver.solver_parameters["snes_type"] == "newtonls"
+    return solver, sea, approximation
 
 
 def march(meshes, SL_init, *, power_law=True, steps=N_STEPS, record=None,
@@ -334,7 +335,7 @@ def march(meshes, SL_init, *, power_law=True, steps=N_STEPS, record=None,
       maxwell_times: the Maxwell times of the elements, units of t_bar.
 
     Returns:
-      `(J, solver, layout, approximation)`.
+      `(J, solver, sea, approximation)`, with `sea` the `SeaLevel` coupling.
     """
     parent, sub = meshes
     with stop_annotating():
@@ -342,9 +343,9 @@ def march(meshes, SL_init, *, power_law=True, steps=N_STEPS, record=None,
         I = fd.Function(I_init.function_space(), name="ice").assign(ice[0])
         R = fd.FunctionSpace(sub, "R", 0)
         dt = fd.Function(R, name="dt")
-        solver, layout, approximation = build(meshes, SL_init, I_init, I, dt,
-                                              power_law=power_law,
-                                              maxwell_times=maxwell_times)
+        solver, sea, approximation = build(meshes, SL_init, I_init, I, dt,
+                                           power_law=power_law,
+                                           maxwell_times=maxwell_times)
     # The time step on the tape (decision S28): a replay then reads the
     # value of this assignment.
     dt.assign(DT)
@@ -359,9 +360,9 @@ def march(meshes, SL_init, *, power_law=True, steps=N_STEPS, record=None,
                            "outer": int(snes.getLinearSolveIterations())})
     with stop_annotating():
         target = misfit_target(sub)
-    SL = solver.sea_level()
-    J = fd.assemble((SL - target) ** 2 * solver.sea_level_measure()(CURVE_RE))
-    return J, solver, layout, approximation
+    SL = sea.sea_level()
+    J = fd.assemble((SL - target) ** 2 * sea.measure())
+    return J, solver, sea, approximation
 
 
 def misfit_target(sub):
@@ -395,7 +396,10 @@ def control_direction(sub):
 
 
 def taped_reduced_functional(meshes):
-    """Tape the march with `SL_init` as control; return `(Jhat, m, J, solver)`."""
+    """Tape the march with `SL_init` as control; return `(Jhat, m, J, sea)`.
+
+    `sea` is the `SeaLevel` coupling of the taped solver.
+    """
     _, sub = meshes
     with stop_annotating():
         SL_init, _, _ = shoreline_state(sub)
@@ -404,11 +408,11 @@ def taped_reduced_functional(meshes):
     continue_annotation()
     try:
         control = Control(SL_init)
-        J, solver, _, _ = march(meshes, SL_init)
+        J, _, sea, _ = march(meshes, SL_init)
         Jhat = ReducedFunctional(J, control)
     finally:
         pause_annotation()
-    return Jhat, SL_init, J, solver
+    return Jhat, SL_init, J, sea
 
 
 def test_forward_steps_converge_and_power_law_is_live(meshes):
@@ -417,13 +421,13 @@ def test_forward_steps_converge_and_power_law_is_live(meshes):
     with stop_annotating():
         SL_init, _, _ = shoreline_state(sub)
         rows = []
-        _, solver, layout, approximation = march(meshes, SL_init, record=rows)
+        _, solver, _, approximation = march(meshes, SL_init, record=rows)
         # The Newtonian twin: the same march with exponent 1 everywhere.
         _, twin, _, _ = march(meshes, SL_init.copy(deepcopy=True),
                               power_law=False)
     # Three Maxwell elements reach the solver, in one field of shape (3, 2, 2).
     assert len(approximation.maxwell_times) == len(SHEAR_MODULI) == 3
-    m_field = solver.solution.subfunctions[layout.internal_variable_field]
+    m_field = solver.solution.subfunctions[solver.field_index["history"]]
     assert m_field.ufl_shape == (3, 2, 2)
     for row in rows:
         print(f"    [gate] step {row['step']} newton {row['newton']} outer "
@@ -436,8 +440,8 @@ def test_forward_steps_converge_and_power_law_is_live(meshes):
     # The power-law factor at the converged state, per cell (DG0 average of
     # the factor, which is evaluated at quadrature points).
     with stop_annotating():
-        u = solver.solution.subfunctions[layout.displacement]
-        m = solver.solution.subfunctions[layout.internal_variable_field]
+        u = solver.solution.subfunctions[solver.field_index["displacement"]]
+        m = solver.solution.subfunctions[solver.field_index["history"]]
         dev = approximation.deviatoric_stress(u, history_slices(m))
         Q = fd.FunctionSpace(sub, "DG", 0)
         f = fd.Function(Q).project(approximation.power_law_factor(dev))
@@ -462,7 +466,7 @@ def test_forward_steps_converge_and_power_law_is_live(meshes):
     # computed above from the converged state would be below 1 even if the
     # solver ignored it).
     with stop_annotating():
-        u_twin = twin.solution.subfunctions[layout.displacement]
+        u_twin = twin.solution.subfunctions[twin.field_index["displacement"]]
         difference = np.abs(u.dat.data_ro - u_twin.dat.data_ro).max()
         size = np.abs(u_twin.dat.data_ro).max()
     print(f"    [gate] displacement against the Newtonian twin: "
@@ -473,9 +477,9 @@ def test_forward_steps_converge_and_power_law_is_live(meshes):
 def test_replay_matches_fresh_solve(meshes):
     """The replay of the taped march at a new `SL_init` equals a fresh march there."""
     _, sub = meshes
-    Jhat, SL_init, J, solver = taped_reduced_functional(meshes)
-    solver_sea_level = solver.sea_level()
-    dss = solver.sea_level_measure()(CURVE_RE)
+    Jhat, SL_init, J, sea = taped_reduced_functional(meshes)
+    solver_sea_level = sea.sea_level()
+    dss = sea.measure()
     with stop_annotating():
         shifted = SL_init.copy(deepcopy=True)
         shifted += control_direction(sub)
@@ -503,7 +507,7 @@ def test_replay_matches_fresh_solve(meshes):
 def test_taylor_rate_with_initial_sea_level_control(meshes):
     """The guarded Taylor test of the misfit with respect to `SL_init` has rate 2."""
     _, sub = meshes
-    Jhat, SL_init, J, solver = taped_reduced_functional(meshes)
+    Jhat, SL_init, J, sea = taped_reduced_functional(meshes)
     h = control_direction(sub)
     # The direct part of the derivative, `2 int (SL - target) h ds`: `SL`
     # contains `SL_init` itself, so this part involves no solve. It is about
@@ -511,8 +515,8 @@ def test_taylor_rate_with_initial_sea_level_control(meshes):
     # march. Computed at the taped state, before any replay.
     with stop_annotating():
         direct = float(fd.assemble(
-            2 * (solver.sea_level() - misfit_target(sub)) * h
-            * solver.sea_level_measure()(CURVE_RE)))
+            2 * (sea.sea_level() - misfit_target(sub)) * h
+            * sea.measure()))
     ladder = taylor_first_order_ladder(Jhat, SL_init, h)
     print(f"    [gate] R0 {[f'{r:.3e}' for r in ladder['R0']]} "
           f"R1 {[f'{r:.3e}' for r in ladder['R1']]} "
