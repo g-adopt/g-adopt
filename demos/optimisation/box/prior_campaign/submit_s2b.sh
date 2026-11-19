@@ -27,9 +27,11 @@
 #                 then lies between 0.1 (roughest mode) and 84 (constant mode),
 #                 against 2400 to 2e6 for the default first shift of run d (0.93).
 #   imin  = 4e-7  about lambda_min(A); a floor that imfac * gnorm never reaches.
-#   pmax  = 4e-4  about lambda_max(A): a second indefinite solve can grow the shift
-#                 by pgfac = 10 once, to a preconditioned value of at most 1 on the
-#                 roughest mode, and no further.
+#   pmax  = 4e-4  about lambda_max(A), the cap of every increase. The increase rule
+#                 is min(pmax, max(pgfac * pert, pmgfac * gnorm)) with pmgfac * gnorm
+#                 = 0.1 * gnorm of order 0.1 to 1, so an indefinite solve while
+#                 pert > 0 sets the shift to pmax directly, whatever pert was. The
+#                 preconditioned shift is then at most 1 on the roughest mode.
 #   psfac = 0.1   each good solve divides the shift by 10 instead of 2.5.
 #   pmin  = 1e-7  so 4e-5 -> 4e-6 -> 4e-7 -> zero: three shifted solves after one
 #                 negative-curvature solve, then no shift.
