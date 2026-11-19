@@ -466,6 +466,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             psi.function_space(), self.mesh, gravity_bcs, Lambda=self.Lambda,
             quad_degree=dtn_quad_degree, alpha=dtn_alpha,
             representation=dtn_representation)
+        # This solver refuses a DtN boundary that is not a complete circle or
+        # sphere and an empty cross-mesh measure (`check_geometry`). The
+        # checks assemble numbers that nothing on the tape reads.
+        with stop_annotating():
+            self.gravity.check_geometry()
         self.form = self.gravity.form
         if self.form.sigma_bcs:
             raise ValueError(
@@ -1530,12 +1535,19 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self._copy_out()
 
     def update_total_mass(self) -> None:
-        """Refresh the 2-D monopole datum from the sheets of the couplings."""
+        """Refresh the 2-D monopole datum from the sheets of the couplings.
+
+        The datum solves start from zero (`GravityPotential.update_total_mass`),
+        so a run restarted from a checkpoint reproduces the datum bit for bit.
+        The net-mass check is a diagnostic and is not recorded.
+        """
         sheets = self.coupling_context.sheets
         self.gravity.update_total_mass(
             extra_masses=[(sh.density, sh.measure) for sh in sheets
-                          if sh.in_monopole_datum],
-            extra_scales=[(sh.density, sh.measure) for sh in sheets])
+                          if sh.in_monopole_datum])
+        with stop_annotating():
+            self.gravity.check_net_mass(
+                extra_scales=[(sh.density, sh.measure) for sh in sheets])
 
     def _copy_out(self) -> None:
         """Write the displacement and the potential into `u` and `psi`, recorded."""

@@ -28,7 +28,7 @@ def normalise_intersect_measures(
 
     A mesh is the convenient thing to write at the call site and a measure is
     what UFL wants, so both are accepted and a mesh becomes that mesh's cell
-    measure -- the choice `GravitySolver.set_measures` makes for every
+    measure -- the choice `GravityPotential.set_measures` makes for every
     cross-mesh integral it builds. A bare mesh or measure is wrapped, since
     coupling to a single other domain is the common case and a one-element
     tuple is easy to forget.
@@ -82,7 +82,7 @@ class Equation:
           the equation couples a submesh to its parent, so that arguments living on
           the other mesh -- a potential on the parent, a displacement on the mantle
           submesh -- are accepted by terms integrating over this one. See
-          `GravitySolver.set_measures` for the same idiom applied by hand.
+          `GravityPotential.set_measures` for the same idiom applied by hand.
 
     """
 

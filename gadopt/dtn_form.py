@@ -20,17 +20,16 @@ The one quantity that has to cross the seam in the other direction is the 2-D
 monopole flux datum, which is a function of the enclosed mass and therefore of
 the density. It crosses as a coefficient the caller injects,
 `boundary_source(v, extra_flux={bc_id: expr})`, through the same channel the
-prescribed-`flux` conditions already use. `gadopt.gravity_solver.GravitySolver`
-keeps the `Real` fields, the mass forms and `check_net_mass`; see
-`GravitySolver.update_total_mass`, whose docstring explains why that code is
-delicate enough to be worth leaving where its tests can reach it.
+prescribed-`flux` conditions already use.
+`gadopt.gravity_potential.GravityPotential` keeps the `Real` fields, the mass
+forms and `check_net_mass`; see `GravityPotential.update_total_mass`, whose
+docstring explains why that code is delicate.
 
-There are two consumers. `GravitySolver` uses `boundary_bilinear` with a list
-of multiplier `(trial, test)` pairs on its multiplier path and without them on
-its low-rank path, where `build_mode_rows` eliminates the multipliers by hand
-instead; both take their right-hand side from `boundary_source`. A coupled
-self-gravitating residual is the second, and uses the same two methods on its
-own mixed space.
+The one consumer is `GravityPotential`, which both `GravitySolver` and the
+coupled self-gravitating GIA solver compose. It uses `boundary_bilinear` with
+a list of multiplier `(trial, test)` pairs on the multiplier path and without
+them on the low-rank path, where `build_mode_rows` eliminates the multipliers
+by hand instead; both take their right-hand side from `boundary_source`.
 """
 
 import abc
@@ -811,7 +810,7 @@ class DtNGravityForm:
         four sites which integrate a sheet - the residual, the low-rank
         right-hand side, the enclosed-mass form and `check_net_mass`'s scale -
         cannot drift apart in the measure or in the restriction. The last two
-        of those live on `GravitySolver` and reach this through the shim.
+        of those live on `GravityPotential`.
 
         An interior-facet integrand must be restricted, and it is restricted
         with `avg` and never with a hard-coded `'+'`. Measured on a gmsh
@@ -905,8 +904,8 @@ class DtNGravityForm:
         A property of the boundaries alone, so it is available before any form
         is built and a caller can size its mixed space with it. The low-rank
         representation eliminates every one of them and needs none, which is
-        why `GravitySolver.n_multipliers` is zero there while this stays at the
-        true count.
+        why `GravityPotential.n_multipliers` is zero there while this stays at
+        the true count.
         """
         self.n_multipliers = sum(
             dtn.n_multipliers(self.boundary_geometry[bc_id][0])
@@ -1012,21 +1011,20 @@ class DtNGravityForm:
 
         Returned in the **right-hand side** convention, so a residual is
         `boundary_bilinear(psi, v, ...) - boundary_source(v, ...)` and a
-        right-hand side form is this on its own. The two conventions used to
-        sit side by side in `GravitySolver.set_form` and
-        `GravitySolver.set_lowrank_operator`; keeping the sign in one place is
-        the point of the split.
+        right-hand side form is this on its own. `GravityPotential` uses
+        both conventions (`residual`, and `operator` with `source`); the sign
+        is kept in one place here.
 
         Args:
           v: The potential's test function.
           extra_flux: `{bc_id: expression}` of additional outward normal
             derivatives, added exactly as the prescribed-`flux` conditions are.
-            This is the channel the 2-D monopole datum crosses the seam
-            through: the enclosed-mass bookkeeping stays on `GravitySolver`
-            (see `GravitySolver.update_total_mass` for why moving it is a bad
-            trade) and only the resulting flux value, `-2 G M / R`, reaches the
-            boundary form. The expression may be any UFL coefficient, including
-            a `Real` `Function` a tape is watching.
+            The 2-D monopole datum reaches the boundary form through it: the
+            enclosed-mass bookkeeping stays on `GravityPotential` (see
+            `GravityPotential.update_total_mass`), and only the resulting flux
+            value, `-2 G M / R`, reaches the boundary form. The expression may
+            be any UFL coefficient, including a `Real` `Function` a tape is
+            watching.
 
         Returns:
           A `Form`, empty when there is no sheet, no prescribed flux and no
@@ -1051,9 +1049,7 @@ class DtNGravityForm:
         """`boundary_bilinear(...) - boundary_source(...)`.
 
         The whole boundary contribution to a residual, for a caller that wants
-        it in one piece. `GravitySolver` does not use it: its multiplier path
-        needs the two halves separately anyway, because the volume source sits
-        between them in the term order the shipped form has always had.
+        it in one piece (`GravityPotential.residual`).
         """
         return (self.boundary_bilinear(psi, v, multipliers)
                 - self.boundary_source(v, extra_flux))
