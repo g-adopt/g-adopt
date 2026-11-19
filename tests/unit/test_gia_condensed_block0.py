@@ -1,8 +1,8 @@
 """One elimination of the internal variables per block-0 application.
 
 `gadopt.CondensedBlockPC` is the block-0 preconditioner of
-`SelfGravitatingGIASolver` on the full layout (mixed space `(u, M, psi,
-Real...)`). It does the whole block-0 solve itself: it eliminates the combined
+`gadopt.gia_solver.SelfGravitatingGIASolver` on the DG history family (mixed
+space `(u, M, psi, Real...)`). It does the whole block-0 solve itself: it eliminates the combined
 internal-variable field `M` once with Slate (cell-local), runs a Krylov solve
 on the assembled `(u, psi)` condensed system
 
@@ -38,50 +38,89 @@ The interface these tests read, which the implementation must provide:
 - `selfgrav_dtn_iterative_solver_parameters(condensed=False,
   block0="condensed"|"pair")`, `"condensed"` being the default.
 
-The 2-D cases reuse the annulus of `test_gia_gravity.py` and the helpers of
-`test_gia_nested_condensation.py`; the 3-D case is the 24-cell cubed sphere of
-that file's `TestThreeDimensions`. `dt` is a `Constant` throughout, because the
-operator-reuse fingerprint reads its value and a plain number cannot change.
+The 2-D cases reuse the annulus of `test_gia_gravity.py` and the builders of
+`test_gia_nested_condensation.py`; the 3-D case is the 24-cell cubed sphere
+with a fluid core of that file's `TestThreeDimensions`. `dt` is a `Constant`
+throughout, because the operator-reuse fingerprint reads its value and a
+plain number cannot change.
 """
 
 import re
 
-import firedrake as fd
 import numpy as np
 import pytest
-from firedrake.petsc import PETSc
 
 import gadopt
-from gadopt.gia_gravity import (
-    FluidCore,
-    SelfGravitatingGIASolver,
+import firedrake as fd
+from firedrake.petsc import PETSc
+from gadopt.gia_couplings import Rotation, SurfaceLoad
+from gadopt.gia_presets import (
+    OMEGA_SQ_EARTH,
     selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_schur_solver_parameters,
-    self_gravitating_gia_space,
 )
+from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.internal_variable_equation import history_slices
 
 from test_gia_gravity import (  # noqa: E402  (module-level fixtures and helpers)
-    B_MU,
     CURVE_RC,
     CURVE_RE,
-    LAMBDA,
-    SIGMA_HAT,
     approximation,
     gravity_bcs,
-    mechanics_bcs,
+    load_density,
     meshes,  # noqa: F401  (pytest fixture)
+    new_fields,
+    polar_moment,
 )
 from test_gia_nested_condensation import (  # noqa: E402
     build,
     condensation_context,
+    history,
     nested_preset,
     relative_difference,
 )
 # Imported under private names so that pytest does not collect these classes a
-# second time in this module; only their static helpers are used.
+# second time in this module; only their static helpers and constants are
+# used: `TestFluidCore.build_fluid`, `TestPowerLaw._PowerLawSettings.POWER_LAW`, `.NEWTON` and
+# `._build_fluid_core`, `TestThreeDimensions.fluid_core_space` and
+# `.fluid_core_solver`.
+from test_gia_gravity import TestFluidCore as _FluidCoreHelpers
 from test_gia_nested_condensation import TestPowerLaw as _PowerLawSettings
 from test_gia_nested_condensation import TestThreeDimensions as _ThreeD
+
+
+def build_strong_core(meshes, **kwargs):
+    """The annulus of `test_gia_nested_condensation.build` with a strong core.
+
+    The rigid core is held by a strong `u = 0` on Rc in place of the weak
+    `un = 0`. `test_gia_nested_condensation.build` fixes the mechanics
+    conditions to `un = 0`, so this case needs its own builder. Everything
+    else is the same: the `Constant` time step, the `cos 2 phi` `SurfaceLoad`
+    on Re and the rotation row `m3`.
+
+    Args:
+      meshes: the `(parent, sub)` pair of the annulus fixture.
+      **kwargs: passed to `SelfGravitatingGIASolver` (`solver_parameters`,
+        `solver_parameters_extra`).
+
+    Returns:
+      `(solver, u, psi)`, with `u` and `psi` the Functions the solver writes
+      after every solve.
+    """
+    parent, sub = meshes
+    u, psi = new_fields(meshes)
+    couplings = [
+        SurfaceLoad(boundary=CURVE_RE, sigma=load_density(sub), g_surface=1.0),
+        # `Omega_sq` is the Earth's non-dimensional squared rotation rate.
+        Rotation(C=polar_moment(meshes), Omega_sq=OMEGA_SQ_EARTH),
+    ]
+    solver = SelfGravitatingGIASolver(
+        u, psi, approximation(), dt=fd.Constant(1.0),
+        gravity_bcs=gravity_bcs(parent, sheet=False),
+        bcs={CURVE_RC: {"u": fd.as_vector([0.0, 0.0])}}, couplings=couplings,
+        dtn_representation="multiplier", **kwargs)
+    return solver, u, psi
+
 
 #: The block-0 prefix of the preset, and the prefixes the new route nests
 #: under it. Written out once: attaching an option at the wrong depth is a
@@ -289,10 +328,9 @@ class TestThePresetSelectsTheRoute:
     def test_the_default_preset_names_no_block_zero_fieldsplit_fields(self):
         """There is no block-0 fieldsplit on this route, so no `_fields` keys.
 
-        `SelfGravitatingGIASolver._check_block0_split_matches_layout` counts
-        the fields named across those keys to catch a preset that disagrees
-        with the space. A leftover `_fields` key here would make that check
-        compare a stale claim against the space.
+        A `_fields` key names the block-0 split of the `"pair"` route, which
+        holds the history field in split 0. A leftover key here would be a
+        stale claim about a block-0 split that this route does not build.
         """
         p = selfgrav_dtn_iterative_solver_parameters(condensed=False)
         named = [k for k in p
@@ -449,10 +487,10 @@ class TestTheLayoutGuards:
     def test_the_class_refuses_a_two_field_block_zero(self):
         """The class's own guard, tested away from the solver.
 
-        A two-field mixed space is exactly what
-        `condense_internal_variables=True` produces, so the message must name
-        that flag: a caller who reaches this error has set the space and the
-        preset independently, and has to be told which of the two to change.
+        A two-field block 0 is exactly what the Quadrature history family
+        builds, so the message must name that family: a caller who reaches
+        this error has set the history family and the preset independently,
+        and has to be told which of the two to change.
         The message must also name the space it was handed, because the same
         error is what a hand-written dictionary on some other three-field
         block would produce.
@@ -484,43 +522,18 @@ class TestTheLayoutGuards:
         pc.setType("python")
         pc.setOperators(A, A)
         pc.setOptionsPrefix("two_field_block0_")
-        with pytest.raises(ValueError, match="condense_internal_variables"):
+        with pytest.raises(ValueError, match="Quadrature family"):
             gadopt.CondensedBlockPC().initialize(pc)
 
 
-def build_condensed_layout_solver(meshes, solver_parameters):
-    """A condensed-layout solver, built to be refused.
-
-    The space is built with `condense_internal_variables=True`, which the
-    uncondensed preset's block 0 must not be applied to.
-    """
-    parent, sub = meshes
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-        n_internal_variables=1, condense_internal_variables=True,
-        self_gravity_number=LAMBDA,
-        dtn_representation="multiplier")
-    z = fd.Function(Z)
-    Xm = fd.SpatialCoordinate(sub)
-    dx_m = fd.Measure("dx", domain=sub,
-                      intersect_measures=(fd.Measure("dx", domain=parent),))
-    C = fd.assemble(fd.dot(Xm, Xm) * dx_m)
-    return SelfGravitatingGIASolver(
-        z, approximation(), layout=layout, dt=fd.Constant(1.0),
-        bcs=mechanics_bcs(sub), rotation_moments={"C": C},
-        solver_parameters=solver_parameters)
-
-
 def build_with_nullspaces(meshes, solver_parameters):
-    """An annulus solver that declares the kernel and the transpose kernel.
+    """An annulus solver that declares the rigid rotation as its kernel.
 
-    `test_gia_gravity.build(declare_nullspace=True)` declares `nullspace`
-    alone, and the basis has to be built on the mixed space before the solver
-    exists, so the space is built here instead of going through that helper.
-    The same `MixedVectorSpaceBasis` serves as both the kernel and the left
-    kernel: for this system they coincide in the continuum (the rigid rotation
-    is annihilated from both sides), and what the test reads is whether the
-    declared left kernel reaches the assembled displacement block at all.
+    `nullspace="rigid_rotation"` declares the same basis as the kernel and as
+    the left kernel: for this system they coincide in the continuum (the
+    rigid rotation is annihilated from both sides), and what the tests read
+    is whether each declared basis reaches the assembled displacement block
+    at all.
 
     Args:
       meshes: the `(parent, sub)` fixture of `test_gia_gravity`.
@@ -529,42 +542,26 @@ def build_with_nullspaces(meshes, solver_parameters):
     Returns:
       The solved `SelfGravitatingGIASolver`.
     """
-    from gadopt.gia_gravity import rigid_rotation_nullspace
-
-    parent, sub = meshes
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-        n_internal_variables=1, self_gravity_number=LAMBDA,
-        dtn_representation="multiplier")
-    z = fd.Function(Z)
-    Xm = fd.SpatialCoordinate(sub)
-    dx_m = fd.Measure("dx", domain=sub,
-                      intersect_measures=(fd.Measure("dx", domain=parent),))
-    # The polar moment of inertia the rotational closure needs; the value is
-    # the annulus's own, so the closure constants are the physical ones.
-    C = fd.assemble(fd.dot(Xm, Xm) * dx_m)
-    basis = rigid_rotation_nullspace(Z, layout)
-    solver = SelfGravitatingGIASolver(
-        z, approximation(), layout=layout, dt=fd.Constant(1.0),
-        bcs=mechanics_bcs(sub), rotation_moments={"C": C},
-        nullspace=basis, transpose_nullspace=basis,
-        solver_parameters=solver_parameters)
+    solver, _, _ = build(meshes, nullspace="rigid_rotation",
+                         solver_parameters=solver_parameters)
     solver.solve()
     return solver
 
 
-def test_the_condensed_layout_refuses_the_new_block_zero(meshes):
-    """`_check_block0_split_matches_layout` must catch this preset too.
+def test_the_quadrature_family_refuses_the_new_block_zero(meshes):
+    """`_check_dictionary` must refuse this preset on the Quadrature family.
 
-    The `"pair"` route announces its field count through
-    `dtn_fieldsplit_0_pc_fieldsplit_N_fields`, and the existing check compares
-    that count with the space's. The new route names no such key, so the check
-    has to recognise the class by name instead. Without that, an uncondensed
-    preset on a condensed space runs a preconditioner that looks for a history
-    field the space does not have.
+    The Quadrature family has no history field in block 0, so the uncondensed
+    preset's `CondensedBlockPC` would look for a field the space does not
+    have. The check recognises the class by name. The Quadrature family
+    refuses the rigid core's `un` condition, so the annulus here has a fluid
+    core.
     """
     with pytest.raises(ValueError, match="CondensedBlockPC"):
-        build_condensed_layout_solver(meshes, condensed_preset())
+        _FluidCoreHelpers.build_fluid(
+            meshes, internal_variable_family="Quadrature",
+            dtn_representation="multiplier",
+            solver_parameters=condensed_preset())
 
 
 class TestTheSolveMatchesTheDirectRoute:
@@ -572,23 +569,23 @@ class TestTheSolveMatchesTheDirectRoute:
 
     @pytest.fixture(scope="class")
     def direct(self, meshes):
-        solver, z, layout = build(
+        solver, u, psi = build(
             meshes, solver_parameters="direct",
             solver_parameters_extra={"snes_type": "ksponly"})
         solver.solve()
-        return z.copy(deepcopy=True), layout
+        return solver, u, psi
 
     @pytest.fixture(scope="class")
     def condensed(self, meshes):
-        solver, z, layout = build(meshes, solver_parameters=condensed_preset())
+        solver, u, psi = build(meshes, solver_parameters=condensed_preset())
         solver.solve()
-        return solver, z, layout
+        return solver, u, psi
 
     @pytest.fixture(scope="class")
     def pair(self, meshes):
-        solver, z, layout = build(meshes, solver_parameters=nested_preset())
+        solver, u, psi = build(meshes, solver_parameters=nested_preset())
         solver.solve()
-        return solver, z, layout
+        return solver, u, psi
 
     def test_the_class_sits_on_block_zero(self, condensed):
         """The route under test is the one the preset selected.
@@ -626,16 +623,11 @@ class TestTheSolveMatchesTheDirectRoute:
         The gate at 1e-8 is an order and a half above the largest of them, so
         a formulation difference fails it and Krylov noise does not.
         """
-        solver, z, layout = condensed
-        z_direct, _ = direct
+        solver, u, psi = condensed
+        direct_solver, u_direct, psi_direct = direct
         assert_new_route(solver)
-        u, u_direct = (f.subfunctions[layout.displacement]
-                       for f in (z, z_direct))
-        psi, psi_direct = (f.subfunctions[layout.potential]
-                           for f in (z, z_direct))
-        m, = history_slices(z.subfunctions[layout.internal_variable_field])
-        m_direct, = history_slices(
-            z_direct.subfunctions[layout.internal_variable_field])
+        m = history(solver)
+        m_direct = history(direct_solver)
         assert fd.norm(u_direct) > 0.0
         assert relative_difference(u, u_direct) < 1e-8
         assert relative_difference(psi, psi_direct) < 1e-8
@@ -653,13 +645,18 @@ class TestTheSolveMatchesTheDirectRoute:
         that a multiplier whose true value is roundoff is not compared
         relatively against roundoff. Gate 1e-8, the outer tolerance's scale.
         """
-        solver, z, layout = condensed
-        z_direct, _ = direct
+        solver, _, _ = condensed
+        direct_solver, _, _ = direct
         assert_new_route(solver)
-        values = np.array([float(z.subfunctions[i].dat.data_ro[0])
-                           for i in layout.real_fields])
-        reference = np.array([float(z_direct.subfunctions[i].dat.data_ro[0])
-                              for i in layout.real_fields])
+        # Both solvers are built the same way, so their `Real` fields sit at
+        # the same indices of their mixed spaces.
+        assert solver.real_indices == direct_solver.real_indices
+        values = np.array([
+            float(solver.solution.subfunctions[i].dat.data_ro[0])
+            for i in solver.real_indices])
+        reference = np.array([
+            float(direct_solver.solution.subfunctions[i].dat.data_ro[0])
+            for i in direct_solver.real_indices])
         scale = max(abs(reference).max(), 1e-300)
         assert len(values) > 0
         assert abs(values - reference).max() / scale < 1e-8
@@ -703,7 +700,7 @@ class TestOneBlockZeroApplication:
         raised with it: a solve that stops at its cap would leave a residual
         set by the cap.
         """
-        solver, z, layout = build(
+        solver, _, _ = build(
             meshes,
             solver_parameters=condensed_preset(block0_rtol=1e-12,
                                                block0_max_it=400))
@@ -819,13 +816,13 @@ class TestTheAssembledBlocks:
 
     @pytest.fixture(scope="class")
     def solved(self, meshes):
-        solver, z, layout = build(meshes, solver_parameters=condensed_preset())
+        solver, _, _ = build(meshes, solver_parameters=condensed_preset())
         solver.solve()
         return solver
 
     @pytest.fixture(scope="class")
     def pair_solved(self, meshes):
-        solver, z, layout = build(meshes, solver_parameters=nested_preset())
+        solver, _, _ = build(meshes, solver_parameters=nested_preset())
         solver.solve()
         return solver
 
@@ -958,7 +955,8 @@ class TestTheAssembledBlocks:
         """`condensed_field_transpose_nullspace`, the fourth appctx key.
 
         The solver publishes it beside `condensed_field_nullspace` whenever
-        the caller passes `transpose_nullspace=`, and
+        the caller declares `nullspace="rigid_rotation"`, which is also the
+        transpose nullspace, and
         `gadopt.InternalVariableSCPC` sets it on its condensed matrix. The new
         class must do the same: PETSc projects the *left* kernel out of the
         right-hand side, and on a nonsymmetric condensed operator - every
@@ -968,7 +966,7 @@ class TestTheAssembledBlocks:
 
         The vector is checked and not only counted, because an empty or a
         wrong basis of size one would pass a count. The reference is the same
-        rigid rotation `gadopt.rigid_rotation_nullspace` builds in 2-D,
+        rigid rotation `nullspace="rigid_rotation"` builds in 2-D,
         `u = (-y, x)`, interpolated into the same displacement space. Both are
         the same interpolant of the same expression and PETSc orthonormalises
         in the l2 vector norm, so the two differ by a positive scalar and
@@ -1012,12 +1010,12 @@ class TestPowerLaw:
         inner tolerance is tightened to 1e-6 because a power law's Newton step
         is only as good as the linear solve under it.
         """
-        nested, z_nested, layout = build(
+        nested, u, psi = build(
             meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
             solver_parameters=condensed_preset(snes_type="newtonls",
                                                block0_rtol=1e-6),
             solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
-        direct, z_direct, _ = build(
+        direct, u_direct, psi_direct = build(
             meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
             solver_parameters=dict(selfgrav_dtn_schur_solver_parameters,
                                    snes_type="newtonls",
@@ -1031,10 +1029,6 @@ class TestPowerLaw:
         assert nested.solver.snes.getIterationNumber() \
             == direct.solver.snes.getIterationNumber() >= 2
 
-        u, u_direct = (f.subfunctions[layout.displacement]
-                       for f in (z_nested, z_direct))
-        psi, psi_direct = (f.subfunctions[layout.potential]
-                           for f in (z_nested, z_direct))
         assert fd.norm(u_direct) > 0.0
         assert relative_difference(u, u_direct) < 1e-6
         assert relative_difference(psi, psi_direct) < 1e-6
@@ -1090,7 +1084,7 @@ class TestPowerLaw:
             solver_parameters=condensed_preset(snes_type="newtonls",
                                                u_ksp_max_it=4),
             solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
-        assert not solver.condensed_operator_symmetric()
+        assert solver.rheology_nonlinear
         p = solver.solver_parameters
         assert p[U_SPLIT + "ksp_type"] == "gmres"
         assert p[U_SPLIT + "ksp_gmres_restart"] == p[U_SPLIT + "ksp_max_it"] == 4
@@ -1108,7 +1102,7 @@ class TestPowerLaw:
             meshes, approximation_kwargs=_PowerLawSettings.POWER_LAW,
             solver_parameters=condensed_preset(snes_type="newtonls"),
             solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
-        assert not solver.condensed_operator_symmetric()
+        assert solver.rheology_nonlinear
         p = solver.solver_parameters
         assert p[U_SPLIT + "ksp_type"] == "preonly"
         assert U_SPLIT + "ksp_gmres_restart" not in p
@@ -1165,30 +1159,16 @@ class TestOtherConfigurations:
         tolerance is tightened (it moves to 1.7e-8), so 1e-6 is the gate for
         `u` and 1e-8 for `M` and `psi`, which agree at 1e-15 there.
         """
-        parent, sub = meshes
-        Xm = fd.SpatialCoordinate(sub)
-
         def make(solver_parameters):
-            Z, layout = self_gravitating_gia_space(
-                sub, parent, gravity_bcs=gravity_bcs(parent), rotation=False,
-                fluid_core=True, n_internal_variables=1,
-                condense_internal_variables=False, self_gravity_number=LAMBDA,
-                dtn_representation="multiplier")
-            z = fd.Function(Z)
-            solver = SelfGravitatingGIASolver(
-                z, approximation(**_PowerLawSettings.POWER_LAW), layout=layout,
-                dt=fd.Constant(1.0),
-                bcs={CURVE_RE: {"normal_stress": B_MU * SIGMA_HAT * fd.cos(
-                    2 * fd.atan2(Xm[1], Xm[0]))}},
-                fluid_core=FluidCore(boundary=CURVE_RC, rho_core=2.0),
-                solver_parameters=solver_parameters,
-                solver_parameters_extra=dict(_PowerLawSettings.NEWTON))
-            return solver, z, layout
+            # The annulus with the fluid core on Rc, the `cos 2 phi` surface
+            # load on Re, no rotation rows, the power law and its Newton
+            # tolerance.
+            return _PowerLawSettings._build_fluid_core(meshes, solver_parameters)
 
-        nested, z_nested, layout = make(condensed_preset(
+        nested, u, psi = make(condensed_preset(
             snes_type="newtonls", block0_rtol=1e-6,
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"))
-        direct, z_direct, _ = make(
+        direct, u_direct, psi_direct = make(
             dict(selfgrav_dtn_schur_solver_parameters, snes_type="newtonls",
                  snes_linesearch_type="l2"))
         nested.solve()
@@ -1197,16 +1177,10 @@ class TestOtherConfigurations:
         assert nested.solver.snes.getConvergedReason() > 0
         assert nested.solver.snes.getIterationNumber() \
             == direct.solver.snes.getIterationNumber() >= 2
-        assert layout.core_pressure is not None
+        assert "core_pressure" in nested.field_index
 
-        u, u_direct = (f.subfunctions[layout.displacement]
-                       for f in (z_nested, z_direct))
-        psi, psi_direct = (f.subfunctions[layout.potential]
-                           for f in (z_nested, z_direct))
-        m, = history_slices(
-            z_nested.subfunctions[layout.internal_variable_field])
-        m_direct, = history_slices(
-            z_direct.subfunctions[layout.internal_variable_field])
+        m = history(nested)
+        m_direct = history(direct)
         assert fd.norm(u_direct) > 0.0
         assert relative_difference(u, u_direct) < 1e-6
         assert relative_difference(m, m_direct) < 1e-8
@@ -1220,13 +1194,14 @@ class TestOtherConfigurations:
         elements with different viscosities and shear moduli is the cheapest
         configuration that would catch an `n = 1` assumption.
         """
+        # The number of Maxwell elements follows from the list-valued
+        # viscosity and shear modulus of the approximation.
         common = dict(
-            n_internal_variables=2,
             approximation_kwargs={"viscosity": [1.0, 3.0],
                                   "shear_modulus": [1.0, 0.5]})
-        nested, z_nested, layout = build(
+        nested, u, _ = build(
             meshes, solver_parameters=condensed_preset(), **common)
-        direct, z_direct, _ = build(
+        direct, u_direct, _ = build(
             meshes, solver_parameters="direct",
             solver_parameters_extra={"snes_type": "ksponly"}, **common)
         nested.solve()
@@ -1235,15 +1210,10 @@ class TestOtherConfigurations:
         context = block0_context(nested)
         W = context.cxt.a.arguments()[0].function_space()
         assert W[1].value_shape == (2, 2, 2)
-        u, u_direct = (f.subfunctions[layout.displacement]
-                       for f in (z_nested, z_direct))
         assert fd.norm(u_direct) > 0.0
         assert relative_difference(u, u_direct) < 1e-8
-        for m, m_direct in zip(
-                history_slices(
-                    z_nested.subfunctions[layout.internal_variable_field]),
-                history_slices(
-                    z_direct.subfunctions[layout.internal_variable_field])):
+        for m, m_direct in zip(history_slices(nested.internal_variables),
+                               history_slices(direct.internal_variables)):
             assert relative_difference(m, m_direct) < 1e-8
 
     def test_a_strong_displacement_condition_is_handled_or_refused(
@@ -1263,31 +1233,15 @@ class TestOtherConfigurations:
         problem), or refuse it with a message that names it. What fails this
         test is a solve that neither raises nor matches.
         """
-        parent, sub = meshes
-        Xm = fd.SpatialCoordinate(sub)
-        dx_m = fd.Measure("dx", domain=sub,
-                          intersect_measures=(fd.Measure("dx", domain=parent),))
-
         def make(solver_parameters, extra=None):
-            Z, layout = self_gravitating_gia_space(
-                sub, parent, gravity_bcs=gravity_bcs(parent), rotation=True,
-                n_internal_variables=1, condense_internal_variables=False,
-                self_gravity_number=LAMBDA,
-                dtn_representation="multiplier")
-            z = fd.Function(Z)
-            C = fd.assemble(fd.dot(Xm, Xm) * dx_m)
-            solver = SelfGravitatingGIASolver(
-                z, approximation(), layout=layout, dt=fd.Constant(1.0),
-                bcs={CURVE_RC: {"u": fd.as_vector([0.0, 0.0])},
-                     CURVE_RE: {"normal_stress": B_MU * SIGMA_HAT * fd.cos(
-                         2 * fd.atan2(Xm[1], Xm[0]))}},
-                rotation_moments={"C": C},
-                solver_parameters=solver_parameters,
-                solver_parameters_extra=extra)
-            return solver, z, layout
+            # The rigid core held by a strong `u = 0` on Rc, the `cos 2 phi`
+            # surface load on Re and the rotation rows.
+            return build_strong_core(meshes,
+                                     solver_parameters=solver_parameters,
+                                     solver_parameters_extra=extra)
 
         try:
-            nested, z_nested, layout = make(condensed_preset())
+            nested, u, _ = make(condensed_preset())
             nested.solve()
         except Exception as error:  # noqa: BLE001 (the refusal is the outcome)
             message = str(error).lower()
@@ -1297,10 +1251,8 @@ class TestOtherConfigurations:
             return
 
         assert_new_route(nested)
-        direct, z_direct, _ = make("direct", {"snes_type": "ksponly"})
+        direct, u_direct, _ = make("direct", {"snes_type": "ksponly"})
         direct.solve()
-        u, u_direct = (f.subfunctions[layout.displacement]
-                       for f in (z_nested, z_direct))
         assert fd.norm(u_direct) > 0.0
         assert relative_difference(u, u_direct) < 1e-8
 
@@ -1316,18 +1268,18 @@ class TestThreeDimensions:
 
     @pytest.fixture(scope="class")
     def solved(self):
-        Z, layout, mesh, C = _ThreeD.fluid_core_space()
-        z_nested, z_direct = fd.Function(Z), fd.Function(Z)
-        nested = _ThreeD.fluid_core_solver(
-            z_nested, layout, mesh, C,
+        # One mesh for both solvers, so that their fields can be subtracted.
+        mesh, C = _ThreeD.fluid_core_space()
+        nested, _, _ = _ThreeD.fluid_core_solver(
+            mesh, C,
             condensed_preset(block0_rtol=1e-6,
                              multiplier_pc="gadopt.DtNMultiplierDenseSchurPC"))
-        direct = _ThreeD.fluid_core_solver(
-            z_direct, layout, mesh, C,
+        direct, _, _ = _ThreeD.fluid_core_solver(
+            mesh, C,
             dict(selfgrav_dtn_schur_solver_parameters, snes_type="ksponly"))
         nested.solve()
         direct.solve()
-        return nested, z_nested, z_direct, layout
+        return nested, direct
 
     def test_it_matches_the_direct_route(self, solved):
         """Newtonian with a fluid core, 3-D, against LU on block 0.
@@ -1336,18 +1288,15 @@ class TestThreeDimensions:
         in `m`, 1.9e-12 in `psi`. The gate at 1e-8 is three orders above the
         largest of them.
         """
-        nested, z_nested, z_direct, layout = solved
+        nested, direct = solved
         assert_new_route(nested)
         assert nested.solver.snes.getConvergedReason() > 0
         assert nested.solver.snes.ksp.getConvergedReason() > 0
-        u, u_direct = (f.subfunctions[layout.displacement]
-                       for f in (z_nested, z_direct))
-        psi, psi_direct = (f.subfunctions[layout.potential]
-                           for f in (z_nested, z_direct))
-        m, = history_slices(
-            z_nested.subfunctions[layout.internal_variable_field])
-        m_direct, = history_slices(
-            z_direct.subfunctions[layout.internal_variable_field])
+        # `u` and `psi` of each solver hold its solved fields.
+        u, u_direct = nested.u, direct.u
+        psi, psi_direct = nested.psi, direct.psi
+        m = history(nested)
+        m_direct = history(direct)
         assert fd.norm(u_direct) > 0.0
         assert relative_difference(u, u_direct) < 1e-8
         assert relative_difference(m, m_direct) < 1e-8
@@ -1418,9 +1367,9 @@ def test_two_ranks_match_the_direct_route(meshes):  # noqa: F811
     gate as the serial comparison.
     """
     assert fd.COMM_WORLD.size == 2, "this test must run on exactly 2 ranks"
-    nested, z_nested, layout = build(
+    nested, u, psi = build(
         meshes, solver_parameters=condensed_preset())
-    direct, z_direct, _ = build(
+    direct, u_direct, psi_direct = build(
         meshes, solver_parameters="direct",
         solver_parameters_extra={"snes_type": "ksponly"})
     nested.solve()
@@ -1428,13 +1377,8 @@ def test_two_ranks_match_the_direct_route(meshes):  # noqa: F811
     assert_new_route(nested)
     assert nested.solver.snes.ksp.getConvergedReason() > 0
 
-    u, u_direct = (f.subfunctions[layout.displacement]
-                   for f in (z_nested, z_direct))
-    psi, psi_direct = (f.subfunctions[layout.potential]
-                       for f in (z_nested, z_direct))
-    m, = history_slices(z_nested.subfunctions[layout.internal_variable_field])
-    m_direct, = history_slices(
-        z_direct.subfunctions[layout.internal_variable_field])
+    m = history(nested)
+    m_direct = history(direct)
     assert fd.norm(u_direct) > 0.0
     assert relative_difference(u, u_direct) < 1e-8
     assert relative_difference(psi, psi_direct) < 1e-8
