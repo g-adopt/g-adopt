@@ -41,7 +41,10 @@ mesh.cartesian = True
 X = SpatialCoordinate(mesh)
 
 # We use a discontinuous Galerkin space of polynomial degree 0 (piecewise
-# constant) on hexahedral elements, giving 10,400 degrees of freedom.
+# constant) on hexahedral elements, giving 10,400 degrees of freedom. DG0 on
+# this coarse mesh is chosen to keep the demo cheap enough to run as a
+# regression test; the same problem on finer meshes and higher degree is
+# the Richards weak-scaling test in tests/parallel_scaling_richards.
 
 V = FunctionSpace(mesh, "DQ", 0)
 log(f"Number of degrees of freedom: {V.dim()}")
@@ -101,8 +104,9 @@ theta.interpolate(soil_curve.moisture_content(h))
 
 # We use DIRK22 (a second-order, stiffly accurate DIRK scheme) for time
 # integration. With the default stage_type="value" in RichardsSolver,
-# this gives mass conservation to solver tolerance. We use a direct
-# solver since the problem size (162,500 DOFs) is manageable.
+# this gives mass conservation to solver tolerance. At 10,400 DOFs a direct
+# LU factorisation is the cheapest choice; the iterative presets are
+# compared at scale in tests/parallel_scaling_richards.
 
 dt = Constant(600.0)
 t_final = 24 * 3600  # 24 hours in seconds
