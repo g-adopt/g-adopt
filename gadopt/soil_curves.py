@@ -168,7 +168,8 @@ class SoilCurve(ABC):
     @abstractmethod
     def hydraulic_conductivity(self, h: fd.Function | ufl.core.expr.Expr) -> ufl.core.expr.Expr:
         """
-        Calculate relative hydraulic conductivity $K(h)$.
+        Calculate hydraulic conductivity $K(h) = K_s k_r(h)$, where $k_r$ is the
+        dimensionless relative permeability.
 
         Args:
             h: Hydraulic pressure head $[L]$
@@ -202,7 +203,7 @@ class HaverkampCurve(SoilCurve):
     Parameters:
         theta_r: Residual water content $[L^3/L^3]$
         theta_s: Saturated water content $[L^3/L^3]$
-        alpha: Fitting parameter $[L^{-\\beta}]$
+        alpha: Fitting parameter $[L^{\\beta}]$
         beta: Fitting parameter [dimensionless]
         Ks: Saturated hydraulic conductivity $[L/T]$
         A: Fitting parameter $[L^{\\gamma}]$

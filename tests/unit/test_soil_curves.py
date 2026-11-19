@@ -485,7 +485,7 @@ class TestHeterogeneousParameters:
         _, _, model, alpha, theta_s, Ss = self._vg_heterogeneous()
         assert model.parameters["alpha"] is alpha
         assert model.parameters["theta_s"] is theta_s
-        # Ss is routed through ensure_constant, which passes Functions through.
+        # Ss is wrapped like every other parameter, so a Function passes through.
         assert model.Ss is Ss
 
     @pytest.mark.parametrize("property_name", PROPERTY_NAMES)
