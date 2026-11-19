@@ -910,7 +910,7 @@ class TestTheAssembledBlocks:
             self, solved):
         """GAMG on `S_uu` must see more than the rigid modes.
 
-        `condensed_near_nullspace` defaults to `"incompressible"`, so
+        `near_nullspace` defaults to `"incompressible"`, so
         `gadopt.near_nullspace_basis` builds the rigid-body modes and the
         low-degree divergence-free fields. In 2-D the rigid set is 3 vectors
         (two translations and one rotation) and the degree-1 divergence-free

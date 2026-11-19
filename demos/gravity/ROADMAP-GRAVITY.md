@@ -3,7 +3,7 @@
 > **Status note, 2026-08-18.** This file is the radial DtN design record. E6
 > remains open, and the Cartesian implementation does not exist.
 > `GravitySolver` became a component of `SelfGravitatingGIASolver`
-> (`gadopt/gia_gravity.py`), so the potential block now sits inside a larger
+> (`gadopt/gia_solver.py`), so the potential block now sits inside a larger
 > mixed system with its own preconditioner. And the low-rank representation
 > stayed an opt-in path, because it removes unknowns from the residual and so
 > needs the hand-written adjoint in `gadopt/dtn_adjoint.py`. For the state of

@@ -2,7 +2,7 @@
 
 > **Status note, 2026-08-11. This plan is not started, and it is not the
 > coupling that exists.** A different monolithic coupling landed in the
-> meantime: `SelfGravitatingGIASolver` (`gadopt/gia_gravity.py`) solves
+> meantime: `SelfGravitatingGIASolver` (`gadopt/gia_solver.py`) solves
 > displacement, the internal variable, the potential and the rotation scalars
 > together for glacial isostatic adjustment. That solver answers the same
 > structural question this document asks — how to put Poisson and a momentum
