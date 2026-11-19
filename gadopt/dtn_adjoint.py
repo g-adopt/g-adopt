@@ -62,8 +62,9 @@ from firedrake import Cofunction, Function, action, adjoint, assemble, derivativ
 from pyadjoint import AdjFloat, Block
 from pyadjoint.tape import annotate_tape, get_working_tape, no_annotations
 
-__all__ = ["LowRankGravitySolveBlock", "TraceCoefficientBlock",
-           "annotate_lowrank_solve", "taped_trace_coefficients"]
+__all__ = ["LowRankGravitySolveBlock", "ModeRow", "TraceCoefficientBlock",
+           "annotate_lowrank_solve", "taped_mode_coefficients",
+           "taped_trace_coefficients"]
 
 
 class LowRankGravitySolveBlock(Block):
@@ -245,11 +246,31 @@ class LowRankGravitySolveBlock(Block):
 
 
 class TraceCoefficientBlock(Block):
-    """One trace coefficient `c_k = u_k . psi / (scale_k A_h)`.
+    """One trace coefficient `c_k = u_k . psi / (scale_k A_h)` on the tape.
 
     A linear functional of the potential with a constant vector, so the
     derivative is that same vector: the adjoint of a scalar seed `c_bar` is
-    `c_bar * u_k / (scale_k A_h)` as a cofunction on the potential space.
+    `c_bar * u_k / (scale_k A_h)` as a cofunction on the solution's space,
+    and the Hessian is the same map applied to the second-order seed.
+
+    The one block of both low-rank DtN solvers. The solution is the
+    potential itself for `GravitySolver` and the mixed solution of
+    `SelfGravitatingGIASolver`; the row (`ModeRow`) holds the indices of the
+    potential degrees of freedom in that solution's local vector, so the
+    block reads and writes the solution only through `dat.vec_ro` and
+    `dat.vec_rw`, which give one local array for a plain and a mixed space
+    alike (a mixed `dat.data_ro` is a tuple of arrays).
+
+    **Why it exists.** Reading the trace off `dat.data_ro` and returning
+    `float()` severs the tape by construction. The trace spectrum is the
+    geoid, the observable an inversion of either solver most often targets,
+    so on the low-rank path the coefficients would have correct values with
+    a gradient of exactly zero.
+
+    Args:
+      solution: The Function the coefficient is read from.
+      row: The `ModeRow` of the coefficient.
+      value: The `AdjFloat` that holds the coefficient's value.
     """
 
     def __init__(self, solution, row, value):
@@ -262,28 +283,34 @@ class TraceCoefficientBlock(Block):
     def __str__(self):
         return "TraceCoefficientBlock"
 
+    @staticmethod
+    def _local(function):
+        """The local (owned) entries of `function`, one array for any space."""
+        with function.dat.vec_ro as vec:
+            return np.array(vec.array_r, dtype=float)
+
+    def _seeded_cofunction(self, seed):
+        """`seed * u_k / (scale_k A_h)` as a cofunction on the solution's space."""
+        out = Cofunction(self.function_space.dual())
+        with out.dat.vec_rw as vec:
+            self.row.scatter_into(vec.array_w, float(seed))
+        return out
+
     @no_annotations
     def recompute_component(self, inputs, block_variable, idx, prepared):
-        psi = np.asarray(inputs[0].dat.data_ro, dtype=float)
-        local = float(self.row.local_dot(psi))
-        return self.row.comm.allreduce(local)
+        return self.row.comm.allreduce(self.row.local_dot(self._local(inputs[0])))
 
     def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx,
                                prepared=None):
         seed = adj_inputs[0]
-        if seed is None:
-            return None
-        out = Cofunction(self.function_space.dual())
-        self.row.scatter_into(out.dat.data_rw, float(seed))
-        return out
+        return None if seed is None else self._seeded_cofunction(seed)
 
     def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable, idx,
                                prepared=None):
         perturbation = tlm_inputs[0]
         if perturbation is None:
             return None
-        psi = np.asarray(perturbation.dat.data_ro, dtype=float)
-        return self.row.comm.allreduce(float(self.row.local_dot(psi)))
+        return self.row.comm.allreduce(self.row.local_dot(self._local(perturbation)))
 
     def evaluate_hessian_component(self, inputs, hessian_inputs, adj_inputs,
                                    block_variable, idx, relevant_dependencies,
@@ -291,29 +318,80 @@ class TraceCoefficientBlock(Block):
         # Linear in psi, so the second derivative is the first applied to the
         # second-order seed.
         seed = hessian_inputs[0]
-        if seed is None:
-            return None
-        out = Cofunction(self.function_space.dual())
-        self.row.scatter_into(out.dat.data_rw, float(seed))
-        return out
+        return None if seed is None else self._seeded_cofunction(seed)
 
 
-class _SingleModeRow:
-    """One mode's boundary functional, scaled for coefficient recovery."""
+class ModeRow:
+    """One mode's boundary functional, scaled for coefficient recovery.
 
-    def __init__(self, rows, index, comm):
+    **The recovery weight comes from `rows.recovery`, the same array the
+    forward value uses**, so the `1 / (scale_k A_h)` denominator exists in
+    exactly one place and cannot drift between the value and its derivative.
+
+    Args:
+      rows: The `BoundaryModeRows` of one DtN boundary.
+      index: The mode's position in `rows`.
+      dofs: The local indices of the boundary degrees of freedom in the
+        local vector of the solution: `rows.dofs` when the solution is the
+        potential itself, the shifted indices of the potential field in a
+        mixed solution otherwise (`gadopt.dtn_coupled.monolithic_rows`).
+      comm: The communicator of the sum over ranks.
+    """
+
+    def __init__(self, rows, index, dofs, comm):
         self.values = rows.rows[index] * rows.recovery[index]
-        self.dofs = rows.dofs
+        self.dofs = dofs
         self.comm = comm
 
-    def local_dot(self, psi_local):
+    def local_dot(self, x_local):
+        """This rank's part of `u_k . x / (scale_k A_h)`."""
         if not self.values.size:
             return 0.0
-        return self.values @ psi_local[self.dofs]
+        return float(self.values @ np.asarray(x_local)[self.dofs])
 
     def scatter_into(self, target, scale):
+        """Add `scale * u_k / (scale_k A_h)` into the local array `target`."""
         if self.values.size:
             target[self.dofs] += scale * self.values
+
+
+def taped_mode_coefficients(solution, boundaries, mode_rows, dofs, comm):
+    """The trace coefficients of `solution`, `{bc_id: {key: AdjFloat}}`.
+
+    Each value is recorded as a `TraceCoefficientBlock` when annotation is
+    on, so it keeps its dependency on the solution. Off the tape it is the
+    same number with no block added, so a forward-only run pays nothing.
+
+    Args:
+      solution: The Function the coefficients are read from.
+      boundaries: The `(bc_id, ...)` pairs of the DtN boundaries.
+      mode_rows: One `BoundaryModeRows` per boundary.
+      dofs: One array per boundary, the local indices of its degrees of
+        freedom in the local vector of `solution` (see `ModeRow`).
+      comm: The communicator of the sums.
+
+    Raises:
+      RuntimeError: If the three sequences differ in length: they are paired
+        by position and a `zip` would hide the mismatch.
+    """
+    boundaries, mode_rows, dofs = list(boundaries), list(mode_rows), list(dofs)
+    if not len(boundaries) == len(mode_rows) == len(dofs):
+        raise RuntimeError(
+            f"{len(boundaries)} DtN boundaries against {len(mode_rows)} "
+            f"mode-row sets and {len(dofs)} row-index sets; these are paired "
+            "by position and a zip would hide the mismatch.")
+    local = TraceCoefficientBlock._local(solution)
+    tape = get_working_tape() if annotate_tape() else None
+    out = {}
+    for (bc_id, _), rows, indices in zip(boundaries, mode_rows, dofs):
+        out[bc_id] = {}
+        for index, key in enumerate(rows.keys):
+            row = ModeRow(rows, index, indices, comm)
+            value = AdjFloat(comm.allreduce(row.local_dot(local)))
+            if tape is not None:
+                tape.add_block(TraceCoefficientBlock(solution, row, value))
+            out[bc_id][key] = value
+    return out
 
 
 def _accumulate(total, contribution):
@@ -360,33 +438,14 @@ def annotate_lowrank_solve(solver):
 
 
 def taped_trace_coefficients(solver):
-    """`{bc_id: {key: AdjFloat}}`, differentiable when annotation is on.
+    """`{bc_id: {key: AdjFloat}}` of a low-rank `GravitySolver`, differentiable.
 
-    Reading the coefficients off `psi.dat.data_ro` and returning `float()`
-    severs the tape by construction - it is the same sever that
-    `test_coefficient_float_severs_tape` documents as a defect on the
-    multiplier path. The trace spectrum *is* the geoid, which is the observable
-    an inversion of this solver most often targets, so on a path justified by
-    inversions it has to be differentiable.
-
-    The recovery weight comes from `rows.recovery`, the same array the forward
-    value uses, so the `1/(scale_k * A_h)` denominator exists in exactly one
-    place and cannot drift between the value and its derivative.
+    The potential is the whole solution there, so each row indexes the
+    potential space directly (`taped_mode_coefficients`).
     """
-    out = {}
-    comm = solver.mesh.comm
-    psi = solver.mixed_solution
-    psi_local = np.asarray(psi.dat.data_ro, dtype=float)
-    tape = get_working_tape() if annotate_tape() else None
-    for (bc_id, _), rows in zip(solver.dtn_boundaries, solver.mode_rows):
-        out[bc_id] = {}
-        for index, key in enumerate(rows.keys):
-            row = _SingleModeRow(rows, index, comm)
-            value = AdjFloat(comm.allreduce(float(row.local_dot(psi_local))))
-            if tape is not None:
-                tape.add_block(TraceCoefficientBlock(psi, row, value))
-            out[bc_id][key] = value
-    return out
+    return taped_mode_coefficients(
+        solver.mixed_solution, solver.dtn_boundaries, solver.mode_rows,
+        [rows.dofs for rows in solver.mode_rows], solver.mesh.comm)
 
 
 def _rhs_dependencies(solver):

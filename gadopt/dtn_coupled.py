@@ -28,13 +28,11 @@ cannot be corrected at replay time.
 """
 
 import numpy as np
-from firedrake import Cofunction
 from firedrake.petsc import PETSc
 from firedrake.matrix_free.operators import ImplicitMatrixContext
-from pyadjoint import Block, AdjFloat, annotate_tape, get_working_tape, no_annotations
 
 __all__ = ["AugmentedImplicitMatrixContext", "CoupledLowRankDtN",
-           "CoupledTraceCoefficientBlock", "install_augmented_context",
+           "install_augmented_context",
            "monolithic_rows", "psi_local_offset",
            "taped_coupled_trace_coefficients"]
 
@@ -341,132 +339,16 @@ def install_augmented_context(Jmat, dtn_operator):
     return True
 
 
-class _CoupledModeRow:
-    """One mode's boundary functional, indexed into the MONOLITHIC mixed vector.
-
-    The scalar solver's `_SingleModeRow` indexes the potential space, which is
-    the whole unknown there. Here the potential is one field of a mixed space,
-    so the same values sit at `monolithic_rows` instead.
-
-    **The recovery weight comes from `rows.recovery`, the same array the
-    forward value uses**, so the `1 / (scale_k * A_h)` denominator exists in
-    exactly one place and cannot drift between the value and its derivative.
-    That is the detail `gadopt.dtn_adjoint` insists on and it is inherited
-    here rather than re-derived.
-    """
-
-    def __init__(self, rows, index, mono, comm):
-        self.values = rows.rows[index] * rows.recovery[index]
-        self.dofs = mono
-        self.comm = comm
-
-    def local_dot(self, x_local):
-        if not self.values.size:
-            return 0.0
-        return float(self.values @ np.asarray(x_local)[self.dofs])
-
-    def scatter_into(self, target, scale):
-        if self.values.size:
-            target[self.dofs] += scale * self.values
-
-
-class CoupledTraceCoefficientBlock(Block):
-    """One trace coefficient `c_k = u_k . psi / (scale_k A_h)`, on the tape.
-
-    The coupled twin of `gadopt.dtn_adjoint.TraceCoefficientBlock`. The maths is
-    that module's and is not re-derived: `c_k` is a linear functional of the
-    potential with a constant vector, so the adjoint of a scalar seed `c_bar` is
-    `c_bar * u_k / (scale_k A_h)` as a cofunction, and the Hessian is the same
-    map applied to the second-order seed because the functional is linear.
-
-    **Why this exists at all.** Reading the trace off `dat.data_ro` and
-    returning `float()` severs the tape by construction - the same sever
-    `test_coefficient_float_severs_tape` documents as a defect on the
-    multiplier path. `geoid()` depends on `coefficients()` and B5 reports
-    `N(0)` and `N(180)` through it, so on the low-rank path the method would
-    return correct values with a gradient of exactly zero: a different silent
-    failure on the same method, one layer down from the truncating `zip`.
-
-    The only difference from the scalar version is the indexing. The dependency
-    is the **mixed** solution, the cofunction lives in the mixed dual space, and
-    the rows are monolithic, so `dat.data_ro` cannot be used - a mixed `Dat`
-    returns a tuple of arrays. The monolithic local vector is taken through
-    `dat.vec_ro`.
-    """
-
-    def __init__(self, solution, row, value):
-        super().__init__()
-        self.function_space = solution.function_space()
-        self.row = row
-        self.add_dependency(solution)
-        self.add_output(value.create_block_variable())
-
-    def __str__(self):
-        return "CoupledTraceCoefficientBlock"
-
-    @staticmethod
-    def _local(function):
-        with function.dat.vec_ro as vec:
-            return np.array(vec.array_r, dtype=float)
-
-    @no_annotations
-    def recompute_component(self, inputs, block_variable, idx, prepared):
-        local = self.row.local_dot(self._local(inputs[0]))
-        return self.row.comm.allreduce(local)
-
-    def _seeded_cofunction(self, seed):
-        out = Cofunction(self.function_space.dual())
-        with out.dat.vec_rw as vec:
-            self.row.scatter_into(vec.array_w, float(seed))
-        return out
-
-    def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx,
-                               prepared=None):
-        seed = adj_inputs[0]
-        return None if seed is None else self._seeded_cofunction(seed)
-
-    def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable, idx,
-                               prepared=None):
-        perturbation = tlm_inputs[0]
-        if perturbation is None:
-            return None
-        return self.row.comm.allreduce(
-            self.row.local_dot(self._local(perturbation)))
-
-    def evaluate_hessian_component(self, inputs, hessian_inputs, adj_inputs,
-                                   block_variable, idx, relevant_dependencies,
-                                   prepared=None):
-        seed = hessian_inputs[0]
-        return None if seed is None else self._seeded_cofunction(seed)
-
-
 def taped_coupled_trace_coefficients(solver):
     """`{bc_id: {key: AdjFloat}}` for the coupled low-rank path, differentiable.
 
-    The port of `gadopt.dtn_adjoint.taped_trace_coefficients`. Off the tape -
-    annotation disabled - it returns the same numbers with no blocks added, so
-    a forward-only run pays nothing.
+    The potential is one field of the mixed solution, so each row indexes
+    the monolithic local vector (`CoupledLowRankDtN.rows_mono`). The block
+    and the rows are those of `GravitySolver`
+    (`gadopt.dtn_adjoint.taped_mode_coefficients`).
     """
+    from .dtn_adjoint import taped_mode_coefficients
     operator = solver.dtn_operator
-    local = CoupledTraceCoefficientBlock._local(solver.solution)
-    tape = get_working_tape() if annotate_tape() else None
-    boundaries = solver.form.dtn_boundaries
-    if not (len(boundaries) == len(operator.mode_rows)
-            == len(operator.rows_mono)):
-        raise RuntimeError(
-            f"{len(boundaries)} DtN boundaries against "
-            f"{len(operator.mode_rows)} mode-row sets and "
-            f"{len(operator.rows_mono)} row-index sets; these are paired by "
-            "position and a zip would hide the mismatch.")
-    out = {}
-    for (bc_id, _), rows, mono in zip(boundaries, operator.mode_rows,
-                                      operator.rows_mono):
-        out[bc_id] = {}
-        for index, key in enumerate(rows.keys):
-            row = _CoupledModeRow(rows, index, mono, operator.comm)
-            value = AdjFloat(operator.comm.allreduce(row.local_dot(local)))
-            if tape is not None:
-                tape.add_block(
-                    CoupledTraceCoefficientBlock(solver.solution, row, value))
-            out[bc_id][key] = value
-    return out
+    return taped_mode_coefficients(
+        solver.solution, solver.form.dtn_boundaries, operator.mode_rows,
+        operator.rows_mono, operator.comm)
