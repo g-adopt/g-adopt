@@ -17,6 +17,7 @@ process (one rank alone works on `COMM_SELF`). `CheckpointField.save`
 stores the quadrature point coordinates and `load` pairs the values by
 position; a file without the coordinates is refused on another number of
 ranks; on the writer's number of ranks the values come back bit for bit.
+A parent and a submesh of one mesh name keep a point set each.
 """
 from pathlib import Path
 
@@ -282,6 +283,48 @@ def test_a_file_without_point_coordinates_is_refused_on_another_number_of_ranks(
         on_rank_zero(read_file, path, MPI.COMM_SELF)
     _, exact = read_file(path, comm)
     assert exact
+
+
+def test_a_parent_and_a_submesh_of_one_name_keep_their_own_points(tmp_path):
+    """Each Quadrature field of a file is read with the points of its own mesh.
+
+    The parent and the submesh carry one mesh name here, as a parent and a
+    submesh do when each is curved by `Mesh(coordinate_function)`
+    (`gia_solver_cases.annulus_meshes`). Their Quadrature fields of one rule
+    are written to one file, the submesh field first, and read back on the
+    writer's partition; both must come back bit for bit. This needs a
+    stored point set per field: the points of the submesh cover the submesh
+    cells only, so a parent field paired with them is refused, and a
+    submesh field paired with the points of the parent depends on both
+    meshes ordering the points of a shared cell in the same way.
+    """
+    comm = MPI.COMM_WORLD
+    path = shared_directory(tmp_path) / "one_mesh_name.h5"
+
+    def named_submesh(labelled):
+        """The submesh of `labelled`, given the parent's mesh name."""
+        return fd.Submesh(labelled, labelled.topological_dimension, SUBMESH_TAG,
+                          name=labelled.name)
+
+    labelled, _ = parent_and_submesh(comm, split_by_rank=False)
+    sub = named_submesh(labelled)
+    assert sub.name == labelled.name
+    with fd.CheckpointFile(str(path), "w", comm=comm) as chk:
+        chk.save_mesh(labelled)
+        # The submesh field first: its point set is the one a key by mesh
+        # name and rule would keep for both fields.
+        for label, mesh in (("submesh", sub), ("parent", labelled)):
+            field = fields_on(mesh)["scalar"]
+            CheckpointField(f"{label}_scalar", field, labelled).save(chk)
+    with fd.CheckpointFile(str(path), "r", comm=comm) as chk:
+        labelled = chk.load_mesh(fd.mesh.DEFAULT_MESH_NAME)
+        sub = named_submesh(labelled)
+        for label, mesh in (("submesh", sub), ("parent", labelled)):
+            reference = fields_on(mesh)["scalar"]
+            field = fd.Function(reference.function_space())
+            CheckpointField(f"{label}_scalar", field, labelled).load(chk)
+            same = np.array_equal(field.dat.data_ro, reference.dat.data_ro)
+            assert comm.allreduce(bool(same), op=MPI.LAND), label
 
 
 def test_a_point_without_a_match_is_refused():

@@ -23,7 +23,7 @@ another number of ranks, or with other `distribution_parameters` or
 DG0 vector to the right cell, but the values inside it come back permuted.
 
 `save` therefore also stores the physical coordinates of the quadrature
-points, once per file and per quadrature space, in the same encoding. `load`
+points, once per file and per stored field, in the same encoding. `load`
 pairs each local point of a cell with the stored point of the same cell at
 the same position, and copies the values in that order. The pairing accepts
 a distance of at most `MATCH_TOLERANCE` times the cell size and refuses
@@ -69,22 +69,27 @@ MATCH_TOLERANCE = 1e-6
 MATCH_CHUNK = 4096
 
 
-def quadrature_points_name(space) -> str:
-    """The stored name of the point coordinates of a quadrature space.
+def quadrature_points_name(name: str) -> str:
+    """The stored name of the point coordinates of the stored field `name`.
 
-    The coordinates depend on the mesh and on the quadrature rule (degree
-    and scheme), not on the value shape, so a scalar and a tensor history
-    of one rule on one mesh share one stored set.
+    Each Quadrature field has its own stored point set, keyed by the name
+    of the field. A key built from the mesh and the rule would not be
+    unique: a parent and a submesh can carry one mesh name (both are
+    `firedrake_default` when each is curved by `Mesh(coordinate_function)`,
+    as the GIA tests and drivers do), and their point sets of one rule
+    differ. A point set per field also comes from
+    the same encoding as the values of that field, so the pairing of
+    `load` does not depend on two meshes ordering the points of a shared
+    cell in the same way. The cost is one coordinate vector per point and
+    per Quadrature field, which is small against a tensor history.
 
     Args:
-      space: a function space of a Quadrature element.
+      name: the name of the stored field, as given to `CheckpointField`.
 
     Returns:
-      A name that is unique in a checkpoint file for each mesh name and rule.
+      The name of the stored point set of that field.
     """
-    element = _scalar_element(space.ufl_element())
-    return (f"gadopt_quadrature_points_{space.mesh().name}_"
-            f"{element.degree()}_{element.quadrature_scheme()}")
+    return f"gadopt_quadrature_points_{name}"
 
 
 def _scalar_element(element):
@@ -226,7 +231,7 @@ class CheckpointField:
             self.width = self.nodes.shape[1]*space.block_size
             self.local = fd.Function(fd.VectorFunctionSpace(space.mesh(), "DG", 0, dim=self.width))
             self.local_nodes = self.local.function_space().cell_node_list[:self.cells, 0]
-            self.points_name = quadrature_points_name(space)
+            self.points_name = quadrature_points_name(name)
             element = self.local.ufl_element()
         elif space.mesh() is not parent and self.broken:
             element = BrokenElement(space.ufl_element())
@@ -280,7 +285,7 @@ class CheckpointField:
 
         The encoding of `encode`, applied to the coordinates, so that the
         stored point `j` of a cell is where the stored value `j` of the cell
-        sits. Named `quadrature_points_name` of the field's space.
+        sits. Named `quadrature_points_name(name)`.
         """
         if not self.quadrature:
             raise ValueError(f"{self.name!r} is not a Quadrature field; it has "
@@ -379,7 +384,7 @@ class CheckpointField:
         """Store the field in an open `CheckpointFile`, with its point coordinates.
 
         For a Quadrature field the point coordinates are stored once per
-        file and quadrature space (without a timestepping index), and the
+        file and field name (without a timestepping index), and the
         number of ranks of the writer is recorded, so that `load` reads the
         field on any partition.
 

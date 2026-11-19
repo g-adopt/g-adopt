@@ -314,9 +314,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
       dtn_alpha: the Robin shift of the DtN form, `None` for its default.
       gravity_bcs: the potential's conditions (`"dtn"`, `"psi"`, `"flux"`).
       bcs: the displacement conditions (`"u"`, `"un"`, `"normal_stress"`,
-        ...), as for the other G-ADOPT momentum solvers. A `Real` Function
-        in a weak condition must be a Function of the mechanics mesh; one of
-        the parent is refused (`_refuse_parent_reals_on_mechanics_facets`).
+        ...), as for the other G-ADOPT momentum solvers. A Function in a
+        weak condition or a `normal_stress` must be a Function of the
+        mechanics mesh; one of the parent is refused
+        (`_refuse_parent_coefficients_on_mechanics_facets`).
       couplings: a list of `gadopt.gia_couplings.Coupling` objects.
       dtn_representation: `"lowrank"` (default; the DtN modes are a rank-n
         update and the space does not grow with the truncation) or
@@ -344,10 +345,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
       scaling_factor: `c`, a factor of the whole momentum residual. Like
         `approximation.B_mu` and `approximation.self_gravity_number`, which
         scale whole rows too, it is a number, a `Constant` or a Function of
-        the potential's (parent) mesh; another mesh is refused. A `Real`
-        `scaling_factor` cannot be used together with a weak displacement
-        condition or a `normal_stress` in `bcs`
-        (`_refuse_parent_reals_on_mechanics_facets`).
+        the potential's (parent) mesh; another mesh is refused. A
+        `scaling_factor` that is a Function cannot be used together with a
+        weak displacement condition or a `normal_stress` in `bcs`
+        (`_refuse_parent_coefficients_on_mechanics_facets`).
       solver_parameters: `None` (direct in 2-D, iterative in 3-D),
         `"direct"`, `"iterative"`, or a complete dictionary.
       preset_options: arguments of
@@ -655,7 +656,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             unknowns.append(self.solution_split[1])
         F = sum(eq.residual(sol) for eq, sol in zip(self.equations, unknowns, strict=True))
         self._mechanics_form = F
-        self._refuse_parent_reals_on_mechanics_facets(F)
+        self._refuse_parent_coefficients_on_mechanics_facets(F)
         multipliers = [(self.solution_split[i], self.tests[i])
                        for i in self.multiplier_indices]
         F += self.gravity.residual(
@@ -706,33 +707,46 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                     "Function of the parent mesh, for example "
                     "Function(FunctionSpace(psi_mesh, 'R', 0)).")
 
-    def _refuse_parent_reals_on_mechanics_facets(self, mechanics_form) -> None:
-        """Refuse a `Real` Function of the parent in a facet term of the momentum equation.
+    def _refuse_parent_coefficients_on_mechanics_facets(self, mechanics_form) -> None:
+        """Refuse a Function of the parent in a facet term of the momentum equation.
 
         The momentum equation pairs its exterior facets with the parent's
         cells (`Equation` with `intersect_measures`), because it cannot know
-        which of its boundaries are interior facets of the parent. On that
-        pairing Firedrake assembles the derivative with respect to a `Real`
-        Function of the parent twice in the adjoint and once in the tangent
-        (measured: an adjoint pairing of 2.000 times the tangent pairing for
-        a `normal_stress` in `bcs`). The residual and the tangent are right,
-        so a gradient through that coefficient would be wrong with no error.
-        The same value as a `Real` Function of the mechanics mesh has no
-        such pairing and is exact. Volume terms on the parent's cells are
-        exact too, and so are the coupling rows, which use the facet-to-facet
-        measure (`CouplingContext.surface_measure`). Only a boundary that is
-        an interior facet of the parent is affected; the check refuses the
-        coefficient on every boundary, because the form does not say which
-        boundary is which.
+        which of its boundaries are interior facets of the parent. On such a
+        facet the residual and the tangent of a coefficient of the parent
+        are right, and Firedrake's adjoint of that coefficient is wrong for
+        every element measured on the 2-D annulus and the unit square, on 1
+        and 2 ranks:
+
+        - `Real` and scalar DG0: the adjoint is assembled on both parent
+          cells of the facet. For a `Real` the adjoint pairing is 2.000
+          times the tangent pairing; for DG0 the cell outside the mechanics
+          mesh gets a contribution too (a ratio of 1.88 to 2.0, depending on
+          the direction).
+        - CG1, CG2, DG1, DG2 and vector DG0: the adjoint changes from one
+          assembly to the next. Mostly by a denormal number, sometimes by
+          1e100 or more; the values of the cell outside the mechanics mesh
+          are read without being set.
+
+        A gradient through such a coefficient is wrong with no error. The
+        same field as a Function of the mechanics mesh has no such pairing
+        and is exact. Volume terms on the parent's cells are exact and
+        repeatable for every element, and so are the coupling rows, which
+        use the facet-to-facet measure (`CouplingContext.surface_measure`).
+        Only a boundary that is an interior facet of the parent is affected;
+        the check refuses the coefficient on every boundary, because the
+        form does not say which boundary is which.
 
         A row scaling cannot move to the mechanics mesh
-        (`_check_row_scaling_meshes`), so a `Real` `scaling_factor` is
-        refused here together with a weak displacement condition or a
-        `normal_stress`, which are the terms that put it on such a facet.
+        (`_check_row_scaling_meshes`), so a `scaling_factor` that is a
+        Function is refused here together with a weak displacement condition
+        or a `normal_stress`, which are the terms that put it on such a
+        facet.
 
         This check reads the coefficients of the form and changes nothing.
-        It can go once Firedrake assembles the adjoint of a parent `Real`
-        on such a facet once, as it does in the tangent.
+        It can go once Firedrake assembles the adjoint of a parent
+        coefficient on such a facet from the mechanics side only, as it does
+        in the tangent.
 
         Args:
           mechanics_form: the residual of the momentum (and DG history)
@@ -747,29 +761,40 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             for coefficient in extract_coefficients(integral.integrand()):
                 if not isinstance(coefficient, Function):
                     continue
-                space = coefficient.function_space()
-                if (space.mesh() is self.potential_mesh
-                        and coefficient.ufl_element().family() == "Real"):
-                    if coefficient is self.scaling_factor:
-                        advice = (
-                            "scaling_factor must live on the parent mesh "
-                            "(it scales the potential rows too), so a Real "
-                            "scaling_factor cannot be used with a weak "
-                            "displacement condition or a normal_stress in "
-                            "bcs; give it as a number or a Constant")
-                    else:
-                        advice = (
-                            "define it as a Real Function of the mechanics "
-                            "mesh, Function(FunctionSpace(u_mesh, 'R', 0)), "
-                            "which gives the same residual and an exact "
-                            "derivative")
-                    raise ValueError(
-                        f"The Real Function {coefficient.name()!r} of the "
-                        "potential's (parent) mesh appears in a boundary term "
-                        "of the momentum equation (a weak displacement "
-                        "condition or a normal_stress in bcs). Firedrake "
-                        "assembles its adjoint twice on that boundary, so a "
-                        f"gradient with respect to it would be wrong; {advice}.")
+                if coefficient.function_space().mesh() is not self.potential_mesh:
+                    continue
+                real = coefficient.ufl_element().family() == "Real"
+                # How the messages name the coefficient's kind.
+                kind = "Real" if real else "Function"
+                noun = "Real Function" if real else "Function"
+                if coefficient is self.scaling_factor:
+                    advice = (
+                        "scaling_factor must live on the parent mesh "
+                        f"(it scales the potential rows too), so a {kind} "
+                        "scaling_factor cannot be used with a weak "
+                        "displacement condition or a normal_stress in "
+                        "bcs; give it as a number or a Constant")
+                elif real:
+                    advice = (
+                        "define it as a Real Function of the mechanics "
+                        "mesh, Function(FunctionSpace(u_mesh, 'R', 0)), "
+                        "which gives the same residual and an exact "
+                        "derivative")
+                else:
+                    advice = (
+                        "define it as a Function of the mechanics mesh "
+                        "(the same element on u's mesh, for example by "
+                        "interpolating the expression there), which gives "
+                        "the same residual and an exact derivative")
+                raise ValueError(
+                    f"The {noun} {coefficient.name()!r} of the potential's "
+                    "(parent) mesh appears in a boundary term of the "
+                    "momentum equation (a weak displacement condition or a "
+                    "normal_stress in bcs). Firedrake assembles its adjoint "
+                    "wrongly on a boundary that is an interior facet of the "
+                    "parent (twice for a Real or DG0 field, from unset "
+                    "values for other elements), so a gradient with respect "
+                    f"to it would be wrong; {advice}.")
 
     def _detect_solution_dependence(self) -> None:
         """Decide from the forms whether the Jacobian moves inside one solve.

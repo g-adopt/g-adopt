@@ -1102,24 +1102,47 @@ def test_a_coupling_parameter_can_be_a_real_function_on_either_mesh(
     assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
 
 
-def _adjoint_and_tangent(solver, real):
-    """The tangent and adjoint pairings of `dF/dm` for the `Real` Function `m`.
+def _adjoint_and_tangent(solver, parameter):
+    """The tangent and adjoint pairings of `dF/dm` for the Function `m`.
 
     At a fixed coordinate-defined state, `w . (dF/dm dm)` and
-    `((dF/dm)^T w) dm` with `dm = 1` and a coordinate-defined `w`. The two
-    agree when the derivative is assembled right.
+    `((dF/dm)^T w) . dm` with `dm = 1` in every degree of freedom of `m`'s
+    space (a `Real` or a field) and a coordinate-defined `w`. The two agree
+    when the derivative is assembled right.
     """
     C.write_state(solver, C.coordinate_state(solver), previous_dt=None)
-    dF = fd.derivative(solver.F, real)
-    dm = fd.Function(real.function_space()).assign(1.0)
+    dF = fd.derivative(solver.F, parameter)
+    dm = fd.Function(parameter.function_space()).assign(1.0)
     w = C.coordinate_mixed_function(solver, "adjoint", 1.0)
     tangent = fd.assemble(fd.action(dF, dm))
     adjoint = fd.assemble(fd.action(fd.adjoint(dF), w))
     with tangent.dat.vec_ro as t, w.dat.vec_ro as wv:
         forward_pairing = t.dot(wv)
-    with adjoint.dat.vec_ro as a:
-        adjoint_pairing = a.sum()
+    with adjoint.dat.vec_ro as a, dm.dat.vec_ro as d:
+        adjoint_pairing = a.dot(d)
     return forward_pairing, adjoint_pairing
+
+
+def _normal_stress_solver(meshes, factor):
+    """A fluid-core solver whose surface load is `factor` times a fixed shape.
+
+    The load stands in a `normal_stress` of `bcs`, a boundary term of the
+    momentum equation on the surface, which is an interior facet of the
+    parent annulus.
+    """
+    parent, sub = meshes
+    X = fd.SpatialCoordinate(sub)
+    shape = 1e-3 * (1 + fd.cos(fd.atan2(X[1], X[0])))
+    with pytest.warns(UserWarning, match="normal_stress"):
+        solver = NewSolver(
+            fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
+            fd.Function(fd.FunctionSpace(parent, "CG", 2)),
+            C.approximation(Case(core="fluid")), dt=C.dt_function(sub),
+            gravity_bcs=C.gravity_bcs(parent),
+            bcs={C.CURVE_RE: {"normal_stress": factor * shape}},
+            couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
+            dtn_representation="multiplier", solver_parameters="direct")
+    return solver
 
 
 def test_a_parent_real_in_a_momentum_boundary_term_is_refused(meshes):
@@ -1133,27 +1156,38 @@ def test_a_parent_real_in_a_momentum_boundary_term_is_refused(meshes):
     adjoint pairings agree.
     """
     parent, sub = meshes
-    X = fd.SpatialCoordinate(sub)
-    shape = 1e-3 * (1 + fd.cos(fd.atan2(X[1], X[0])))
-
-    def build(factor):
-        with pytest.warns(UserWarning, match="normal_stress"):
-            solver = NewSolver(
-                fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
-                fd.Function(fd.FunctionSpace(parent, "CG", 2)),
-                C.approximation(Case(core="fluid")), dt=C.dt_function(sub),
-                gravity_bcs=C.gravity_bcs(parent),
-                bcs={C.CURVE_RE: {"normal_stress": factor * shape}},
-                couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-                dtn_representation="multiplier", solver_parameters="direct")
-        return solver
-
     on_parent = fd.Function(fd.FunctionSpace(parent, "R", 0), name="load_factor")
     on_parent.assign(1.0)
     with pytest.raises(ValueError, match="'load_factor'.*mechanics mesh"):
-        build(on_parent)
+        _normal_stress_solver(meshes, on_parent)
     on_mechanics = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0)
-    forward_pairing, adjoint_pairing = _adjoint_and_tangent(build(on_mechanics), on_mechanics)
+    forward_pairing, adjoint_pairing = _adjoint_and_tangent(
+        _normal_stress_solver(meshes, on_mechanics), on_mechanics)
+    assert abs(forward_pairing) > 0
+    assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
+
+
+@pytest.mark.parametrize("family,degree", [("DG", 0), ("CG", 1)])
+def test_a_parent_field_in_a_momentum_boundary_term_is_refused(meshes, family, degree):
+    """A polynomial field of the parent in a `normal_stress` in `bcs` is refused.
+
+    On a boundary that is an interior facet of the parent, Firedrake's
+    adjoint of a parent DG0 field is assembled on both parent cells of the
+    facet (a pairing near 2 times the tangent's), and that of a CG1 field
+    changes from one assembly to the next. The solver refuses both and
+    names the field. A DG0 field of the mechanics mesh is accepted, and
+    its tangent and adjoint pairings agree.
+    """
+    parent, sub = meshes
+    on_parent = fd.Function(fd.FunctionSpace(parent, family, degree), name="load_field")
+    on_parent.assign(1.0)
+    with pytest.raises(ValueError, match="Function 'load_field'.*Function of the mechanics mesh"):
+        _normal_stress_solver(meshes, on_parent)
+    if family != "DG":
+        return
+    on_mechanics = fd.Function(fd.FunctionSpace(sub, family, degree)).assign(1.0)
+    forward_pairing, adjoint_pairing = _adjoint_and_tangent(
+        _normal_stress_solver(meshes, on_mechanics), on_mechanics)
     assert abs(forward_pairing) > 0
     assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
 
@@ -1188,6 +1222,7 @@ def test_a_real_scaling_factor_lives_on_the_parent_without_weak_conditions(meshe
     dt = fd.Function(fd.FunctionSpace(parent, "R", 0)).assign(C.DT0)
     solver, _, _ = C.build_new(meshes, Case(core="rigid", load="surface"), dt=dt)
     forward_pairing, adjoint_pairing = _adjoint_and_tangent(solver, dt)
+    assert abs(forward_pairing) > 0
     assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
 
 
