@@ -537,6 +537,7 @@ class KrylovRecorder:
             "at_cap": bool(iterations >= record["max_it"]
                            or reason == PETSc.KSP.ConvergedReason.DIVERGED_MAX_IT),
             "step_norm": PETSC_LIBRARY.step_norm(ksp),
+            "step_norm_metric": self._metric_step_norm(ksp, x),
             "residual_norms": current["rnorm"],
         })
         ritz = (lanczos_ritz_values(current["rz"], current["z"], current["d"], self.comm)
@@ -553,6 +554,38 @@ class KrylovRecorder:
         self.solves.append(record)
 
     # -- helpers -------------------------------------------------------------------
+
+    def _metric_step_norm(self, ksp, x):
+        """``sqrt(s^T A s)`` of the Krylov solution ``s``, with ``A`` the metric.
+
+        ``step_norm`` is STCG's norm of the same step. With the default
+        ``-ksp_cg_dtype unpreconditioned`` (``stcg.c:640``) that is the Euclidean
+        norm of the nodal values, which depends on the mesh, and the trust radius
+        is measured in it. This value is the length of the same step in the metric
+        of the control, for comparison only; nothing in the solver uses it.
+
+        The preconditioning matrix of the solve applies ``Z^T A Z`` on the inactive
+        set (``riesz_hessian.MaskedInnerProductMat``) or ``A`` when no bound is
+        active, so ``s^T (P s)`` is the metric norm squared of the step expanded
+        with zeros on the active set. The product goes into a vector of its own,
+        and the work vectors of the context are rewritten in full by every later
+        use, so the solve is the same with or without this value.
+
+        Returns:
+            float, or None when the preconditioning matrix is not a Python matrix
+            of ``riesz_hessian.py``.
+        """
+        _, pmat = ksp.getOperators()
+        if pmat.getType() != PETSc.Mat.Type.PYTHON:
+            return None
+        context = pmat.getPythonContext()
+        if not hasattr(context, "apply_riesz"):
+            return None
+        As = x.duplicate()
+        pmat.mult(x, As)
+        value = x.dot(As)
+        As.destroy()
+        return float(np.sqrt(max(value, 0.0)))
 
     def _negative_curvature(self, record):
         """The curvature of the last direction of a negative-curvature solve.
