@@ -17,14 +17,13 @@ form that removes those unknowns. Both forms pass the 2-D monopole test.
 `gadopt/spherical_harmonics.py` evaluates real orthonormal spherical harmonics
 by recursion. A parallel scaling study is in `tests/parallel_scaling_gravity/`.
 
-**The self-gravitating GIA solver.** `gadopt/gia_gravity.py` provides
-`SelfGravitatingGIASolver`. It solves displacement, the internal variable, the
+**The self-gravitating GIA solver.** `gadopt/gia_solver.py` provides
+`SelfGravitatingGIASolver`, with the couplings in `gadopt/gia_couplings.py`. It solves displacement, the internal variable, the
 potential, the fluid-core pressure, and the rotation scalars in one mixed
 space. The exterior condition enters in one of two representations,
 `dtn_representation="multiplier"` (one `Real` unknown for each spherical
 harmonic mode) or `"lowrank"` (a rank-k update on the potential rows, no
-multiplier unknowns). The default is low-rank on the full layout and
-multiplier on the condensed layout (`resolve_dtn_representation`); on the
+multiplier unknowns). The default is low-rank on both history families; on the
 3-D Spada benchmark the low-rank arm gives the same state as the multiplier
 arm at every truncation, at 0.69 of the warm step, with a setup that does
 not grow with the truncation. `DtNTwoBlockSchurPC` preconditions the system,

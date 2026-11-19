@@ -930,7 +930,7 @@ class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
 
 
 def test_the_tolerance_ladder_of_the_phase_3_spike_is_untouched():
-    """`demos/gravity/spikes/spike_phase3d.py:394`, call for call.
+    """The tolerance ladder of the Phase-3 driver, call for call.
 
     That driver sweeps `block0_rtol` down to 1e-2 and names
     `multiplier_pc="none"` so that the preset refuses nothing and every rung

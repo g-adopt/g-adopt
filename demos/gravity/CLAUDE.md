@@ -410,14 +410,14 @@ records their numbers and §9.6 records what they do not establish.
 
     gadopt/dtn_form.py                        DtNGravityForm, the boundary
                                               treatment as a reusable form
-    gadopt/gia_gravity.py                     self_gravitating_gia_space,
-                                              SelfGravitatingGIASolver,
-                                              rigid_rotation_nullspace
+    gadopt/gia_solver.py                      SelfGravitatingGIASolver
+    gadopt/gia_couplings.py                   FluidCore, Rotation, CentreOfMass,
+                                              SeaLevel, SurfaceLoad
+    gadopt/gia_presets.py                     the solver presets
     demos/gravity/generate_selfgrav_annulus.py   the four-region parent mesh
     demos/gravity/validate_selfgrav_annulus.py   its acceptance gate, and
                                               `curve_mesh`
     demos/gravity/selfgrav_gia_annulus.py     the driver
-    demos/gravity/spikes/gate_*.py            the verification gates
     tests/unit/test_gia_gravity.py            37 structural tests
     tests/unit/test_dtn_form.py               the extraction's own tests
     tests/unit/test_self_gravity_terms.py     the two body-force terms
@@ -481,9 +481,9 @@ The verified relaxation, on the coarse mesh in about forty seconds:
 reaching Airy isostasy `zeta = -sigma_hat/rho_0` in 187 steps, −9.9955e-04
 against −1.0e-03.
 
-The gates are separate scripts in `demos/gravity/spikes/`, not in the driver:
-`gate_v1.py`, `gate_v2.py`, `gate_v3prime.py`, `gate_v7.py`, `gate_v8.py`,
-`gate_v9.py`. Each states its expected numbers before it runs them.
+The verification of the solver is in the unit tests
+(`tests/unit/test_gia_solver*.py` and the files that build the solver), not in
+the driver.
 
 ## The traps
 

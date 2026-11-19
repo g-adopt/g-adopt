@@ -31,7 +31,6 @@ solver that way and return `(solver, u, psi)`.
 """
 
 import tempfile
-import types
 from pathlib import Path
 
 import firedrake as fd
@@ -1332,11 +1331,11 @@ class TestBlockOneIsTheDiagonalItClaims:
        noise: the rotation row divides by a separately assembled mantle
        volume, so its diagonal carries the ratio of two assemblies of the same
        integral under different quadrature rules. At production size the ratio
-       is much further from 1 - `gate_phase1_diagonal_3d.py` measures
-       **8.8775e-11** on the coarse Spada mesh, against 1.2735e-15 for the 72
-       multiplier rows there - so **`DIAG_TOL` at 1e-12 holds on these meshes
-       and does not hold at scale.** Read that gate's `ROT_DIAG_TOL` before
-       concluding anything about the rotation rows from this file.
+       is much further from 1: the rotation row measured **8.8775e-11** on
+       the coarse Spada mesh, against 1.2735e-15 for the 72 multiplier rows
+       there - so **`DIAG_TOL` at 1e-12 holds on these meshes and does not
+       hold at scale.** A bound on the rotation rows at production size must
+       be looser than `DIAG_TOL`.
     2. **The off-diagonals.** In serial, exactly 0.0, bit zero, not 1e-16 -
        TSFC emits no kernel for a term the form does not contain. That makes
        the assertion vacuous on its own, which is why (3) exists. On 2 ranks it
@@ -1760,40 +1759,6 @@ class TestBlockOneInThreeDimensions:
             "the premise of this test: the diagonal cannot tell the modes "
             "apart, so if it suddenly can, read this docstring again")
         check_multiplier_alignment(solver, silent_tol=silent_tol)
-
-    def test_the_gate_scripts_copy_of_the_probe_agrees_with_this_one(self):
-        """The duplication in `gate_phase1_diagonal_3d.py`, closed by measurement.
-
-        That script reimplements `read_real_rows` and `real_block` rather than
-        importing them, because a demo reaching into `tests/` is the wrong
-        dependency direction and would make the production gate depend on the
-        test tree being importable on Gadi. The direction that *is* allowed is
-        this one, and without it "the two are pinned to agree" means somebody
-        read two numbers off two screens.
-
-        The script's `real_block` reads `real_fields` from a layout object;
-        the solver has no layout, so a namespace carrying the solver's
-        `real_indices` under that name stands in for it.
-
-        The case of 24 columns of two layers, so it costs a second, and it is
-        the same case the script's own `--selfcheck` runs.
-        """
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[2]
-                               / "demos" / "gravity" / "spikes"))
-        import gate_phase1_diagonal_3d as gate
-
-        solver, _, _ = self.build()
-        mine = real_block(solver)
-        layout = types.SimpleNamespace(real_fields=solver.real_indices)
-        theirs = gate.real_block(solver, solver.solution, layout)
-        assert np.abs(mine - theirs).max() == 0.0, (
-            "the gate script's copy of the probe no longer agrees with this "
-            "file's; they have drifted and the production gate is measuring "
-            "something else")
-        # And the tolerances it gates on are this file's.
-        assert gate.DIAG_TOL == DIAG_TOL
-        assert gate.OFFDIAG_TOL == OFFDIAG_TOL
 
     def test_the_polar_pair_is_uncoupled_and_carries_C_minus_A(self):
         """The one thing 2-D cannot say, in three parts.
@@ -2443,10 +2408,7 @@ class TestRigidRotationNullspace:
 class TestFluidCore:
     """`FluidCore`: the CMB condition that replaces the rigid `un = 0`.
 
-    Structural only, as everything in this file is. The physics - the
-    contrast-zero cancellation, the sign of the CMB stiffness, its magnitude
-    against 1.744945, and the nullspace consequences - is
-    `demos/gravity/spikes/gate_fluidcore.py`.
+    Structural only, as everything in this file is.
     """
 
     #: The keywords of `build_fluid` that go to `FluidCore`; the rest go to
