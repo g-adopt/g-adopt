@@ -146,13 +146,27 @@ class InnerProductMat:
     def mult(self, A, x, y):
         """``y = A x``, with ``x`` a primal control vector and ``y`` a dual one.
 
-        The Newton shift is not part of this action, as ``shift`` says.
+        The Newton shift is not part of this action, as ``shift`` says. With
+        Dirichlet conditions in the inner product (``--prior-wall-bc dirichlet``)
+        the action is that of the operator the Riesz map inverts: ``A_ff x_f`` on
+        the free nodes and zero on the constrained ones, with the entries of ``x``
+        on the constrained nodes ignored. PETSc never calls this method for the
+        preconditioner, which applies only ``A^{-1}``. ``ShiftedHessianMat`` calls
+        it to add ``pert * A x`` to the Hessian action.
         """
         u = Function(self.control_space)
         self.vec_interface.from_petsc(x, u)
+        bcs = getattr(self.inner_product, "bcs", None) or []
+        for bc in bcs:
+            # Homogeneous conditions: the constrained entries of x take no part.
+            bc.zero(u)
         # ``form(u, v)`` with u a Function and v a TestFunction is a linear form, so
         # its assembly is the dual object A u.
         v = assemble(self.inner_product.form(u, TestFunction(self.control_space)))
+        for bc in bcs:
+            # Zero rows on the constrained nodes, so that A x lies in the range of
+            # the operator that the Riesz map inverts.
+            v.dat.data_wo_with_halos[bc.nodes] = 0.0
         self.vec_interface.to_petsc(y, v)
 
     def multHermitian(self, A, x, y):
@@ -314,6 +328,158 @@ class RieszPC:
         if viewer is None or viewer.getType() != PETSc.Viewer.Type.ASCII:
             return
         viewer.printfASCII("Riesz map of the control inner product\n")
+
+
+class ShiftedHessianMat:
+    """Python ``Mat`` context for the Hessian with BNK's shift taken in the metric.
+
+    BNK regularises an indefinite Hessian by ``MatShift(H, pert)``, which adds
+    ``pert * I`` in nodal coordinates, and it sizes ``pert`` from
+    ``gnorm = sqrt(g^T A^{-1} g)``, the norm of the gradient in the metric ``A`` of
+    the control (``TaoGradientNorm`` with pyadjoint's Riesz map as the gradient-norm
+    matrix). The nodal Hessian of a CG1 control scales like the mass matrix,
+    ``h^2``, while ``gnorm`` does not depend on the mesh, so ``pert * I`` is far
+    larger than the Hessian: 2100 times on smooth directions at 64 cells and
+    12000 times at 150 cells (step S2b of the box campaign). ``pert * A`` has the
+    scale that BNK's rule assumes: its size against ``H`` is ``pert`` against the
+    eigenvalues of ``A^{-1} H``, and both are mesh independent.
+
+    This context is installed as the Hessian of the TAO object, in place of
+    pyadjoint's ``ReducedFunctionalHessianMat``. Its action is
+
+        y = H x + pert * A x,
+
+    with ``H x`` from pyadjoint's Hessian matrix and ``A x`` from the same
+    ``InnerProductMat`` whose inverse is the Krylov preconditioner. The preconditioned
+    operator is then ``A^{-1} H + pert I``. With active bounds the preconditioner is
+    ``Z^T A^{-1} Z`` and the operator ``Z^T (H + pert A) Z``, so that identity holds
+    only approximately; the preconditioner stays symmetric positive definite.
+
+    ``shift`` SETS ``pert``. BNK calls ``MatShift`` once per Krylov solve with its
+    current ``pert``, and the bounded trust-region types (BNTR, BNTL) call it again
+    for a re-solve with the same Hessian, so a sum would count the shift twice.
+    ``update``, the Hessian callback of TAO, resets ``pert`` to zero, because BNK
+    makes no shift call at all for a solve with ``pert = 0``.
+
+    ``createSubMatrix`` returns a ``MaskedShiftedHessianMat``. Without it, PETSc
+    would build a virtual sub-matrix (``MatCreateSubMatrixVirtual``) that wraps this
+    matrix in a shell and keeps the shift in that shell, so ``shift`` here would
+    never be called and the shift would be the identity again.
+
+    The context defines the same operations as pyadjoint's Hessian matrix and no
+    others (no ``getDiagonal``), so BNK's active-set estimate takes the same branch
+    with either matrix.
+
+    Args:
+        hessian_mat: pyadjoint's Hessian ``Mat``, from ``TAOSolver``.
+        metric: the ``InnerProductMat`` of the preconditioning matrix.
+
+    Attributes:
+        pert: the shift that the next action applies.
+    """
+
+    def __init__(self, hessian_mat, metric):
+        self.hessian_mat = hessian_mat
+        self.hessian_context = hessian_mat.getPythonContext()
+        self.metric = metric
+        self.pert = 0.0
+        # A work vector of the full control space for A x.
+        self.work = metric.vec_interface.new_petsc()
+
+    @property
+    def sizes(self):
+        """The sizes of pyadjoint's Hessian matrix."""
+        return self.hessian_mat.getSizes()
+
+    def create_mat(self):
+        """Build the PETSc ``Mat`` that carries this context, set up as pyadjoint does."""
+        mat = PETSc.Mat().createPython(self.sizes, self, comm=self.hessian_mat.getComm())
+        mat.setOption(PETSc.Mat.Option.SYMMETRIC, True)
+        mat.setUp()
+        mat.assemble()
+        return mat
+
+    def update(self, tao, x, H, P):
+        """The Hessian callback of TAO: re-tape at ``x``, and clear the shift.
+
+        pyadjoint's own callback reads its context from the matrix it is given, so
+        it gets pyadjoint's matrix here and not the matrix of this context.
+        """
+        type(self.hessian_context).update(tao, x, self.hessian_mat, P)
+        self.pert = 0.0
+
+    def shift(self, A, alpha):
+        """Set the shift to ``alpha``, BNK's ``pert``. See the class docstring."""
+        self.pert = float(alpha)
+
+    def mult(self, A, x, y):
+        """``y = H x + pert * A x``.
+
+        pyadjoint's matrix adds its own shift, which stays zero because nothing
+        calls its ``shift`` once this context is the Hessian of TAO.
+        """
+        self.hessian_context.mult(self.hessian_mat, x, y)
+        if self.pert != 0.0:
+            self.metric.mult(None, x, self.work)
+            y.axpy(self.pert, self.work)
+
+    def multHermitian(self, A, x, y):
+        """Symmetric, so the same action."""
+        self.mult(A, x, y)
+
+    def createSubMatrix(self, A, isrow, iscol, submat):
+        """The operator on the inactive set, ``Z^T (H + pert A) Z``, as a Python ``Mat``."""
+        if submat is not None:
+            submat.getPythonContext().reset(isrow)
+            return submat
+        return MaskedShiftedHessianMat(self, isrow).create_mat()
+
+
+class MaskedShiftedHessianMat(MaskedInnerProductMat):
+    """``Z^T (H + pert A) Z`` on the inactive set of BNK, for ``ShiftedHessianMat``.
+
+    The scatter between the full and the reduced vectors is the one of
+    ``MaskedInnerProductMat``: a reduced vector is expanded into a full vector that
+    is zero on the active set, the full operator is applied, and the result is
+    restricted again. ``shift`` sets the shift of the full-space context, because
+    BNK shifts this sub-matrix and not the full matrix whenever a bound is active.
+    """
+
+    def __init__(self, parent, iset):
+        # ``MaskedInnerProductMat`` reads ``vec_interface`` and ``comm`` from its
+        # parent; both are the ones of the metric.
+        self.shifted = parent
+        super().__init__(parent.metric, iset)
+
+    def shift(self, A, alpha):
+        """Set the shift of the full operator to ``alpha``."""
+        self.shifted.shift(None, alpha)
+
+    def mult(self, A, x, y):
+        """``y = Z^T (H + pert A) Z x``."""
+        self.shifted.mult(None, self._expand(x), self.y_full)
+        self._restrict(y)
+
+    def apply_riesz(self, x, y):
+        """Not a preconditioning matrix; the Riesz map is never applied here."""
+        raise NotImplementedError("MaskedShiftedHessianMat is a Hessian, not a preconditioner")
+
+
+def build_shifted_hessian(tao, metric):
+    """Install ``ShiftedHessianMat`` as the Hessian of a TAO object built by ``TAOSolver``.
+
+    Args:
+        tao: the TAO object of ``TAOSolver``, after its ``setUp``.
+        metric: the ``InnerProductMat`` of the preconditioning matrix.
+
+    Returns:
+        ``(mat, context)``. The caller must keep both alive for the whole solve.
+    """
+    hessian_mat, pmat = tao.getHessian()[:2]
+    context = ShiftedHessianMat(hessian_mat, metric)
+    mat = context.create_mat()
+    tao.setHessian(context.update, H=mat, P=pmat)
+    return mat, context
 
 
 def build_preconditioner_matrix(problem, comm=None):

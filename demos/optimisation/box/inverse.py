@@ -100,6 +100,12 @@ def parse_args(argv=None):
                         help="inner Krylov iteration limit (ROL truncated CG, TAO BNK KSP)")
     parser.add_argument("--no-riesz-j0", action="store_true",
                         help="TAO bqnk types: leave the LMVM initial Hessian as the identity")
+    parser.add_argument("--bnk-shift", default="identity", choices=("identity", "metric"),
+                        help="how the bounded Newton types of TAO apply their Hessian "
+                             "shift pert: 'identity' adds pert * I in nodal "
+                             "coordinates (PETSc's behaviour); 'metric' adds pert * A, "
+                             "with A the metric of the control (needs a -riesz "
+                             "optimiser)")
     parser.add_argument("--tao-opt", action="append", default=[], metavar="KEY=VALUE",
                         help="extra PETSc option for TAO, repeatable; KEY alone sets a flag")
     parser.add_argument("--rol-shift", type=float, default=0.0, metavar="FACTOR",
@@ -338,6 +344,8 @@ def main(argv=None):
         "delta_t": problem.delta_t,
         "window_time": problem.window_time,
         "krylov_max_it": args.krylov_max_it,
+        # How BNK's Hessian shift is applied: nodal identity or the metric.
+        "bnk_shift": args.bnk_shift,
         "prior": prior_record(problem, args.riesz),
     }
 
@@ -354,6 +362,7 @@ def main(argv=None):
         extra.update(parse_tao_options(args.tao_opt))
         kwargs["extra_options"] = extra
         kwargs["riesz_initial_hessian"] = not args.no_riesz_j0
+        kwargs["bnk_shift"] = args.bnk_shift
 
     recorder = run(problem, args.optimiser, **kwargs)
 

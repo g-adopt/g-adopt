@@ -64,7 +64,7 @@ import pyadjoint.optimization.rol_solver as pyadjoint_rol
 from pyadjoint import MinimizationProblem, stop_annotating
 from pyadjoint.enlisting import Enlist
 from pyadjoint.optimization.tao_solver import PETScVecInterface, RieszMapMat, TAOConvergenceError, TAOSolver
-from riesz_hessian import build_preconditioner_matrix
+from riesz_hessian import build_preconditioner_matrix, build_shifted_hessian
 from recording import PETSC_LIBRARY, KrylovRecorder, gradient_norms, tao_view_text
 import ROL
 
@@ -414,10 +414,16 @@ class ShiftedROLObjective(pyadjoint_rol.ROLObjective):
     is a preconditioned steepest-descent direction. PETSc's bounded Newton types
     instead shift the Hessian whenever they see negative curvature, an indefinite
     matrix, a direction that is not descent, or a failed line search, with
-    ``pert = min(100, max(1e-4, 0.1 |g|))`` grown tenfold on each further failure
-    (``bnk.c:563-580``). This class gives ROL the same treatment from outside the
-    library, so that the comparison is between two methods that both regularise an
-    indefinite model.
+    ``pert = min(100, max(1e-4, 0.1 gnorm))`` grown tenfold on each further failure
+    (``bnk.c:563-580``). This class gives ROL a shift from outside the library, so
+    that both methods regularise an indefinite model.
+
+    The two shifts are not the same operator. ROL gets ``lambda A`` as described
+    above. BNK adds ``pert * I`` in nodal coordinates (``MatShift``), unless the run
+    sets ``--bnk-shift metric``, which makes BNK's shift ``pert * A`` as well
+    (``riesz_hessian.ShiftedHessianMat``). The nodal identity is far larger than the
+    Hessian of this CG1 problem, whose nodal scale is that of the mass matrix, so
+    with the identity shift the two methods are regularised very differently.
 
     ``shift`` is set by the caller once per outer iteration and held fixed for every
     Hessian application inside that iteration, which is what BNK does.
@@ -776,7 +782,7 @@ def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
 
 def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None,
             riesz_initial_hessian=True, output=None, metadata=None,
-            gradient_rtol=0.0, work_budget=0.0):
+            gradient_rtol=0.0, work_budget=0.0, bnk_shift="identity"):
     """Run one TAO variant on the problem.
 
     Args:
@@ -790,10 +796,20 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
             ``blmvm``.
         output: JSON file to rewrite after every iteration, or None.
         metadata: run settings written into every dump.
+        bnk_shift: ``"identity"`` keeps BNK's Hessian shift ``pert * I`` in nodal
+            coordinates, PETSc's own behaviour. ``"metric"`` installs
+            ``riesz_hessian.ShiftedHessianMat`` as the Hessian, so that the same
+            ``pert`` shifts by ``pert * A`` with ``A`` the metric of the control.
+            Needs a ``-riesz`` variant, which supplies ``A``.
 
     Returns:
         Recorder
     """
+    if bnk_shift not in ("identity", "metric"):
+        raise ValueError(f"bnk_shift must be 'identity' or 'metric', got {bnk_shift!r}")
+    if bnk_shift == "metric" and not variant.endswith("-riesz"):
+        raise ValueError("bnk_shift='metric' needs a -riesz variant, whose "
+                         "preconditioning matrix carries the metric")
     recorder = Recorder(problem, output=output, metadata=metadata or {},
                         work_budget=work_budget)
     recorder.attach()
@@ -813,6 +829,13 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     solver = TAOSolver(minimisation_problem, params, Pmat=pmat)
     tao = solver.tao
 
+    # pyadjoint's Hessian context, read before a metric shift replaces the matrix,
+    # so that the Krylov recorder can observe the Hessian actions in both modes.
+    hessian_context = tao.getHessian()[0].getPythonContext()
+    shifted_mat = shifted_context = None
+    if bnk_shift == "metric":
+        shifted_mat, shifted_context = build_shifted_hessian(tao, pmat_context)
+
     j0_refs = None
     if riesz_initial_hessian and tao.getType() in ("bqnktr", "bqnkls", "bqnktl", "bqnls"):
         j0_refs = _set_lmvm_initial_hessian(tao, problem)
@@ -822,7 +845,9 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     if tao.getType() in TAO_KRYLOV_TYPES:
         krylov = KrylovRecorder(tao, pmat_context=pmat_context,
                                 comm=problem.Tic.function_space().mesh().comm,
-                                wall_nodes=problem.wall_nodes)
+                                wall_nodes=problem.wall_nodes,
+                                hessian_context=hessian_context,
+                                shifted_hessian=shifted_context)
         krylov.attach()
     diagnostic_errors = []
 
@@ -924,7 +949,7 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
         recorder.final_diagnostics["krylov_solves_unassigned"] = krylov.pop_solves()
     # Both references were only kept alive for the solve; a petsc4py TAO cannot hold
     # Python attributes, so the Python side has to own them until here.
-    del j0_refs, pmat, pmat_context
+    del j0_refs, pmat, pmat_context, shifted_mat, shifted_context
     return recorder
 
 

@@ -376,14 +376,39 @@ class KrylovRecorder:
             wall nodes in the layout of the control vector, or None. With it, each
             solve also records which wall nodes are in the active set, so that the
             entries into and exits from the active set can be counted.
+        hessian_context: the Python context of pyadjoint's Hessian matrix, or
+            None. With it, the recorder keeps a copy of the input and the output of
+            the last Hessian action, and a solve that stops on negative curvature
+            records the curvature of its last direction (see below).
+        shifted_hessian: the ``ShiftedHessianMat`` of ``riesz_hessian.py`` when the
+            run takes BNK's shift in the metric, or None for the identity shift.
+
+    The curvature at a negative-curvature stop. STCG stops with
+    ``CONVERGED_NEG_CURVE`` right after it applies the operator to its search
+    direction ``p`` and finds ``kappa = p^T Q p <= 0`` (``stcg.c:181-188`` and
+    ``:477-485`` at v3.25.0), so the last Hessian action of that solve is ``H p``.
+    With an active set, ``p`` arrives at pyadjoint's matrix expanded to the full
+    space with zeros on the active entries, which changes none of the products
+    below. The solve record then holds ``negative_curvature`` with
+    ``pHp = p^T H p`` (the shift of pyadjoint's own matrix taken out),
+    ``pAp = p^T A p`` with ``A`` the metric, ``pp = p^T p``, the shift ``pert``
+    and its mode, ``kappa = pHp + pert * pp`` (identity) or ``pHp + pert * pAp``
+    (metric), which is STCG's ``kappa`` up to roundoff, and ``pHp / pAp``, the
+    curvature measured in the metric: the size of the negative eigenvalue of
+    ``A^{-1} H`` that STCG met, on the scale of the Ritz values.
 
     Attributes:
         solves: the solve records not yet handed out by ``pop_solves``.
         errors: messages of failures inside the hooks.
     """
 
-    def __init__(self, tao, pmat_context=None, comm=MPI.COMM_WORLD, wall_nodes=None):
+    def __init__(self, tao, pmat_context=None, comm=MPI.COMM_WORLD, wall_nodes=None,
+                 hessian_context=None, shifted_hessian=None):
         self.tao = tao
+        self.hessian_context = hessian_context
+        self.shifted_hessian = shifted_hessian
+        # The last Hessian action: (copy of x, copy of y, shift of pyadjoint's matrix).
+        self._last_action = None
         self.wall_nodes = wall_nodes or {}
         self.ksp = tao.getKSP()
         self.pmat_context = pmat_context
@@ -406,6 +431,31 @@ class KrylovRecorder:
         if self.pmat_context is not None:
             self.pmat_context.observer = self._guard(self._observe_preconditioner)
             self.pmat_context.shift_observer = self._guard(self._observe_shift)
+        if self.hessian_context is not None:
+            self._tap_hessian()
+
+    def _tap_hessian(self):
+        """Keep a copy of the input and output of every Hessian action.
+
+        petsc4py looks up ``mult`` on the Python context at each call, so an
+        instance attribute that calls the original method and then copies its two
+        vectors observes every action without changing it. The original method
+        always runs, also when the recorder has been disabled by an error.
+        """
+        context = self.hessian_context
+        original = context.mult
+
+        def mult(A, x, y):
+            original(A, x, y)
+            if self.enabled:
+                try:
+                    self._last_action = (x.copy(), y.copy(),
+                                         float(getattr(context, "_shift", 0.0)))
+                except Exception as error:  # noqa: BLE001 -- see the class docstring
+                    self.enabled = False
+                    self.errors.append(f"hessian tap: {type(error).__name__}: {error}")
+
+        context.mult = mult
 
     def _guard(self, function):
         """Wrap a hook so that a failure disables the recorder and never propagates."""
@@ -491,12 +541,44 @@ class KrylovRecorder:
         })
         ritz = (lanczos_ritz_values(current["rz"], current["z"], current["d"], self.comm)
                 if current["z"] else np.array([]))
+        if self.shifted_hessian is not None:
+            # The shift that the Hessian operator itself applied in this solve. It
+            # equals ``hessian_shift`` when the metric shift is in place.
+            record["operator_shift"] = self.shifted_hessian.pert
+        if record["reason_name"] in ("CONVERGED_NEG_CURVE", "DIVERGED_INDEFINITE_MAT"):
+            record["negative_curvature"] = self._negative_curvature(record)
         record["ritz_values"] = [float(v) for v in ritz]
         record["ritz_min"] = float(ritz[0]) if ritz.size else None
         record["ritz_max"] = float(ritz[-1]) if ritz.size else None
         self.solves.append(record)
 
     # -- helpers -------------------------------------------------------------------
+
+    def _negative_curvature(self, record):
+        """The curvature of the last direction of a negative-curvature solve.
+
+        See the class docstring. Returns None when no Hessian action was observed.
+        """
+        if self._last_action is None or self.pmat_context is None:
+            return None
+        p, Hp, own_shift = self._last_action
+        pp = p.dot(p)
+        # pyadjoint's matrix adds its own shift (the identity shift of BNK when no
+        # bound is active); take it out to get the Hessian alone.
+        pHp = Hp.dot(p) - own_shift * pp
+        Ap = p.duplicate()
+        self.pmat_context.mult(None, p, Ap)
+        pAp = p.dot(Ap)
+        Ap.destroy()
+        if self.shifted_hessian is not None:
+            mode, pert = "metric", self.shifted_hessian.pert
+            kappa = pHp + pert * pAp
+        else:
+            mode, pert = "identity", record.get("hessian_shift", 0.0)
+            kappa = pHp + pert * pp
+        return {"pHp": float(pHp), "pAp": float(pAp), "pp": float(pp),
+                "pert": float(pert), "shift_mode": mode, "kappa": float(kappa),
+                "pHp_over_pAp": float(pHp / pAp) if pAp else None}
 
     def _active_split(self, pmat, n_total):
         """Split the active set of this solve into lower, upper and fixed bounds.
