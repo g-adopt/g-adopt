@@ -34,9 +34,11 @@ def assert_marked_rank_count(request) -> None:
         # The plugin split a list of counts into one test per count.
         requested = callspec.params["_nprocs"]
     else:
-        counts = marker.kwargs.get("nprocs", marker.args[0] if marker.args else None)
+        # The plugin's reading of the marker: a positional count, an
+        # `nprocs` keyword, or no count, which means its default of 3.
+        counts = marker.kwargs.get("nprocs", marker.args[0] if marker.args else 3)
         counts = tuple(counts) if isinstance(counts, (list, tuple)) else (counts,)
-        assert len(counts) == 1 and counts[0] is not None, (
+        assert len(counts) == 1, (
             f"{node.name} asks for {counts} ranks, but no test was made per "
             "count; the mpi-pytest plugin is not active")
         requested, = counts
