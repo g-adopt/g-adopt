@@ -20,15 +20,27 @@ block 1), in a 2-D annulus with a march of `STEPS` steps:
    something.
 2. The release frees the taping solver and its preconditioner tree: the
    solver object, the outer preconditioner instance of the taping solver
-   and its PETSc SNES are dead after the release, the PETSc log shows the
-   destroyed objects in the release stage, and at most two preconditioner
-   sets are alive at any time after it (three without it).
+   and its PETSc SNES are dead after the release, exactly one instance of
+   each class of the tree is gone, and at most two preconditioner sets are
+   alive at any time after it (three without it). With
+   `GADOPT_RELEASE_TEST_PETSC_LOG=1` the PETSc log also shows the destroyed
+   C objects in the release stage (`PETSC_LOG` below says why this is not
+   the default).
 3. The release also frees the tree when another Python wrapper of the
    taping SNES is alive (as in the monitor list of the Exp01 diagnostics),
    and any later use of the taping solver raises a clear error.
 
-`STEPS = 6` is above the default lag of the rebuild rule (5 solves), so
-every sweep crosses a lagged rebuild, as in production.
+The case keeps the rebuild rule of production (`gia_rebuild = lagged`) with
+a shorter lag, `REBUILD_EVERY = 2` in place of the default 5, so that a march
+of `STEPS = 3` steps builds, keeps the lagged preconditioner for one solve
+and rebuilds once inside every sweep (the forward run, every replay and
+every adjoint sweep), as the long Exp01 march does with the default lag.
+
+The case stays on the DG history family. The release frees the third
+preconditioner set that the cached solver blocks of the low-rank DG step
+leave behind; the Quadrature family keeps one forward solver that its own
+tape block reuses for the replay, so it has no taping solver to free and
+`release_taping_solver` returns without a release there.
 """
 
 import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
@@ -61,23 +73,44 @@ from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
 from gadopt.gia_presets import OMEGA_SQ_EARTH
 from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.solver_options_manager import DeleteParam
+import gia_solver_cases
 import test_gia_gravity
 import test_gia_transient_power_law_gate as gate
 
-#: The module fixture of `test_gia_gravity` (parent annulus, mantle
-#: submesh), bound to a name of this module so that pytest finds it.
-meshes = test_gia_gravity.meshes
 
-#: The steps of the march. Above the default lag of the rebuild rule (5), so
-#: the forward run, every replay and every adjoint sweep rebuild once inside
-#: the sweep, as the 452-step Exp01 march does.
-STEPS = 6
+@pytest.fixture(scope="module")
+def meshes():
+    """The parent annulus and its curved mantle submesh of the GIA unit tests.
+
+    The stored triangle mesh of `gia_solver_cases.MESH_FILE`
+    (`n_azimuthal=16`, `dr_mantle=0.3`), coarser than the quadrilateral
+    mesh of `test_gia_gravity` (32 and 0.2) with the same tags and radii.
+    The release concerns the solver objects, not the resolution, and every
+    solve of this test costs in proportion to the number of cells. The
+    stored file also spares the test gmsh.
+    """
+    return gia_solver_cases.annulus_meshes()
+
+
+#: The lag of the rebuild rule of the case: the preconditioner pieces are
+#: rebuilt after this many nonlinear solves (`gia_rebuild_every`). Shorter
+#: than the default (5), so that a short march crosses a lagged rebuild.
+REBUILD_EVERY = 2
+
+#: The steps of the march. Above `REBUILD_EVERY`, so the forward run, every
+#: replay and every adjoint sweep build, lag and rebuild once inside the
+#: sweep, as the 452-step Exp01 march does with the default lag.
+STEPS = 3
 
 #: The ice of step k is `(1 - k MELT) I_init`.
 MELT = 0.1
 
-#: The step sizes of the Taylor evaluations along `gate.control_direction`.
-EPSILONS = (0.1, 0.05, 0.025)
+#: The step sizes of the evaluations at new controls along
+#: `gate.control_direction`. One is enough for the test: each replay at a new
+#: control is a full sweep through the cached forward solver, with its own
+#: lagged rebuild, and the next adjoint runs at that control. The Taylor mode
+#: of `invert_exp01.py` makes three, which repeat the same sequence.
+EPSILONS = (0.1,)
 
 needs_cached = pytest.mark.skipif(
     not dca.CACHED_SOLVER_BLOCKS,
@@ -138,10 +171,21 @@ class SetTracker:
 
 
 def collect(comm):
-    """Three rounds of Python and PETSc garbage collection. Collective."""
+    """Up to three rounds of Python and PETSc garbage collection. Collective.
+
+    On more than one rank a PETSc object whose last Python reference goes is
+    destroyed only by the collective `garbage_cleanup`, which can drop the
+    Python context of a nested object, so every round can free more; all
+    three rounds run. In serial PETSc destroys an object at once, and the
+    rounds stop at the first one in which `gc.collect` finds nothing. A full
+    `gc.collect` costs about a second in this test, and the test collects at
+    every stage of every run.
+    """
     for _ in range(3):
-        gc.collect()
+        found = gc.collect()
         PETSc.garbage_cleanup(comm)
+        if comm.size == 1 and not found:
+            break
 
 
 def checkpoint_directory(comm):
@@ -161,9 +205,11 @@ def build_solver(meshes, SL_init, I_init, I, dt):
     centre-of-mass rows and the rigid-rotation nullspace. Only the data
     helpers and constants of the gate module are used.
 
+    The lag of the rebuild rule is `REBUILD_EVERY`.
+
     The preset prints a converged-reason line for every block-0 iteration;
-    four runs of a 6-step march make that the largest cost of the test on a
-    busy node. The keys change no number, so they are deleted from the
+    four runs of a march make that the largest cost of the test on a busy
+    node. The keys change no number, so they are deleted from the
     options after construction (as `--diagnostics` does in the Exp01
     driver), which rebuilds the variational solver once before any solve.
 
@@ -205,7 +251,8 @@ def build_solver(meshes, SL_init, I_init, I, dt):
         nullspace="rigid_rotation", solver_parameters="iterative",
         preset_options=dict(outer_rtol=gate.OUTER_RTOL, block0_rtol=1e-4,
                             snes_rtol=gate.SNES_RTOL, snes_type="newtonls"),
-        solver_parameters_extra={"snes_atol": gate.SNES_ATOL})
+        solver_parameters_extra={"snes_atol": gate.SNES_ATOL,
+                                 "gia_rebuild_every": REBUILD_EVERY})
     solver.add_to_solver_config(
         {key: DeleteParam for key in solver.solver_parameters
          if key.endswith("converged_reason")}, reinit=True)
@@ -290,12 +337,12 @@ def run(meshes, tracker, *, release, order, stray_wrapper=False):
       meshes: the module fixture.
       tracker: the `SetTracker` of the test.
       release: call `release_taping_solver` after the taped forward run.
-      order: `"taylor"`: replay at the taped control, adjoint, three Taylor
-        replays, one more adjoint at the last of them (the Taylor mode of
-        `invert_exp01.py`, plus one adjoint at a new control); `"invert"`:
-        adjoint first, then two pairs of replay and adjoint at new controls
-        (the order of ROL in the invert mode, whose first evaluation of J
-        is the taped value).
+      order: `"taylor"`: replay at the taped control, adjoint, a replay at
+        each control of `EPSILONS`, one more adjoint at the last of them (the
+        order of the Taylor mode of `invert_exp01.py`, plus one adjoint at a
+        new control); `"invert"`: adjoint first, then a pair of replay and
+        adjoint at each control of `EPSILONS` (the order of ROL in the
+        invert mode, whose first evaluation of J is the taped value).
       stray_wrapper: keep Python wrappers of the taping SNES, its KSP and
         its outer PC alive through the release.
 
@@ -350,7 +397,7 @@ def run(meshes, tracker, *, release, order, stray_wrapper=False):
         out["snes_handle_alive"] = any(
             isinstance(o, PETSc.SNES) and o.handle == handle
             for o in gc.get_objects())
-        out["log"] = object_table("release_taping_solver", comm)
+        out["log"] = object_table("release_taping_solver", comm) if PETSC_LOG else {}
         out["sets"]["after the release"] = tracker.live()
         tracker.peak = tracker.live()
     else:
@@ -374,7 +421,7 @@ def run(meshes, tracker, *, release, order, stray_wrapper=False):
     elif order == "invert":
         out["gradients"].append(gradient_values(rf.derivative()))
         stage_done("after the first adjoint")
-        for eps in EPSILONS[:2]:
+        for eps in EPSILONS:
             out["J"].append(float(rf(perturbed(case, eps))))
             stage_done(f"after the replay eps {eps}")
             out["gradients"].append(gradient_values(rf.derivative()))
@@ -456,25 +503,38 @@ def print_run(label, result):
                   f"{result['log']}")
 
 
+#: Whether the test turns PETSc logging on and checks the object table of the
+#: release stage in the log view. Off by default: the compiled kernels of
+#: Firedrake take the ids of their PETSc log events when they are loaded, and
+#: a kernel loaded while logging was off (or from an earlier process state)
+#: keeps the id -1. Once logging is on, every call of such a kernel prints a
+#: PETSc "Index -1 is not in range" error trace and continues; for this case
+#: that is about 1e5 traces per solve, gigabytes of output and a solve that
+#: takes 45 s in place of 2 s. The Python-level counts of
+#: `live_solver_objects` and the weak references check the release without it.
+PETSC_LOG = bool(os.environ.get("GADOPT_RELEASE_TEST_PETSC_LOG"))
+
+
 @pytest.fixture(scope="module", autouse=True)
 def petsc_logging():
-    """PETSc logging on, so the log view has the object table per stage."""
-    if not PETSc.Log.isActive():
+    """PETSc logging on with `PETSC_LOG`, so the log view has the object table per stage."""
+    if PETSC_LOG and not PETSc.Log.isActive():
         PETSc.Log.begin()
     yield
 
 
 @needs_cached
-@pytest.mark.parallel(nprocs=[1, 2, 4])
+@pytest.mark.parallel(nprocs=[1, 2])
 @pytest.mark.parametrize("order", ["taylor", "invert"])
 def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
                                                      order):
     """J and every gradient are bit-identical with the release; one set is freed.
 
-    Four runs in one process: without the release, with it, with it and a
-    stray wrapper of the taping SNES, and without it again. The last one
-    checks that two runs without the release agree bit for bit, so that the
-    equality of the others is a test.
+    Runs in one process: without the release, with it, with it and a stray
+    wrapper of the taping SNES (in the Taylor order only: the wrapper
+    concerns the release, not the order of the sweeps after it), and
+    without it again. The last one checks that two runs without the release
+    agree bit for bit, so that the equality of the others is a test.
     """
     base = run(meshes, set_tracker, release=False, order=order)
     print_run(f"{order} off", base)
@@ -483,7 +543,7 @@ def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
     # `GADOPT_RELEASE_TEST_NO_STRAY=1` skips the run with the stray wrappers,
     # so that the test fits in a short batch job with a cold kernel cache.
     stray = None
-    if not os.environ.get("GADOPT_RELEASE_TEST_NO_STRAY"):
+    if order == "taylor" and not os.environ.get("GADOPT_RELEASE_TEST_NO_STRAY"):
         stray = run(meshes, set_tracker, release=True, order=order,
                     stray_wrapper=True)
         print_run(f"{order} release + stray wrapper", stray)
@@ -523,7 +583,7 @@ def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
     # at least the outer KSP and PC, the two sub-KSPs of the inner
     # fieldsplit, the condensed KSP and the KSPs of the two GAMG hierarchies
     # and of the low-rank PC; nothing new is created.
-    if PETSc.COMM_WORLD.rank == 0:
+    if PETSC_LOG and PETSc.COMM_WORLD.rank == 0:
         log = freed["log"]
         assert log, "no object table for the release stage in the log view"
         assert log.get("SNES", (0, 0))[1] >= 1, log
@@ -534,22 +594,14 @@ def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
 
 
 @needs_cached
-def test_solve_after_release_raises(meshes):
-    """A forward solve after the release stops with `TapingSolverReleasedError`."""
-    comm = meshes[1].comm
-    case = build_case(meshes)
-    tape_case(case, comm)
-    assert dca.release_taping_solver(case["solver"])["released"]
-    # A second call does nothing.
-    assert dca.release_taping_solver(case["solver"])["reason"] == "already released"
-    with pytest.raises(dca.TapingSolverReleasedError):
-        with stop_annotating():
-            case["solver"].solve()
+def test_release_refuses_while_annotating_and_a_solve_after_it_raises(meshes):
+    """The release refuses to run while the tape records; a solve after it raises.
 
-
-@needs_cached
-def test_release_refuses_while_annotating(meshes):
-    """The release refuses to run while the tape records."""
+    One taped case serves both checks, because each needs a taped forward
+    run. With annotation on, the release raises and frees nothing. With
+    annotation paused it releases, a second call does nothing, and a
+    forward solve stops with `TapingSolverReleasedError`.
+    """
     comm = meshes[1].comm
     case = build_case(meshes)
     tape_case(case, comm)
@@ -559,6 +611,12 @@ def test_release_refuses_while_annotating(meshes):
             dca.release_taping_solver(case["solver"])
     finally:
         pause_annotation()
+    assert dca.release_taping_solver(case["solver"])["released"]
+    # A second call does nothing.
+    assert dca.release_taping_solver(case["solver"])["reason"] == "already released"
+    with pytest.raises(dca.TapingSolverReleasedError):
+        with stop_annotating():
+            case["solver"].solve()
 
 
 def test_release_does_nothing_without_cached_blocks(monkeypatch):
