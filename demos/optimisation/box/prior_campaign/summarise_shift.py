@@ -94,6 +94,8 @@ def parse_args(argv=None):
                         default=[1e-3, 1e-4, 1e-5, 1e-6], help="values of J")
     parser.add_argument("--reference", default="a",
                         help="run whose work-to-J is the denominator of table 2")
+    parser.add_argument("--levels", nargs="+", type=float, default=[200, 400, 600, 800],
+                        help="common work levels of the initial_misfit table")
     parser.add_argument("--plot", default=None,
                         help="write J, ritz_min and the shift against work to this file")
     return parser.parse_args(argv)
@@ -265,6 +267,43 @@ def work_bracket(entry):
     return (0.0 if before is None else before["work"], at["work"])
 
 
+def at_work(rows, level):
+    """The last iteration row whose work does not pass ``level``, or None."""
+    best = None
+    for row in rows:
+        if row["work"] <= level:
+            best = row
+    return best
+
+
+def stalls(record, run_length=3, fraction=0.1):
+    """Runs of consecutive RTOL solves whose step is short against the trust radius.
+
+    The stall that BNK's identity shift causes shows as Krylov solves that converge
+    on their relative tolerance (``CONVERGED_RTOL``) with a step norm far below the
+    trust radius: the shifted model is minimised well inside the trust region, by a
+    short scaled-gradient step. This counts runs of at least ``run_length``
+    consecutive solves with that reason and ``step_norm < fraction * trust_radius``.
+
+    Returns:
+        list of ``(first iteration, last iteration)`` of each such run.
+    """
+    out, current = [], []
+    for row in record["iterations"]:
+        for s in row.get("krylov_solves", []):
+            short = (s.get("reason_name") == "CONVERGED_RTOL" and s.get("step_norm") is not None
+                     and s.get("trust_radius") and s["step_norm"] < fraction * s["trust_radius"])
+            if short:
+                current.append(row["iteration"])
+                continue
+            if len(current) >= run_length:
+                out.append((current[0], current[-1]))
+            current = []
+    if len(current) >= run_length:
+        out.append((current[0], current[-1]))
+    return out
+
+
 def _fmt(value, spec):
     """Format a number, or a dash for None."""
     return "-" if value is None else format(value, spec)
@@ -383,6 +422,45 @@ def main(argv=None):
                 high = math.inf if ref[0] == 0.0 else mine[1] / ref[0]
                 cells.append(f"{low:6.2f}-{high:<7.2f}".rjust(14))
             print(f"{name:>8s} " + " ".join(cells))
+
+    print("\n== initial_misfit at the last iteration with common work <= level")
+    print(f"{'run':>8s} " + " ".join(f"{format(level, '.0f'):>18s}" for level in args.levels))
+    for name, record in records.items():
+        cells = []
+        for level in args.levels:
+            row = at_work(record["iterations"], level)
+            last = record["iterations"][-1]
+            if row is None:
+                cells.append(f"{'-':>18s}")
+            elif row is last and last["work"] < level and "budget" in str(record.get("stop_reason")):
+                # The run stopped before this level, so the value is its last one.
+                cells.append(f"({row['iteration']:2d}) {row['initial_misfit']:.3e} stop".rjust(18))
+            else:
+                cells.append(f"({row['iteration']:2d}) {row['initial_misfit']:.3e}".rjust(18))
+        print(f"{name:>8s} " + " ".join(cells))
+    print("   (iteration in brackets; 'stop' marks a run that stopped below that level)")
+
+    print("\n== stalls: runs of >= 3 consecutive CONVERGED_RTOL solves with step norm "
+          "< 0.1 trust radius")
+    for name, record in records.items():
+        found = stalls(record)
+        print(f"{name:>8s} " + (", ".join(f"iterations {a}-{b}" for a, b in found)
+                                if found else "none"))
+
+    print("\n== negative-curvature stops: iteration, work, shift used in that solve, shift "
+          "set for the next solve, curvature in the metric")
+    for name, record in records.items():
+        solves = [(row["iteration"], row["work"], s) for row in record["iterations"]
+                  for s in row.get("krylov_solves", [])]
+        for k, (iteration, work, s) in enumerate(solves):
+            if s.get("reason_name") != "CONVERGED_NEG_CURVE":
+                continue
+            nc = s.get("negative_curvature") or {}
+            following = solves[k + 1][2].get("hessian_shift") if k + 1 < len(solves) else None
+            print(f"{name:>8s} it {iteration:3d} work {work:7.1f} shift {_fmt(s.get('hessian_shift'), '.3e')} "
+                  f"next {_fmt(following, '.3e')} mode {nc.get('shift_mode', '-')} "
+                  f"pHp {_fmt(nc.get('pHp'), '.3e')} pAp {_fmt(nc.get('pAp'), '.3e')} "
+                  f"pHp/pAp {_fmt(nc.get('pHp_over_pAp'), '.3e')} kappa {_fmt(nc.get('kappa'), '.3e')}")
 
     shifts = {name: replay_shift(record) for name, record in records.items()}
     print("\n== Krylov solves: count, negative-curvature solves, and the shift record")

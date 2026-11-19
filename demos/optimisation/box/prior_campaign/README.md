@@ -23,6 +23,7 @@ The run outputs are not in git.
 | `check_shift.py` | Checks that every recorded shift follows the update rules of BNK. |
 | `submit_s2c.sh` | Submits step S2c, BNK's shift in the metric: the 150-cell reference, three smoke jobs, five 64-cell runs and two 150-cell runs. Runs on a Setonix login node. |
 | `smoke_s2c.slurm` | Runs one short 64-cell case, compares it with its S2 record and runs `check_s2c.py`. |
+| `check_wrapper.py` | Checks the metric-shifted Hessian against an assembled reference on the tiny case, and that it differs from an identity shift. Runs in seconds. |
 | `check_s2c.py` | Checks the shift mode, that the Hessian operator applied BNK's shift, and the curvature record of every negative-curvature solve. |
 | `summarise_shift.py` | Prints the S2b tables: work to reach values of `J`, `initial_misfit` there, negative-curvature solves, `ritz_min` and the shift per solve. |
 | `fetch.sh` | Copies the records of one step from Setonix to reunion. Runs on reunion. |
