@@ -24,7 +24,7 @@ from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
                                get_working_tape, pause_annotation,
                                stop_annotating)
 from pyadjoint.tape import annotate_tape
-from ufl.algorithms import extract_coefficients
+from ufl.algorithms import expand_derivatives, extract_coefficients
 
 import gadopt
 import gia_solver_cases as C
@@ -1243,3 +1243,52 @@ def test_a_discontinuous_parent_field_is_refused_as_a_coupling_parameter(meshes)
     C.build_new(meshes, case, parameters={"FluidCore.rho_core": cg})
     dg_mechanics = fd.Function(fd.FunctionSpace(sub, "DG", 0)).assign(1.2)
     C.build_new(meshes, case, parameters={"FluidCore.rho_core": dg_mechanics})
+
+
+@pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+def test_no_parent_unknown_in_a_momentum_boundary_term(meshes, representation):
+    """No boundary term of the momentum equation depends on a parent unknown.
+
+    The refusal of parent coefficients in momentum boundary terms reads the
+    coefficients of those terms. A parent unknown (the potential, a DtN
+    multiplier, a rotation unknown) is a component of the
+    mixed solution, whose mesh is not the parent, so the refusal cannot see
+    it. Its adjoint on a boundary that is an interior facet of the parent
+    would meet the same Firedrake defect. This test takes the exterior-facet
+    integrals of the mechanics residual of a rigid-core case (weak `un`
+    condition) with rotation, which adds `Real` unknowns (and the DtN
+    multipliers on that path), differentiates them with respect to the
+    solution, and asserts that no column of the result belongs to a field
+    of the parent. A rigid core excludes the centre-of-mass rows.
+    """
+    from firedrake.formmanipulation import split_form
+    case = Case(core="rigid", rotation=True, load="surface",
+                representation=representation)
+    solver, _, _ = C.build_new(meshes, case)
+    facet = fd.Form(solver._mechanics_form.integrals_by_type("exterior_facet"))
+    assert facet.integrals(), "the case has no momentum boundary term"
+    jacobian = expand_derivatives(fd.derivative(facet, solver.solution))
+    # `split_form` returns every block, the empty ones too.
+    columns = {block.indices[1] for block in split_form(jacobian)
+               if not expand_derivatives(block.form).empty()}
+    parent_fields = {solver.potential_index, *solver.real_indices}
+    assert solver.real_indices, "the case has no Real unknown"
+    assert columns, "the boundary terms depend on no unknown"
+    assert not columns & parent_fields, (
+        f"a momentum boundary term depends on the parent fields "
+        f"{sorted(columns & parent_fields)}")
+
+
+def test_a_discontinuous_displacement_is_refused(meshes):
+    """The solver refuses a displacement outside H1 and names the element.
+
+    A discontinuous displacement adds interior-facet terms to the momentum
+    equation, which this solver does not handle.
+    """
+    parent, sub = meshes
+    with pytest.raises(ValueError, match="u must be in a continuous space"):
+        NewSolver(
+            fd.Function(fd.VectorFunctionSpace(sub, "DG", 2)),
+            fd.Function(fd.FunctionSpace(parent, "CG", 2)),
+            C.approximation(Case()), dt=C.dt_function(sub),
+            gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"un": 0.0}})

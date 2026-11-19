@@ -144,6 +144,7 @@ from mpi4py import MPI
 from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.algorithms import expand_derivatives, extract_coefficients
 from ufl.domain import extract_domains
+from ufl.sobolevspace import H1
 
 from .gia_couplings import CouplingContext, ordered, scalar_value
 from .gia_presets import (NULL_COUPLING_ROW_SCALE,
@@ -430,6 +431,19 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         self.mesh = u.function_space().mesh()
         self.potential_mesh = psi.function_space().mesh()
+        # A discontinuous displacement adds interior-facet terms to the
+        # momentum equation (`viscosity_term` on `eq.dS`). In a cross-mesh
+        # system they are paired with the parent's cells like the
+        # exterior-facet terms, and the refusal of parent coefficients in
+        # facet terms (`_refuse_parent_coefficients_on_mechanics_facets`)
+        # does not read them. No configuration of this solver uses or tests
+        # a displacement outside H1.
+        if u.function_space().ufl_element() not in H1:
+            raise ValueError(
+                "u must be in a continuous space (for example "
+                "VectorFunctionSpace(mesh, 'CG', 2)); this solver does not "
+                "handle the interior-facet terms of a discontinuous "
+                f"displacement, and got {u.function_space().ufl_element()}.")
         if not hasattr(self.potential_mesh, "cartesian"):
             raise ValueError(
                 "The potential's mesh has no `cartesian` attribute; set "
