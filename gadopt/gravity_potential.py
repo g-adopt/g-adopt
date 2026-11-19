@@ -506,12 +506,16 @@ class GravityPotential:
         with Jacobi on a one-by-one system, so the start value changes no
         iteration count.
 
-        The solve is made new on every call. A cached
+        The solve is made new on every call, through the free function
+        `solve`. On the Firedrake before the pyop3 merge, a cached
         `LinearVariationalSolver` whose right-hand side has a facet integral
-        into a `Real` space returns the right value on its first solve and
-        wrong values after it in parallel (measured on a unit disc:
-        `1.881574` then `0.0` alternately on two ranks). The KSP converges,
-        so the result would be a wrong potential with no error.
+        into a `Real` space returned the right value on its first solve and
+        wrong values after it on two ranks (`1.881574` then `0.0`
+        alternately on a unit disc), with a converged KSP. On the present
+        Firedrake the same system gives the right value on every solve on
+        two ranks (exterior facets, interior facets, and a volume term). The
+        free `solve` stays until a cached solver is tested on every
+        Firedrake build this code supports.
 
         Args:
           extra_masses: `(density, measure)` pairs of the caller's sheets that
