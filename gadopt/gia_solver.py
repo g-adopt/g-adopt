@@ -126,6 +126,7 @@ of the earlier solver.
 """
 
 import itertools
+import weakref
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
@@ -1176,9 +1177,17 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """Build `theta_psi B` on the low-rank path; `None` on the multiplier path."""
         self.dtn_operator = None
         if self.dtn_representation == "lowrank":
+            # The operator reads `theta_psi` through a weak reference to the
+            # solver. The operator is in the application context, which the
+            # Python preconditioner contexts hold, and PETSc holds those
+            # contexts from C. A strong reference back to the solver would
+            # close a reference cycle through C, which Python's garbage
+            # collector cannot see, so every solver of a finished run would
+            # stay alive with all its preconditioner trees.
+            solver_ref = weakref.ref(self)
             self.dtn_operator = self.gravity.build_lowrank_operator(
                 self.solution_space, self.potential_index,
-                lambda: self.theta_psi_value)
+                lambda: solver_ref().theta_psi_value)
 
     # -- Solver options ------------------------------------------------------------
 

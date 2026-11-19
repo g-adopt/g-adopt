@@ -5,17 +5,22 @@ DG history, and the Quadrature history with either DtN representation)
 records the same structure: a sweep marker, the step block, a sweep marker
 and the kernel projection (`gadopt.gia_step_adjoint`). The tests here check
 that structure, the tangent sweep of the Quadrature step block against its
-adjoint, and the refusal of its second-order adjoint.
+adjoint, the refusal of its second-order adjoint, and that a finished taped
+run leaves no solver alive once the tape is gone.
 
 The gradients themselves are checked by the Taylor tests of
 `test_gia_solver.py` (`test_taylor_and_replay` and the `Real`-control
 tests), which run on both step kinds.
 """
+import gc
+import weakref
+
 import firedrake as fd
 import pytest
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
                                get_working_tape, pause_annotation,
                                stop_annotating)
+from petsc4py import PETSc
 from pyadjoint.tape import annotate_tape
 
 import gadopt
@@ -168,3 +173,37 @@ def test_the_quadrature_step_refuses_a_hessian(meshes):
     rf.derivative()
     with pytest.raises(NotImplementedError, match="Quadrature history step"):
         rf.hessian(direction)
+
+
+def test_a_finished_taped_run_is_collected(meshes):
+    """No solver of a finished taped run stays alive once the tape is gone.
+
+    The low-rank DtN operator is in the application context, which the
+    Python preconditioner contexts of the iterative preset hold, and PETSc
+    holds those contexts from C. If the operator held the solver strongly,
+    the solver, its taping solver, the cached replay and derivative solvers
+    and all their preconditioner trees would form a cycle through C that
+    Python's collector cannot see, and stay alive to the end of the process.
+    """
+    case = Case(representation="lowrank", model="maxwell2", core="fluid", centre=True)
+    control, _ = _field_control(meshes[1])
+    with stop_annotating():
+        dt = C.dt_function(meshes[1])
+        solver, u, psi = C.build_new(meshes, case, control=control, dt=dt,
+                                     nullspace="rigid_rotation",
+                                     solver_parameters="iterative")
+    continue_annotation()
+    for h in STEPS[:2]:
+        dt.assign(h)
+        solver.solve()
+    J = fd.assemble(fd.inner(u, u) * fd.dx(domain=meshes[1]))
+    rf = ReducedFunctional(J, Control(control))
+    pause_annotation()
+    rf.derivative()
+    alive = weakref.ref(solver)
+    del solver, u, psi, rf, J
+    get_working_tape().clear_tape()
+    gc.collect()
+    PETSc.garbage_cleanup(meshes[1].comm)
+    gc.collect()
+    assert alive() is None
