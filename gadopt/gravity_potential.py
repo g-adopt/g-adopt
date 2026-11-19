@@ -39,8 +39,8 @@ density `rho` is a prescribed source with a net mass of its own, which the
 
 import numpy as np
 from firedrake import (Constant, DirichletBC, Form, Function, FunctionSpace,
-                       Measure, SpatialCoordinate, TestFunction, TrialFunction,
-                       assemble, dot, grad, solve, sqrt)
+                       Measure, TestFunction, TrialFunction, assemble, dot,
+                       grad, solve)
 from pyadjoint.tape import stop_annotating
 from warnings import warn
 
@@ -131,6 +131,10 @@ class GravityPotential:
         self.volume_density = (None if volume_density is None
                                else ensure_constant(volume_density))
         self.set_measures(source_quad_degree)
+        # Four 0-form assembles in a cross-mesh system, none otherwise. They
+        # are numbers that no functional depends on, so they are not recorded.
+        with stop_annotating():
+            self.check_cross_mesh_measures()
         self.set_monopole_datum()
         #: The low-rank operator of a coupled solver, built by
         #: `build_lowrank_operator`.
@@ -152,7 +156,7 @@ class GravityPotential:
         intersection, and a sub-block that a preconditioner extracts from a
         mixed space spanning both meshes needs every integral to admit both
         domains. The intersection does not restrict the Laplacian to the
-        submesh; `check_geometry` asserts that. `dx_parent` is the plain
+        submesh; `check_cross_mesh_measures` asserts that. `dx_parent` is the plain
         parent measure of the enclosed-mass system, whose arguments are
         `Real` fields of the parent alone. `dx_density` is `dx_m` at the
         quadrature degree of the volume density.
@@ -170,38 +174,28 @@ class GravityPotential:
         self.dx_density = (self.dx_m if source_quad_degree is None
                            else self.dx_m(degree=source_quad_degree))
 
-    def check_geometry(self) -> None:
-        """Measure every DtN boundary and the cross-mesh measures.
+    def check_cross_mesh_measures(self) -> None:
+        """Refuse intersected measures that do not measure what they claim.
 
-        Each check is for a failure that gives a converged solve and no
-        error: a DtN tag that matches nothing or part of a circle, an
-        intersected measure that is empty, and a cross-mesh entity map that
-        evaluates a parent field at the wrong points.
+        In a cross-mesh system three failures give a converged solve and no
+        error: an intersected density measure `dx_m` that is empty or smaller
+        than the density's mesh (the volume source and the displacement
+        source vanish), an intersected parent measure `dx_g` that misses
+        part of the parent (the Laplacian then misses the stand-off buffer),
+        and a cross-mesh entity map that evaluates a parent field at the
+        wrong points of the density's mesh. This method compares each of the
+        three with an integral that has no intersection. Without a submesh
+        the measures are the plain ones and there is nothing to check.
 
-        The constructor does not call it: whether a DtN boundary must be a
-        complete circle or sphere is the policy of the solver. The coupled
-        GIA solver calls it. `GravitySolver` accepts a boundary that deviates
-        from constant radius with the warning of `DtNGravityForm`. It
-        assembles numbers that nothing on the tape reads, so a caller runs it
-        under `stop_annotating`.
+        The constructor runs it for every caller, under `stop_annotating`.
+
+        Raises:
+          ValueError: naming the measure that is wrong.
         """
-        dim = self.potential_mesh.geometric_dimension
-        X = SpatialCoordinate(self.potential_mesh)
-        r = sqrt(dot(X, X))
-        for bc_id, _ in self.form.dtn_boundaries:
-            dss = self.form.ds(bc_id)
-            extent = assemble(Constant(1.0) * dss)
-            if extent <= 0.0:
-                raise ValueError(
-                    f"DtN boundary {bc_id}: the measure is empty. A tag of the "
-                    "wrong facet kind gives zero and a warning.")
-            radius = assemble(r * dss) / extent
-            expected = 2 * np.pi * radius if dim == 2 else 4 * np.pi * radius ** 2
-            if abs(extent - expected) > 1e-2 * expected:
-                raise ValueError(
-                    f"DtN boundary {bc_id} measures {extent:.6e} at mean radius "
-                    f"{radius:.6g}, against {expected:.6e} for a complete "
-                    "circle or sphere of that radius.")
+        if not self.cross_mesh:
+            return
+        # The volume of the density's mesh from its own plain measure, and the
+        # volume of the parent from `dx_parent`, which has no intersection.
         volume = assemble(Constant(1.0) * Measure("dx", domain=self.density_mesh))
         if not np.isclose(assemble(Constant(1.0) * self.dx_m), volume, rtol=1e-12):
             raise ValueError(
@@ -214,13 +208,45 @@ class GravityPotential:
             raise ValueError(
                 "The intersected parent measure does not cover the parent, so "
                 "the Laplacian would miss the stand-off buffer.")
-        if self.cross_mesh:
-            probe = Function(FunctionSpace(self.potential_mesh, "CG", 1)).assign(1.0)
-            crossed = assemble(probe * self.dx_m)
-            if not np.isclose(crossed, volume, rtol=1e-10):
+        # A parent field of value one, integrated over the density's mesh,
+        # is read through the cross-mesh entity map; a wrong map gives a
+        # value other than the volume.
+        probe = Function(FunctionSpace(self.potential_mesh, "CG", 1)).assign(1.0)
+        crossed = assemble(probe * self.dx_m)
+        if not np.isclose(crossed, volume, rtol=1e-10):
+            raise ValueError(
+                f"A parent coefficient integrated over the density's mesh "
+                f"gives {crossed:.6e} against its volume {volume:.6e}.")
+
+    def check_dtn_boundaries_complete(self) -> None:
+        """Refuse a DtN boundary that is not a complete circle or sphere.
+
+        The DtN map is defined on a complete origin-centred circle or sphere.
+        A tag that matches only part of one gives a converged solve and no
+        error. The check compares the discrete measure of each boundary with
+        the measure of a complete circle or sphere at its mean radius, within
+        1 %. It reads the measure and the radius that `DtNGravityForm`
+        assembled when it measured the boundaries, so it assembles nothing.
+
+        The constructor does not run it, because whether a DtN boundary must
+        be complete is the policy of the solver. The coupled GIA solver runs
+        it. `GravitySolver` accepts a boundary that deviates from constant
+        radius with the warning of `DtNGravityForm` and proceeds.
+
+        Raises:
+          ValueError: naming the boundary, its measure and its mean radius.
+        """
+        dim = self.potential_mesh.geometric_dimension
+        for bc_id, _ in self.form.dtn_boundaries:
+            extent = self.form.boundary_area[bc_id]
+            _, radius = self.form.boundary_geometry[bc_id]
+            # The perimeter of a circle in 2-D, the area of a sphere in 3-D.
+            expected = 2 * np.pi * radius if dim == 2 else 4 * np.pi * radius ** 2
+            if abs(extent - expected) > 1e-2 * expected:
                 raise ValueError(
-                    f"A parent coefficient integrated over the density's mesh "
-                    f"gives {crossed:.6e} against its volume {volume:.6e}.")
+                    f"DtN boundary {bc_id} measures {extent:.6e} at mean radius "
+                    f"{radius:.6g}, against {expected:.6e} for a complete "
+                    "circle or sphere of that radius.")
 
     # -- The residual row -------------------------------------------------------
 

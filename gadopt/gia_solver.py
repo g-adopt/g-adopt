@@ -467,10 +467,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             quad_degree=dtn_quad_degree, alpha=dtn_alpha,
             representation=dtn_representation)
         # This solver refuses a DtN boundary that is not a complete circle or
-        # sphere and an empty cross-mesh measure (`check_geometry`). The
-        # checks assemble numbers that nothing on the tape reads.
-        with stop_annotating():
-            self.gravity.check_geometry()
+        # sphere. The constructor of the part has already checked the
+        # cross-mesh measures.
+        self.gravity.check_dtn_boundaries_complete()
         self.form = self.gravity.form
         if self.form.sigma_bcs:
             raise ValueError(

@@ -557,7 +557,7 @@ class TestGeometryAssertions:
                                      gravity_bcs=bcs, bcs=mechanics_bcs(sub))
 
     def test_dtn_boundary_measures_match_their_radii(self, solved):
-        """What `check_geometry` asserts, restated so a reader can see it.
+        """What `check_dtn_boundaries_complete` asserts, restated so a reader can see it.
 
         A tag matching half a circle gives half the perimeter and is otherwise
         undetectable.
