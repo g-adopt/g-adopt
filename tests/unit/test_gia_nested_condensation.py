@@ -296,6 +296,51 @@ class TestOperatorReuse:
         solver.solve()
         assert context.assembly_count == 2
 
+    def test_assembly_follows_the_tape_sweep(self, meshes):
+        """A replay of the tape reassembles the condensed operator at its start.
+
+        A replay does not run `SelfGravitatingGIASolver.solve`, so
+        `operator_version` does not move, while the control can have
+        changed since the last build. `TapeSweepMarkerBlock` moves
+        `gia_tape_sweep` at the start of every replay, and the class reads it:
+        the second replay reassembles once, at its only solve. The replay
+        solver is the cached forward solver of the solve block
+        (Firedrake PR 4638), which shares the solver's context.
+        """
+        from types import SimpleNamespace
+
+        from firedrake.adjoint import (Control, ReducedFunctional,
+                                       continue_annotation, get_working_tape,
+                                       pause_annotation, stop_annotating)
+        from gadopt.dtn_coupled_adjoint import CACHED_SOLVER_BLOCKS, SOLVE_BLOCK_TYPE
+
+        if not CACHED_SOLVER_BLOCKS:
+            pytest.skip("the replay solver is a cached solver of Firedrake PR 4638")
+        tape = get_working_tape()
+        tape.clear_tape()
+        sub = meshes[1]
+        with stop_annotating():
+            factor = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0)
+            solver, u, _ = build(meshes, approximation_kwargs=dict(viscosity=factor),
+                                 solver_parameters=nested_preset())
+        continue_annotation()
+        try:
+            solver.solve()
+            J = fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
+            rf = ReducedFunctional(J, Control(factor))
+        finally:
+            pause_annotation()
+        block, = [b for b in tape.get_blocks() if isinstance(b, SOLVE_BLOCK_TYPE)
+                  and any(o.output is solver.solution for o in b.get_outputs())]
+        replay = SimpleNamespace(solver=block.forward_cache.solver)
+        with stop_annotating():
+            other = fd.Function(factor.function_space()).assign(1.3)
+        rf(factor)
+        count = condensation_context(replay).assembly_count
+        rf(other)
+        assert condensation_context(replay).assembly_count == count + 1
+        tape.clear_tape()
+
 
 class TestPowerLaw:
     """Newton on the nested preset, with a state-dependent Jacobian.

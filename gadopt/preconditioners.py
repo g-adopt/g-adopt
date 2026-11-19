@@ -627,10 +627,11 @@ def _published_dt(pc):
 
     During a replay or an adjoint sweep the `dt` object holds the value of
     the last forward assignment, not the value of the step being solved.
-    The coupled low-rank solve block therefore binds `appctx["gia_dt"]` to
-    the time step of its own forward solve around each of its solves
-    (`gadopt.dtn_coupled_adjoint`, `_bound_to_block`), and that value wins
-    when it is present.
+    The step block of the GIA solver (low-rank or Quadrature) therefore
+    binds `appctx["gia_dt"]` to the time step of its own forward solve
+    around each of its solves (`gadopt.gia_step_adjoint`,
+    `GIAStepBlockMixin._bound_to_block`), and that value wins when it is
+    present.
 
     Args:
       pc: PETSc preconditioner.
@@ -639,7 +640,24 @@ def _published_dt(pc):
       The effective history step h/alpha (h for BE) as a float, or `None` when the context carries none or it
       cannot be read as one number.
     """
-    ctx = _solver_appctx(pc)
+    return _context_dt(_solver_appctx(pc))
+
+
+def _context_dt(ctx):
+    """The effective history step `h/alpha` that the context `ctx` publishes.
+
+    The value `_published_dt` returns, read from an application context
+    dict instead of a PC: `gia_dt` and `gia_time_alpha` (bound by a step
+    block during a replay or a derivative sweep) win over the live `dt` and
+    `time_alpha`.
+
+    Args:
+      ctx: An application context dict.
+
+    Returns:
+      The step as a float, or `None` when the context carries none or it
+      cannot be read as one number.
+    """
     dt = ctx.get("gia_dt", ctx.get("dt"))
     if dt is None:
         return None
@@ -675,7 +693,7 @@ def _last_solve_outer_per_newton(pc):
 def _tape_sweep(pc):
     """The replay or derivative sweep of the tape this solve belongs to.
 
-    `gadopt.dtn_coupled_adjoint.TapeSweepMarkerBlock` raises
+    `gadopt.gia_step_adjoint.TapeSweepMarkerBlock` raises
     `gia_tape_sweep` in the application context when a replay, an adjoint
     sweep, a tangent sweep or a Hessian sweep of the tape starts. A forward run
     never moves it. Between two such sweeps the controls can change (a replay
@@ -942,8 +960,8 @@ class _RebuildRule:
         `|solve_index - index at last build|`, not the signed difference. A
         forward run and a replay raise the index by one per solve. An adjoint
         sweep solves the taped steps from the last to the first, and each
-        solve block binds the index of its own forward solve
-        (`gadopt.dtn_coupled_adjoint`), so there the index falls by one per
+        step block binds the index of its own forward solve
+        (`gadopt.gia_step_adjoint`), so there the index falls by one per
         solve. A signed difference is negative on that sweep, and the lag
         would never expire.
 
@@ -2327,12 +2345,13 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     compares equal values and the adjoint's complement is likewise built once,
     at the first adjoint solve, and kept.
 
-    Two refinements of that picture hold now. On the low-rank path each solve
-    block binds the solve index and the time step of its own forward solve
-    around its replay and adjoint solves (`gadopt.dtn_coupled_adjoint`), so
+    Two refinements of that picture hold now. On the low-rank path and with
+    the Quadrature history each step block binds the solve index and the
+    time step of its own forward solve around its replay and derivative
+    solves (`gadopt.gia_step_adjoint`), so
     the lagged rule moves through a sweep as it does through the forward run.
     And `gia_tape_sweep` (`_tape_sweep`, moved by
-    `gadopt.dtn_coupled_adjoint.TapeSweepMarkerBlock`) changes at the start of
+    `gadopt.gia_step_adjoint.TapeSweepMarkerBlock`) changes at the start of
     every replay and derivative sweep, in every context that carries the
     solver's markers, so a replay at a new control value rebuilds the
     complement instead of keeping the one of the taping value. The multiplier
@@ -3432,6 +3451,15 @@ class InternalVariableSCPC(fd.SCPC):
     the key the class behaves as `SCPC` does. `assembly_count` records how
     many times the condensed operator has been assembled.
 
+    Two more markers also force a reassembly, because the version does not
+    move in a replay or a derivative sweep of the tape, which do not run the
+    solver's `solve`: the tape sweep counter `gia_tape_sweep`
+    (`gadopt.gia_step_adjoint.TapeSweepMarkerBlock`), which moves when a
+    replay at a new control value or a derivative sweep starts, and the
+    effective history step `dt / alpha` (`_context_dt`), which a step block
+    binds to its own forward step around each of its solves. In a forward
+    run neither moves without the version, so the reuse there is unchanged.
+
     This class reads the attributes `cxt`, `weight`, `S` and `S_pc` of `SCPC`,
     and `CoupledInternalVariableSolver` reads `_bases` of Firedrake's
     `MixedVectorSpaceBasis` to hand over the displacement nullspaces. Both
@@ -3658,7 +3686,7 @@ class InternalVariableSCPC(fd.SCPC):
 
         # Additions to `SCPC.initialize` start here.
         self.assembly_count = 1
-        self._operator_version = self._published_version()
+        self._markers = self._published_markers()
 
         appctx = self.cxt.appctx
         matrices = [Smat]
@@ -3675,20 +3703,27 @@ class InternalVariableSCPC(fd.SCPC):
             for matrix in matrices:
                 matrix.setNearNullSpace(basis)
 
-    def _published_version(self):
-        """The operator version the solver publishes, or a sentinel.
+    def _published_markers(self):
+        """What says whether the condensed operator moved, from the context.
 
-        The sentinel is a fresh object, so a context without the key never
-        compares equal to a stored version and the operator is rebuilt on
-        every update, which is what `SCPC` does.
+        The operator version the solver publishes (or a sentinel), the tape
+        sweep counter and the effective history step. The sentinel is a fresh
+        object, so a context without a version never compares equal to a
+        stored one and the operator is rebuilt on every update, which is what
+        `SCPC` does.
+
+        Returns:
+          `(version, sweep, step)`.
         """
-        return self.cxt.appctx.get("operator_version", object())
+        ctx = self.cxt.appctx
+        return (ctx.get("operator_version", object()), ctx.get("gia_tape_sweep"),
+                _context_dt(ctx))
 
     def update(self, pc):
-        version = self._published_version()
-        if version is not None and version == self._operator_version:
+        markers = self._published_markers()
+        if markers[0] is not None and markers == self._markers:
             return
-        self._operator_version = version
+        self._markers = markers
         self.assembly_count += 1
         super().update(pc)
 
