@@ -241,8 +241,8 @@ class _QuadratureStep:
     """One step with the history eliminated at quadrature points.
 
     `DirectConstitutiveBackend` owns the nonlinear solve with the local
-    Newton callbacks, the kernel projection inside its map and the tape
-    block of the whole step. It is built once; an options change rebuilds
+    Newton callbacks and the tape block of the whole step
+    (`ConstitutiveStepBlock`). It is built once; an options change rebuilds
     its variational solver only, so the residual and the local solve keep
     one set of private coefficients.
     """
@@ -1385,7 +1385,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             self._step = _LowRankStep(self)
         else:
             self._step = _StockStep(self)
-        #: The adopted low-rank solve block of the last annotated solve.
+        #: The step block of the last annotated solve: the adopted low-rank
+        #: solve block, or the `ConstitutiveStepBlock` of the Quadrature
+        #: family (`gadopt.gia_step_adjoint`). None on the stock step.
         self.adjoint_block = None
         #: Whether the low-rank adjoint carries the derivative of `theta_psi`.
         self._include_theta_derivative = True
@@ -1521,7 +1523,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         one recorded block, the recorded kernel projection, the history
         accept, and the copy into `u` and `psi`.
         """
-        from .dtn_coupled_adjoint import TapeSweepMarkerBlock
+        from .gia_step_adjoint import TapeSweepMarkerBlock
         self.time_integrator.prepare()
         self.update_total_mass()
         # Counted before the solve, so every preconditioner setup inside it
@@ -1538,11 +1540,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         snes = self.solver.snes
         self.appctx["gia_last_solve_linear_its"] = int(snes.getLinearSolveIterations())
         self.appctx["gia_last_solve_newton_its"] = max(1, int(snes.getIterationNumber()))
-        # Recorded. On the Quadrature family the step block has already
-        # projected inside its own map, so this applies P a second time; P is
-        # idempotent up to round-off and its adjoint is applied twice as well,
-        # which is correct, and the forward values are those of the earlier
-        # solver.
+        # Recorded (`KernelProjectionBlock`). The one projection of every
+        # step kind: no step block projects inside its own map, so a replay
+        # and a derivative sweep remove the rigid rotation here as the
+        # forward run does (`gadopt.gia_step_adjoint`).
         project_out_kernel(self.nullspace, self.solution)
         self.history.advance(self)
         self._copy_out()
@@ -1625,9 +1626,14 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         return out
 
     def require_controls_reach_residual(self, *controls) -> None:
-        """Raise if a control never enters the adopted low-rank solve block."""
+        """Raise if a control never enters the step block of the last annotated solve.
+
+        Available where the step block is G-ADOPT's own: the low-rank DtN
+        path and the Quadrature family (`adjoint_block`).
+        """
         if self.adjoint_block is None:
-            raise RuntimeError("Run one annotated low-rank solve first.")
+            raise RuntimeError("Run one annotated solve on the low-rank DtN path "
+                               "or with the Quadrature history first.")
         from .dtn_coupled_adjoint import require_controls_reach_block
         require_controls_reach_block(self.adjoint_block, controls)
 

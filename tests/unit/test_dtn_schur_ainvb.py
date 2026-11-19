@@ -1422,7 +1422,7 @@ def test_an_adjoint_sweep_rebuilds_as_the_index_falls(stub_appctx):
 
     An adjoint sweep solves the taped steps from the last to the first, and
     each solve block binds the index of its forward solve
-    (`gadopt.dtn_coupled_adjoint`), so the index falls by one per solve. The
+    (`gadopt.gia_step_adjoint`), so the index falls by one per solve. The
     rule must rebuild after `every` solves there too, and the next sweep, or
     the next replay that starts again at index 1, must rebuild at its first
     solve.

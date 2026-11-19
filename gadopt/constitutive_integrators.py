@@ -1,11 +1,16 @@
-"""Local quadrature integration and directly assembled first reverse derivatives.
+"""The step of the Quadrature history and its directly assembled first derivatives.
 
 The mechanics/sea-level residual remains owned by SelfGravitatingGIASolver.
 Only the material update and its implicit scalar sensitivity are supplied here.
 No external operator is embedded in a form or used by the numerical root solver.
-"""
-from contextlib import contextmanager
 
+`DirectConstitutiveBackend` solves one step (the coupled Newton solve with the
+local constitutive solve at the quadrature points in its callbacks) and
+supplies the adjoint and the tangent of that map. `ConstitutiveStepBlock`
+records the step on the tape; it shares the binding of the solver state and
+the derivative of the low-rank DtN prefactor with the low-rank step block
+(`gadopt.gia_step_adjoint.GIAStepBlockMixin`).
+"""
 import numpy as np
 import firedrake as fd
 import ufl
@@ -15,7 +20,7 @@ from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.algorithms.analysis import extract_coefficients
 
 from .internal_variable_equation import assign_history_slices, history_slices
-from .nullspaces import apply_kernel_projection
+from .gia_step_adjoint import GIAStepBlockMixin
 
 #: The index of the displacement in the mixed space of both GIA solvers that
 #: own a quadrature step; the field order of either solver starts with it.
@@ -110,45 +115,121 @@ class BackstressQuadratureUpdate(MaxwellQuadratureUpdate):
         self.lower = 1.
 
 
-class ConstitutiveStepBlock(Block):
-    """Converged mixed solve and simultaneous material updates as one map."""
+class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
+    """One step of the Quadrature history: coupled solve and material update as one map.
+
+    The map takes the coefficients of the step residual and of the local
+    constitutive equation (`DirectConstitutiveBackend.inputs`: the previous
+    history levels, the time coefficients, the material and coupling
+    parameters, the loads) to the coupled solution and the updated history
+    at the quadrature points (`DirectConstitutiveBackend.outputs`). The
+    previous solution is not an input: it is only the initial guess of the
+    forward Newton solve, and a replay starts from zero.
+
+    The solution leaves the map with the gauge the solve gave it. The
+    `KernelProjectionBlock` that `SelfGravitatingGIASolver.solve` records
+    after this block removes the rigid rotation, as for the low-rank step
+    block (`gadopt.gia_step_adjoint`). The history does not depend on the
+    gauge: a rigid rotation has zero strain.
+
+    Replay, adjoint and tangent run the backend with the shared solver state
+    bound to this block (`GIAStepBlockMixin._bound_to_block`). The adjoint
+    and the tangent add the derivative of the low-rank prefactor
+    `theta_psi`, which the forms do not carry. The second-order adjoint is
+    not written.
+
+    Args:
+      backend: The `DirectConstitutiveBackend` of the step.
+    """
 
     def __init__(self, backend):
         super().__init__()
         self.backend = backend
+        self.gia_solver = backend.owner
+        # `SelfGravitatingGIASolver.solve` raised the index before the step,
+        # so this is the index the forward solve's preconditioners saw.
+        self.gia_solve_index = backend.owner.appctx.get("gia_solve_index")
         for coefficient in backend.inputs:
             self.add_dependency(coefficient)
 
-    def restore(self, inputs):
+    def __str__(self):
+        return "ConstitutiveStepBlock"
+
+    def _restore(self, inputs):
+        """Set the private inputs of the backend to this block's input values."""
         for target, value in zip(self.backend.private_inputs, inputs):
             target.assign(value)
 
+    def _restore_state(self, inputs):
+        """Set the inputs and the forward solution, and refresh the local root.
+
+        The derivative of the map is taken at the forward solution of this
+        block, with the frozen quadrature coefficients of the local solve at
+        that solution (`MaxwellQuadratureUpdate.refresh`).
+        """
+        self._restore(inputs)
+        self.backend.work.assign(self.get_outputs()[0].saved_output)
+        self.backend.material.refresh(self.backend.work)
+
     def prepare_recompute_component(self, inputs, relevant_outputs):
-        self.restore(inputs)
+        self._restore(inputs)
         # A shared workspace may hold an unrelated later step after reverse.
         # Use a deterministic gauge-free guess for this algebraic solve.
         self.backend.work.assign(0)
-        self.backend.forward()
+        with self._bound_to_block():
+            self.backend.forward()
 
     def recompute_component(self, inputs, block_variable, idx, prepared=None):
         return self.backend.numeric_outputs[idx]._ad_create_checkpoint()
 
     def prepare_evaluate_adj(self, inputs, adj_inputs, relevant_dependencies):
-        self.restore(inputs)
-        self.backend.work.assign(self.get_outputs()[0].saved_output)
-        self.backend.material.refresh(self.backend.work)
-        self.backend.reverse(adj_inputs)
+        self._restore_state(inputs)
+        with self._bound_to_block():
+            self.backend.reverse(adj_inputs)
 
     def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
-        return self.backend.input_gradient(idx)
+        gradient = self.backend.input_gradient(idx)
+        return self._add_theta_adjoint_term(
+            gradient, block_variable.output, self.backend.work, self.backend.adjoint)
+
+    def prepare_evaluate_tlm(self, inputs, tlm_inputs, relevant_outputs):
+        self._restore_state(inputs)
+        coefficient = self._theta_tangent_coefficient()
+        with self._bound_to_block():
+            return self.backend.tangent(
+                tlm_inputs, self._B0_action(self.backend.work) if coefficient else None,
+                coefficient)
+
+    def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable, idx, prepared=None):
+        return prepared[idx]
+
+    def prepare_evaluate_hessian(self, inputs, hessian_inputs, adj_inputs,
+                                 relevant_dependencies):
+        raise NotImplementedError(
+            "The second-order adjoint of the Quadrature history step is not "
+            "written: it needs the second derivatives of the local "
+            "constitutive solve.")
 
 
 class DirectConstitutiveBackend:
     """Direct derivatives of the FULL mixed residual, not just displacement.
 
-    Both DtN representations are supported with natural displacement boundaries.
-    Strong and weak displacement boundary
-    conditions are not implemented for this path and are refused explicitly.
+    Owns the step of the Quadrature history: the coupled nonlinear solve
+    with the local constitutive solve in its callbacks, the history update at
+    the quadrature points, and the first derivatives of that map (adjoint and
+    tangent) for `ConstitutiveStepBlock`. The residual is rewritten in
+    private copies of its coefficients, so that a replay or a derivative
+    sweep can set them to the values of one block without touching the live
+    Functions.
+
+    Both DtN representations are supported with natural displacement
+    boundaries. Strong and weak displacement boundary conditions are not
+    implemented for this path and are refused explicitly.
+
+    Args:
+      owner: The `SelfGravitatingGIASolver`.
+      material: The `MaxwellQuadratureUpdate` (or backstress variant) of
+        the owner's history.
     """
 
     def __init__(self, owner, material):
@@ -165,9 +246,6 @@ class DirectConstitutiveBackend:
         self.work = owner.solution.copy(deepcopy=True)
         mapping = dict(zip(self.inputs, self.private_inputs)) | {owner.solution: self.work}
         self.lowrank = owner.dtn_representation == "lowrank"
-        self._mapping = mapping
-        self._solve_epoch = 0
-        self._theta_factors = (owner.scaling_factor, owner._row_scale_B_mu, owner.Lambda)
         self.F = ufl.replace(owner.F, mapping)
         material.equation = ufl.replace(material.equation, mapping)
         material.diagonal = ufl.replace(material.diagonal, mapping)
@@ -201,7 +279,9 @@ class DirectConstitutiveBackend:
         self.rhs_form = fd.derivative(self.H, self.work, fd.TestFunction(owner.solution_space))
         self.reverse_functional = self.H-fd.action(self.sensitivity_F, self.adjoint)
         self.gradient_forms = {}
-        self.matrix = self.linear_solver = None
+        #: The tangent forms and Functions, built at the first tangent sweep
+        #: (`_build_tangent`): only Taylor and tangent tests use them.
+        self._tangent = None
 
     def build_solver(self):
         """Build the nonlinear solver of the step from the owner's options.
@@ -211,8 +291,8 @@ class DirectConstitutiveBackend:
         A second backend would replace the coefficients of the shared
         material expressions a second time, and the residual and the local
         Newton solve would then read two different sets of private copies.
-        The cached transpose solver of `reverse` reads the same options, so
-        it is dropped and built again at the next reverse sweep.
+        The cached derivative solvers read the same options, so they are
+        dropped and built again at the next derivative sweep.
         """
         owner = self.owner
         self.solver = fd.NonlinearVariationalSolver(
@@ -222,42 +302,9 @@ class DirectConstitutiveBackend:
             pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector,
             **(dict(post_function_callback=owner.augment_residual,
                     post_jacobian_callback=owner.augment_jacobian) if self.lowrank else {}))
-        self.matrix = self.linear_solver = None
-
-    def _theta_values(self):
-        from .utility import scalar_value
-        return tuple(scalar_value(self._mapping.get(c, c)) for c in self._theta_factors)
-
-    @contextmanager
-    def bound_lowrank(self):
-        """Bind the operator and PC cache to this step's private coefficients."""
-        if not self.lowrank:
-            yield
-            return
-        from .utility import scalar_value
-        op, ctx = self.owner.dtn_operator, self.owner.appctx
-        saved_theta = op.theta
-        sf, bmu, lam = self._theta_values()
-        op.theta = sf*bmu/lam
-        missing = object()
-        self._solve_epoch += 1
-        values = {"gia_dt": scalar_value(self._mapping.get(self.owner.dt, self.owner.dt)),
-                  "gia_time_alpha": scalar_value(self._mapping[self.owner.time_integrator.alpha]),
-                  # A replay can change controls at the same h/alpha. Its
-                  # private operator is a fresh solve even when the live
-                  # forward counter has not moved since the original march.
-                  "gia_solve_index": self._solve_epoch}
-        saved = {key: ctx.get(key, missing) for key in values}
-        ctx.update(values)
-        try:
-            yield
-        finally:
-            op.theta = saved_theta
-            for key, value in saved.items():
-                if value is missing:
-                    ctx.pop(key, None)
-                else:
-                    ctx[key] = value
+        #: `{"adjoint": (matrix, solver), "tangent": (matrix, solver)}`, the
+        #: linear derivative solves, built at their first use.
+        self.derivative_solvers = {}
 
     def refresh_from_vector(self, vector):
         with stop_annotating():
@@ -266,19 +313,20 @@ class DirectConstitutiveBackend:
             self.material.refresh(self.work)
 
     def forward(self):
+        """Solve the step from the guess in `work` and update the history buffers.
+
+        The solution keeps the gauge the solve gave it; the projection that
+        removes the rigid rotation is the recorded one after the step block
+        (`SelfGravitatingGIASolver.solve`).
+        """
         self.owner.appctx["operator_version"] = None
-        with self.bound_lowrank():
-            self.solver.solve()
-        # Projection is part of this recorded map: replay must return the same
-        # gauge as the original forward solve, not an arbitrary rigid rotation.
-        # `self.work` is private to this block and never on the tape, so the
-        # unrecorded form of the projection is the right one here.
-        apply_kernel_projection(self.owner.nullspace, self.work)
+        self.solver.solve()
         self.material.refresh(self.work)
         # Interpolate on the mechanics mesh only, not through mixed-domain split.
         assign_history_slices(self.buffers, self.material.updates)
 
     def solve(self):
+        """One forward step from the owner's solution, recorded as one block."""
         block = ConstitutiveStepBlock(self) if annotate_tape() else None
         with stop_annotating():
             for target, value in zip(self.private_inputs, self.inputs):
@@ -290,13 +338,75 @@ class DirectConstitutiveBackend:
             get_working_tape().add_block(block)
             for output in self.outputs:
                 block.add_output(output.create_block_variable())
+            self.owner.adjoint_block = block
+
+    def _linear_solve(self, kind, rhs, solution):
+        """Solve one linear derivative system of the step, and check its residual.
+
+        The operator is the Jacobian `J` of the step at the state in `work`
+        (`kind="tangent"`) or its transpose (`kind="adjoint"`), matrix-free,
+        with the low-rank DtN action on it on the low-rank path. The matrix
+        and the solver are built at the first solve of each kind and
+        reassembled in place afterwards.
+
+        Args:
+          kind: "adjoint" or "tangent".
+          rhs: The right-hand side, a Cofunction; its rows of the strong
+            boundary conditions are set to zero here.
+          solution: The Function to write the solution into.
+
+        Raises:
+          RuntimeError: If the true relative residual is above 1e-8.
+        """
+        owner = self.owner
+        owner.appctx["operator_version"] = None
+        form = fd.adjoint(self.J) if kind == "adjoint" else self.J
+        if kind not in self.derivative_solvers:
+            matrix = fd.assemble(form, bcs=owner.strong_bcs, mat_type='matfree',
+                                 appctx=owner.appctx)
+            if self.lowrank:
+                owner.augment_jacobian(None, matrix.petscmat)
+            # The derivative options of the solver without its SNES part: no
+            # accepted cap on the outer Krylov solve, so a capped derivative
+            # solve raises (`StokesSolverBase.adjoint_solver_parameters`).
+            options = {k: v for k, v in owner.adjoint_solver_parameters().items()
+                       if not k.startswith('snes_')}
+            # The transpose operator has the forward nullspaces swapped.
+            nullspace, transpose_nullspace = owner.nullspace, owner.transpose_nullspace
+            if kind == "adjoint":
+                nullspace, transpose_nullspace = transpose_nullspace or nullspace, nullspace
+            solver = fd.LinearSolver(
+                matrix, solver_parameters=options, nullspace=nullspace,
+                transpose_nullspace=transpose_nullspace, near_nullspace=owner.near_nullspace,
+                appctx=owner.appctx)
+            self.derivative_solvers[kind] = (matrix, solver)
+        else:
+            matrix, solver = self.derivative_solvers[kind]
+            fd.assemble(form, bcs=owner.strong_bcs, tensor=matrix, mat_type='matfree',
+                        appctx=owner.appctx)
+            if self.lowrank:
+                owner.augment_jacobian(None, matrix.petscmat)
+            solver.invalidate_jacobian()
+        for bc in owner.strong_bcs:
+            bc.zero(rhs)
+        solver.solve(solution, rhs)
+        with solution.dat.vec_ro as x, rhs.dat.vec_ro as b:
+            r = b.duplicate()
+            matrix.petscmat.mult(x, r)
+            r.aypx(-1, b)
+            relative = r.norm()/max(b.norm(), 1e-30)
+            r.destroy()
+        if relative > 1e-8:
+            raise RuntimeError(f"Direct {kind} solve true relative residual {relative}")
 
     def reverse(self, seeds):
-        with self.bound_lowrank():
-            self._reverse(seeds)
+        """Solve the adjoint system of the step for the seeds of its outputs.
 
-    def _reverse(self, seeds):
-        self.owner.appctx["operator_version"] = None
+        Args:
+          seeds: The adjoint seeds of `outputs`: a Cofunction on the mixed
+            space for the solution, then one Cofunction (or None) per history
+            buffer.
+        """
         for density, seed, weights in zip(self.densities, seeds[1:], self.weights):
             if seed is None:
                 density.assign(0)
@@ -305,66 +415,89 @@ class DirectConstitutiveBackend:
         rhs = fd.assemble(self.rhs_form)
         if seeds[0] is not None:
             rhs += seeds[0]
-        # The forward result is projected onto the complement of the rigid
-        # kernel. Apply the transpose of that Euclidean projection to its seed.
-        # `rhs` is a Cofunction, and the projection is symmetric in
-        # coefficient space, so the same function applies the transpose.
-        apply_kernel_projection(self.owner.nullspace, rhs)
-        if self.matrix is None:
-            self.matrix = fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, mat_type='matfree',
-                                      appctx=self.owner.appctx)
-            if self.lowrank:
-                self.owner.augment_jacobian(None, self.matrix.petscmat)
-            # The derivative options of the solver without its SNES part: no
-            # accepted cap on the outer Krylov solve, so a capped transpose
-            # solve raises (`StokesSolverBase.adjoint_solver_parameters`).
-            options = {k: v for k, v in self.owner.adjoint_solver_parameters().items()
-                       if not k.startswith('snes_')}
-            self.linear_solver = fd.LinearSolver(
-                self.matrix, solver_parameters=options,
-                nullspace=self.owner.transpose_nullspace or self.owner.nullspace,
-                transpose_nullspace=self.owner.nullspace, near_nullspace=self.owner.near_nullspace,
-                appctx=self.owner.appctx)
-        else:
-            fd.assemble(fd.adjoint(self.J), bcs=self.owner.strong_bcs, tensor=self.matrix, mat_type='matfree',
-                        appctx=self.owner.appctx)
-            if self.lowrank:
-                self.owner.augment_jacobian(None, self.matrix.petscmat)
-            self.linear_solver.invalidate_jacobian()
-        for bc in self.owner.strong_bcs:
-            bc.zero(rhs)
-        self.linear_solver.solve(self.adjoint, rhs)
-        with self.adjoint.dat.vec_ro as x, rhs.dat.vec_ro as b:
-            r = b.duplicate()
-            self.matrix.petscmat.mult(x, r)
-            r.aypx(-1, b)
-            relative = r.norm()/max(b.norm(), 1e-30)
-            r.destroy()
-        if relative > 1e-8:
-            raise RuntimeError(f"Direct transpose solve true relative residual {relative}")
+        self._linear_solve("adjoint", rhs, self.adjoint)
 
     def input_gradient(self, index):
+        """The gradient of the step map with respect to input `index`, from the forms.
+
+        The derivative of the low-rank prefactor, which no form carries, is
+        added by `ConstitutiveStepBlock`.
+        """
         if index not in self.gradient_forms:
             coefficient = self.private_inputs[index]
             self.gradient_forms[index] = fd.derivative(
                 self.reverse_functional, coefficient,
                 fd.TestFunction(coefficient.function_space()))
-        gradient = fd.assemble(self.gradient_forms[index])
-        if self.lowrank:
-            # The factored DtN term is outside UFL: add its scalar scaling
-            # derivative explicitly. Fixed geometry/mode rows have no inputs.
-            original = self.inputs[index]
-            sf, bmu, lam = self._theta_values()
-            dtheta = sum(value for factor, value in zip(
-                self._theta_factors, (bmu/lam, sf/lam, -sf*bmu/lam**2)) if original is factor)
-            if dtheta:
-                if original.ufl_shape or original.function_space().ufl_element().family() != "Real":
-                    raise ValueError("DtN row-scaling controls must be scalar Real Functions")
-                with self.work.dat.vec_ro as x, self.adjoint.dat.vec_ro as adjoint:
-                    b = x.duplicate()
-                    b.set(0.)
-                    self.owner.dtn_operator.apply_local(x.array_r, b.array_w, theta=1.)
-                    pairing = adjoint.dot(b)
-                    b.destroy()
-                gradient.dat.data[:] -= dtheta*pairing
-        return gradient
+        return fd.assemble(self.gradient_forms[index])
+
+    def _build_tangent(self):
+        """The forms of the tangent map, with one placeholder per input tangent.
+
+        Built once, at the first tangent sweep. `directions[i]` holds the
+        tangent of input `i` (zero where it has none), `state` the tangent
+        of the mixed solution and `displacement` its displacement part on the
+        mechanics mesh.
+
+        The right-hand side is `(dF/dz) zdot` summed over the inputs that the
+        residual reads. The history tangents are the derivatives of the
+        history updates along `(displacement, zdot)`. Both are taken through
+        the lifted fluidity `q + (E0 - E)/Eq`, whose value is the frozen root
+        `q` and whose derivative is that of the local root, so they include
+        the change of the local constitutive solve. The history expressions
+        are written in the mechanics-mesh displacement `material.u`, as the
+        forward update is, so that they interpolate on the mechanics mesh
+        only.
+        """
+        material = self.material
+        directions = [fd.Function(c.function_space()) for c in self.private_inputs]
+        state = fd.Function(self.owner.solution_space)
+        displacement = fd.Function(material.u.function_space())
+        in_residual = set(self.sensitivity_F.coefficients())
+        rhs_form = sum(fd.derivative(self.sensitivity_F, c, d)
+                       for c, d in zip(self.private_inputs, directions) if c in in_residual)
+        lifted = material.q + (material.E0 - material.equation)/material.Eq
+        history = []
+        for g in material.updates:
+            g = ufl.replace(g, {material.q: lifted})
+            read = set(extract_coefficients(g))
+            tangent = ufl.derivative(g, material.u, displacement)
+            for c, d in zip(self.private_inputs, directions):
+                if c in read:
+                    tangent = tangent + ufl.derivative(g, c, d)
+            history.append(ufl.algorithms.expand_derivatives(tangent))
+        buffers = [fd.Function(m.function_space()) for m in self.buffers]
+        self._tangent = dict(directions=directions, state=state, displacement=displacement,
+                             rhs_form=rhs_form, history=history, buffers=buffers)
+
+    def tangent(self, tlm_inputs, B0_state, theta_coefficient):
+        """The tangent of the step map along the input tangents.
+
+        Solves `J xdot = -(dF/dz) zdot - (d theta_psi/dz zdot) B0 x` and
+        evaluates the history tangents at `(xdot, zdot)`.
+
+        Args:
+          tlm_inputs: The tangent of each input, in the order of `inputs`,
+            or None where the input has none.
+          B0_state: `B0 x` at the forward solution (low-rank path with a
+            tangent of a factor of `theta_psi`), or None.
+          theta_coefficient: `(d theta_psi / dz) zdot`.
+
+        Returns:
+          New Functions, the tangent of each of `outputs` in order.
+        """
+        if self._tangent is None:
+            self._build_tangent()
+        t = self._tangent
+        for direction, value in zip(t["directions"], tlm_inputs):
+            if value is None:
+                direction.assign(0)
+            else:
+                direction.assign(value)
+        rhs = fd.assemble(-t["rhs_form"])
+        if B0_state is not None:
+            with rhs.dat.vec_rw as dv, B0_state.dat.vec_ro as bv:
+                dv.axpy(-theta_coefficient, bv)
+        self._linear_solve("tangent", rhs, t["state"])
+        t["displacement"].assign(t["state"].subfunctions[DISPLACEMENT])
+        assign_history_slices(t["buffers"], t["history"])
+        return [t["state"].copy(deepcopy=True)] + [b.copy(deepcopy=True) for b in t["buffers"]]

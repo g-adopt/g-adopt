@@ -70,6 +70,13 @@ installed last. So the prefactor is computed from THIS block's saved dependency
 values and set on the shared operator immediately before each solve, and
 restored after.
 
+The binding (with the markers of the preconditioner rebuild rule) and the
+`(d theta_psi/dm) B0 psi` term are not written here: they are
+`gadopt.gia_step_adjoint.GIAStepBlockMixin`, which the step block of the
+Quadrature history (`gadopt.constitutive_integrators.ConstitutiveStepBlock`)
+shares. This module adds what only the adopted Firedrake solve blocks need:
+the hooks into their solves and the cached solvers' contexts.
+
 ## Two Firedrakes: the stock solve block and the cached solver block
 
 Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
@@ -95,17 +102,14 @@ constructor accepts them (the constructor removes `adj_kwargs` and
 `TypeError`), so the namespace is the only place to give them.
 """
 
-from contextlib import contextmanager
-
-import numpy as np
 from firedrake import (Cofunction, LinearVariationalProblem,
                        LinearVariationalSolver, NonlinearVariationalSolver,
                        TrialFunction, assemble, derivative)
 from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
-from pyadjoint import Block
 from pyadjoint.tape import annotate_tape
 
-from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords, scalar_value
+from .gia_step_adjoint import GIAStepBlockMixin, TapeSweepMarkerBlock
+from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords
 
 # Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
 # replaces the stock solve block of an annotated variational solve with a
@@ -134,85 +138,6 @@ __all__ = ["CACHED_SOLVER_BLOCKS", "CachedCoupledLowRankDtNSolveBlock",
            "derivative_solver_kwargs",
            "live_solver_objects", "release_taping_solver",
            "require_controls_reach_block"]
-
-
-class TapeSweepMarkerBlock(Block):
-    """A tape block that raises `gia_tape_sweep` when a sweep of the tape starts.
-
-    The rebuild rule of the GIA preconditioners (`gadopt.preconditioners.
-    _RebuildRule`) keys on markers that only `SelfGravitatingGIASolver.solve`
-    moves. A replay at a new control value, or the adjoint sweep that follows
-    it, does not run that method, so without a further marker the replay and
-    derivative solvers keep preconditioner pieces built for the old control
-    value. With a capped outer solve that is a wrong answer and not only a
-    slow one. This block gives the rule that marker.
-
-    `SelfGravitatingGIASolver.solve` puts two of these on the tape around each
-    annotated solve: one before it (`before=True`), which a replay and a
-    tangent sweep reach before the solve block, and one after it, which an
-    adjoint and a Hessian sweep reach before the solve block, because they run
-    the tape backwards. A block counts a new sweep when the direction of the
-    sweep changes, or when the solve index it belongs to does not move on in
-    the direction of the sweep (a replay that starts again at the first step,
-    or a tape of one step). Within one sweep the counter stays, so the lagged
-    rebuild of an adjoint sweep keeps its lag.
-
-    The block has no dependencies and no outputs, so it changes no value on
-    the tape. It writes into the solver's application context, which the
-    forward, replay and derivative solvers of both DtN representations share
-    on this Firedrake; `CachedCoupledLowRankDtNSolveBlock` also copies it
-    into the contexts of its cached solvers (`_bound_to_block`).
-
-    Args:
-      gia_solver: The `SelfGravitatingGIASolver` whose application context
-        holds the counter.
-      solve_index: The `gia_solve_index` of the forward solve this block
-        belongs to.
-      before: `True` for the block in front of the solve, `False` for the one
-        behind it.
-    """
-
-    def __init__(self, gia_solver, solve_index, before):
-        super().__init__()
-        self.gia_solver = gia_solver
-        self.solve_index = solve_index
-        self.before = before
-
-    def __str__(self):
-        return f"TapeSweepMarkerBlock({'before' if self.before else 'after'})"
-
-    def _visit(self, direction):
-        """Count a new sweep if this visit does not continue the last one.
-
-        Args:
-          direction: `+1` for a sweep in tape order (replay, tangent), `-1`
-            for a sweep in reverse order (adjoint, Hessian).
-        """
-        solver = self.gia_solver
-        last = getattr(solver, "_tape_sweep_visit", None)
-        if (last is None or last[0] != direction
-                or (self.solve_index - last[1]) * direction <= 0):
-            solver.appctx["gia_tape_sweep"] = solver.appctx.get("gia_tape_sweep", 0) + 1
-        solver._tape_sweep_visit = (direction, self.solve_index)
-
-    # pyadjoint calls these four for every block of a sweep. The stock
-    # versions return early for a block without outputs, so they are
-    # replaced, not extended.
-    def recompute(self, markings=False):
-        if self.before:
-            self._visit(+1)
-
-    def evaluate_tlm(self, markings=False):
-        if self.before:
-            self._visit(+1)
-
-    def evaluate_adj(self, markings=False):
-        if not self.before:
-            self._visit(-1)
-
-    def evaluate_hessian(self, markings=False):
-        if not self.before:
-            self._visit(-1)
 
 
 def adjoint_solver(block):
@@ -344,261 +269,18 @@ def require_controls_reach_block(block, controls):
                 "(REVIEW-ADJOINT S6.5 D1). Raised here instead.")
 
 
-#: `float()` of one scalar carrier (`gadopt.utility.scalar_value`).
-_scalar = scalar_value
+def _adjoint_solution(prepared, adj_inputs):
+    """The adjoint solution of a solve block's adjoint sweep, or None.
 
-
-class _ThetaPsiTerms:
-    """What both coupled low-rank blocks add to a stock solve block.
-
-    The low-rank feedback enters the residual and the Jacobian as
-    `theta_psi B0 psi` through PETSc callbacks, with
-    `theta_psi = scaling_factor B_mu / Lambda`. The callbacks read the
-    prefactor off the shared `dtn_operator`, which holds the LIVE value. Each
-    block binds the prefactor to its own saved values around its solves, and
-    adds the `(d theta_psi / dm) B0 psi` term, which no form carries, to the
-    adjoint gradient and to the tangent right-hand side. Around the same solves
-    it also sets `gia_solve_index` to the index of its forward solve, so that
-    the rebuild rule of the preconditioners sees the steps move during replay
-    and adjoint (`_bound_to_block`).
-
-    Mixed into `CoupledLowRankDtNSolveBlock` (stock Firedrake) and
-    `CachedCoupledLowRankDtNSolveBlock` (Firedrake PR 4638). Neither is ever
-    constructed: `adopt_coupled_lowrank_block` changes the `__class__` of the
-    block the annotated solve produced.
+    Both Firedrake solve blocks keep it under "adj_sol" in the dict their
+    `prepare_evaluate_adj` returns. None when the block had no seed.
     """
-
-    #: The owning `SelfGravitatingGIASolver`, set by the adopt function. Carries
-    #: the shared `dtn_operator`, the solver parameters and the
-    #: `_include_theta_derivative` switch.
-    gia_solver = None
-    #: The `gia_solve_index` of the forward solve that put this block on the
-    #: tape, set by the adopt function. `_bound_to_block` writes it into the
-    #: application contexts around each replay, adjoint and tangent solve.
-    gia_solve_index = None
-
-    # -- theta_psi, bound from THIS block's saved control values -------------
-    def _saved_scalar(self, obj) -> float:
-        """`obj`'s value at the tape point: its saved output if it is a
-        dependency, otherwise its live value (a control-independent constant)."""
-        for dep in self.get_dependencies():
-            if dep.output is obj:
-                return _scalar(dep.saved_output)
-        return _scalar(obj)
-
-    def _theta_objects(self):
-        s = self.gia_solver
-        return float(s.scaling_factor), s.approximation.B_mu, s.Lambda
-
-    def _bound_theta(self) -> float:
-        """`scaling_factor * B_mu / Lambda` at this block's saved values."""
-        sf, b_mu, lam = self._theta_objects()
-        b = self._saved_scalar(b_mu)
-        if b == 0.0:
-            b = 1.0  # NULL_COUPLING_ROW_SCALE: a deleted row, not a decoupled one
-        return sf * b / self._saved_scalar(lam)
-
-    def _dtheta(self, control) -> float:
-        """`d theta_psi / d control`, zero unless the control is B_mu or Lambda."""
-        sf, b_mu, lam = self._theta_objects()
-        if control is b_mu:
-            return sf / self._saved_scalar(lam)
-        if control is lam:
-            b = self._saved_scalar(b_mu)
-            if b == 0.0:
-                b = 1.0
-            lam_v = self._saved_scalar(lam)
-            return -sf * b / (lam_v * lam_v)
-        return 0.0
-
-    # -- the solve index the preconditioners read ----------------------------
-    def _solve_index_contexts(self):
-        """The application contexts the preconditioners of this block read.
-
-        On stock Firedrake the replay solver is built from the forward
-        solver's keywords and the derivative solvers from
-        `derivative_solver_kwargs`, so all of them carry the forward
-        solver's own `appctx` dict. `CachedCoupledLowRankDtNSolveBlock`
-        overrides this with the cloned dicts of the cached solvers.
-
-        Returns:
-          A list of the `appctx` dicts to write `gia_solve_index` into.
-        """
-        return [self.gia_solver.appctx]
-
-    @contextmanager
-    def _bound_to_block(self):
-        """Bind what the shared solvers read to this block for one solve.
-
-        Three values are bound, and all restored on exit:
-
-        - `theta_psi` on the shared `dtn_operator`, from this block's saved
-          control values. The augmentation callbacks read it at every
-          application.
-        - `gia_solve_index` in the application context, set to the index of
-          the forward solve that put this block on the tape. The rebuild rule
-          of the preconditioners (`gadopt.preconditioners._RebuildRule`)
-          rebuilds when this index moves. Nothing else moves it during a
-          replay or an adjoint sweep, because those solves do not go through
-          `SelfGravitatingGIASolver.solve`. Without this binding the replay
-          and the adjoint keep the preconditioner of their first solve for
-          every later step of every sweep. With it, a replay rebuilds at the
-          same steps as the forward run, and the adjoint sweep rebuilds as it
-          walks back through the steps.
-        - `gia_dt` in the application context, set to the time step of this
-          block's forward solve (`_saved_dt`). The rebuild rule also
-          rebuilds when the time step differs from the one of the last build
-          (`gadopt.preconditioners._published_dt`). The solver's own `dt`
-          object holds its live value, which during a replay or an adjoint
-          sweep is the value of the last forward assignment, not the value
-          of the step being solved. Without this binding a march whose time
-          step changes rebuilds at the change in the forward run only, and
-          the replay and the adjoint keep a preconditioner built for the
-          other time step until the solve count expires the lag.
-
-        Yields:
-          The shared `dtn_operator`.
-        """
-        op = self.gia_solver.dtn_operator
-        saved = op.theta
-        op.theta = self._bound_theta()
-        # A block adopted without an index (none recorded) leaves the
-        # contexts alone. Each context is restored to its own previous value,
-        # so the forward solver's count is unchanged after a replay on stock
-        # Firedrake, where the replay shares the forward dict.
-        all_contexts = self._solve_index_contexts()
-        contexts = [] if self.gia_solve_index is None else all_contexts
-        missing = object()
-        saved_index = [ctx.get("gia_solve_index", missing) for ctx in contexts]
-        for ctx in contexts:
-            ctx["gia_solve_index"] = self.gia_solve_index
-        # The time step of this block, bound in every context the
-        # preconditioners read (not only those with a solve index: the time
-        # step is a property of the solve, whatever the index). A time step
-        # that is not a dependency of the block (a float) cannot change on
-        # the tape and is left alone.
-        dt = self._saved_dt()
-        dt_contexts = [] if dt is None else all_contexts
-        saved_dt = [ctx.get("gia_dt", missing) for ctx in dt_contexts]
-        for ctx in dt_contexts:
-            ctx["gia_dt"] = dt
-        # The tape sweep counter (`TapeSweepMarkerBlock`) into every context
-        # the preconditioners read. Where those are the solver's own dict this
-        # writes the same value back; where Firedrake gave a cached solver a
-        # copy of the dict, the copy would otherwise keep the counter of the
-        # time it was made. A counter is never restored: it only grows.
-        sweep = self.gia_solver.appctx.get("gia_tape_sweep")
-        if sweep is not None:
-            for ctx in all_contexts:
-                ctx["gia_tape_sweep"] = sweep
-        integrator = getattr(self.gia_solver, "time_integrator", None)
-        alpha = None
-        if integrator is not None:
-            for dep in self.get_dependencies():
-                if dep.output is integrator.alpha:
-                    alpha = _scalar(dep.saved_output)
-                    break
-        alpha_contexts = [] if alpha is None else all_contexts
-        saved_alpha = [ctx.get("gia_time_alpha", missing) for ctx in alpha_contexts]
-        for ctx in alpha_contexts:
-            ctx["gia_time_alpha"] = alpha
-        try:
-            yield op
-        finally:
-            op.theta = saved
-            for ctx, value in zip(alpha_contexts, saved_alpha):
-                if value is missing:
-                    ctx.pop("gia_time_alpha", None)
-                else:
-                    ctx["gia_time_alpha"] = value
-            for ctx, value in zip(contexts, saved_index):
-                if value is missing:
-                    ctx.pop("gia_solve_index", None)
-                else:
-                    ctx["gia_solve_index"] = value
-            for ctx, value in zip(dt_contexts, saved_dt):
-                if value is missing:
-                    ctx.pop("gia_dt", None)
-                else:
-                    ctx["gia_dt"] = value
-
-    def _saved_dt(self):
-        """The time step of this block's forward solve, as a float, or None.
-
-        A time step that is a `Function` on the Real space is a coefficient
-        of the residual and so a dependency of the solve block, and its
-        saved output is its value at this point of the tape: the value of
-        the forward solve in an adjoint sweep, and the replayed value in a
-        replay. A float or a `Constant` (a UFL constant value, not a
-        coefficient, so not a dependency) gives None, and the rule then
-        reads the live value.
-        """
-        dt = getattr(self.gia_solver, "dt", None)
-        if dt is None:
-            return None
-        for dep in self.get_dependencies():
-            if dep.output is dt:
-                return _scalar(dep.saved_output)
+    if prepared is None or adj_inputs[0] is None:
         return None
-
-    # -- the low-rank action, as vectors ------------------------------------
-    def _B0_psi(self) -> Cofunction:
-        """`B0 psi` (prefactor one) at the forward solution, as a cofunction."""
-        output = self.get_outputs()[0]
-        psi = output.saved_output
-        out = Cofunction(output.output.function_space().dual())
-        op = self.gia_solver.dtn_operator
-        with psi.dat.vec_ro as xv, out.dat.vec_rw as yv:
-            yv.set(0.0)
-            op.apply_local(xv.array_r, yv.array_w, theta=1.0)
-        return out
-
-    def _lambda_dot_B0_psi(self, adj_sol) -> float:
-        """`lambda . (B0 psi)`, the scalar the theta derivative multiplies."""
-        B0_psi = self._B0_psi()
-        with adj_sol.dat.vec_ro as lv, B0_psi.dat.vec_ro as bv:
-            return float(lv.dot(bv))
-
-    # -- the theta derivative ------------------------------------------------
-    def _add_theta_adjoint_term(self, out, block_variable, prepared, adj_input):
-        """Add `-(d theta_psi / dm) lambda . (B0 psi)` to the gradient `out`.
-
-        The stock gradient is `-lambda^T dF/dm` from the forms, which do not
-        carry `B`. The missing part is a scalar times `d theta_psi / dm`, so it
-        is nonzero only for the controls `B_mu` and `Lambda`, which are `Real`
-        functions or constants: the term is added to every entry of `out`.
-        """
-        if not getattr(self.gia_solver, "_include_theta_derivative", True):
-            return out
-        if prepared is None or adj_input is None:
-            return out
-        control = block_variable.output
-        dth = self._dtheta(control)
-        if dth == 0.0:
-            return out
-        extra = -dth * self._lambda_dot_B0_psi(prepared["adj_sol"])
-        if out is None:
-            out = Cofunction(control.function_space().dual())
-        out.dat.data_wo[:] = np.asarray(out.dat.data_ro) + extra
-        return out
-
-    def _theta_tangent_coefficient(self) -> float:
-        """`(d theta_psi / dm) mdot`, summed over the dependencies that have a
-        tangent value. Zero when the theta derivative is switched off."""
-        if not getattr(self.gia_solver, "_include_theta_derivative", True):
-            return 0.0
-        coeff = 0.0
-        for dep in self.get_dependencies():
-            tlm = dep.tlm_value
-            if tlm is None:
-                continue
-            dth = self._dtheta(dep.output)
-            if dth != 0.0:
-                coeff += dth * _scalar(tlm)
-        return coeff
+    return prepared["adj_sol"]
 
 
-class CoupledLowRankDtNSolveBlock(_ThetaPsiTerms, NonlinearVariationalSolveBlock):
+class CoupledLowRankDtNSolveBlock(GIAStepBlockMixin, NonlinearVariationalSolveBlock):
     """The stock coupled solve block, re-classed to carry `A + B`.
 
     Used on a Firedrake without cached solver blocks. Never constructed
@@ -636,8 +318,9 @@ class CoupledLowRankDtNSolveBlock(_ThetaPsiTerms, NonlinearVariationalSolveBlock
                                prepared=None):
         out = super().evaluate_adj_component(inputs, adj_inputs, block_variable,
                                              idx, prepared)
-        return self._add_theta_adjoint_term(out, block_variable, prepared,
-                                            adj_inputs[0])
+        return self._add_theta_adjoint_term(
+            out, block_variable.output, self.get_outputs()[0].saved_output,
+            _adjoint_solution(prepared, adj_inputs))
 
     # -- 3 & 5. the tangent operator and its theta right-hand side ----------
     def _assemble_and_solve_tlm_eq(self, dFdu, dFdm, dudm, bcs):
@@ -647,7 +330,7 @@ class CoupledLowRankDtNSolveBlock(_ThetaPsiTerms, NonlinearVariationalSolveBlock
             # column that the stock form is missing. Through the monolithic
             # vec, never `dat.data`: `dFdm` is a cofunction on the MIXED
             # space, whose `dat.data` is a tuple of per-field arrays.
-            B0_psi = self._B0_psi()
+            B0_psi = self._B0_action(self.get_outputs()[0].saved_output)
             if not isinstance(dFdm, Cofunction):
                 dFdm = assemble(dFdm)
             dFdm = dFdm.copy()
@@ -671,7 +354,7 @@ class CoupledLowRankDtNSolveBlock(_ThetaPsiTerms, NonlinearVariationalSolveBlock
 
 
 if CACHED_SOLVER_BLOCKS:
-    class CachedCoupledLowRankDtNSolveBlock(_ThetaPsiTerms, CachedSolverBlock):
+    class CachedCoupledLowRankDtNSolveBlock(GIAStepBlockMixin, CachedSolverBlock):
         """The cached solve block of Firedrake PR 4638, re-classed for `A + B`.
 
         The forward, adjoint and tangent solvers of a `CachedSolverBlock` are
@@ -731,8 +414,9 @@ if CACHED_SOLVER_BLOCKS:
                                    idx, prepared=None):
             out = super().evaluate_adj_component(inputs, adj_inputs,
                                                  block_variable, idx, prepared)
-            return self._add_theta_adjoint_term(out, block_variable, prepared,
-                                                adj_inputs[0])
+            return self._add_theta_adjoint_term(
+                out, block_variable.output, self.get_outputs()[0].saved_output,
+                _adjoint_solution(prepared, adj_inputs))
 
         # -- the tangent, with the theta column on its right-hand side -------
         def evaluate_tlm_component(self, inputs, tlm_inputs, block_variable,
@@ -761,7 +445,7 @@ if CACHED_SOLVER_BLOCKS:
 
             coeff = self._theta_tangent_coefficient()
             if coeff != 0.0:
-                B0_psi = self._B0_psi()
+                B0_psi = self._B0_action(self.get_outputs()[0].saved_output)
                 with tlm_rhs.dat.vec_rw as dv, B0_psi.dat.vec_ro as bv:
                     dv.axpy(-coeff, bv)
 
@@ -1150,6 +834,12 @@ def release_taping_solver(gia_solver, *, max_rounds=12, count_objects=True):
         # No coupled solve is on the tape, so no cached solver exists, and
         # the taping solver is the only solver of this problem.
         result["reason"] = "no coupled solve block on the tape"
+        return result
+    if not hasattr(block, "forward_cache"):
+        # The Quadrature step block replays and differentiates through the
+        # solvers of its backend, the taping solver among them, so there is
+        # no second solver set to free and the taping solver must stay.
+        result["reason"] = "the step block replays through the taping solver"
         return result
     # The cached solvers must be other objects than the taping solver;
     # otherwise the release would destroy the solver of the replay.
