@@ -159,14 +159,6 @@ class _AutoRichardsonMixin:
     detect a change in one quantity each, and neither is guaranteed to notice
     a slow drift in something else. It is a backstop, so its default is long.
 
-    When a lag is in use, all three are checked only on the steps where the
-    snapshot refreshes. Between refreshes the operator the smoother reads is
-    identical, so a measurement returns what it returned last time. One
-    consequence is that both the reference and the value tested against it
-    are then the iteration counts of the steps with the stalest snapshot.
-    That is self-consistent, but it means the condition responds to staleness
-    and to spectral drift together rather than to drift alone.
-
     Options, all with the outer preconditioner's prefix:
 
     ``vlumping_omega_auto``
