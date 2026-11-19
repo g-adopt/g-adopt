@@ -41,6 +41,7 @@ Two structural rules, both paid for elsewhere:
 import sys
 from pathlib import Path
 
+import gadopt  # noqa: F401  - before firedrake, as the drivers do
 import firedrake as fd
 from firedrake.petsc import PETSc
 import numpy as np
@@ -55,17 +56,15 @@ from firedrake.adjoint import (
 )
 from pyadjoint.tape import annotate_tape
 
-from gadopt import (
-    CompressibleInternalVariableApproximation,
-    CylindricalDtN,
-    FluidCore,
-    SelfGravitatingGIASolver,
-    self_gravitating_gia_space,
-)
-from gadopt.gia_gravity import (
+from gadopt import CylindricalDtN
+from gadopt.approximations import CompressibleInternalVariableApproximation
+from gadopt.gia_couplings import FluidCore, Rotation, SurfaceLoad
+from gadopt.gia_presets import (
+    OMEGA_SQ_EARTH,
     selfgrav_dtn_iterative_solver_parameters,
     selfgrav_dtn_lowrank_direct_solver_parameters,
 )
+from gadopt.gia_solver import SelfGravitatingGIASolver
 
 # Siblings on the test path: the guarded Taylor driver and the matfree-safe
 # first-order ladder. Reused rather than re-derived, so that the low-rank arm is
@@ -136,10 +135,12 @@ def preset_parameters(preset, representation, *, rotation=False,
 CONTRACT = {
     # Confirmed by the Lead from the source.
     "keyword": "dtn_representation",          # SelfGravitatingGIASolver(...)
-    "default": "multiplier",
-    # `SelfGravitatingGIASolver.theta_psi`, a property at gia_gravity.py:1693,
-    # returning `scaling_factor * B_mu / Lambda`. `_row_scale_B_mu` floors
-    # `B_mu` to 1.0 when it is exactly zero, which is what L15 is about.
+    # `gadopt.gia_solver.SelfGravitatingGIASolver` defaults to the low-rank
+    # representation; every build in this file names its representation.
+    "default": "lowrank",
+    # `SelfGravitatingGIASolver.theta_psi` (`gadopt/gia_solver.py`), a
+    # property returning `scaling_factor * B_mu / Lambda`. `row_scale_B_mu`
+    # floors `B_mu` to 1.0 when it is exactly zero, which is what L15 is about.
     "theta_psi_attr": "theta_psi",
     # `solver.dtn_operator`, a `CoupledLowRankDtN` (gadopt/dtn_coupled.py:73).
     # Three entry points, all on the MONOLITHIC mixed vector and not on the
@@ -254,54 +255,86 @@ def real(mesh, value):
 
 
 def _build(meshes, control_name, control, representation, *,
-           rotation=False, declare_nullspace=False,
-           declare_transpose_nullspace=False, b_mu=None,
+           rotation=False, declare_nullspace=False, b_mu=None,
            fluid_core=False, solver_parameters="direct",
            approximation_kwargs=None, solver_parameters_extra=None):
     """Assemble the coupled solver with exactly one control live.
 
-    Mirrors `test_gia_gravity.build`, but `self_gravity_number` is threaded into
-    BOTH the space and the approximation, because `Lambda` enters in two places
-    and a builder that fed only one would give a Taylor test that passed while
-    measuring half the dependence.
+    Mirrors `test_gia_gravity.build`. `self_gravity_number` is the
+    approximation's alone, and it enters the self-gravity term of the momentum
+    equation, `theta_psi` and the potential source; the solver reads it from
+    there, so a control on it reaches every place.
+
+    The surface load is one `SurfaceLoad` on Re with the surface density
+    `sigma = s SIGMA_HAT (cos 2 theta + m)`, where `s` is the `sigma` control
+    (1 otherwise) and the mean `m = 0.25` on a fluid core, 0 on a rigid one.
+    The coupling writes the traction `B_mu g_surface sigma`. Here `g_surface`
+    is `B_MU / (B_mu s)`, so the traction is `B_MU SIGMA_HAT (cos 2 theta + m)`
+    whatever `B_mu` and `s` are. This keeps each control in its channels:
+
+    - family 2 (`sigma`) enters the mass sheet only, that is the potential
+      row, the rotation row and the 2-D monopole datum, and not the traction;
+    - `B_mu` (family 4, and the `b_mu` knob of L9) enters the self-gravity
+      term and `theta_psi`, and not the traction, so `B_mu = 1e-30` closes
+      the momentum channel and leaves the load in place.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      control_name: the key of `CONTROL_VALUES` that `control` replaces.
+      control: a `Real` Function on `control_mesh(meshes, control_name)`.
+      representation: `"multiplier"` or `"lowrank"`.
+      rotation: add the rotational closure with the polar moment of the
+        mantle and the Earth's rotation rate.
+      declare_nullspace: declare the rigid rotation as nullspace and
+        transpose nullspace (`nullspace="rigid_rotation"`), as the GIAMIP
+        Exp01 driver does; it needs a fluid core.
+      b_mu: the value of `B_mu` when it is not the control; `None` is `B_MU`.
+      fluid_core: a `FluidCore` of density 2 at the CMB, or a rigid core
+        (`un = 0`).
+      solver_parameters: a preset name or a complete dictionary.
+      approximation_kwargs: approximation settings on top of the defaults,
+        for example a power law.
+      solver_parameters_extra: options added last.
+
+    Returns:
+      `(solver, u, psi)`: the solver, and the displacement and potential that
+      it overwrites with the solution after every solve.
     """
     parent, sub = meshes
-    one = fd.Constant(1.0)
 
     def pick(name, default):
         return control if control_name == name else default
 
-    b_mu_default = fd.Constant(B_MU if b_mu is None else b_mu)
+    b_mu_value = pick("B_mu", fd.Constant(B_MU if b_mu is None else b_mu))
     lam = pick("Lambda", fd.Constant(LAMBDA))
-    # Family 2 is defined as "enters `boundary_source` only", so the control
-    # scales the parent-side interior sigma sheet and NOT the mantle-side
-    # normal stress. A parent `Real` inside the submesh integral would also
-    # raise MismatchingDomainError.
-    sigma_scale = pick("sigma", one)
+    sigma_scale = pick("sigma", fd.Constant(1.0))
 
-    Xp = fd.SpatialCoordinate(parent)
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
     Xm = fd.SpatialCoordinate(sub)
     gravity_bcs = {
         CURVE_OUTER: {"dtn": CylindricalDtN(TRUNCATION)},
         CURVE_INNER: {"dtn": CylindricalDtN(TRUNCATION)},
-        CURVE_RE: {"interior_sigma":
-                   sigma_scale * SIGMA_HAT * fd.cos(2 * fd.atan2(Xp[1], Xp[0]))},
     }
-    surface_load = fd.Constant(B_MU) * SIGMA_HAT * (
-        fd.cos(2 * fd.atan2(Xm[1], Xm[0]))
-        + (fd.Constant(0.25) if fluid_core else fd.Constant(0.0)))
-    mechanics_bcs = {
-        CURVE_RE: {"normal_stress": surface_load},
-    }
-    if not fluid_core:
+    mean = fd.Constant(0.25) if fluid_core else fd.Constant(0.0)
+    pattern = SIGMA_HAT * (fd.cos(2 * fd.atan2(Xm[1], Xm[0])) + mean)
+    # `B_mu g_surface sigma = B_MU pattern`: the traction does not depend on
+    # the `B_mu` or the `sigma` control (see the docstring).
+    couplings = [SurfaceLoad(
+        boundary=CURVE_RE, sigma=sigma_scale * pattern,
+        g_surface=fd.Constant(B_MU) / (b_mu_value * sigma_scale))]
+    mechanics_bcs = {}
+    if fluid_core:
+        couplings.append(FluidCore(boundary=CURVE_RC, rho_core=2.0))
+    else:
         mechanics_bcs[CURVE_RC] = {"un": 0.0}
-
-    Z, layout = self_gravitating_gia_space(
-        sub, parent, gravity_bcs=gravity_bcs, rotation=rotation,
-        fluid_core=fluid_core,
-        n_internal_variables=1, condense_internal_variables=False,
-        self_gravity_number=lam, dtn_representation=representation)
-    z = fd.Function(Z)
+    if rotation:
+        # The polar moment of the mantle, `C = int |x|^2 dx`, on the submesh
+        # cells paired with the parent's cells.
+        dx_m = fd.Measure("dx", domain=sub,
+                          intersect_measures=(fd.Measure("dx", domain=parent),))
+        couplings.append(Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m),
+                                  Omega_sq=OMEGA_SQ_EARTH))
 
     approx = CompressibleInternalVariableApproximation(
         bulk_modulus=1.0,
@@ -309,52 +342,48 @@ def _build(meshes, control_name, control, representation, *,
         shear_modulus=pick("shear_modulus", fd.Constant(1.0)),
         viscosity=pick("viscosity", fd.Constant(1.0)),
         g=pick("G", fd.Constant(G0)),
-        B_mu=pick("B_mu", b_mu_default),
+        B_mu=b_mu_value,
         self_gravity_number=lam,
         **(approximation_kwargs or {}))
 
-    dx_m = fd.Measure("dx", domain=sub,
-                      intersect_measures=(fd.Measure("dx", domain=parent),))
     kwargs = {}
     if declare_nullspace:
-        from gadopt import rigid_rotation_nullspace
-        kwargs["nullspace"] = rigid_rotation_nullspace(Z, layout)
-        if declare_transpose_nullspace:
-            # As the GIAMIP Exp01 driver does: the rotation is also a left
-            # kernel, so the right-hand side is made orthogonal to it.
-            kwargs["transpose_nullspace"] = kwargs["nullspace"]
+        kwargs["nullspace"] = "rigid_rotation"
     if solver_parameters_extra:
         kwargs["solver_parameters_extra"] = solver_parameters_extra
 
     solver = SelfGravitatingGIASolver(
-        z, approx, layout=layout, dt=1.0, bcs=mechanics_bcs,
-        rotation_moments={"C": fd.assemble(fd.dot(Xm, Xm) * dx_m)},
-        fluid_core=(FluidCore(boundary=CURVE_RC, rho_core=2.0)
-                    if fluid_core else None),
+        u, psi, approx, dt=fd.Constant(1.0), gravity_bcs=gravity_bcs,
+        bcs=mechanics_bcs, couplings=couplings,
         solver_parameters=solver_parameters,
         **{CONTRACT["keyword"]: representation}, **kwargs)
-    return solver, z, layout
+    return solver, u, psi
 
 
-def _objective(z, layout, sub):
-    """J = ||u||^2 over the mantle, read through UFL split of the mixed solution.
+def fluid_core_of(solver):
+    """The `FluidCore` coupling of `solver`; its `pressure()` is the `Real` field."""
+    return next(c for c in solver.couplings if isinstance(c, FluidCore))
 
-    Through `fd.split`, i.e. a reference the tape owns -- never `float(...)` and
-    never `.coefficients()`, both of which detach.
+
+def _objective(solver):
+    """J = ||u||^2 over the mantle, read through the UFL split of the solution.
+
+    `solver.field("displacement")` is a UFL split of the solved mixed
+    Function, a reference the tape owns -- never `float(...)` and never
+    `.coefficients()`, both of which detach.
     """
-    u = fd.split(z)[layout.displacement]
-    return fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
+    u = solver.field("displacement")
+    return fd.assemble(fd.inner(u, u) * fd.dx(domain=solver.mesh))
 
 
 def forward(meshes, control_name, control, representation, *, tape_it,
             solver_flags=None, **build_kwargs):
-    """One taped (or untaped) coupled solve; returns (J, solver, z, layout).
+    """One taped (or untaped) coupled solve; returns (J, solver).
 
     `solver_flags` are set on the solver between construction and `solve()`.
     That is where `_include_theta_derivative` goes for L11b: it must be flipped
     after the solver exists and before the gradient is taken.
     """
-    _, sub = meshes
     def _apply(solver):
         for name, value in (solver_flags or {}).items():
             if not hasattr(solver, name):
@@ -365,23 +394,23 @@ def forward(meshes, control_name, control, representation, *, tape_it,
 
     if tape_it:
         with stop_annotating():
-            solver, z, layout = _build(meshes, control_name, control,
-                                       representation, **build_kwargs)
+            solver, _, _ = _build(meshes, control_name, control,
+                                  representation, **build_kwargs)
             _apply(solver)
         solver.solve()
-        return _objective(z, layout, sub), solver, z, layout
+        return _objective(solver), solver
     with stop_annotating():
-        solver, z, layout = _build(meshes, control_name, control,
-                                   representation, **build_kwargs)
+        solver, _, _ = _build(meshes, control_name, control,
+                              representation, **build_kwargs)
         _apply(solver)
         solver.solve()
-        return _objective(z, layout, sub), solver, z, layout
+        return _objective(solver), solver
 
 
 # ---------------------------------------------------------------------------
 # Rule 16: `B` must be doing something before any assertion is believed
 # ---------------------------------------------------------------------------
-def b_liveness(solver, z, representation):
+def b_liveness(solver, representation):
     """`||theta B z|| / ||F(z)||` at the converged state.
 
     Both reviewers shipped a dead control on the same day -- a mode orthogonal
@@ -392,14 +421,22 @@ def b_liveness(solver, z, representation):
     On the multiplier arm there is no `B`; the equivalent liveness statement is
     that the DtN multipliers are not all zero, which is the same question asked
     of the representation that carries the coupling there.
+
+    Args:
+      solver: a solved `SelfGravitatingGIASolver`; `z` is its mixed solution.
+      representation: `"multiplier"` or `"lowrank"`.
+
+    Returns:
+      The ratio, after asserting that it is above `B_LIVENESS_FLOOR`.
     """
+    z = solver.solution
     residual = fd.assemble(solver.F)
     with residual.dat.vec_ro as rv:
         fnorm = rv.norm()
     assert fnorm > 0.0, "residual is identically zero: nothing to measure"
 
     if representation == "multiplier":
-        mults = [z.subfunctions[i] for i in solver.layout.multipliers]
+        mults = [z.subfunctions[i] for i in solver.multiplier_indices]
         num = float(np.sqrt(sum(float(np.sum(m.dat.data_ro ** 2))
                                 for m in mults)))
         label = "||lambda||"
@@ -445,14 +482,14 @@ def reduced_functional(meshes, control_name, value, representation,
     continue_annotation()
     try:
         m = Control(control)
-        J, solver, z, layout = forward(meshes, control_name, control,
+        J, solver = forward(meshes, control_name, control,
                                        representation, tape_it=True,
                                        **build_kwargs)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
     if check_liveness:
-        b_liveness(solver, z, representation)
+        b_liveness(solver, representation)
     return Jhat, control, direction, J, solver
 
 
@@ -477,7 +514,7 @@ def gradient_against_fresh_solves(meshes, control_name, value, representation,
     def at(shift):
         with stop_annotating():
             m = real(control_mesh(meshes, control_name), value + shift)
-            J, fresh_solver, _, _ = forward(meshes, control_name, m,
+            J, fresh_solver = forward(meshes, control_name, m,
                                             representation, tape_it=False,
                                             **build_kwargs)
             # Anti-contamination (REVIEW-ADJOINT S3, "the instrument that is
@@ -508,11 +545,14 @@ CONTROL_VALUES = {
 #: `Real` function on the mantle submesh used inside a parent-mesh integral
 #: raises `tsfc.exceptions.MismatchingDomainError`, which is how the first
 #: `sigma` run failed. The mantle material properties live on the submesh; the
-#: ice load and the three `theta_psi` constants touch the parent-mesh potential
-#: row and live on the parent.
+#: three `theta_psi` constants touch the parent-mesh potential row and live on
+#: the parent. The load scale `sigma` lives on the submesh, because
+#: `SurfaceLoad` takes its density on the mechanics mesh and integrates every
+#: use of it (the traction, the mass sheet in the potential row) on the
+#: mechanics mesh's `ds` paired with the parent's `dS`.
 CONTROL_MESH = {
     "shear_modulus": "sub", "viscosity": "sub", "rho_0": "sub",
-    "sigma": "parent", "Lambda": "parent", "B_mu": "parent", "G": "parent",
+    "sigma": "sub", "Lambda": "parent", "B_mu": "parent", "G": "parent",
 }
 
 
@@ -590,7 +630,7 @@ def test_taylor_with_a_power_law(meshes, control_name, preset):
     cmesh = control_mesh(meshes, control_name)
     shifted = 1.05 * value
     with stop_annotating():
-        J_direct, _, _, _ = forward(
+        J_direct, _ = forward(
             meshes, control_name, real(cmesh, shifted), "lowrank",
             tape_it=False, fluid_core=True, solver_parameters=parameters,
             approximation_kwargs=POWER_LAW,
@@ -655,7 +695,7 @@ def test_replay_matches_fresh_solve(meshes, representation, control_name):
     cmesh = control_mesh(meshes, control_name)
     shifted = 1.05 * value
     with stop_annotating():
-        J_direct, _, _, _ = forward(meshes, control_name, real(cmesh, shifted),
+        J_direct, _ = forward(meshes, control_name, real(cmesh, shifted),
                                     representation, tape_it=False)
     J_replay = float(Jhat(real(cmesh, shifted)))
     relative = abs(J_replay - float(J_direct)) / abs(float(J_direct))
@@ -973,15 +1013,15 @@ def test_geoid_is_differentiable(meshes, representation, control_name):
     try:
         m = Control(control)
         with stop_annotating():
-            solver, z, layout = _build(meshes, control_name, control,
-                                       representation)
+            solver, _, _ = _build(meshes, control_name, control,
+                                  representation)
         solver.solve()
         J = _geoid_objective(solver, parent)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
 
-    b_liveness(solver, z, representation)
+    b_liveness(solver, representation)
     assert abs(float(J)) > 0.0, (
         "the geoid objective is exactly zero: this is the failure mode "
         "`coefficients()` already had once, through a zip that truncated to "
@@ -1138,8 +1178,9 @@ def test_one_solve_adds_one_block(meshes):
     continue_annotation()
     try:
         n0 = len(tape.get_blocks())
-        _, _, z, _ = forward(meshes, "shear_modulus", control, "multiplier",
-                             tape_it=True)
+        _, solver = forward(meshes, "shear_modulus", control, "multiplier",
+                            tape_it=True)
+        z = solver.solution
     finally:
         pause_annotation()
     added = tape.get_blocks()[n0:]
@@ -1158,8 +1199,8 @@ def test_one_solve_adds_one_block(meshes):
 #
 # Measured: one post-solve assign lands a `FunctionAssignBlock` after the solve
 # block, and `get_blocks()[-1]` then picks up the wrong one. Not hypothetical --
-# `project_out_nullspace` adds a `KernelProjectionBlock` and an assign after
-# the solve, and `update_total_mass` assembles and assigns before it.
+# `solve` adds a kernel projection and the assigns into `u` and `psi` after
+# the solve block, and `update_total_mass` assembles and assigns before it.
 # ===========================================================================
 def test_block_is_found_by_output_identity_not_position(meshes):
     """L26: an intervening block must not defeat the adoption."""
@@ -1173,10 +1214,13 @@ def test_block_is_found_by_output_identity_not_position(meshes):
     continue_annotation()
     try:
         n0 = len(tape.get_blocks())
-        _, _, z, _ = forward(meshes, "shear_modulus", control, "multiplier",
-                             tape_it=True)
+        _, solver = forward(meshes, "shear_modulus", control, "multiplier",
+                            tape_it=True)
+        z = solver.solution
         spoiler = fd.Function(z.function_space())
-        spoiler.assign(z)                      # a block after the solve, as project_out_nullspace adds
+        # A block after the solve, as the solver's own kernel projection and
+        # its assigns into `u` and `psi` add.
+        spoiler.assign(z)
     finally:
         pause_annotation()
 
@@ -1205,9 +1249,9 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     """L27: two solves on ONE solver, each block using its own `theta`.
 
     The timestep loop is `solver.solve()` twice on one solver:
-    `StokesSolverBase.solve()` advances the viscous history inside the call
-    (`stokes_integrators.py:502-505`) and `dt` is baked in at construction, so
-    one solver marches at one `dt` with no rebuild.
+    `SelfGravitatingGIASolver.solve()` advances the viscous history inside the
+    call and `dt` is held fixed here, so one solver marches at one `dt` with
+    no rebuild.
 
     **Two independent solvers sharing a solution would not reproduce the
     defect.** The shared `_ad_solvers` dict is what carries `theta` across
@@ -1221,7 +1265,6 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     captured after EACH call. Reading it once at the end gives only the most
     recent block, which is exactly the state that would hide the defect.
     """
-    _, sub = meshes
     tape = get_working_tape()
     tape.clear_tape()
     with stop_annotating():
@@ -1231,12 +1274,12 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     try:
         m = Control(control)
         with stop_annotating():
-            solver, z, layout = _build(meshes, "Lambda", control,
-                                       representation)
+            solver, _, _ = _build(meshes, "Lambda", control,
+                                  representation)
         for _ in range(2):
             solver.solve()
             blocks.append(_contract(solver, "block_attr"))
-        J = _objective(z, layout, sub)
+        J = _objective(solver)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -1261,11 +1304,11 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     def at(shift):
         with stop_annotating():
             mm = real(control_mesh(meshes, "Lambda"), value + shift)
-            s2, z2, l2 = _build(meshes, "Lambda", mm, representation)
+            s2, _, _ = _build(meshes, "Lambda", mm, representation)
             assert s2 is not solver
             s2.solve()
             s2.solve()
-            return float(_objective(z2, l2, sub))
+            return float(_objective(s2))
 
     eps = FD_EPS * value
     difference = (at(+eps) - at(-eps)) / (2 * eps)
@@ -1307,7 +1350,6 @@ def test_control_absent_from_residual_raises_at_install(meshes, representation):
     `theta_psi` was frozen as a float, is 1474% wrong at Taylor rate 1.9993 and
     the check correctly stays quiet. L11 remains the gate.
     """
-    _, sub = meshes
     with stop_annotating():
         used = real(control_mesh(meshes, "Lambda"), CONTROL_VALUES["Lambda"])
         # A different object, of the right space, that never enters the form.
@@ -1318,14 +1360,14 @@ def test_control_absent_from_residual_raises_at_install(meshes, representation):
     try:
         m = Control(orphan)
         with stop_annotating():
-            solver, z, layout = _build(meshes, "Lambda", used, representation)
+            solver, _, _ = _build(meshes, "Lambda", used, representation)
         solver.solve()
         block = _contract(solver, "block_attr")
         deps = [bv.output for bv in block.get_dependencies()]
         assert orphan not in deps, (
             "the orphan control reached the residual; this test no longer "
             "exercises the D1 trap")
-        J = _objective(z, layout, sub)
+        J = _objective(solver)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -1377,11 +1419,11 @@ def test_fluid_core_lowrank_replay_matches_fresh_solve(meshes, preset):
     Jhat, _, _, _, solver = reduced_functional(
         meshes, "shear_modulus", value, "lowrank", fluid_core=True,
         solver_parameters=parameters)
-    assert abs(float(solver.core_pressure)) > 1e-12
+    assert abs(float(fluid_core_of(solver).pressure())) > 1e-12
 
     shifted = 1.05 * value
     with stop_annotating():
-        J_direct, _, _, _ = forward(
+        J_direct, _ = forward(
             meshes, "shear_modulus", real(meshes[1], shifted), "lowrank",
             tape_it=False, fluid_core=True, solver_parameters=parameters)
     J_replay = float(Jhat(real(meshes[1], shifted)))
@@ -1421,11 +1463,11 @@ def test_fluid_core_multiplier_and_lowrank_match(meshes):
     with stop_annotating():
         for representation in REPRESENTATIONS:
             control = real(meshes[1], CONTROL_VALUES["shear_modulus"])
-            J, solver, _, _ = forward(
+            J, solver = forward(
                 meshes, "shear_modulus", control, representation,
                 tape_it=False, fluid_core=True)
             answers[representation] = float(J)
-            pressures[representation] = float(solver.core_pressure)
+            pressures[representation] = float(fluid_core_of(solver).pressure())
     assert abs(answers["multiplier"] - answers["lowrank"]) \
         / abs(answers["multiplier"]) < 1e-10
     assert abs(pressures["multiplier"] - pressures["lowrank"]) \
@@ -1439,14 +1481,16 @@ def test_fluid_core_lowrank_parallel_forward_solve(meshes):
     assert comm.size == 2, "FC5 must run on exactly two ranks"
     with stop_annotating():
         control = real(meshes[1], CONTROL_VALUES["shear_modulus"])
-        J, solver, _, _ = forward(
+        J, solver = forward(
             meshes, "shear_modulus", control, "lowrank", tape_it=False,
             fluid_core=True)
 
     n = fd.FacetNormal(solver.mesh)
-    dss = solver.fluid_core_measure()(CURVE_RC)
-    flux = float(fd.assemble(fd.dot(solver.displacement, n) * dss))
-    pressure = float(solver.core_pressure)
+    # The CMB measure of the coupling: the mantle's `ds` on Rc, paired with
+    # the parent's `dS`, at the boundary quadrature degree.
+    dss = fluid_core_of(solver).measure()
+    flux = float(fd.assemble(fd.dot(solver.field("displacement"), n) * dss))
+    pressure = float(fluid_core_of(solver).pressure())
     assert abs(flux) < 1e-11
     assert abs(pressure) > 1e-12
     assert np.isfinite(float(J))
@@ -1480,7 +1524,7 @@ def test_replay_and_adjoint_see_the_taped_solve_index(meshes, monkeypatch):
     n_solves = 3
     with stop_annotating():
         control = real(cmesh, CONTROL_VALUES[control_name])
-        solver, z, layout = _build(
+        solver, _, _ = _build(
             meshes, control_name, control, "lowrank", fluid_core=True,
             solver_parameters=preset_parameters("iterative", "lowrank",
                                                 fluid_core=True))
@@ -1489,7 +1533,7 @@ def test_replay_and_adjoint_see_the_taped_solve_index(meshes, monkeypatch):
         m = Control(control)
         for _ in range(n_solves):
             solver.solve()
-        J = _objective(z, layout, meshes[1])
+        J = _objective(solver)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -1605,16 +1649,16 @@ def test_declared_nullspaces_are_exact_on_the_lowrank_operator(meshes):
     cmesh = control_mesh(meshes, control_name)
     with stop_annotating():
         control = real(cmesh, CONTROL_VALUES[control_name])
-        solver, z, layout = _build(
+        solver, _, _ = _build(
             meshes, control_name, control, "lowrank", fluid_core=True,
-            declare_nullspace=True, declare_transpose_nullspace=True,
+            declare_nullspace=True,
             solver_parameters=preset_parameters("iterative", "lowrank",
                                                 fluid_core=True))
     continue_annotation()
     try:
         m = Control(control)
         solver.solve()
-        J = _objective(z, layout, meshes[1])
+        J = _objective(solver)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -1672,29 +1716,28 @@ def test_a_capped_outer_solve_on_the_tape_is_never_silently_wrong(meshes, repres
 
     sub = meshes[1]
     taped_value, new_value, cap = 1.0, 0.2, 2
-    options = dict(fluid_core=True, rotation=True, declare_nullspace=True,
-                   declare_transpose_nullspace=True)
+    options = dict(fluid_core=True, rotation=True, declare_nullspace=True)
 
     def fresh_value(value, parameters):
         with stop_annotating():
-            solver, z, layout = _build(meshes, "viscosity", real(sub, value),
-                                       representation,
-                                       solver_parameters=parameters, **options)
+            solver, _, _ = _build(meshes, "viscosity", real(sub, value),
+                                  representation,
+                                  solver_parameters=parameters, **options)
             solver.solve()
-            return float(_objective(z, layout, sub))
+            return float(_objective(solver))
 
     def taped(value, parameters):
         tape = get_working_tape()
         tape.clear_tape()
         with stop_annotating():
             control = real(sub, value)
-            solver, z, layout = _build(meshes, "viscosity", control,
-                                       representation,
-                                       solver_parameters=parameters, **options)
+            solver, _, _ = _build(meshes, "viscosity", control,
+                                  representation,
+                                  solver_parameters=parameters, **options)
         continue_annotation()
         try:
             solver.solve()
-            J = _objective(z, layout, sub)
+            J = _objective(solver)
         finally:
             pause_annotation()
         return ReducedFunctional(J, Control(control))
