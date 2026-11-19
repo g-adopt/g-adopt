@@ -1011,9 +1011,9 @@ class DtNGravityForm:
 
         Returned in the **right-hand side** convention, so a residual is
         `boundary_bilinear(psi, v, ...) - boundary_source(v, ...)` and a
-        right-hand side form is this on its own. `GravityPotential` uses
-        both conventions (`residual`, and `operator` with `source`); the sign
-        is kept in one place here.
+        right-hand side form is this on its own. `GravityPotential.source`
+        uses it in this convention and `GravityPotential.residual` subtracts
+        it; the sign is kept in one place here.
 
         Args:
           v: The potential's test function.
@@ -1048,8 +1048,8 @@ class DtNGravityForm:
     def boundary_residual(self, psi, v, multipliers=None, extra_flux=None):
         """`boundary_bilinear(...) - boundary_source(...)`.
 
-        The whole boundary contribution to a residual, for a caller that wants
-        it in one piece (`GravityPotential.residual`).
+        The whole boundary contribution to a residual, for a caller that
+        writes its own residual and wants the boundary in one piece.
         """
         return (self.boundary_bilinear(psi, v, multipliers)
                 - self.boundary_source(v, extra_flux))

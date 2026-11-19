@@ -26,9 +26,13 @@ sheet terms are written in this convention.
 ## The residual row
 
     theta_psi [ int grad(psi) . grad(v) dx_g
+                + boundary_bilinear(psi, v, multipliers)
                 - Lambda int rho_0 u . grad(v) dx_m
                 - 4 pi G int rho v dx_m
-                + boundary_residual(psi, v, multipliers, monopole flux) ]
+                - boundary_source(v, monopole flux) ]
+
+`operator` writes the first two lines and `source` the last three (with the
+opposite sign); `residual` is their difference.
 
 with `Lambda = 4 pi G` in the units of the potential. The displacement
 source is the divergence form, so with `v = 1` it is identically zero and the
@@ -296,8 +300,7 @@ class GravityPotential:
                  multipliers=None):
         """The potential row and, on the multiplier path, the DtN constraint rows.
 
-        The terms are the same as `operator - source`, in the order
-        Laplacian, volume sources, boundary terms.
+        `operator - source`, so that each term is written in one place.
 
         Args:
           psi, v: the potential and its test function (split components).
@@ -316,10 +319,8 @@ class GravityPotential:
             # by the solver (`build_lowrank_operator`, or the rank-n update of
             # `GravitySolver`).
             multipliers = None
-        F = dot(grad(psi), grad(v)) * self.dx_g
-        F -= self.volume_source(v, u, density=density)
-        F += self.form.boundary_residual(psi, v, multipliers,
-                                         extra_flux=self.monopole_fluxes())
+        F = (self.operator(psi, v, multipliers)
+             - self.source(v, u, density=density))
         return F if theta_psi is None else theta_psi * F
 
     def dirichlet_bcs(self, potential_space):
