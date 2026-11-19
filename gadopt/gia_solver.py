@@ -203,6 +203,12 @@ class _QuadratureStep:
     def solver(self):
         return self.backend.solver
 
+    @solver.setter
+    def solver(self, value):
+        # `release_taping_solver` puts a stand-in here after it destroyed
+        # the taping solver; the backend owns the solver of this step.
+        self.backend.solver = value
+
     def build(self):
         self.backend.build_solver()
 
@@ -274,6 +280,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         such as `un` on a surface that is not a sphere about the origin (see
         `_check_kernel`). A mode that does not meet a strong displacement
         condition is refused separately.
+      check_nullspace: `True` (default) runs the density and Jacobian
+        measures of `_check_kernel` on every declared mode at construction;
+        `False` skips them (a restart of a configuration that was checked
+        before). The strong-condition check runs in both cases, as it costs
+        one copy of the mode per condition.
       near_nullspace: the modes GAMG is given on the condensed displacement
         operator: `"incompressible"` (default), `"rigid"` or `"none"`.
       scaling_factor: `c`, a factor of the whole momentum residual.
@@ -313,6 +324,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         nullspace=None,
         nullspace_rtol: float = 1e-2,
         nullspace_jacobian_rtol: float = 0.5,
+        check_nullspace: bool = True,
         near_nullspace: str = "incompressible",
         scaling_factor=1,
         solver_parameters=None,
@@ -352,6 +364,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.derivative_max_it = derivative_max_it
         self.nullspace_rtol = nullspace_rtol
         self.nullspace_jacobian_rtol = nullspace_jacobian_rtol
+        self.check_nullspace = check_nullspace
         self.dtn_representation = dtn_representation
 
         self.mesh = u.function_space().mesh()
@@ -693,6 +706,86 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     #: that the measure sees.
     NULLSPACE_DENSITY_DEGREE = 4
 
+    def _density_moment_measure(self):
+        r"""Return a function that gives the density measure `L` of one mode.
+
+        `L = max_v |int rho_0 (e . grad v) dx| / int |rho_0| |e . grad v| dx`
+        over the monomials `v` of degree 1 to `NULLSPACE_DENSITY_DEGREE`
+        (`_check_kernel` gives its meaning). With four degrees there are 34
+        monomials in 3-D, and each needs two integrals per mode. As forms,
+        that is either 68 kernels per mode or one 1-form on a mixed space of
+        34 `Real` spaces, and both are slow to compile and to assemble on a
+        production mesh. The integrals are therefore evaluated at the
+        quadrature points: `rho_0` times the quadrature weight is assembled
+        once as a 1-form on a `Quadrature` space (a test function of that
+        space is one at its own point and zero at the others, so the
+        assembled value is `w_p rho_0(x_p)`), the coordinates and the mode
+        are interpolated onto the same points, and the monomials and their
+        gradients are evaluated with NumPy. Each integral is then a sum over
+        the points of the rank and one sum over the ranks.
+
+        The quadrature degree is UFL's estimate for the integrand of the
+        highest monomial degree, the degree that `assemble` would choose for
+        the same integrals as forms, so the numbers do not depend on how
+        they are evaluated.
+
+        Returns:
+          `measure(vector)`, which takes the mode as a Function on the
+          displacement space and returns `L` as a float, the same on every
+          rank.
+        """
+        from firedrake import TestFunction, VectorFunctionSpace
+        from ufl.algorithms import estimate_total_polynomial_degree
+
+        mesh = self.mesh
+        dim = mesh.geometric_dimension
+        degree = self.NULLSPACE_DENSITY_DEGREE
+        X = SpatialCoordinate(mesh)
+        rho = self.approximation.density
+        # The exponents of every monomial of degree 1 to `degree`, one row
+        # per monomial: (2, 0, 1) is x^2 z.
+        exponents = np.array([
+            np.bincount(np.array(powers, dtype=int), minlength=dim)
+            for d in range(1, degree + 1)
+            for powers in itertools.combinations_with_replacement(range(dim), d)])
+        # The quadrature degree of the integrand with the highest monomial.
+        highest = X[0] ** degree
+        q = estimate_total_polynomial_degree(
+            rho * dot(self.solution.subfunctions[0], grad(highest)))
+        Q = FunctionSpace(mesh, "Quadrature", q)
+        QV = VectorFunctionSpace(mesh, "Quadrature", q)
+        metadata = {"quadrature_degree": q}
+        # `w_p rho_0(x_p)` per point; `dx_m` reads a density given on the
+        # parent mesh through its intersection measure.
+        weighted = assemble(rho * TestFunction(Q) * self.gravity.dx_m(metadata=metadata))
+        w_rho = np.ravel(weighted.dat.data_ro)
+        points = Function(QV).interpolate(X).dat.data_ro.reshape(-1, dim)
+        at_points = Function(QV)
+        comm = mesh.comm
+
+        def measure(vector):
+            e = at_points.interpolate(vector).dat.data_ro.reshape(-1, dim)
+            change = np.empty(len(exponents))
+            scale = np.empty(len(exponents))
+            for k, powers in enumerate(exponents):
+                # grad v . e with d/dx_j prod_i x_i^p_i = p_j x_j^(p_j - 1) prod_{i != j} x_i^p_i.
+                rate = np.zeros(len(points))
+                for j in range(dim):
+                    if powers[j] == 0:
+                        continue
+                    shifted = powers.copy()
+                    shifted[j] -= 1
+                    rate += powers[j] * np.prod(points ** shifted, axis=1) * e[:, j]
+                change[k] = np.sum(w_rho * rate)
+                scale[k] = np.sum(np.abs(w_rho) * np.abs(rate))
+            # The owned points of every rank: one sum over the ranks.
+            change = comm.allreduce(change, op=MPI.SUM)
+            scale = comm.allreduce(scale, op=MPI.SUM)
+            mask = scale > 0
+            return float(np.max(np.abs(change[mask]) / scale[mask])) if mask.any() else 0.0
+
+        return measure
+
     def _check_kernel(self, basis) -> None:
         r"""Check each declared mode in three ways: boundary values, density, Jacobian.
 
@@ -744,37 +837,24 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         an off-centre point or a declared translation. It is not a test of
         the density: a 30 percent lateral density gives 0.02 to 0.14.
 
+        **Cost.** The moments are evaluated at the quadrature points
+        (`_density_moment_measure`), which costs one assembly and two
+        interpolations per mode. The shear reference is measured once, on the
+        first mode, so the Jacobian probe costs two actions per mode (`J e`
+        and `J^T e`) and two in all for the reference. A non-finite ratio is
+        refused, as it would pass every bound. If the time step is not
+        positive at construction (a driver that assigns the first step
+        later), the probe runs at a unit step, because the DG history
+        equation divides by the step; the caller's value is put back.
+        `check_nullspace=False` skips the moments and the Jacobian probe.
+
         All numbers are logged at every construction and kept in
         `kernel_residuals` as `(L, |J e|/|J s|, |J^T e|/|J^T s|)`.
         """
         J = derivative(self.F, self.solution)
         X = SpatialCoordinate(self.mesh)
         dim = self.mesh.geometric_dimension
-        dx_m = self.gravity.dx_m
-        rho = self.approximation.density
-        polynomials = []
-        for degree in range(1, self.NULLSPACE_DENSITY_DEGREE + 1):
-            for powers in itertools.combinations_with_replacement(range(dim), degree):
-                term = Constant(1.0)
-                for k in powers:
-                    term = term * X[k]
-                polynomials.append(term)
-        # All moments in one assembly each: one `Real` test function per
-        # moment, in a mixed space (a vector `Real` space takes no argument).
-        R = FunctionSpace(self.mesh, "R", 0)
-        q = TestFunctions(MixedFunctionSpace([R] * len(polynomials)))
-
-        def values(cofunction):
-            return np.array([scalar_value(c) for c in cofunction.subfunctions])
-
-        def moments(vector):
-            rates = [dot(vector, grad(v)) for v in polynomials]
-            change = sum(rho * rate * q[k] for k, rate in enumerate(rates)) * dx_m
-            scale = sum(abs(rho) * abs(rate) * q[k] for k, rate in enumerate(rates)) * dx_m
-            a, b = np.abs(values(assemble(change))), values(assemble(scale))
-            mask = b > 0
-            return float(np.max(a[mask] / b[mask])) if mask.any() else 0.0
-
+        moments = self._density_moment_measure() if self.check_nullspace else None
         def size(direction, transpose=False):
             form = action(adjoint(J) if transpose else J, direction)
             with assemble(form).dat.vec_ro as r:
@@ -793,6 +873,33 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             return out
 
         self.kernel_residuals = []
+        # The DG history equation divides by the time step, so a zero step
+        # (a driver that assigns the first step after construction) makes
+        # the history rows of `J e` non-finite. The probe then runs at a
+        # unit step, and the caller's value is put back afterwards; the
+        # kernel property does not depend on the step size.
+        step = scalar_value(self.dt)
+        probe_step = self.check_nullspace and not (np.isfinite(step) and step > 0)
+        if probe_step:
+            self.dt.assign(1.0)
+        try:
+            self._check_modes(basis, moments, unit, size, X)
+        finally:
+            if probe_step:
+                self.dt.assign(step)
+
+    def _check_modes(self, basis, moments, unit, size, X) -> None:
+        """The loop of `_check_kernel` over the declared modes.
+
+        Args:
+          basis: the `VectorSpaceBasis` of the displacement modes.
+          moments: the density measure of `_density_moment_measure`, or
+            `None` when `check_nullspace` is off.
+          unit: makes a mixed Function of unit norm from a mode.
+          size: the norm of a Jacobian action (or of its transpose).
+          X: the coordinates of the mechanics mesh.
+        """
+        reference = None
         for vector in basis._vecs:
             mode = unit(vector=vector)
             for bc in self.displacement_bcs:
@@ -809,10 +916,27 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                         f"{bc.sub_domain} of a strong displacement condition "
                         f"(relative size {off:.3e} there), so it is not in the "
                         "constrained space and cannot be a kernel.")
+            if moments is None:
+                continue
             lateral = moments(vector)
-            shear = unit(field_expression=dot(X, X) * vector)
-            ratio = size(mode) / size(shear)
-            ratio_t = size(mode, transpose=True) / size(shear, transpose=True)
+            if reference is None:
+                # The shear reference sets the scale of a stiff mode. Every
+                # rigid rotation gives the same shear stiffness up to the
+                # geometry, so it is measured once, on the first mode, and
+                # the check costs two actions per mode (`J e`, `J^T e`).
+                shear = unit(field_expression=dot(X, X) * vector)
+                reference = (size(shear), size(shear, transpose=True))
+            ratio = size(mode) / reference[0]
+            ratio_t = size(mode, transpose=True) / reference[1]
+            if not (np.isfinite(ratio) and np.isfinite(ratio_t)):
+                # A NaN compares False with every bound, so it would pass
+                # the check below without testing anything.
+                raise ValueError(
+                    f"The Jacobian probe of a declared nullspace mode is not "
+                    f"finite (|J e|/|J s| = {ratio}, |J^T e|/|J^T s| = "
+                    f"{ratio_t}), so the mode cannot be checked. The Jacobian "
+                    "at the state of construction has a non-finite entry; "
+                    "pass check_nullspace=False to build without the check.")
             self.kernel_residuals.append((lateral, ratio, ratio_t))
             log(f"{self.name}: nullspace mode: density variation L = "
                 f"{lateral:.3e} (refused above {self.nullspace_rtol:g}); "
@@ -959,15 +1083,37 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """Refuse `ksponly` on a residual whose Jacobian depends on the solution.
 
         One linear solve at the initial state reports convergence and returns
-        a state wrong by the whole nonlinearity.
+        a state wrong by the whole nonlinearity, with nothing in the log. The
+        message names each cause that is present and the way out of it, so a
+        reader with a Newtonian rheology and a live coastline is not sent to
+        the rheology, and the other way round.
         """
-        if (self.solver_parameters.get("snes_type") == "ksponly"
+        if not (self.solver_parameters.get("snes_type") == "ksponly"
                 and self.jacobian_depends_on_solution):
-            raise ValueError(
-                "snes_type='ksponly' is refused: the Jacobian depends on the "
-                "solution (a power law, a nonlinear backstress or a live "
-                "coastline), so one linear solve returns a wrong state. Use "
-                "snes_type='newtonls'.")
+            return
+        causes, remedies = [], []
+        if self.rheology_nonlinear:
+            exponent = getattr(self.approximation, "exponent", None)
+            causes.append("the nonlinear rheology (a power law"
+                          + (f" of exponent={exponent!r}" if exponent is not None else "")
+                          + " or a nonlinear backstress)")
+            remedies.append("use a Newtonian rheology if that is what is meant")
+        if any(getattr(c, "fixed_ocean", True) is False for c in self.couplings):
+            causes.append("the live sea-level sheet of SeaLevel(fixed_ocean=False), "
+                          "which follows the sea level and so the unknowns")
+            remedies.append("set SeaLevel(fixed_ocean=True) if the coastline is "
+                            "meant to be frozen")
+        if not causes:
+            # A cause of a solution-dependent Jacobian that this list does
+            # not name; the general sentence still states the refusal.
+            causes.append("a term of the residual")
+        verb = "makes" if len(causes) == 1 else "make"
+        raise ValueError(
+            f"snes_type='ksponly' is refused because {' and '.join(causes)} "
+            f"{verb} the residual nonlinear, so one linear solve at the initial "
+            "state converges by definition and returns a state that is wrong "
+            "by the whole nonlinearity. Use snes_type='newtonls' (the default "
+            "of the presets)" + "".join(f", or {r}" for r in remedies) + ".")
 
     def _attach_context(self, extras) -> None:
         """Publish what the preconditioners read in the application context.
@@ -1057,6 +1203,17 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     def solver(self):
         """The variational solver of the step."""
         return self._step.solver
+
+    @solver.setter
+    def solver(self, value):
+        """Replace the variational solver of the step.
+
+        Used by `gadopt.dtn_coupled_adjoint.release_taping_solver`, which
+        puts a stand-in that raises on use after it destroyed the taping
+        solver of a finished forward run. The step owns the solver, so the
+        stand-in goes there and every reader of `solver` sees it.
+        """
+        self._step.solver = value
 
     #: SNES and KSP options of the forward Newton loop that a linear
     #: derivative solve does not take; the lists of `StokesSolverBase`.
