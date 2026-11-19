@@ -55,6 +55,11 @@ a second entry would count it twice.
 - A `Real` field of the parent, its test function and a constant on a facet
   of the mechanics mesh go through `CouplingContext.on_parent_facet`, which
   restricts them where the facet is an interior facet of the parent.
+- A coupling parameter that the caller gives (a number, a `Constant`, or a
+  `Real` Function of either mesh) goes through
+  `CouplingContext.on_coupling_facet` in a facet integrand. That method
+  restricts the parameter if it lives on the parent and leaves it alone if
+  it lives on the mechanics mesh, so the caller can give it on either mesh.
 - Each coupling refuses an invalid combination in `check`, before any form
   is built.
 """
@@ -70,6 +75,7 @@ from firedrake import (Constant, FacetNormal, Form, Measure,
 from mpi4py import MPI
 from ufl import derivative as ufl_derivative
 from ufl.algorithms.ad import expand_derivatives
+from ufl.domain import extract_domains
 
 from .momentum_equation import rotational_potential
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
@@ -143,6 +149,8 @@ class CouplingContext:
       dx_m: the mantle volume measure, intersected with the parent.
       boundary_quad_degree: the quadrature degree of every facet integral of
         the couplings, the degree of the DtN boundary form.
+      mechanics_quad_degree: the quadrature degree of the momentum
+        equation, which its weak boundary terms also use.
       scaling_factor: `c`, the factor of the whole momentum residual.
       row_scale_B_mu: `B_mu`, floored to one where it is exactly zero.
       theta_psi: `c B_mu / Lambda`, the scaling of the potential row.
@@ -156,7 +164,8 @@ class CouplingContext:
 
     def __init__(self, *, solution, fields, tests, approximation, mesh,
                  potential_mesh, dx_m, boundary_quad_degree, scaling_factor,
-                 row_scale_B_mu, Lambda, four_pi_G, bcs, field_names):
+                 row_scale_B_mu, Lambda, four_pi_G, bcs, field_names,
+                 mechanics_quad_degree=None):
         self.solution = solution
         self.space = solution.function_space()
         self.fields = fields
@@ -167,6 +176,7 @@ class CouplingContext:
         self.cross_mesh = mesh is not potential_mesh
         self.dx_m = dx_m
         self.boundary_quad_degree = boundary_quad_degree
+        self.mechanics_quad_degree = mechanics_quad_degree
         self.scaling_factor = scaling_factor
         self.row_scale_B_mu = row_scale_B_mu
         self.Lambda = Lambda
@@ -205,7 +215,55 @@ class CouplingContext:
         """A continuous field of the parent (the potential) on a coupling facet."""
         return interior_facet_integrand(value) if self.cross_mesh else value
 
-    def surface_measure(self, tag) -> Measure:
+    def on_coupling_facet(self, value):
+        """A coupling parameter on a coupling facet, restricted as its mesh requires.
+
+        A coupling parameter (`FluidCore(rho_core=, g=)`, `Rotation(Omega_sq=)`,
+        `SeaLevel(g_surface=)`, `SurfaceLoad(g_surface=)`) can be a number, a
+        `Constant`, or a `Real` Function of the mechanics mesh or of the
+        parent. In a cross-mesh system a coupling facet is an exterior facet
+        of the mechanics mesh and an interior facet of the parent, and UFL
+        has a different rule for each mesh there: a quantity of the parent
+        must be restricted (`interior_facet_integrand`), because the
+        derivative with respect to a `Real` Function of the parent is an
+        `Argument` that UFL refuses unrestricted on an interior facet; a
+        quantity of the mechanics mesh must not be restricted, because UFL
+        refuses a restriction on an exterior facet (`Inconsistent
+        restrictions`). This method reads the mesh of `value` from its
+        terminals and applies the rule of that mesh. It does not change the
+        form; each facet integrand calls it on each parameter where the
+        integrand is built.
+
+        A parameter with no mesh (a number or a `Constant`) is returned as it
+        is. A parameter whose terminals live on both meshes is refused,
+        because no single restriction is valid for it.
+
+        Args:
+          value: a UFL expression of the parameter.
+
+        Returns:
+          `value`, restricted with `avg` if it lives on the parent.
+
+        Raises:
+          ValueError: If `value` mixes quantities of the two meshes, or lives
+            on a mesh that is neither of them.
+        """
+        value = ensure_constant(value)
+        if not self.cross_mesh:
+            return value
+        meshes = set(extract_domains(value))
+        if not meshes or meshes == {self.mesh}:
+            return value
+        if meshes == {self.potential_mesh}:
+            return interior_facet_integrand(value)
+        raise ValueError(
+            "A coupling parameter must be a number, a Constant, or a Real "
+            "Function of one mesh: the mechanics mesh or the parent of the "
+            f"potential. The value {value} lives on {len(meshes)} meshes, or on "
+            "a mesh that is neither. Give each parameter as a Function of one "
+            "of those two meshes.")
+
+    def surface_measure(self, tag, degree=None) -> Measure:
         """The facet measure of a coupling on `tag`, at the boundary degree.
 
         The mechanics mesh's own `ds`, intersected with the parent's interior
@@ -220,7 +278,12 @@ class CouplingContext:
         `"bottom"`, and `CombinedSurfaceMeasure` maps the tag. An extruded
         mesh is never cross-mesh, because `CombinedSurfaceMeasure` takes no
         `intersect_measures`.
+
+        Args:
+          tag: the boundary tag on the mechanics mesh.
+          degree: the quadrature degree; `None` takes `boundary_quad_degree`.
         """
+        degree = self.boundary_quad_degree if degree is None else degree
         if self.mesh.extruded:
             if self.cross_mesh:
                 raise NotImplementedError(
@@ -228,9 +291,8 @@ class CouplingContext:
                     "is not supported: CombinedSurfaceMeasure takes no "
                     "intersect_measures, so a coupling facet would lose the "
                     "facet-to-facet pairing with the parent.")
-            return CombinedSurfaceMeasure(
-                domain=self.mesh, degree=self.boundary_quad_degree)(tag)
-        kwargs = {"domain": self.mesh, "degree": self.boundary_quad_degree}
+            return CombinedSurfaceMeasure(domain=self.mesh, degree=degree)(tag)
+        kwargs = {"domain": self.mesh, "degree": degree}
         if self.cross_mesh:
             kwargs["intersect_measures"] = (
                 Measure("dS", domain=self.potential_mesh),)
@@ -423,8 +485,13 @@ class FluidCore(Coupling):
         return self.context.surface_measure(self.boundary)
 
     def sheet_density(self, u):
-        """`sigma_core = rho_core (u . rhat) = -rho_core (u . n)` for a displacement `u`."""
-        return -ensure_constant(self.rho_core) * dot(u, FacetNormal(self.context.mesh))
+        """`sigma_core = rho_core (u . rhat) = -rho_core (u . n)` for a displacement `u`.
+
+        A facet quantity: `rho_core` is restricted as its mesh requires
+        (`CouplingContext.on_coupling_facet`).
+        """
+        ctx = self.context
+        return -ctx.on_coupling_facet(self.rho_core) * dot(u, FacetNormal(ctx.mesh))
 
     def sheets(self, ctx):
         return [MassSheet(
@@ -443,10 +510,11 @@ class FluidCore(Coupling):
         psi = ctx.fields["potential"]
         p_core = ctx.fields["core_pressure"]
         un = dot(u, FacetNormal(ctx.mesh))
-        rho_core = ensure_constant(self.rho_core)
-        rho_mantle = (approximation.density if self.rho_mantle is None
-                      else ensure_constant(self.rho_mantle))
-        g0 = approximation.g if self.g is None else ensure_constant(self.g)
+        # The parameters of the CMB, each restricted as its mesh requires.
+        rho_core = ctx.on_coupling_facet(self.rho_core)
+        rho_mantle = ctx.on_coupling_facet(
+            approximation.density if self.rho_mantle is None else self.rho_mantle)
+        g0 = ctx.on_coupling_facet(approximation.g if self.g is None else self.g)
         B_mu = approximation.B_mu
         dss = self.measure()
         c = ctx.scaling_factor
@@ -479,7 +547,7 @@ class FluidCore(Coupling):
             n = FacetNormal(ctx.mesh)
             psi_rot = ctx.rotational_potential(ctx.mesh, facet=True)
             F += (ctx.on_parent_facet(ctx.scaling_factor * ctx.approximation.B_mu)
-                  * ensure_constant(self.rho_core) * dot(w, n) * psi_rot
+                  * ctx.on_coupling_facet(self.rho_core) * dot(w, n) * psi_rot
                   * self.measure())
         return F
 
@@ -617,34 +685,80 @@ class Rotation(Coupling):
             Omega_sq = self.Omega_sq
             if facet:
                 values = [ctx.on_parent_facet(value) for value in values]
-                Omega_sq = ctx.on_parent_facet(Omega_sq)
+                Omega_sq = ctx.on_coupling_facet(Omega_sq)
             return rotational_potential(values[-n_rot:], mesh, Omega_sq=Omega_sq)
         ctx.rotational_potential = psi_rot
 
     @staticmethod
     def inertia_polynomial(i: int, X):
-        """`p_i(x)`: `x^2 + y^2` for `i = 2`, `-x_i z` otherwise."""
+        """`p_i(x)`: `x^2 + y^2` for `i = 2`, `-x_i z` otherwise.
+
+        `p_i` is the polynomial whose integral against the density gives the
+        inertia component `I_i3`: `R^2 - z^2 = x^2 + y^2` for `i = 2`, and
+        `-x_i z` for the two polar-wander components. Those two need the
+        third coordinate, so in 2-D only the rotation-rate component (`i = 2`)
+        exists.
+
+        Args:
+          i: The component, 0 or 1 for polar wander and 2 for the rotation rate.
+          X: The `SpatialCoordinate` of the mesh.
+
+        Returns:
+          The UFL polynomial `p_i(X)`.
+
+        Raises:
+          ValueError: If `i` is 0 or 1 and `X` has fewer than three components.
+        """
         if i == 2:
             return X[0] ** 2 + X[1] ** 2
+        # Without this check, UFL would raise `Index out of bounds` at `X[2]`,
+        # which does not say what is wrong.
+        if len(X) < 3:
+            raise ValueError(
+                f"The inertia component {i} needs a third coordinate; a 2-D "
+                "disc has only the rotation-rate component m_3 (index 2).")
         return -X[i] * X[2]
 
-    def inertia_form(self, ctx, i, test=None, scale=None):
-        """`dI_i3` at the current solution, weighted by `scale * test` (or 1)."""
+    def inertia_form(self, ctx, i, test=None, scale=None, parameter=None):
+        """`dI_i3` at the current solution, weighted by `parameter * scale * test`.
+
+        Args:
+          ctx: the `CouplingContext`.
+          i: the component of `dI_i3`, 0 to 2.
+          test: a test function of a `Real` field of the parent, or `None`
+            for 1.
+          scale: a factor made of quantities of the parent (row scalings),
+            or `None` for 1.
+          parameter: a coupling parameter of either mesh (`Omega_sq`), or
+            `None` for 1. It is restricted on the sheets as its own mesh
+            requires, so it is kept apart from `scale`.
+
+        Returns:
+          The form of `dI_i3`: the mantle term on `dx_m` and one term per
+          sheet on its facet measure.
+        """
         weight = Constant(1.0) if test is None else test
         scale = Constant(1.0) if scale is None else scale
-        # The weight and the scale under one restriction on the sheets.
-        facet_weight = ctx.on_parent_facet(scale * weight)
+        parameter = Constant(1.0) if parameter is None else parameter
+        # The weight and the scale, both of the parent, under one restriction
+        # on the sheets; the parameter under the restriction of its mesh.
+        facet_weight = (ctx.on_parent_facet(scale * weight)
+                        * ctx.on_coupling_facet(parameter))
         p = self.inertia_polynomial(i, SpatialCoordinate(ctx.mesh))
         u = ctx.fields["displacement"]
-        form = scale * weight * ctx.approximation.density * dot(grad(p), u) * ctx.dx_m
+        form = (parameter * scale * weight * ctx.approximation.density
+                * dot(grad(p), u) * ctx.dx_m)
         for sheet in ctx.sheets:
             form += facet_weight * p * sheet.density * sheet.measure
         return form
 
+    def row_scale(self, ctx, i):
+        """`s_i c B_mu`: the part of the scaling of row `i` made of parent quantities."""
+        return self.CLOSURE_SIGNS[i] * ctx.scaling_factor * ctx.row_scale_B_mu
+
     def theta_rot(self, ctx, i):
         """`s_i c B_mu Omega_sq`: the scaling of row `i`."""
-        return (self.CLOSURE_SIGNS[i] * ctx.scaling_factor * ctx.row_scale_B_mu
-                * self.Omega_sq)
+        return self.row_scale(ctx, i) * self.Omega_sq
 
     def residual(self, ctx) -> Form:
         F = Form([])
@@ -658,8 +772,11 @@ class Rotation(Coupling):
             m_i, nu_i = ctx.fields[name], ctx.tests[name]
             theta = self.theta_rot(ctx, i)
             F += theta * (self.closure_constants[i] * m_i / volume) * nu_i * ctx.dx_m
-            F -= self.CLOSURE_SIGNS[i] * self.inertia_form(ctx, i, test=nu_i,
-                                                           scale=theta)
+            # `theta_rot` split into its parent part and `Omega_sq`, which
+            # can be a `Real` Function of either mesh.
+            F -= self.CLOSURE_SIGNS[i] * self.inertia_form(
+                ctx, i, test=nu_i, scale=self.row_scale(ctx, i),
+                parameter=self.Omega_sq)
         return F
 
     def values(self) -> dict:
@@ -857,7 +974,7 @@ class SeaLevel(Coupling):
         u = fields["displacement"]
         psi = fields["potential"]
         shift = ctx.on_parent_facet(fields["sea_level_shift"])
-        g_surface = ensure_constant(self.g_surface)
+        g_surface = ctx.on_coupling_facet(self.g_surface)
         # Bruns: N = +(psi + psi_rot) / g.
         N = ctx.parent_trace(psi) / g_surface
         if ctx.rotational_potential is not None:
@@ -906,26 +1023,32 @@ class SeaLevel(Coupling):
                           in_monopole_datum=False)]
 
     def _scale(self, ctx):
-        """`c B_mu g_s`, the factor of the sea-level energy."""
-        return (ctx.scaling_factor * ctx.approximation.B_mu
-                * ensure_constant(self.g_surface))
+        """`c B_mu`, the part of the factor `c B_mu g_s` of the sea-level energy
+        that is made of parent quantities."""
+        return ctx.scaling_factor * ctx.approximation.B_mu
 
     def residual(self, ctx) -> Form:
-        g_surface = ensure_constant(self.g_surface)
+        # `g_s` can be a `Real` Function of either mesh, so it is restricted
+        # as its own mesh requires and kept apart from the parent factors.
+        g_surface = ctx.on_coupling_facet(self.g_surface)
         sigma = self.sheet()
         dss = self.measure()
         scale = self._scale(ctx)
         w = ctx.tests["displacement"]
         v = ctx.tests["potential"]
         s = ctx.tests["sea_level_shift"]
-        # The scale and every parent test function under one restriction.
-        # The displacement row: the weight of the load.
-        F = ctx.on_parent_facet(scale) * sigma * dot(w, FacetNormal(ctx.mesh)) * dss
-        # The potential row: the mass sheet, with the sign of every sheet.
-        F -= ctx.on_parent_facet(scale * v / g_surface) * sigma * dss
+        # The parent scale and every parent test function under one
+        # restriction. The displacement row: the weight of the load,
+        # `c B_mu g_s sigma (w . n)`.
+        F = (ctx.on_parent_facet(scale) * g_surface * sigma
+             * dot(w, FacetNormal(ctx.mesh)) * dss)
+        # The potential row: the mass sheet, with the sign of every sheet,
+        # `-c B_mu sigma v`. The `g_s` of the energy cancels against the
+        # `1 / g_s` of the geoid `N = psi / g_s`.
+        F -= ctx.on_parent_facet(scale * v) * sigma * dss
         # The Shift row: the net mass of water and ice is zero, up to the
-        # centre-of-mass column.
-        F -= ctx.on_parent_facet(scale * s) * sigma * dss
+        # centre-of-mass column, `-c B_mu g_s sigma s`.
+        F -= ctx.on_parent_facet(scale * s) * g_surface * sigma * dss
         return F
 
     def energy(self) -> Form:
@@ -971,14 +1094,16 @@ class SeaLevel(Coupling):
             C0 = self.ocean_mask()
             ice = self.rho_i * ((1 - C0) * self.I - (1 - C0) * self.I_init)
             G = ice * delta + 0.5 * self.rho_w * C0 * delta * delta
-            return -ctx.on_parent_facet(self._scale(ctx)) * G * self.measure()
+            return (-ctx.on_parent_facet(self._scale(ctx))
+                    * ctx.on_coupling_facet(self.g_surface) * G * self.measure())
         frozen = ctx.solution.copy(deepcopy=True)
         SL_f = self.sea_level(ctx.split_of(frozen))
         eps = ensure_constant(self.softplus_width)
         W_f = water_fraction(self.I, SL_f, eps, self.rho_w, self.rho_i)
         sigma_0 = self.sheet_of(SL_f) + self.rho_w * W_f * (self.SL_init - SL_f)
         G = sigma_0 * delta + 0.5 * self.rho_w * W_f * delta * delta
-        return -ctx.on_parent_facet(self._scale(ctx)) * G * self.measure()
+        return (-ctx.on_parent_facet(self._scale(ctx))
+                * ctx.on_coupling_facet(self.g_surface) * G * self.measure())
 
     def shift(self):
         """`Shift`, a `Real` Function (a view of the solution)."""
@@ -990,8 +1115,9 @@ class SurfaceLoad(Coupling):
 
     The load `sigma` on one boundary of the mechanics mesh enters
 
-    - the momentum equation as the normal traction `B_mu g_surface sigma`, a
-      weak `normal_stress` condition of the momentum equation;
+    - the momentum equation as the normal traction `B_mu g_surface sigma`,
+      the term `c B_mu g_surface sigma (w . n)` that a weak `normal_stress`
+      condition would add, written in this coupling's residual;
     - the potential row as a mass sheet, `-theta_psi 4 pi G int sigma v dS`;
     - the rotation rows and the centre-of-mass rows through its `MassSheet`;
     - the 2-D monopole datum, with no lag, because it does not depend on the
@@ -1037,25 +1163,34 @@ class SurfaceLoad(Coupling):
         """The load measure at the boundary degree, restricted to the boundary."""
         return self.context.surface_measure(self.boundary)
 
-    def mechanics_bcs(self, ctx) -> dict:
-        normal_stress = (ctx.approximation.B_mu * ensure_constant(self.g_surface)
-                         * self.sigma)
-        return {self.boundary: {"normal_stress": normal_stress}}
-
     def sheets(self, ctx):
         return [MassSheet(name="surface load", density=self.sigma,
                           test_variation=None, measure=self.measure(),
                           in_monopole_datum=True)]
 
     def residual(self, ctx) -> Form:
+        # The momentum row: the weight of the load, the term a weak
+        # `normal_stress` of `B_mu g_s sigma` adds to the momentum equation,
+        # at the momentum equation's quadrature degree. It is written here and
+        # not as a condition of the momentum equation because that equation
+        # pairs its facets with the parent's cells, where the derivative with
+        # respect to a `Real` Function of the parent (`B_mu`, `g_s`, `c`) is
+        # assembled twice. On the coupling facet measure every parameter is
+        # restricted as its mesh requires.
+        w = ctx.tests["displacement"]
+        traction = (ctx.on_coupling_facet(ctx.scaling_factor)
+                    * ctx.on_coupling_facet(ctx.approximation.B_mu)
+                    * ctx.on_coupling_facet(self.g_surface) * self.sigma)
+        F = (traction * dot(w, FacetNormal(ctx.mesh))
+             * ctx.surface_measure(self.boundary, degree=ctx.mechanics_quad_degree))
         # The potential row of a prescribed sheet, `-theta_psi 4 pi G sigma v`.
         # `theta_psi 4 pi G` is `c B_mu` for every nonzero `B_mu`; at
         # `B_mu = 0` the potential still sees the load while the mechanics
         # does not, which is the null-coupling configuration.
         v = ctx.tests["potential"]
-        return (-ctx.on_parent_facet(ctx.theta_psi * ctx.four_pi_G * v)
-                * self.sigma * self.measure())
-
+        F -= (ctx.on_parent_facet(ctx.theta_psi * ctx.four_pi_G * v)
+              * self.sigma * self.measure())
+        return F
 
 
 def ordered(couplings) -> list:
@@ -1075,4 +1210,3 @@ def ordered(couplings) -> list:
     if len({id(c) for c in couplings}) != len(couplings):
         raise ValueError("The same coupling object appears twice in couplings.")
     return sorted(couplings, key=lambda c: c.order)
-

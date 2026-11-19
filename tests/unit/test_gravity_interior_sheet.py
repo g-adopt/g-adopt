@@ -274,13 +274,11 @@ class TestRealControlsOnTheSheet:
     outside the `avg` assembles, because UFL gives a coefficient of a
     continuous element a default side, but the derivative with respect to it
     is a `Real` `Argument`, which UFL accepts on an interior facet only with a
-    restriction. Since Firedrake no longer replaces a `Real` argument by the
-    literal 1 (#5656), such a gradient raises `Discontinuous type Argument
-    must be restricted`. `G` is such a factor, outside the `avg`;
-    `GravitySolver` restricts it with
-    `gadopt.utility.restrict_real_coefficients_on_interior_facets`. The sheet
-    scale is inside the `avg`. Both gradients are checked against a central
-    difference of fresh solves.
+    restriction (`Discontinuous type Argument must be restricted`). The
+    sheet integral (`DtNGravityForm.sheet_integral`) therefore puts the whole
+    integrand, `G` and the sheet scale included, under one restriction with
+    `gadopt.utility.interior_facet_integrand`. Both gradients are checked
+    against a central difference of fresh solves.
     """
 
     G0, S0, STEP = 1.3, 0.7, 1e-5
@@ -334,35 +332,36 @@ class TestRealControlsOnTheSheet:
         assert abs(gradient - difference) <= 1e-7 * abs(difference)
 
 
-class TestRestrictRealCoefficients:
-    """`restrict_real_coefficients_on_interior_facets` on one small mesh."""
+class TestInteriorFacetIntegrand:
+    """`interior_facet_integrand` applied to a `Real` function on one small mesh.
+
+    The helper restricts a quantity on interior facets with `avg`. For a
+    `Real` function the value is unchanged, and the derivative with respect to
+    it is a restricted `Real` `Argument`, which UFL accepts on `dS`.
+    """
 
     @pytest.fixture(scope="class")
     def square(self):
+        """A unit square with a `Real` function of value 1."""
         mesh = fd.UnitSquareMesh(4, 4)
         r = fd.Function(fd.FunctionSpace(mesh, "R", 0)).assign(1.0)
         return mesh, r
 
     def test_the_derivative_exists_and_has_the_facet_value(self, square):
-        """`derivative(r dS, r)` is the interior facet length, once."""
-        from gadopt.utility import restrict_real_coefficients_on_interior_facets
+        """`derivative(avg(r) dS, r)` is the interior facet length, once."""
+        from gadopt.utility import interior_facet_integrand
         mesh, r = square
-        form = restrict_real_coefficients_on_interior_facets(r * fd.dS, mesh)
+        form = interior_facet_integrand(r) * fd.dS
         exact = fd.assemble(fd.Constant(1.0) * fd.dS(domain=mesh))
+        # `avg(r) = r` for a field with one value on both sides.
         assert fd.assemble(form) == pytest.approx(exact, rel=1e-14)
+        # Each side contributes half of the facet integral to the one global
+        # entry, so the sum is the facet length once and not twice.
         gradient = fd.assemble(fd.derivative(form, r)).dat.data_ro_with_halos[0]
         assert gradient == pytest.approx(exact, rel=1e-14)
 
-    def test_a_coefficient_inside_and_outside_a_restriction_is_refused(self, square):
-        from gadopt.utility import restrict_real_coefficients_on_interior_facets
+    def test_an_unrestricted_real_function_has_no_derivative_on_ds(self, square):
+        """Negative control: without the helper, UFL refuses the derivative."""
         mesh, r = square
-        v = fd.TestFunction(fd.FunctionSpace(mesh, "CG", 1))
-        with pytest.raises(ValueError, match="both inside and outside"):
-            restrict_real_coefficients_on_interior_facets(
-                r * fd.avg(r * v) * fd.dS, mesh)
-
-    def test_exterior_facets_are_left_alone(self, square):
-        from gadopt.utility import restrict_real_coefficients_on_interior_facets
-        mesh, r = square
-        form = r * fd.ds
-        assert restrict_real_coefficients_on_interior_facets(form, mesh) == form
+        with pytest.raises(ValueError, match="must be restricted"):
+            fd.assemble(fd.derivative(r * fd.dS, r))

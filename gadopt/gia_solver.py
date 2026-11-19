@@ -588,6 +588,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             potential_mesh=self.potential_mesh,
             dx_m=self.gravity.dx_m,
             boundary_quad_degree=self.form.quad_degree,
+            mechanics_quad_degree=self.quad_degree,
             scaling_factor=self.scaling_factor,
             row_scale_B_mu=self.row_scale_B_mu,
             Lambda=self.Lambda,
@@ -903,8 +904,8 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """
         J = derivative(self.F, self.solution)
         X = SpatialCoordinate(self.mesh)
-        dim = self.mesh.geometric_dimension
         moments = self._density_moment_measure() if self.check_nullspace else None
+
         def size(direction, transpose=False):
             form = action(adjoint(J) if transpose else J, direction)
             with assemble(form).dat.vec_ro as r:
@@ -1520,11 +1521,20 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         The counters of the preconditioner caches (`gia_solve_index`, the
         operator version, the tape sweep marker) are not part of the state.
-        With the direct presets a restored run continues bit for bit. With a
-        lagged rebuild of the `Real`-block complement (`gia_rebuild` lagged),
-        the restored run rebuilds at its first solve where the uninterrupted
-        run may keep a lagged complement, so the two agree to the solver
-        tolerance and not bit for bit.
+
+        The restored state equals the saved one bit for bit on any number of
+        ranks. How the continued run compares with the uninterrupted run
+        depends on the rank count. In serial, with the direct presets, it
+        continues bit for bit. On more than one rank it agrees to the
+        round-off of the direct solve and not bit for bit: the presets
+        factorise block 0 with MUMPS, and two parallel factorisations of the
+        same matrix in one process sum the contributions of the ranks in an
+        order that depends on the timing of the messages, so their solutions
+        differ in the last digits (measured up to about 2e-14 relative on two
+        ranks). With a lagged rebuild of the `Real`-block complement
+        (`gia_rebuild` lagged), the restored run rebuilds at its first solve
+        where the uninterrupted run may keep a lagged complement, so the two
+        agree to the solver tolerance and not bit for bit.
         """
         from .gia_state import decode_into
         targets = self._state_targets()

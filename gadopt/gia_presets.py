@@ -1108,7 +1108,7 @@ def selfgrav_dtn_iterative_solver_parameters(
         **({"dtn_fieldsplit_0_ksp_type": "preonly",
             "dtn_fieldsplit_0_pc_type": "python",
             "dtn_fieldsplit_0_pc_python_type": ("gadopt.ReducedGIABlockPC" if condensed
-                                                    else "gadopt.CondensedBlockPC")}
+                                                else "gadopt.CondensedBlockPC")}
            if new_block0 else
            {"dtn_fieldsplit_0_ksp_type": "fgmres",
             "dtn_fieldsplit_0_ksp_rtol": block0_rtol,

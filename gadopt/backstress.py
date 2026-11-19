@@ -40,7 +40,8 @@ class BackstressApproximation(CompressibleInternalVariableApproximation):
             raise ValueError("transition_stress must be a positive fixed scalar")
         if 'background_stress' in kwargs:
             raise ValueError("Represent initial stress memory with the backstress tensor")
-        super().__init__(bulk_modulus, density, shear_modulus, viscosity,
+        super().__init__(
+            bulk_modulus, density, shear_modulus, viscosity,
             exponent=exponent, transition_stress=transition_stress, background_stress=0., **kwargs)
         self.backstress_modulus = ensure_constant(backstress_modulus)
         self.recovery_time = ensure_constant(recovery_time)
@@ -87,7 +88,7 @@ def backstress_history_term(eq, trial):
     rate = material.creep_fluidity(effective)*effective/(2*material.viscosity[0])
     alpha = eq.time_alpha
     return (fd.inner(test_p, (alpha*p-old_p)/eq.dt-rate)
-            +fd.inner(test_a, (alpha*a-old_a)/eq.dt-rate+a/material.recovery_time))*eq.dx
+            + fd.inner(test_a, (alpha*a-old_a)/eq.dt-rate+a/material.recovery_time))*eq.dx
 
 
 backstress_history_term.required_attrs = {'displacement', 'trial_old', 'time_alpha', 'dt'}

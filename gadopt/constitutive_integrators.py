@@ -102,10 +102,10 @@ class BackstressQuadratureUpdate(MaxwellQuadratureUpdate):
         chi = ufl.variable(self.q)
         effective = trial/(1+h*chi/eta*(mu/alpha+mu_b/c))
         E = chi-material.creep_fluidity(effective)
-        self.equation = ufl.replace(E, {chi:self.q})
-        self.diagonal = ufl.replace(ufl.algorithms.expand_derivatives(ufl.diff(E, chi)), {chi:self.q})
+        self.equation = ufl.replace(E, {chi: self.q})
+        self.diagonal = ufl.replace(ufl.algorithms.expand_derivatives(ufl.diff(E, chi)), {chi: self.q})
         rate = chi*effective/(2*eta)
-        self.updates = [ufl.replace(g, {chi:self.q})
+        self.updates = [ufl.replace(g, {chi: self.q})
                         for g in ((P+h*rate)/alpha, (B+h*rate)/c)]
         self.lower = 1.
 
@@ -215,7 +215,8 @@ class DirectConstitutiveBackend:
         it is dropped and built again at the next reverse sweep.
         """
         owner = self.owner
-        self.solver = fd.NonlinearVariationalSolver(self.problem, solver_parameters=owner.solver_parameters,
+        self.solver = fd.NonlinearVariationalSolver(
+            self.problem, solver_parameters=owner.solver_parameters,
             options_prefix=owner.name, appctx=owner.appctx, nullspace=owner.nullspace,
             transpose_nullspace=owner.transpose_nullspace, near_nullspace=owner.near_nullspace,
             pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector,
@@ -319,7 +320,8 @@ class DirectConstitutiveBackend:
             # solve raises (`StokesSolverBase.adjoint_solver_parameters`).
             options = {k: v for k, v in self.owner.adjoint_solver_parameters().items()
                        if not k.startswith('snes_')}
-            self.linear_solver = fd.LinearSolver(self.matrix, solver_parameters=options,
+            self.linear_solver = fd.LinearSolver(
+                self.matrix, solver_parameters=options,
                 nullspace=self.owner.transpose_nullspace or self.owner.nullspace,
                 transpose_nullspace=self.owner.nullspace, near_nullspace=self.owner.near_nullspace,
                 appctx=self.owner.appctx)
@@ -344,7 +346,8 @@ class DirectConstitutiveBackend:
     def input_gradient(self, index):
         if index not in self.gradient_forms:
             coefficient = self.private_inputs[index]
-            self.gradient_forms[index] = fd.derivative(self.reverse_functional, coefficient,
+            self.gradient_forms[index] = fd.derivative(
+                self.reverse_functional, coefficient,
                 fd.TestFunction(coefficient.function_space()))
         gradient = fd.assemble(self.gradient_forms[index])
         if self.lowrank:
