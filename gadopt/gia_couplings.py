@@ -584,16 +584,21 @@ class Rotation(Coupling):
         if given is not None and consistent is not None:
             # The check reads numbers, computed from the factors: `float()`
             # of the composite raises when a factor is a `Real` Function.
-            q = (4 * np.pi * scalar_value(self.surface_radius) ** 5
-                 * scalar_value(self.Omega_sq) / (3 * scalar_value(ctx.Lambda))
-                 * scalar_value(self.k_s))
+            Q_value = (4 * np.pi * scalar_value(self.surface_radius) ** 5
+                       * scalar_value(self.Omega_sq) / (3 * scalar_value(ctx.Lambda)))
+            q = Q_value * scalar_value(self.k_s)
             relative = abs(scalar_value(given) - q) / abs(q)
             if relative > self.CONSISTENCY_RTOL:
+                # Both readings of the mismatch: the C - A that k_s implies,
+                # and the k_s that the given C - A implies, so the caller
+                # sees which constant to change and to what.
                 raise ValueError(
                     f"Rotation gives C_minus_A={scalar_value(given)!r} and "
                     f"k_s={scalar_value(self.k_s)!r}, which disagree by "
-                    f"{relative:.3%} against C - A = Q k_s = {q!r}. Give one "
-                    "of them, or reconcile them.")
+                    f"{relative:.3%} against C - A = Q k_s = {q!r}; the given "
+                    f"C_minus_A implies k_s = (C - A) / Q = "
+                    f"{scalar_value(given) / Q_value!r}. Give one of them, or "
+                    "reconcile them.")
         constant = consistent if consistent is not None else ensure_constant(given)
         self.closure_constants[0] = self.closure_constants[1] = constant
 
