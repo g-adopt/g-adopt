@@ -10,8 +10,9 @@ solver. These tests run the new solver itself:
   DG path with sea level, on the quadrature path with BDF2, a fluid core and
   the centre of mass, and on a power law;
 - `state`, `CheckpointFile`, `restore`: a run interrupted and continued is
-  bit for bit the uninterrupted run; a checkpoint of the old solver converts
-  into a state of the new one;
+  bit for bit the uninterrupted run in serial, and equal to round-off on
+  more ranks; checkpoint files the old solver wrote convert into a state of
+  the new one;
 - the interface rules: the order of the couplings, the refusals, the
   nullspace check, the presets, `approximation.mu`, the closure constant.
 """
@@ -70,28 +71,25 @@ FORWARD = [
 #: Fingerprints of the earlier solver's (`gadopt.gia_gravity`) state after
 #: each of the three steps, by case label: per step the displacement, the
 #: potential and the accepted history as `[norm, probe, probe norm]`
-#: (`gia_solver_cases.fingerprint`), and the value of every `Real` field.
+#: (`gia_solver_cases.probe_pairing`), and the value of every `Real` field.
 FORWARD_REFERENCE = C.reference_values("forward")
 
+#: Bound on the relative difference of a solved field from the stored one.
+#: The earlier solver and this one agreed to about 1e-15 when they were run
+#: side by side on one machine. On another machine, another BLAS, another
+#: MUMPS ordering or another rank count moves a solved state by round-off
+#: times the condition number of the step, which can exceed 1e-12; a defect
+#: in a term moves it by far more than 1e-10.
+SOLVED_RTOL = 1e-10
 
-def field_fingerprint(function, name):
-    """`[norm, probe, probe norm]` of one Function, as the recording made it."""
-    import zlib
-    values = np.ravel(function.dat.data_ro)
-    probe = np.random.default_rng(zlib.crc32(name.encode())).random(values.shape) - .5
-    return [float(np.linalg.norm(values)), float(values @ probe),
-            float(np.linalg.norm(probe))]
 
-
-@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("case", FORWARD, ids=[c.label for c in FORWARD])
 def test_three_steps_agree_with_the_reference(meshes, case):
     """Direct presets: after each step the state agrees with the stored one.
 
     The displacement, the potential and the accepted history are compared
-    through their fingerprints, and every `Real` field by value. The earlier
-    solver and this one agreed to 1e-12 in the field norms when they were
-    run side by side; the bound here is the same.
+    through their coordinate-defined fingerprints, and every `Real` field by
+    value, at `SOLVED_RTOL`.
     """
     sub = meshes[1]
     dt = C.dt_function(sub)
@@ -103,20 +101,26 @@ def test_three_steps_agree_with_the_reference(meshes, case):
         if case.load:
             surface_ice(sea, k)
         new.solve()
-        fields = {"displacement": field_fingerprint(u, "displacement"),
-                  "potential": field_fingerprint(psi, "potential"),
-                  "history": field_fingerprint(new.internal_variables, "history")}
+        fields = {"displacement": C.probe_pairing(u, "displacement"),
+                  "potential": C.probe_pairing(psi, "potential"),
+                  "history": C.probe_pairing(new.internal_variables, "history")}
         C.assert_fingerprints_agree(
-            fields, {name: reference[name] for name in fields}, rtol=1e-12)
+            fields, {name: reference[name] for name in fields}, rtol=SOLVED_RTOL)
         # A `Real` field whose exact value is zero (the core pressure under a
-        # load with no degree-0 part) is round-off, so the bound has an
-        # absolute floor far below every nonzero field here.
+        # load with no degree-0 part) is round-off, so every `Real` field is
+        # compared against the largest `Real` value of the step. In a case
+        # where every `Real` value is round-off (the Quadrature case: no
+        # rotation, a load with no degree-0 part), the check is that they
+        # stay round-off against the size of the displacement vector.
         reals = reference["reals"]
         assert set(reals) == set(new.field_index) - {"displacement", "history", "potential"}
+        displacement_size = reference["displacement"][0]
         scale = max(abs(value) for value in reals.values())
+        bound = (SOLVED_RTOL * scale if scale > 1e-12 * displacement_size
+                 else 1e-12 * displacement_size)
         for name, value in reals.items():
             difference = abs(float(new.real_field(name)) - value)
-            assert difference <= 1e-12 * scale + 1e-16, (k, name, difference)
+            assert difference <= bound, (k, name, difference)
 
 
 # -- Taylor and replay -----------------------------------------------------------
@@ -190,8 +194,8 @@ def march(meshes, case, control, steps=STEPS[:2], *, checkpoint_dir=None,
         solver.solve()
     parent = meshes[0]
     dx_m = fd.Measure("dx", domain=sub, metadata={"quadrature_degree": 4})
-    J = fd.assemble((fd.inner(u, u) + .1 * fd.inner(solver.internal_variables,
-                                                     solver.internal_variables)) * dx_m)
+    history = solver.internal_variables
+    J = fd.assemble((fd.inner(u, u) + .1 * fd.inner(history, history)) * dx_m)
     J += fd.assemble(psi * psi * fd.dx(domain=parent))
     sea_level = [c for c in solver.couplings if isinstance(c, cp.SeaLevel)]
     if sea_level:
@@ -306,21 +310,73 @@ def run(solver, sea, steps, first=0):
 
 
 def values(solver):
-    """Copies of every coefficient array of the state, for a bitwise compare."""
+    """Copies of every coefficient array of the state, for a bitwise compare.
+
+    Reading `data_ro` can start a halo exchange, which every rank must join,
+    so each test takes the copies once per solver, on every rank, before it
+    compares anything.
+    """
     return {name: np.array(f.dat.data_ro, copy=True)
             for name, f in solver.state().items()}
 
 
+#: Bound on the relative difference of a continued run from the
+#: uninterrupted one on more than one rank. The direct presets factorise
+#: block 0 with parallel MUMPS, whose solutions of one matrix differ between
+#: two factorisations in one process by about 1e-14 relative (the ranks'
+#: contributions are summed in an order set by the message timing), and four
+#: steps carry that difference forward.
+PARALLEL_RTOL = 1e-10
+
+
+def states_differ(first, second, solver, rtol):
+    """The names of the state entries of two `values` copies that differ.
+
+    Each comparison is reduced over the ranks before it is used, so every
+    rank gets the same list and takes the same branch afterwards. A rank
+    that left a loop at a difference only it had seen would leave the other
+    ranks waiting in the next collective call.
+
+    Args:
+      first, second: copies from `values`, with the same keys.
+      solver: the solver of `second`, for the communicator and to tell the
+        `Real` fields.
+      rtol: 0 for a bitwise comparison. Otherwise the bound on the
+        difference relative to the norm of the entry in `second`; a `Real`
+        field is compared against the largest `Real` value of the state
+        instead, because a `Real` field whose exact value is zero (the core
+        pressure under a load with no degree-0 part) holds round-off only.
+    """
+    from mpi4py import MPI
+    comm = solver.mesh.comm
+    if rtol == 0:
+        return [key for key in first
+                if not comm.allreduce(bool(np.array_equal(first[key], second[key])),
+                                      op=MPI.LAND)]
+    reals = {name for name, f in solver.state().items()
+             if f.function_space().ufl_element().family() == "Real"}
+    real_scale = max([comm.allreduce(float(np.max(np.abs(second[k]), initial=0.0)),
+                                     op=MPI.MAX) for k in reals] or [0.0])
+    out = []
+    for key in first:
+        difference = np.sqrt(comm.allreduce(float(np.sum((first[key] - second[key]) ** 2))))
+        size = np.sqrt(comm.allreduce(float(np.sum(second[key] ** 2))))
+        scale = real_scale if key in reals else size
+        if difference > rtol * scale:
+            out.append(key)
+    return out
+
+
 def load_meshes(path, name):
-    """The parent from a checkpoint file and its curved mantle submesh."""
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "demos" / "gravity"))
-    from validate_selfgrav_annulus import curve_mesh
+    """The parent from a checkpoint file and its curved mantle submesh.
+
+    The file stores the parent with its P2 coordinates. `Submesh` does not
+    inherit them, so the submesh is curved again.
+    """
     with fd.CheckpointFile(str(path), "r") as chk:
         parent = chk.load_mesh(name)
     parent.cartesian = False
-    sub = curve_mesh(fd.Submesh(parent, 2, C.CELL_MANTLE))
+    sub = C.curve_mesh(fd.Submesh(parent, 2, C.CELL_MANTLE))
     sub.cartesian = False
     return parent, sub
 
@@ -337,7 +393,14 @@ def relative(a, b):
 
 @pytest.mark.parametrize("case", STATE_CASES, ids=[c.label for c in STATE_CASES])
 def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
-    """Interrupted, checkpointed, restored on a loaded mesh, continued: bit for bit."""
+    """Interrupted, checkpointed, restored on a loaded mesh, continued.
+
+    The restored state equals the saved one bit for bit on any number of
+    ranks. The continued run equals the uninterrupted run bit for bit in
+    serial; on more than one rank it agrees to `PARALLEL_RTOL`, because two
+    parallel MUMPS factorisations of one matrix do not give the same bits
+    (`SelfGravitatingGIASolver.restore`).
+    """
     from pathlib import Path
     directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
     name = meshes[0].name
@@ -367,18 +430,22 @@ def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
     restarted, sea2 = solver_on(second)
     with fd.CheckpointFile(str(directory / "state.h5"), "r") as chk:
         restarted.restore(read_state(chk, restarted, idx=0))
-    for key, array in values(restarted).items():
-        assert np.array_equal(array, saved[key]), key
+    assert not states_differ(values(restarted), saved, restarted, rtol=0)
     run(restarted, sea2, FOUR[2:], first=2)
+    continued = values(restarted)
 
     reference, sea3 = solver_on(first)
     run(reference, sea3, FOUR)
-    for key, array in values(reference).items():
-        assert np.array_equal(array, values(restarted)[key]), key
+    rtol = 0 if reference.mesh.comm.size == 1 else PARALLEL_RTOL
+    assert not states_differ(values(reference), continued, restarted, rtol=rtol)
 
 
 def test_state_round_trip_in_memory_and_reset(meshes):
-    """`restore` of copied Functions, then `reset` back to rest."""
+    """`restore` of copied Functions, then `reset` back to rest.
+
+    The continued runs agree bit for bit in serial and to `PARALLEL_RTOL` on
+    more than one rank (`SelfGravitatingGIASolver.restore`).
+    """
     case = STATE_CASES[2]
     sea = None
     a, u, psi = C.build_new(meshes, case, dt=C.dt_function(meshes[1]),
@@ -389,92 +456,155 @@ def test_state_round_trip_in_memory_and_reset(meshes):
     b, ub, psib = C.build_new(meshes, case, dt=C.dt_function(meshes[1]),
                               nullspace="rigid_rotation")
     b.restore(copies)
-    assert np.array_equal(ub.dat.data_ro, u.dat.data_ro)
-    assert np.array_equal(psib.dat.data_ro, psi.dat.data_ro)
+    comm = b.mesh.comm
+
+    def on_every_rank(flag):
+        # One answer for all ranks, so that no rank leaves the test early.
+        from mpi4py import MPI
+        return comm.allreduce(bool(flag), op=MPI.LAND)
+
+    assert on_every_rank(np.array_equal(ub.dat.data_ro, u.dat.data_ro))
+    assert on_every_rank(np.array_equal(psib.dat.data_ro, psi.dat.data_ro))
     run(a, sea, FOUR[2:])
     run(b, sea, FOUR[2:])
-    for key, array in values(a).items():
-        assert np.array_equal(array, values(b)[key]), key
+    rtol = 0 if b.mesh.comm.size == 1 else PARALLEL_RTOL
+    assert not states_differ(values(a), values(b), b, rtol=rtol)
     b.reset()
     assert b.time_integrator.previous_dt is None
     for key, f in b.state().items():
         if key != "previous_dt":
-            assert not np.any(f.dat.data_ro), key
-    assert not np.any(ub.dat.data_ro)
+            assert on_every_rank(not np.any(f.dat.data_ro)), key
+    assert on_every_rank(not np.any(ub.dat.data_ro))
     with pytest.raises(ValueError, match="Unknown state entries"):
         b.restore({**copies, "something": copies["displacement"]})
 
 
-def old_layout(solver):
-    """The fields and the metadata of a checkpoint in the earlier solver's layout.
+#: Checkpoint files that the earlier solver (`gadopt.gia_gravity` at commit
+#: 2f4b1397) wrote after two steps on the mesh of `gia_solver_cases.MESH_FILE`,
+#: in the layouts of the drivers that ran it. Written once, in serial, by a
+#: script that ran the earlier solver and the drivers' field lists
+#: (`time_history_fields`, `time_history_metadata`), then copied with gzip
+#: compression in the HDF5 1.10 file format, which HDF5 reads transparently.
+#: The mesh in every file is the curved parent, under its default name.
+OLD_CHECKPOINTS = C.REFERENCE_DIR
+OLD_MESH_NAME = "firedrake_default"
 
-    The drivers of the earlier solver (`gadopt.gia_gravity`, `selfgrav_common`)
-    stored every sub-function of the mixed solution as `solution_{i}`, the
-    quadrature history also as `internal_variables_0`, the accepted BDF2
-    levels as `time_{current,previous}_{i}` and the metadata of
-    `time_history_metadata`; a backward-Euler DG run stored no levels and no
-    metadata. The earlier solver's mixed space had the same sub-spaces in the
-    same order as this solver's (checked field by field on the three cases
-    below while both existed, `NOTES/design/step3/IMPLEMENTATION-PART2.md`),
-    so a file in that layout is written here from this solver's state.
+#: The cases of the stored files: the file name, the configuration and
+#: whether the file has the Exp01 layout (own names, no broken encoding,
+#: `real_{i}` rows) instead of the `selfgrav_common` layout (every
+#: sub-function of the mixed solution as `solution_{i}` in the broken
+#: encoding, the BDF2 levels as `time_*`, the quadrature history also as
+#: `internal_variables_0`).
+OLD_CHECKPOINT_CASES = {
+    "Quadrature-bdf2-selfgrav": (
+        "gia_old_checkpoint_quadrature_bdf2.h5",
+        Case(family="Quadrature", scheme="bdf2", representation="lowrank",
+             model="maxwell2", core="fluid", centre=True), False),
+    "DG-be-multiplier-selfgrav": (
+        "gia_old_checkpoint_dg_be.h5", Case(rotation=True), False),
+    "DG-bdf2-lowrank-selfgrav": (
+        "gia_old_checkpoint_dg_bdf2.h5",
+        Case(scheme="bdf2", representation="lowrank", core="fluid",
+             rotation=True, centre=True), False),
+    "DG-bdf2-lowrank-exp01": (
+        "gia_old_checkpoint_exp01.h5",
+        Case(scheme="bdf2", representation="lowrank", core="fluid",
+             rotation=True, centre=True), True),
+}
 
-    Args:
-      solver: a `SelfGravitatingGIASolver` after at least one step.
+
+def stored_names(solver, exp01):
+    """The names of the fields a driver of the earlier solver stored for `solver`.
+
+    The earlier solver's mixed space had the same sub-spaces in the same
+    order as this solver's, so the `selfgrav_common` layout has one
+    `solution_{i}` per sub-function of this solver's mixed solution.
+    """
+    levels = (["time_current_0", "time_previous_0"]
+              if solver.time_scheme == "bdf2" else [])
+    if exp01:
+        return (["checkpoint_displacement", "checkpoint_internal_variables"]
+                + levels + ["checkpoint_potential"])
+    names = [f"solution_{i}" for i in range(len(solver.solution.subfunctions))]
+    if solver.family == "Quadrature":
+        names.append("internal_variables_0")
+    return names + levels
+
+
+def _old_checkpoint_converts(label):
+    """Restore this solver from a stored file of the earlier solver and continue.
+
+    The file holds the earlier solver's state after two steps. A solver on
+    the mesh loaded from the file restores the converted state. A second
+    solver on the same loaded mesh marches the same two steps from rest; the
+    restored state agrees with it, and after both take a third step they
+    agree again. The bound 1e-11 covers the difference of the two solvers
+    (round-off, measured below 1e-14 per field when they ran side by side),
+    the round-off of the broken encoding of the `selfgrav_common` layout,
+    and the different numbering of the degrees of freedom of the mesh on
+    which the earlier solver ran and of the loaded mesh.
 
     Returns:
-      `(fields, metadata)`: a list of `(name, Function)` and a dict of floats.
+      `(solver, loaded, metadata)` of the restored run, for further checks.
     """
-    fields = [(f"solution_{i}", f) for i, f in enumerate(solver.solution.subfunctions)]
-    if solver.family == "Quadrature":
-        fields.append(("internal_variables_0", solver.internal_variables))
-    if solver.time_scheme != "bdf2":
-        return fields, {}
-    history = solver.time_integrator
-    fields += [(f"time_{level}_{i}", f) for level in ("current", "previous")
-               for i, f in enumerate(getattr(history, level) or ())]
-    previous = history.previous_dt
-    metadata = {"time_scheme_order": 2.0, "time_history_version": 1.0,
-                "time_previous_dt": -1.0 if previous is None else float(previous)}
-    if solver.family == "Quadrature":
-        metadata.update(material_solver_kind=1.0, material_quad_degree=float(C.QUAD))
-    return fields, metadata
+    filename, case, exp01 = OLD_CHECKPOINT_CASES[label]
+    path = str(OLD_CHECKPOINTS / filename)
+    loaded_meshes = load_meshes(path, OLD_MESH_NAME)
+    parent, sub = loaded_meshes
+    nullspace = "rigid_rotation" if case.core == "fluid" else None
+    new, u, psi = C.build_new(loaded_meshes, case, dt=C.dt_function(sub),
+                              nullspace=nullspace)
+    names = stored_names(new, exp01)
+    with fd.CheckpointFile(path, "r") as chk:
+        loaded = {n: chk.load_function(parent, n, idx=0) for n in names}
+        history = chk.get_timestepping_history(parent, names[0])
+    metadata = {k: float(v[-1]) for k, v in history.items() if k != "index"}
+    aliases = ({"displacement": "checkpoint_displacement",
+                "potential": "checkpoint_potential"} if exp01 else None)
+    state = state_from_checkpoint(new, loaded, metadata, aliases=aliases)
+    if exp01 and "time_current_0" not in loaded:
+        state["history"] = loaded["checkpoint_internal_variables"]
+    new.restore(state)
+    if case.scheme == "bdf2":
+        assert new.time_integrator.previous_dt == FOUR[1]
+
+    reference, u_ref, psi_ref = C.build_new(loaded_meshes, case, dt=C.dt_function(sub),
+                                            nullspace=nullspace)
+    run(reference, None, FOUR[:2])
+
+    def assert_agree(when):
+        for name, a, b in [("displacement", u, u_ref), ("potential", psi, psi_ref),
+                           ("history", new.internal_variables,
+                            reference.internal_variables)]:
+            assert relative(a, b) <= 1e-11, (when, name, relative(a, b))
+
+    assert_agree("restored")
+    run(new, None, FOUR[2:3], first=2)
+    run(reference, None, FOUR[2:3], first=2)
+    assert_agree("continued")
+    return new, loaded, metadata
 
 
-def test_a_checkpoint_of_the_old_solver_converts(meshes):
-    """The `selfgrav_common` layout of the earlier solver restarts this one.
+@pytest.mark.xfail(
+    fd.COMM_WORLD.size > 1, strict=True,
+    reason="A quadrature history read on another number of ranks than it was "
+           "written on comes back permuted inside each cell: "
+           "`CheckpointField` stores the values at the quadrature points in "
+           "the local node order of each cell, and that order follows the "
+           "cell orientation, which changes when the mesh is redistributed. "
+           "The file was written in serial.")
+def test_a_checkpoint_of_the_old_solver_converts():
+    """A file of the earlier solver in the `selfgrav_common` layout, Quadrature, BDF2.
 
-    A run of two steps is encoded on the parent in the drivers' layout
-    (`old_layout`: `solution_{i}`, `time_*`, broken elements) with its
-    metadata. A second solver restores the converted state; both take a third
-    step and agree to round-off. A file with the wrong time order is refused.
+    The file is the earlier solver's own output (`OLD_CHECKPOINTS`), so this
+    checks that a file the earlier code wrote restarts this solver
+    (`_old_checkpoint_converts`). A file with the wrong time order is
+    refused. On more than one rank the restored history is wrong (the
+    `xfail` reason), because the file was written in serial.
     """
-    from gadopt.viscoelastic_checkpointing import CheckpointField
-    case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
-                model="maxwell2", core="fluid", centre=True)
-    parent, sub = meshes
-    first, u_first, psi_first = C.build_new(meshes, case, dt=C.dt_function(sub),
-                                            nullspace="rigid_rotation")
-    for h in FOUR[:2]:
-        first.dt.assign(h)
-        first.solve()
-    fields, metadata = old_layout(first)
-    stored = {name: CheckpointField(name, f, parent).encode().copy(deepcopy=True)
-              for name, f in fields}
-    new, u, psi = C.build_new(meshes, case, dt=C.dt_function(sub),
-                              nullspace="rigid_rotation")
-    new.restore(state_from_checkpoint(new, stored, metadata))
-    assert new.time_integrator.previous_dt == FOUR[1]
-    for h in FOUR[2:3]:
-        first.dt.assign(h)
-        new.dt.assign(h)
-        first.solve()
-        new.solve()
-    assert fd.norm(u - u_first) <= 1e-12 * fd.norm(u)
-    assert fd.norm(psi - psi_first) <= 1e-12 * fd.norm(psi)
-    assert (fd.norm(new.internal_variables - first.internal_variables)
-            <= 1e-12 * fd.norm(new.internal_variables))
+    new, loaded, metadata = _old_checkpoint_converts("Quadrature-bdf2-selfgrav")
     with pytest.raises(ValueError, match="time order"):
-        state_from_checkpoint(new, stored, {**metadata, "time_scheme_order": 1.0})
+        state_from_checkpoint(new, loaded, {**metadata, "time_scheme_order": 1.0})
 
 
 def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
@@ -508,102 +638,20 @@ def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
             read_state(chk, e, idx=0)
 
 
-def _old_checkpoint_round_trip(meshes, case, tmp_path, *, exp01):
-    """Write a checkpoint in a driver's layout of the earlier solver, convert, continue.
+@pytest.mark.parametrize("label", ["DG-be-multiplier-selfgrav",
+                                   "DG-bdf2-lowrank-selfgrav"])
+def test_a_dg_checkpoint_of_the_old_solver_converts(label):
+    """A file of the earlier solver in the DG `selfgrav_common` layout.
 
-    `exp01=False`: the `selfgrav_common` layout (`old_layout`), every
-    sub-function of the mixed solution as `solution_{i}` in the broken
-    encoding, the BDF2 levels as `time_*`, the metadata of
-    `time_history_metadata` as the timestepping values. `exp01=True`: the
-    Exp01 driver's layout, the displacement, the history and the potential
-    under its own names copied without the broken encoding, and the `Real`
-    rows as `real_{i}` in the timestepping values. The run that writes the
-    file continues as the reference.
+    The history is `solution_1`. Backward Euler stores no levels and no
+    metadata; BDF2 stores the levels and the time metadata.
     """
-    from pathlib import Path
-    from gadopt.viscoelastic_checkpointing import CheckpointField
-    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
-    # `load_function` takes only a mesh loaded from the file, so the first
-    # run is made on a loaded mesh and the second on a second load of the
-    # file it writes; both loads number the degrees of freedom alike.
-    with fd.CheckpointFile(str(directory / "mesh.h5"), "w") as chk:
-        chk.save_mesh(meshes[0])
-    name = meshes[0].name
-    loaded_meshes = load_meshes(directory / "mesh.h5", name)
-    parent, sub = loaded_meshes
-    first, u_first, psi_first = C.build_new(
-        loaded_meshes, case, dt=C.dt_function(sub),
-        nullspace="rigid_rotation" if case.core == "fluid" else None)
-    for h in FOUR[:2]:
-        first.dt.assign(h)
-        first.solve()
-    zs = first.solution.subfunctions
-    fields, info = old_layout(first)
-    if exp01:
-        names = {"displacement": "checkpoint_displacement",
-                 "history": "checkpoint_internal_variables"}
-        fields = [(names["displacement"], zs[first.field_index["displacement"]]),
-                  (names["history"], zs[first.field_index["history"]])]
-        fields += [(n, f) for n, f in old_layout(first)[0] if n.startswith("time_")]
-        encoded = [CheckpointField(n, f, parent, broken=False) for n, f in fields]
-        potential_field = zs[first.field_index["potential"]]
-        potential = fd.Function(fd.FunctionSpace(parent, potential_field.ufl_element()),
-                                name="checkpoint_potential").assign(potential_field)
-        for i, f in enumerate(zs):
-            if f.ufl_element().family() == "Real":
-                info[f"real_{i}"] = float(f.dat.data_ro_with_halos[0])
-    else:
-        encoded = [CheckpointField(n, f, parent) for n, f in fields]
-    info = {k: float(v) for k, v in info.items()} | {"step": 2.0}
-    path = str(directory / "old.h5")
-    with fd.CheckpointFile(path, "w") as chk:
-        chk.save_mesh(parent)
-        for field in encoded:
-            chk.save_function(field.encode(), idx=0, timestepping_info=info)
-        if exp01:
-            chk.save_function(potential, idx=0, timestepping_info=info)
-    # Read back on a second load of the file, as a restarted driver does.
-    stored_names = [f.stored.name() for f in encoded] + (["checkpoint_potential"] if exp01 else [])
-    second = load_meshes(path, name)
-    with fd.CheckpointFile(path, "r") as chk:
-        loaded = {n: chk.load_function(second[0], n, idx=0) for n in stored_names}
-        history = chk.get_timestepping_history(second[0], stored_names[0])
-    metadata = {k: float(v[-1]) for k, v in history.items() if k != "index"}
-    new, u, psi = C.build_new(second, case, dt=C.dt_function(second[1]),
-                              nullspace="rigid_rotation" if case.core == "fluid" else None)
-    aliases = ({"displacement": "checkpoint_displacement",
-                "potential": "checkpoint_potential"} if exp01 else None)
-    state = state_from_checkpoint(new, loaded, metadata, aliases=aliases)
-    if exp01 and "time_current_0" not in loaded:
-        state["history"] = loaded["checkpoint_internal_variables"]
-    new.restore(state)
-    for h in FOUR[2:3]:
-        first.dt.assign(h)
-        new.dt.assign(h)
-        first.solve()
-        new.solve()
-    # The broken element of the old layout changes the last bit of some
-    # values, so the continued run agrees to round-off, not bit for bit
-    # (measured up to 1.2e-12 against the earlier solver).
-    assert relative(u, u_first) <= 1e-11
-    assert relative(psi, psi_first) <= 1e-11
-    assert relative(new.internal_variables, first.internal_variables) <= 1e-11
+    _old_checkpoint_converts(label)
 
 
-@pytest.mark.parametrize("case", [Case(rotation=True),
-                                  Case(scheme="bdf2", representation="lowrank",
-                                       core="fluid", rotation=True, centre=True)],
-                         ids=["DG-be-multiplier", "DG-bdf2-lowrank"])
-def test_a_dg_checkpoint_of_the_old_solver_converts(meshes, case, tmp_path):
-    """The earlier DG layout (history as `solution_1`), through a CheckpointFile."""
-    _old_checkpoint_round_trip(meshes, case, tmp_path, exp01=False)
-
-
-def test_an_exp01_checkpoint_of_the_old_solver_converts(meshes, tmp_path):
-    """The Exp01 layout (own names, `real_{i}`), through a CheckpointFile."""
-    case = Case(scheme="bdf2", representation="lowrank", core="fluid",
-                rotation=True, centre=True)
-    _old_checkpoint_round_trip(meshes, case, tmp_path, exp01=True)
+def test_an_exp01_checkpoint_of_the_old_solver_converts():
+    """A file of the earlier solver in the Exp01 layout (own names, `real_{i}`)."""
+    _old_checkpoint_converts("DG-bdf2-lowrank-exp01")
 
 
 # -- Interface ----------------------------------------------------------------------
@@ -628,11 +676,15 @@ def test_the_order_of_the_couplings_does_not_matter(meshes):
 
     a, b = build(1), build(-1)
     assert b.field_names == a.field_names
-    x = C.random_function(a.solution_space, np.random.default_rng(3), 1e-3)
+    # One state for both, defined by the coordinates, so that every row is
+    # nonzero.
+    x = C.coordinate_mixed_function(a, "order", 1e-3)
     C.fill(a.solution, x)
     C.fill(b.solution, x)
     with fd.assemble(a.F).dat.vec_ro as ra, fd.assemble(b.F).dat.vec_ro as rb:
-        assert np.array_equal(ra.array_r, rb.array_r)
+        same = np.array_equal(ra.array_r, rb.array_r)
+    from mpi4py import MPI
+    assert a.mesh.comm.allreduce(bool(same), op=MPI.LAND)
 
 
 def test_the_approximation_is_not_written(meshes):
@@ -972,3 +1024,72 @@ def test_taylor_with_a_real_control_in_the_row_scalings(meshes, control_name):
     pause_annotation()
     assert abs(float(rf(control)) - float(J)) <= 1e-10 * abs(float(J))
     assert_taylor_with_guards(rf, control, direction, J, min_rate=1.9)
+
+
+#: The coupling parameters that can be given as a `Real` Function, with the
+#: load of the case that carries them and their value in the test geometry.
+REAL_PARAMETERS = {
+    "SeaLevel.g_surface": ("sea_fixed", 1.0),
+    "SurfaceLoad.g_surface": ("surface", 1.0),
+    "Rotation.Omega_sq": ("surface", 1.566e-3),
+    "FluidCore.rho_core": ("surface", 1.2),
+    "FluidCore.g": ("surface", 1.0),
+    # Not a coupling parameter, but every coupling facet term carries it, and
+    # the traction of a `SurfaceLoad` is where a `Real` `B_mu` of the parent
+    # needs the coupling facet measure.
+    "approximation.B_mu": ("surface", C.B_MU),
+}
+
+
+@pytest.mark.parametrize("on, parameter", [
+    (on, parameter) for parameter in REAL_PARAMETERS
+    for on in ("mechanics", "parent")
+    # `B_mu` is a row scaling of the parent rows, so it lives on the parent.
+    if not (parameter == "approximation.B_mu" and on == "mechanics")])
+def test_a_coupling_parameter_can_be_a_real_function_on_either_mesh(
+        meshes, parameter, on):
+    """A coupling parameter as a `Real` Function of either mesh: residual and derivatives.
+
+    The coupling facets are exterior facets of the mechanics mesh and
+    interior facets of the parent. UFL requires every quantity of the parent
+    to carry a restriction there and refuses one on a quantity of the
+    mechanics mesh, so each parameter must be restricted by the mesh it
+    lives on. Checked: the residual assembles and equals the residual with
+    the plain number; the tangent action `dF/dm . dm` and the adjoint action
+    `(dF/dm)^T w`, which pyadjoint assembles for a control, assemble too, and
+    the two agree (`w . (dF/dm dm) = ((dF/dm)^T w) dm`).
+    """
+    parent, sub = meshes
+    load, number = REAL_PARAMETERS[parameter]
+    case = Case(core="fluid", rotation=True, centre=True, load=load)
+    mesh = sub if on == "mechanics" else parent
+    R = fd.FunctionSpace(mesh, "R", 0)
+    real = fd.Function(R).assign(number)
+
+    def residual_at_fixed_state(value):
+        # One fixed coordinate-defined state, so that every term is nonzero.
+        solver, _, _ = C.build_new(meshes, case, sea=C.SeaFields(sub, ice=True),
+                                   parameters={parameter: value})
+        C.write_state(solver, C.coordinate_state(solver), previous_dt=None)
+        return solver
+
+    reference = residual_at_fixed_state(number)
+    solver = residual_at_fixed_state(real)
+    F = solver.F
+    with fd.assemble(F).dat.vec_ro as a, fd.assemble(reference.F).dat.vec_ro as b:
+        assert a.norm() > 0
+        difference = a.copy()
+        difference.axpy(-1.0, b)
+        assert difference.norm() <= 1e-14 * b.norm()
+    dF = fd.derivative(F, real)
+    dm = fd.Function(R).assign(1.0)
+    w = C.coordinate_mixed_function(solver, "adjoint", 1.0)
+    tangent = fd.assemble(fd.action(dF, dm))
+    adjoint = fd.assemble(fd.action(fd.adjoint(dF), w))
+    with tangent.dat.vec_ro as t, w.dat.vec_ro as wv:
+        forward_pairing = t.dot(wv)
+    with adjoint.dat.vec_ro as a:
+        adjoint_pairing = a.sum()
+    # The parameter enters the residual: the derivative is not zero.
+    assert abs(forward_pairing) > 0
+    assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)

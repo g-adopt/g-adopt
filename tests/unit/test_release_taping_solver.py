@@ -468,7 +468,7 @@ def petsc_logging():
 @pytest.mark.parallel(nprocs=[1, 2, 4])
 @pytest.mark.parametrize("order", ["taylor", "invert"])
 def test_release_changes_no_number_and_frees_one_set(meshes, set_tracker,
-                                                    order):
+                                                     order):
     """J and every gradient are bit-identical with the release; one set is freed.
 
     Four runs in one process: without the release, with it, with it and a

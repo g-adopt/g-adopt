@@ -512,6 +512,14 @@ class TestInertiaTranspose:
             psi_rot = rotational_potential(list(m), mesh, Omega_sq=1.0)
             assert fd.assemble((psi_rot - p_i) ** 2 * fd.dx(domain=mesh)) < 1e-24
 
+    @pytest.mark.parametrize("component", [0, 1])
+    def test_2d_refuses_a_polar_wander_component(self, component):
+        """A polar-wander component needs `z`, which a 2-D mesh does not have."""
+        mesh = fd.UnitSquareMesh(1, 1)
+        X = fd.SpatialCoordinate(mesh)
+        with pytest.raises(ValueError, match="third coordinate"):
+            Rotation.inertia_polynomial(component, X)
+
     def test_inertia_of_a_cos2_sheet_vanishes(self, solved):
         """`int sigma (x^2 + y^2) dS` over a circle kills a `cos 2phi` load.
 
@@ -1228,7 +1236,7 @@ def offdiagonal_ratios(block):
     return np.abs(off).max(axis=1) / np.abs(np.diag(block))
 
 
-def block_asymmetry(F, z):
+def block_asymmetry(F, z, J=None):
     """Per-block `max|A_ij - A_ji^T|`, and the max-abs grid beside it.
 
     A hand copy of `demos/gravity/selfgrav_gia_annulus.py`, deliberately, and
@@ -1242,9 +1250,15 @@ def block_asymmetry(F, z):
     assembles with `Real` blocks present, where monolithic `aij` does not, it is
     sharp to ~1e-17, and it names the block. It needs a global dense transpose,
     so it is serial.
+
+    Args:
+      F: the residual.
+      z: the mixed unknown of `F`.
+      J: the Jacobian to measure; `None` takes `derivative(F, z)`.
     """
     Z = z.function_space()
-    A = fd.assemble(fd.derivative(F, z), mat_type="nest").petscmat
+    J = fd.derivative(F, z) if J is None else J
+    A = fd.assemble(J, mat_type="nest").petscmat
     n = len(Z)
     diff = np.zeros((n, n))
     size = np.zeros((n, n))
@@ -1307,6 +1321,123 @@ class TestBlockZeroSymmetry:
         diff, size = block_asymmetry(solver.F, z)
         window = np.ix_(block0, block0)
         assert diff[window].max() / size[window].max() > 1e-6
+
+
+class TestEliminatedBlockSymmetry:
+    """Block 0 with the history eliminated is symmetric; with it, it is not."""
+
+    def test_the_eliminated_block_is_symmetric(self, meshes):
+        """The Quadrature family's `(u, psi)` block 0 is symmetric to round-off.
+
+        On the Quadrature family the history is eliminated at the quadrature
+        points, and the operator of the step is the Jacobian of the step
+        backend with that elimination in it (`DirectConstitutiveBackend.J`),
+        plus the low-rank DtN update. The presets solve the eliminated
+        displacement block with CG because it is symmetric; this measures
+        that, for a linear Maxwell rheology of two elements with a fluid core
+        and rotation.
+
+        The instrument is the bilinear form of the operator: for three
+        coordinate-defined directions `x_k` with zero `Real` components,
+        `|x_i . J x_j - x_j . J x_i|` relative to the largest `|x_i . J x_j|`.
+        It runs on any number of ranks, unlike a dense block transpose (and
+        the nest assembly that one needs does not accept the backend's
+        Jacobian). The same instrument on the DG family, whose block 0 also
+        holds the history rows, reads far above round-off, so it is not
+        vacuous there.
+        """
+        import gia_solver_cases as cases
+
+        def asymmetry(family):
+            solver, _, _ = TestFluidCore.build_fluid(
+                meshes, rotation=True, internal_variable_family=family,
+                approximation_kwargs={"viscosity": [1.0, 3.0],
+                                      "shear_modulus": [1.0, 0.5]})
+            directions = []
+            for k in range(3):
+                x = cases.coordinate_mixed_function(solver, f"symmetry{k}", 1.0)
+                for index in solver.real_indices:
+                    x.subfunctions[index].assign(0.0)
+                directions.append(x)
+            # The actions of the operator the step solves, at the solver's
+            # state (the backend's Jacobian on the Quadrature family).
+            _, actions = cases.residual_and_actions(solver, directions)
+            pairing = np.zeros((3, 3))
+            for i, x in enumerate(directions):
+                for j, action in enumerate(actions):
+                    with action.dat.vec_ro as a, x.dat.vec_ro as v:
+                        pairing[i, j] = a.dot(v)
+            assert np.abs(pairing).max() > 0.0
+            return np.abs(pairing - pairing.T).max() / np.abs(pairing).max()
+
+        quadrature = asymmetry("Quadrature")
+        dg = asymmetry("DG")
+        print(f"bilinear asymmetry: Quadrature {quadrature:.3e}, DG {dg:.3e}")
+        assert quadrature <= 1e-12
+        assert dg > 1e-6
+
+
+#: Bounds on the relative L2 gap between the DG and Quadrature families after
+#: two steps on this annulus, about ten times the measured gaps (1.5e-4 in
+#: `u` and 7.9e-4 in `psi`).
+FAMILY_GAP_U = 2e-3
+FAMILY_GAP_PSI = 1e-2
+
+
+class TestFamiliesAgree:
+    """The DG and Quadrature history families describe one physical system.
+
+    The DG family carries the history as a DG1 unknown in the mixed space;
+    the Quadrature family eliminates it at the quadrature points. Both are
+    built here with a fluid core, because the Quadrature family supports
+    natural displacement boundaries only.
+    """
+
+    MAXWELL2 = {"viscosity": [1.0, 3.0], "shear_modulus": [1.0, 0.5]}
+
+    def test_dg_and_quadrature_agree_after_two_steps(self, meshes):
+        """Two steps of each family agree in `u` and `psi` to the discretisation gap.
+
+        The two families differ in how the history is represented (DG1
+        against values at the quadrature points), so they agree to a
+        discretisation error of this resolution and not to round-off. The
+        bound is about ten times the measured gap; a sign or factor error
+        in either family moves the fields by order one.
+        """
+        fields = {}
+        for family in ("DG", "Quadrature"):
+            solver, u, psi = TestFluidCore.build_fluid(
+                meshes, rotation=True, internal_variable_family=family,
+                approximation_kwargs=self.MAXWELL2, nullspace="rigid_rotation",
+                solver_parameters="direct")
+            solver.solve()
+            solver.solve()
+            fields[family] = (u, psi)
+        (u_dg, psi_dg), (u_q, psi_q) = fields["DG"], fields["Quadrature"]
+        assert fd.norm(u_q) > 0.0
+        gap_u = relative_difference(u_dg, u_q)
+        gap_psi = relative_difference(psi_dg, psi_q)
+        print(f"DG against Quadrature: u {gap_u:.3e}, psi {gap_psi:.3e}")
+        assert gap_u < FAMILY_GAP_U
+        assert gap_psi < FAMILY_GAP_PSI
+
+    def test_the_real_block_does_not_depend_on_the_family(self, meshes):
+        """The `Real` block of the Jacobian is the same matrix in both families.
+
+        Eliminating the history touches no constraint row, so the block of
+        the DtN multipliers, the core pressure and the rotation row is the
+        same to round-off. Both use the multiplier representation, which has
+        one `Real` row per DtN mode.
+        """
+        blocks = []
+        for family in ("DG", "Quadrature"):
+            solver, _, _ = TestFluidCore.build_fluid(
+                meshes, rotation=True, internal_variable_family=family,
+                dtn_representation="multiplier")
+            blocks.append(real_block(solver))
+        dg, quadrature = blocks
+        assert np.abs(dg).max() > 0.0
+        assert np.abs(dg - quadrature).max() <= 1e-14 * np.abs(dg).max()
 
 
 class TestBlockOneIsTheDiagonalItClaims:

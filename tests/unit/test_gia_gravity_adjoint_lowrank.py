@@ -483,8 +483,8 @@ def reduced_functional(meshes, control_name, value, representation,
     try:
         m = Control(control)
         J, solver = forward(meshes, control_name, control,
-                                       representation, tape_it=True,
-                                       **build_kwargs)
+                            representation, tape_it=True,
+                            **build_kwargs)
         Jhat = ReducedFunctional(J, m)
     finally:
         pause_annotation()
@@ -515,8 +515,8 @@ def gradient_against_fresh_solves(meshes, control_name, value, representation,
         with stop_annotating():
             m = real(control_mesh(meshes, control_name), value + shift)
             J, fresh_solver = forward(meshes, control_name, m,
-                                            representation, tape_it=False,
-                                            **build_kwargs)
+                                      representation, tape_it=False,
+                                      **build_kwargs)
             # Anti-contamination (REVIEW-ADJOINT S3, "the instrument that is
             # itself unverified"): the reference must not be the taped object.
             assert fresh_solver is not taped_solver, (
@@ -696,7 +696,7 @@ def test_replay_matches_fresh_solve(meshes, representation, control_name):
     shifted = 1.05 * value
     with stop_annotating():
         J_direct, _ = forward(meshes, control_name, real(cmesh, shifted),
-                                    representation, tape_it=False)
+                              representation, tape_it=False)
     J_replay = float(Jhat(real(cmesh, shifted)))
     relative = abs(J_replay - float(J_direct)) / abs(float(J_direct))
     print(f"    [replay/{representation}/{control_name}] replay {J_replay:.10e} "

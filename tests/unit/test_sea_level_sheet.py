@@ -44,7 +44,7 @@ from gadopt import sea_level_sheet as sls
 from gadopt.gia_couplings import CentreOfMass
 from gadopt.utility import scalar_value
 import test_sea_level as tsl
-from test_sea_level import (  # noqa: F401  (pytest fixtures)
+from test_sea_level import (
     B_MU,
     EPS,
     G_RE,
@@ -56,20 +56,23 @@ from test_sea_level import (  # noqa: F401  (pytest fixtures)
     SNES_ATOL,
     SNES_RTOL,
     build,
-    clean_tape,
     coupling,
     indicator,
-    meshes,
     perturb,
     polar_angle,
     re_measure,
     real_value,
-    representation,
     solve_settings,
     solver_converged,
     surface_fields,
     vector_norm,
 )
+# The module fixtures of `test_sea_level`, bound by assignment so that pytest finds
+# them here and flake8 does not read the test arguments of the same name as
+# redefinitions of an import.
+clean_tape = tsl.clean_tape
+meshes = tsl.meshes
+representation = tsl.representation
 
 R = RHO_W / RHO_I
 
@@ -175,8 +178,8 @@ class TestSoftplusColumn:
         the negative water column `rho_w SL`."""
         mesh, space = unit_interval
         column = sls.softplus_column(fd.Function(space).assign(I),
-                                       fd.Function(space).assign(SL),
-                                       self.EPS, RHO_W, RHO_I)
+                                     fd.Function(space).assign(SL),
+                                     self.EPS, RHO_W, RHO_I)
         assert evaluate(column, mesh) == pytest.approx(expected, rel=1e-14,
                                                        abs=1e-15)
 
@@ -564,8 +567,7 @@ class TestSolves:
         eustatic = (-(RHO_I / RHO_W) * fd.assemble(d_ice * caps * dss)
                     / fd.assemble((1 - caps) * dss))
         assert eustatic > 0.0
-        assert real_value(sea.shift()) == pytest.approx(eustatic,
-                                                                rel=1e-4)
+        assert real_value(sea.shift()) == pytest.approx(eustatic, rel=1e-4)
 
 
 def ice_control_and_direction(sub, which):

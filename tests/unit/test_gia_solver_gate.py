@@ -4,13 +4,15 @@ For every configuration the earlier solver (`gadopt.gia_gravity` at commit
 2f4b1397) supported, that solver and the present one were
 built on the same annulus, one fixed nonzero state was written into both
 (every field, both history levels, the BDF2 coefficients after a startup
-step), and the assembled residual and the Jacobian action on two random
+step), and the assembled residual and the Jacobian action on two fixed
 directions agreed field by field to round-off. The earlier solver's vectors
 are stored as fingerprints (`gia_solver_cases.fingerprint`: per field block
-the norm and the dot product with a fixed random vector) in
+the norm and the pairing with a fixed probe) in
 `data/gia_gate_reference.json`, so this file now compares the present solver
-against those stored values. The state and the directions come from the same
-seeded generator as when they were recorded.
+against those stored values. The state, the directions and the probes are
+interpolated from fixed expressions of the coordinates
+(`gia_solver_cases.coordinate_function`), so the comparison does not depend
+on the order of the degrees of freedom and runs on any number of ranks.
 
 On the Quadrature family the residual and the Jacobian are those of the
 step backend, after the local constitutive root is solved at the state: that
@@ -20,13 +22,9 @@ is the system the step solves. On the low-rank DtN path the low-rank update
 Configurations the earlier solver reached only through its pointwise
 substitution are not compared: the present solver has no pointwise path. A
 rigid core is compared on the DG family only.
-
-The probes follow the serial order of the degrees of freedom, so the
-comparison runs in serial only.
 """
 
 import firedrake as fd
-import numpy as np
 import pytest
 
 import gia_solver_cases as C
@@ -99,22 +97,21 @@ def gate(meshes, case, *, perturb=None):
     new, _, _ = C.build_new(meshes, case, sea=sea)
     if perturb is not None:
         perturb(new)
-    # The generator, its seed and the order of the draws are those of the
-    # recording; a change here changes the state and the stored values no
-    # longer apply.
-    rng = np.random.default_rng(20261119)
-    state = C.random_state(new, rng)
+    # The labels of the state and the directions select their expressions;
+    # they are those of the recording, and a change here changes the state
+    # so that the stored values no longer apply.
+    state = C.coordinate_state(new)
     C.write_state(new, state, previous_dt=0.07 if case.scheme == "bdf2" else None)
     if case.scheme == "bdf2":
         # The BDF2 coefficients of a step after a startup step of 0.07.
         r = C.DT0 / .07
         assert abs(float(new.time_integrator.alpha) - (1 + 2 * r) / (1 + r)) < 1e-14
-    directions = [C.random_function(new.solution_space, rng, 1.0) for _ in range(2)]
+    directions = [C.coordinate_mixed_function(new, f"direction{k}", 1.0)
+                  for k in range(2)]
     residual, actions = C.residual_and_actions(new, directions)
     return [C.fingerprint(v, new.field_index) for v in [residual, *actions]]
 
 
-@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("case", CASES, ids=[c.label for c in CASES])
 def test_residual_and_jacobian_action_match_the_reference(meshes, case):
     """Residual and two Jacobian actions agree with the stored values in every block.
@@ -147,7 +144,6 @@ NEGATIVE = {
 }
 
 
-@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("row", list(NEGATIVE))
 def test_the_gate_sees_a_changed_row(meshes, row):
     """Negative controls: one small extra term in one row is seen in that block.

@@ -12,10 +12,11 @@ from time import perf_counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'unit'))
-import gadopt  # imported before firedrake, as G-ADOPT requires
-import firedrake as fd
-import test_gia_direct_bdf2 as test
-from test_gia_eliminated_lowrank import load
+# The imports below need the two paths above, so they follow them.
+import gadopt  # noqa: E402  (imported before firedrake, as G-ADOPT requires)
+import firedrake as fd  # noqa: E402
+import test_gia_direct_bdf2 as test  # noqa: E402
+from test_gia_eliminated_lowrank import load  # noqa: E402
 
 meshes = test.meshes.__wrapped__()
 _, sub = meshes

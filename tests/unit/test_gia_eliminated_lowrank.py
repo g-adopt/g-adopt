@@ -14,7 +14,7 @@ import firedrake as fd
 import numpy as np
 import pytest
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
-                              pause_annotation, get_working_tape, stop_annotating)
+                               pause_annotation, get_working_tape, stop_annotating)
 from gadopt.gia_couplings import SurfaceLoad
 from gadopt.gia_solver import SelfGravitatingGIASolver
 import test_gia_direct_bdf2 as direct
@@ -55,10 +55,10 @@ def test_lowrank_matches_multipliers(meshes, model, exponent, moving=False):
     _, sub = meshes
     c = fd.Function(fd.FunctionSpace(sub, 'CG', 1)).assign(.1)
     low, dt, ice = direct.build(meshes, c, direct=True, exponent=exponent, model=model,
-                               representation='lowrank', iterative=True,
-                               moving_coastline=moving)
+                                representation='lowrank', iterative=True,
+                                moving_coastline=moving)
     ref, rdt, rice = direct.build(meshes, c, direct=True, exponent=exponent, model=model,
-                                 moving_coastline=moving)
+                                  moving_coastline=moving)
     # The low-rank solver holds no `dtn_multiplier_k` field, so its fields
     # are a subset of the multiplier solver's; they are compared by name.
     assert set(low.field_index) <= set(ref.field_index)
@@ -130,7 +130,7 @@ def check_lowrank_adjoint(meshes, model, checkpoint, tmp_path, moving=False):
         control = fd.Function(fd.FunctionSpace(sub, 'CG', 1)).assign(.1)
         direction = control.copy(deepcopy=True).interpolate(.1+.03*fd.SpatialCoordinate(sub)[0])
         solver, dt, ice = direct.build(meshes, control, direct=True, model=model,
-                                      representation='lowrank', iterative=True, moving_coastline=moving)
+                                       representation='lowrank', iterative=True, moving_coastline=moving)
     if moving:
         assert solver.solver_parameters['gia_rebuild'] == 'always'
     continue_annotation()
@@ -151,9 +151,9 @@ def check_lowrank_adjoint(meshes, model, checkpoint, tmp_path, moving=False):
         solver.solve()
     u = solver.field('displacement')
     psi = solver.field('potential')
-    measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree':4},
+    measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree': 4},
                          intersect_measures=(fd.dx(domain=meshes[0]),))
-    J = fd.assemble((fd.inner(u,u)+.1*fd.inner(solver.internal_variables,solver.internal_variables))*measure)
+    J = fd.assemble((fd.inner(u, u)+.1*fd.inner(solver.internal_variables, solver.internal_variables))*measure)
     J += fd.assemble(.01*psi**2*fd.dx(domain=meshes[0]))
     rf = ReducedFunctional(J, c)
     pause_annotation()
@@ -175,7 +175,8 @@ def test_lowrank_gravity_control_adjoint(meshes):
         gravity = fd.Function(fd.FunctionSpace(meshes[0], 'R', 0)).assign(.03)
         direction = gravity.copy(deepcopy=True).assign(.005)
         solver, dt, ice = direct.build(meshes, material_control, direct=True,
-            representation='lowrank', iterative=True, gravity_control=gravity)
+                                       representation='lowrank', iterative=True,
+                                       gravity_control=gravity)
     continue_annotation()
     c = Control(gravity)
     for k, h in enumerate(direct.STEPS):
@@ -183,9 +184,9 @@ def test_lowrank_gravity_control_adjoint(meshes):
         load(ice, k)
         solver.solve()
     u = solver.field('displacement')
-    measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree':4},
+    measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree': 4},
                          intersect_measures=(fd.dx(domain=meshes[0]),))
-    J = fd.assemble(fd.inner(u,u)*measure)
+    J = fd.assemble(fd.inner(u, u)*measure)
     rf = ReducedFunctional(J, c)
     pause_annotation()
     assert_taylor_with_guards(rf, gravity, direction, J, min_rate=1.9)

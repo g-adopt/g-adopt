@@ -14,7 +14,7 @@ import numpy as np
 import ufl
 import pytest
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
-                              pause_annotation, get_working_tape, stop_annotating)
+                               pause_annotation, get_working_tape, stop_annotating)
 from pyadjoint.tape import annotate_tape
 import gadopt.gia_history as gia_history
 from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
@@ -22,25 +22,14 @@ from gadopt.gia_presets import OMEGA_SQ_EARTH
 from gadopt.gia_solver import SelfGravitatingGIASolver
 import test_gia_gravity as base
 from test_gravity_adjoint import assert_taylor_with_guards
+import gia_solver_cases
+
 
 @pytest.fixture(scope='module')
 def meshes():
-    import sys
-    import tempfile
-    from pathlib import Path
-    pytest.importorskip('gmsh')
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]/'demos'/'gravity'))
-    from generate_selfgrav_annulus import generate
-    from validate_selfgrav_annulus import curve_mesh
-    path = Path(tempfile.gettempdir())/'gadopt_bdf2_triangle_annulus.msh'
-    if fd.COMM_WORLD.rank == 0 and not path.exists():
-        generate(str(path), dr_mantle=.3, n_azimuthal=16, quads=False)
-    fd.COMM_WORLD.barrier()
-    parent = curve_mesh(fd.Mesh(str(path)))
-    parent.cartesian = False
-    sub = curve_mesh(fd.Submesh(parent, 2, base.CELL_MANTLE))
-    sub.cartesian = False
-    return parent, sub
+    """The small triangle annulus, read from `tests/unit/data` (no gmsh needed)."""
+    return gia_solver_cases.annulus_meshes()
+
 
 STEPS = (.08, .13, .07, .12)
 
@@ -118,7 +107,8 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
     if exponent == 'spatial':
         power = fd.Function(fd.FunctionSpace(sub, 'DG', 0)).interpolate(
             fd.conditional(fd.SpatialCoordinate(sub)[0] > 0, 3., 1.))
-    material = base.approximation(shear_modulus=[.4, .6],
+    material = base.approximation(
+        shear_modulus=[.4, .6],
         viscosity=[.12*fd.exp(control), .6*fd.exp(control)],
         exponent=power, transition_stress=.003,
         B_mu=base.B_MU if gravity_control is None else gravity_control)
@@ -128,7 +118,8 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
             backstress_modulus=.8, recovery_time=.4*fd.exp(.3*control),
             exponent=exponent, transition_stress=.003, g=1., B_mu=base.B_MU,
             self_gravity_number=base.LAMBDA)
-    sea = SeaLevel(boundary=base.CURVE_RE, rho_w=.1, rho_i=.09, g_surface=1.,
+    sea = SeaLevel(
+        boundary=base.CURVE_RE, rho_w=.1, rho_i=.09, g_surface=1.,
         SL_init=initial_sea, I=ice, I_init=initial_ice,
         N_init=fd.Constant(0.), ur_init=fd.Constant(0.), fixed_ocean=not moving_coastline, softplus_width=.001)
     X = fd.SpatialCoordinate(sub)
@@ -137,7 +128,7 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
                  Rotation(C=fd.assemble(fd.dot(X, X)*measure), Omega_sq=OMEGA_SQ_EARTH),
                  CentreOfMass(), sea]
     options = dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11,
-        ksp_error_if_not_converged=True)
+                   ksp_error_if_not_converged=True)
     if options_extra:
         options.update(options_extra)
     arguments = dict(
@@ -186,6 +177,7 @@ def build(meshes, control, *, direct, exponent=3, scheme='bdf2', iterative=False
         # to unpack` in `formmanipulation.py`).
         J = ufl.algorithms.expand_derivatives(
             ufl.derivative(F, tuple(fields), fd.TrialFunctions(Z)))
+
         def jacobian_matrix():
             """The unreduced mixed Jacobian at the present state, as one AIJ matrix.
 
@@ -316,14 +308,16 @@ def test_direct_matches_coupled_quadrature(meshes, exponent, model):
             a = direct.solution.subfunctions[direct.field_index[index]]
             b = coupled.solution.subfunctions[coupled.field_index[index]]
             np.testing.assert_allclose(a.dat.data_ro, b.dat.data_ro, rtol=5e-7, atol=2e-9)
-        np.testing.assert_allclose(direct.internal_variables.dat.data_ro,
+        np.testing.assert_allclose(
+            direct.internal_variables.dat.data_ro,
             coupled.solution.subfunctions[coupled.field_index['history']].dat.data_ro,
             rtol=5e-7, atol=2e-9)
         # The `Real` fields, by name; both solvers hold the same ones.
         names = [direct.field_names[i] for i in direct.real_indices]
         assert names == [coupled.field_names[j] for j in coupled.real_indices]
         for name in names:
-            np.testing.assert_allclose(direct.real_field(name).dat.data_ro,
+            np.testing.assert_allclose(
+                direct.real_field(name).dat.data_ro,
                 coupled.real_field(name).dat.data_ro, rtol=5e-7, atol=2e-9)
 
 
@@ -352,9 +346,9 @@ def march(meshes, control, *, direct, model='maxwell', checkpoint_dir=None):
         histories = solver.internal_variables
     else:
         histories = solver.field('history')
-    measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree':4},
+    measure = fd.Measure('dx', domain=sub, metadata={'quadrature_degree': 4},
                          intersect_measures=(fd.dx(domain=meshes[0]),))
-    return fd.assemble((fd.inner(u,u)+.1*fd.inner(histories,histories))*measure)
+    return fd.assemble((fd.inner(u, u)+.1*fd.inner(histories, histories))*measure)
 
 
 @pytest.mark.parametrize('model', ['maxwell', 'backstress'])
@@ -398,7 +392,7 @@ def test_direct_iterative_matches_lu_block_reference(meshes):
     for h in STEPS[:2]:
         dt.assign(h)
         idt.assign(h)
-        ice.interpolate(.001*(1+.5*fd.cos(2*fd.atan2(X[1],X[0]))))
+        ice.interpolate(.001*(1+.5*fd.cos(2*fd.atan2(X[1], X[0]))))
         iice.assign(ice)
         reference.solve()
         iterative.solve()

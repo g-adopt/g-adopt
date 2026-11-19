@@ -119,8 +119,11 @@ from test_gia_gravity import (  # noqa: E402  (module-level fixture and helpers)
     RE,
     approximation,
     gravity_bcs,
-    meshes,  # noqa: F401  (pytest fixture)
 )
+# The module fixture of `test_gia_gravity`, bound by assignment so that pytest finds
+# it here and flake8 does not read the test arguments of the same name as
+# redefinitions of an import.
+meshes = test_gia_gravity.meshes
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -371,7 +374,7 @@ def surface_fields(sub, state, *, d_ice=0.0, sl_init=None):
     zero = fd.Function(V)
     if state in ("ocean", "land"):
         value = -DEEP if state == "land" else (DEEP if sl_init is None
-                                                else sl_init)
+                                               else sl_init)
         SL_init = fd.Function(V).assign(value)
         I_init = fd.Function(V)
         I = fd.Function(V)
@@ -1438,8 +1441,7 @@ class TestEustaticLimit:
         eustatic = (-(RHO_I / RHO_W) * fd.assemble(d_ice * caps * dss)
                     / fd.assemble((1 - caps) * dss))
         assert eustatic > 0.0  # melting raises the sea
-        assert real_value(sea.shift()) == pytest.approx(eustatic,
-                                                                rel=1e-4)
+        assert real_value(sea.shift()) == pytest.approx(eustatic, rel=1e-4)
 
 
 #: The solved shoreline states, one per representation, so that
@@ -2697,7 +2699,7 @@ class TestFixedOcean:
                                   ocean_ice=GROUNDED)
         solver, z, sea = build(meshes, fields, lam=1e-6, stiff=True,
                                earth=dict(shear_modulus=1e8,
-                                             bulk_modulus=1e8),
+                                          bulk_modulus=1e8),
                                representation=representation,
                                sea_level_overrides=fixed(),
                                **solve_settings(representation))

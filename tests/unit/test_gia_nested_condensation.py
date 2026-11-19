@@ -36,6 +36,7 @@ from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.internal_variable_equation import history_slices
 from gadopt.preconditioners import DtNMultiplierDenseSchurPC, InternalVariableSCPC
 
+import test_gia_gravity  # noqa: E402
 from test_gia_gravity import (  # noqa: E402  (module-level fixtures and helpers)
     CURVE_RC,
     CURVE_RE,
@@ -43,10 +44,13 @@ from test_gia_gravity import (  # noqa: E402  (module-level fixtures and helpers
     approximation,
     gravity_bcs,
     load_density,
-    meshes,  # noqa: F401  (pytest fixture)
     new_fields,
     polar_moment,
 )
+# The module fixture of `test_gia_gravity`, bound by assignment so that pytest finds
+# it here and flake8 does not read the test arguments of the same name as
+# redefinitions of an import.
+meshes = test_gia_gravity.meshes
 
 
 def build(meshes, *, approximation_kwargs=None, dt=1.0,

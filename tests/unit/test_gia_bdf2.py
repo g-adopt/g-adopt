@@ -4,7 +4,7 @@ import firedrake as fd
 import numpy as np
 import pytest
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
-                              pause_annotation, get_working_tape, stop_annotating)
+                               pause_annotation, get_working_tape, stop_annotating)
 from pyadjoint.tape import annotate_tape
 from gadopt.gia_couplings import (CentreOfMass, FluidCore, Rotation, SeaLevel,
                                   SurfaceLoad)
@@ -41,7 +41,8 @@ def build(meshes, *, scheme='bdf2', exponent=1, control=None):
     psi = fd.Function(fd.FunctionSpace(parent, 'CG', 2))
     R = fd.FunctionSpace(sub, 'R', 0)
     dt = fd.Function(R).assign(STEPS[0])
-    material = base.approximation(shear_modulus=[.4, .6],
+    material = base.approximation(
+        shear_modulus=[.4, .6],
         viscosity=[.12, .6*(control if control is not None else 1.)],
         exponent=exponent, transition_stress=.003)
     X = fd.SpatialCoordinate(sub)
@@ -182,6 +183,7 @@ def test_bdf2_lowrank_moving_coastline_adjoint(meshes, monkeypatch):
     import gadopt.preconditioners as pcs
     events = []
     original_due = pcs._RebuildRule.due
+
     def due(rule, pc):
         ctx = pcs._solver_appctx(pc)
         events.append((ctx.get('gia_solve_index'), pcs._published_dt(pc)))

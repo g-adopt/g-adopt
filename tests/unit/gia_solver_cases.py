@@ -1,17 +1,27 @@
 """Builders shared by the tests of `gadopt.gia_solver`.
 
 `Case` describes one configuration of the coupled GIA system and `build_new`
-builds it with `gadopt.gia_solver.SelfGravitatingGIASolver`. `random_state`,
-`write_state` and `residual_and_actions` give the residual and the Jacobian
-actions at one fixed state, and `fingerprint` and `reference_values` compare
-them with the values stored from the earlier solver.
+builds it with `gadopt.gia_solver.SelfGravitatingGIASolver`.
+`coordinate_state`, `write_state` and `residual_and_actions` give the
+residual and the Jacobian actions at one fixed state, and `fingerprint` and
+`reference_values` compare them with the values stored from the earlier
+solver.
 
 The geometry is the small triangle annulus of `test_gia_direct_bdf2.py`: a
-parent with a stand-off buffer, the mantle a `Submesh`, both P2-curved.
+parent with a stand-off buffer, the mantle a `Submesh`, both P2-curved. The
+linear mesh is stored in `data/gia_triangle_annulus.msh`.
+
+Everything that enters a stored value is defined by the coordinates and not
+by the order of the degrees of freedom: the state and the directions are
+interpolated from fixed expressions of `SpatialCoordinate`, and a probe is a
+Function interpolated in the same way and paired with the vector. The order
+of the degrees of freedom depends on the mesh reader, on the reordering of
+DMPlex and on the number of ranks, so values defined by that order do not
+transfer between machines or rank counts. Values defined by the
+coordinates do, up to round-off.
 """
 
-import sys
-import tempfile
+import zlib
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -33,19 +43,44 @@ DT0 = 0.1
 QUAD = 4
 
 
+#: The linear triangle annulus of the GIA unit tests. Written once by
+#: `demos/gravity/generate_selfgrav_annulus.generate(path, dr_mantle=.3,
+#: n_azimuthal=16, quads=False)` with gmsh 4.15.2 and stored, so that the
+#: cells are the same on every machine and no test needs gmsh.
+MESH_FILE = Path(__file__).resolve().parent / "data" / "gia_triangle_annulus.msh"
+
+
+def curve_mesh(linear_mesh):
+    """Remap a linear annulus mesh to P2 coordinates, so its circles are curved.
+
+    Edge midpoints are pushed radially onto the linear interpolant of the
+    vertex radii, so an edge whose two vertices lie on a circle becomes a
+    quadratic arc on that circle. The same map as `curve_mesh` of
+    `demos/gravity/validate_selfgrav_annulus.py`; it is repeated here because
+    that module imports gmsh.
+
+    Args:
+      linear_mesh: a mesh with straight edges and no vertex at the origin.
+
+    Returns:
+      A new mesh with P2 coordinates. A `Submesh` built before the remap keeps
+      its entity maps to the parent.
+    """
+    X = fd.SpatialCoordinate(linear_mesh)
+    r = fd.sqrt(X[0] ** 2 + X[1] ** 2)
+    r_p1 = fd.Function(fd.FunctionSpace(linear_mesh, "CG", 1)).interpolate(r)
+    X_p2 = fd.Function(fd.VectorFunctionSpace(linear_mesh, "CG", 2)).interpolate(
+        (r_p1 / r) * X)
+    return fd.Mesh(X_p2)
+
+
 def annulus_meshes():
-    """The parent annulus and its mantle submesh, both P2-curved."""
-    import pytest
-    pytest.importorskip("gmsh")
-    root = Path(__file__).resolve().parents[2]
-    sys.path.insert(0, str(root / "demos" / "gravity"))
-    from generate_selfgrav_annulus import generate
-    from validate_selfgrav_annulus import curve_mesh
-    path = Path(tempfile.gettempdir()) / "gadopt_bdf2_triangle_annulus.msh"
-    if fd.COMM_WORLD.rank == 0 and not path.exists():
-        generate(str(path), dr_mantle=.3, n_azimuthal=16, quads=False)
-    fd.COMM_WORLD.barrier()
-    parent = curve_mesh(fd.Mesh(str(path)))
+    """The parent annulus and its mantle submesh, both P2-curved.
+
+    The parent is read from `MESH_FILE`. `Submesh` does not inherit the P2
+    coordinates of its parent, so the submesh is curved separately.
+    """
+    parent = curve_mesh(fd.Mesh(str(MESH_FILE)))
     parent.cartesian = False
     sub = curve_mesh(fd.Submesh(parent, 2, CELL_MANTLE))
     sub.cartesian = False
@@ -93,10 +128,10 @@ class Case:
         return replace(self, **kwargs)
 
 
-def approximation(case, control=None):
+def approximation(case, control=None, B_mu=B_MU):
     """A fresh approximation of `case.model`; `control` scales the viscosity."""
     factor = 1.0 if control is None else fd.exp(control)
-    common = dict(bulk_modulus=1.0, density=1.0, g=1.0, B_mu=B_MU,
+    common = dict(bulk_modulus=1.0, density=1.0, g=1.0, B_mu=B_mu,
                   self_gravity_number=LAMBDA)
     if case.model == "maxwell":
         return gadopt.CompressibleInternalVariableApproximation(
@@ -170,9 +205,30 @@ def dt_function(sub, value=DT0):
 
 def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
               solver_parameters="direct", extra=None, default_options=True,
-              **kwargs):
-    """The new solver for `case`. Returns `(solver, u, psi)`."""
+              parameters=None, **kwargs):
+    """The new solver for `case`. Returns `(solver, u, psi)`.
+
+    Args:
+      meshes: the parent annulus and its mantle submesh.
+      case: the configuration.
+      control: `None`, or a `Real` Function that scales the viscosity.
+      dt: the time step, a `Real` Function; `None` gives `DT0`.
+      sea: the prescribed fields of a sea-level case; `None` makes new ones.
+      nullspace: the `nullspace` argument of the solver.
+      solver_parameters: the preset name or dictionary.
+      extra: options added to the tight default tolerances.
+      default_options: `False` leaves out the tight default tolerances.
+      parameters: values that replace coupling parameters, keyed
+        `"Coupling.argument"`, for example `{"FluidCore.g": g}`, and
+        `"approximation.B_mu"` for the self-gravity coupling number.
+      kwargs: further arguments of the solver.
+    """
     parent, sub = meshes
+    parameters = dict(parameters or {})
+
+    def value(key, default):
+        # A replaced coupling parameter, or the value of the test geometry.
+        return parameters.pop(key, default)
     u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
     psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
     bcs = {}
@@ -180,24 +236,32 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
     if case.core == "rigid":
         bcs[CURVE_RC] = {"un": 0.0}
     else:
-        couplings.append(new_couplings.FluidCore(boundary=CURVE_RC, rho_core=1.2, g=1.))
+        couplings.append(new_couplings.FluidCore(
+            boundary=CURVE_RC, rho_core=value("FluidCore.rho_core", 1.2),
+            g=value("FluidCore.g", 1.)))
     if case.rotation:
-        couplings.append(new_couplings.Rotation(C=polar_moment(meshes), Omega_sq=1.566e-3))
+        couplings.append(new_couplings.Rotation(
+            C=polar_moment(meshes), Omega_sq=value("Rotation.Omega_sq", 1.566e-3)))
     if case.centre:
         couplings.append(new_couplings.CentreOfMass())
     if case.load == "surface":
         couplings.append(new_couplings.SurfaceLoad(
             boundary=CURVE_RE, sigma=load_expression(sub, case.load_mean),
-            g_surface=1.0))
+            g_surface=value("SurfaceLoad.g_surface", 1.0)))
     elif case.load in ("sea_fixed", "sea_moving"):
         sea = sea or SeaFields(sub)
-        couplings.append(new_couplings.SeaLevel(**sea.kwargs(case)))
+        couplings.append(new_couplings.SeaLevel(**{
+            **sea.kwargs(case),
+            "g_surface": value("SeaLevel.g_surface", 1.0)}))
     # Tight tolerances, so that the direct presets compare at round-off.
     options = (dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11)
                if default_options else {})
     options.update(extra or {})
+    material = approximation(case, control, B_mu=value("approximation.B_mu", B_MU))
+    # Every replacement must have reached a coupling of the case.
+    assert not parameters, f"parameters of couplings the case lacks: {sorted(parameters)}"
     solver = NewSolver(
-        u, psi, approximation(case, control), dt=dt or dt_function(sub),
+        u, psi, material, dt=dt or dt_function(sub),
         time_scheme=case.scheme, internal_variable_family=case.family,
         quad_degree=QUAD if case.family == "Quadrature" else None,
         gravity_bcs=gravity_bcs(parent), bcs=bcs, couplings=couplings,
@@ -207,11 +271,84 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
     return solver, u, psi
 
 
-def random_function(space, rng, amplitude):
+def _unit(seed, k):
+    """A number in [0, 1) from two integers, the same on every platform.
+
+    Integer arithmetic modulo 2^32 (Knuth's multiplicative hash), so the
+    value does not depend on a NumPy generator, whose stream NumPy does not
+    promise to keep across versions.
+    """
+    return ((seed * 2654435761 + (k + 1) * 40503 + 12345) % 2 ** 32) / 2 ** 32
+
+
+def _component(X, seed, k):
+    """One smooth scalar of the coordinates `X` with parameters from `(seed, k)`.
+
+    `sin(a . X + p) + 0.5 cos(b . X + q) + 0.3`, with every component of the
+    wave vectors `a` and `b` between -3 and 3 in units of the inverse mantle
+    depth. The annulus spans radii 0.6 to 4.4, so each term has a few
+    oscillations across it and no symmetry of the annulus; the constant part
+    keeps the mean of the field nonzero.
+    """
+    dim = len(X)
+    values = [_unit(seed, 8 * k + j) for j in range(2 * dim + 2)]
+    a = [6 * values[j] - 3 for j in range(dim)]
+    b = [6 * values[dim + j] - 3 for j in range(dim)]
+    p, q = 2 * np.pi * values[2 * dim], 2 * np.pi * values[2 * dim + 1]
+    return (fd.sin(sum(a_j * X[j] for j, a_j in enumerate(a)) + p)
+            + .5 * fd.cos(sum(b_j * X[j] for j, b_j in enumerate(b)) + q) + .3)
+
+
+def coordinate_function(space, name, amplitude):
+    """A Function of `space` defined by the coordinates and by `name`.
+
+    Every component is a smooth expression of `SpatialCoordinate` whose
+    parameters come from `crc32(name)` and the component number, scaled by
+    `amplitude`, and interpolated into `space`. A `Real` space gets one
+    number per component from the same parameters. The values at a node
+    depend only on where the node is, so the Function is the same on every
+    machine and rank count up to round-off.
+
+    Args:
+      space: a function space that is not mixed.
+      name: a label that selects the expression, for example the field name.
+      amplitude: the scale of the values.
+
+    Returns:
+      The new Function.
+    """
+    seed = zlib.crc32(name.encode())
     f = fd.Function(space)
-    with f.dat.vec_wo as v:
-        v.array[:] = amplitude * (rng.random(v.array.shape) - .5)
-    return f
+    shape = space.value_shape
+    size = int(np.prod(shape)) if shape else 1
+    if space.ufl_element().family() == "Real":
+        values = [amplitude * (_unit(seed, k) - .5) for k in range(size)]
+        f.assign(fd.Constant(np.reshape(values, shape) if shape else values[0]))
+        return f
+    X = fd.SpatialCoordinate(space.mesh())
+    components = [amplitude * _component(X, seed, k) for k in range(size)]
+    expression = (fd.as_tensor(np.reshape(np.array(components, dtype=object), shape).tolist())
+                  if shape else components[0])
+    return f.interpolate(expression)
+
+
+def coordinate_mixed_function(new, name, amplitude):
+    """A Function of the solver's mixed space, field by field from the coordinates.
+
+    Each sub-function is `coordinate_function` of its space with the label
+    `name:field`, so a field gets the same values whatever its position in
+    the mixed space.
+
+    Args:
+      new: a `SelfGravitatingGIASolver`.
+      name: the label of the whole direction.
+      amplitude: the scale of the values.
+    """
+    out = fd.Function(new.solution_space)
+    for field, index in new.field_index.items():
+        sub = out.subfunctions[index]
+        fill(sub, coordinate_function(sub.function_space(), f"{name}:{field}", amplitude))
+    return out
 
 
 def fill(function, values):
@@ -220,16 +357,31 @@ def fill(function, values):
         src.copy(dst)
 
 
-def random_state(new, rng, amplitude=1e-3):
-    """Random values for every field and both history levels, by name."""
+def coordinate_state(new, amplitude=1e-3):
+    """Coordinate-defined values for every field and both history levels, by name.
+
+    The displacement of amplitude 1e-3 with wave numbers up to about 4 gives
+    strains of a few times 1e-3, above the transition stress 0.003 of the
+    power-law cases, so the nonlinear part of those rheologies is reached.
+
+    Args:
+      new: a `SelfGravitatingGIASolver`.
+      amplitude: the scale of the values.
+
+    Returns:
+      `{name: Function}` with the entries of `new.state()` (without
+      `previous_dt`) and, for a solver with a history unknown,
+      `history_iterate`, the Newton iterate of the history.
+    """
     state = {}
     for name, f in new.state().items():
         if name == "previous_dt":
             continue
-        state[name] = random_function(f.function_space(), rng, amplitude)
+        state[name] = coordinate_function(f.function_space(), name, amplitude)
     if "history" in new.field_index:
-        state["history_iterate"] = random_function(
-            new.solution.subfunctions[1].function_space(), rng, amplitude)
+        state["history_iterate"] = coordinate_function(
+            new.solution.subfunctions[new.field_index["history"]].function_space(),
+            "history_iterate", amplitude)
     return state
 
 
@@ -242,7 +394,7 @@ def write_state(new, state, *, previous_dt):
 
     Args:
       new: a `SelfGravitatingGIASolver` of `gadopt.gia_solver`.
-      state: `{name: Function}` from `random_state`.
+      state: `{name: Function}` from `coordinate_state`.
       previous_dt: the length of the previous step, or `None`.
     """
     for name, index in new.field_index.items():
@@ -299,31 +451,46 @@ def residual_and_actions(solver, directions):
 
 
 #: Bound on the relative difference of one field block. Every block is
-#: nonzero in the gate cases (the smallest, the `m3` row, is about 1e-4 of the
-#: whole vector), so round-off of one block stays near 1e-15.
+#: nonzero in the gate cases, so round-off of one block stays near 1e-15.
 FIELD_RTOL = 1e-10
 
 
-def fingerprint(vector, index_of):
-    """`{field: [norm, probe]}` of a mixed residual or action vector.
+def probe_pairing(vector, name):
+    """`[norm, probe, probe norm]` of one vector, with a coordinate-defined probe.
 
-    `probe` is the dot product of the field block with a fixed vector drawn
-    from a generator seeded by the field name, so two vectors with the same
-    fingerprint agree in norm and in one fixed direction per block. Serial
-    only: the probe follows the local order of the degrees of freedom.
+    `vector` is a Function or a Cofunction that is not mixed. The probe is
+    `coordinate_function` of the primal space with the label `probe:name`,
+    and `probe` is the sum over the degrees of freedom of the vector entry
+    times the probe value at that node. The norms are Euclidean norms of
+    the coefficient vectors. All three are reductions over every rank, so
+    they do not depend on the order of the degrees of freedom or on the rank
+    count, and every rank gets the same numbers.
+
+    Args:
+      vector: the vector to fingerprint.
+      name: the field name, which selects the probe.
+    """
+    space = vector.function_space()
+    if isinstance(vector, fd.Cofunction):
+        space = space.dual()
+    probe = coordinate_function(space, f"probe:{name}", 1.0)
+    with vector.dat.vec_ro as v, probe.dat.vec_ro as w:
+        return [float(v.norm()), float(v.dot(w)), float(w.norm())]
+
+
+def fingerprint(vector, index_of):
+    """`{field: [norm, probe, probe norm]}` of a mixed residual or action vector.
+
+    Each field block is paired with its own coordinate-defined probe
+    (`probe_pairing`), so two vectors with the same fingerprint agree in norm
+    and in one fixed direction per block.
 
     Args:
       vector: a Cofunction on a mixed space.
       index_of: `{field name: index in that mixed space}`.
     """
-    import zlib
-    out = {}
-    for name, index in index_of.items():
-        values = np.ravel(vector.subfunctions[index].dat.data_ro)
-        probe = np.random.default_rng(zlib.crc32(name.encode())).random(values.shape) - .5
-        out[name] = [float(np.linalg.norm(values)), float(values @ probe),
-                     float(np.linalg.norm(probe))]
-    return out
+    return {name: probe_pairing(vector.subfunctions[index], name)
+            for name, index in index_of.items()}
 
 
 def fingerprint_differences(new, reference):
@@ -361,9 +528,9 @@ def assert_fingerprints_agree(new, reference, rtol=FIELD_RTOL):
 #: Jacobian actions per gate case (keys "2d" and "3d", then the case label),
 #: `gia_forward_reference.json` the fingerprints of the three-step forward
 #: states and the `Real` values after each step. Both were recorded from the
-#: earlier solver (`gadopt.gia_gravity` at commit 2f4b1397) in serial, with the
-#: generators the tests use, so the probes follow the serial order of the
-#: degrees of freedom and the comparisons run in serial only.
+#: earlier solver (`gadopt.gia_gravity` at commit 2f4b1397) with the
+#: coordinate-defined states, directions and probes of this module, so the
+#: comparisons hold on any machine and any number of ranks.
 REFERENCE_DIR = Path(__file__).resolve().parent / "data"
 
 

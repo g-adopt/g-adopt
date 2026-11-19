@@ -59,7 +59,8 @@ from gadopt.preconditioners import (
     LowRankPotentialPC, _LowRankPotentialOperator)
 
 # The annulus of the GIA suite (dr 0.2, 32 cells around) and its constants.
-from test_gia_gravity import (  # noqa: F401  (the fixture is used by name)
+import test_gia_gravity  # noqa: E402
+from test_gia_gravity import (
     B_MU,
     CURVE_INNER,
     CURVE_OUTER,
@@ -67,8 +68,11 @@ from test_gia_gravity import (  # noqa: F401  (the fixture is used by name)
     CURVE_RE,
     LAMBDA,
     SIGMA_HAT,
-    meshes,
 )
+# The module fixture of `test_gia_gravity`, bound by assignment so that pytest finds
+# it here and flake8 does not read the test arguments of the same name as
+# redefinitions of an import.
+meshes = test_gia_gravity.meshes
 
 
 # The outer tolerance is tight so that the iteration counts compared below are

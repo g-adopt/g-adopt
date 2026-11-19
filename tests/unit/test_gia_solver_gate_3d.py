@@ -7,14 +7,15 @@ three rotation rows with the polar-wander pair closed by `C - A = Q k_s`, the
 CMB of an extruded mesh reached as `"bottom"` through
 `CombinedSurfaceMeasure`, and three centre-of-mass rows. The earlier solver
 (`gadopt.gia_gravity` at commit 2f4b1397) was given the same
-numbers and the same random state, and its residual and two Jacobian actions
-are stored as fingerprints in `data/gia_gate_reference.json` (key "3d"). The
-present solver is compared against those values field by field, in serial,
-because the probes follow the serial order of the degrees of freedom.
+numbers and the same state, and its residual and two Jacobian actions are
+stored as fingerprints in `data/gia_gate_reference.json` (key "3d"). The
+present solver is compared against those values field by field. The state,
+the directions and the probes are defined by the coordinates
+(`gia_solver_cases.coordinate_function`), so the comparison runs on any
+number of ranks.
 """
 
 import firedrake as fd
-import numpy as np
 import pytest
 
 import gadopt
@@ -82,7 +83,6 @@ CASES = [("multiplier", "maxwell", "DG"), ("lowrank", "maxwell2", "DG"),
 REFERENCE = C.reference_values("gate")["3d"]
 
 
-@pytest.mark.skipif(fd.COMM_WORLD.size > 1, reason="the stored probes are serial")
 @pytest.mark.parametrize("representation, model, family", CASES,
                          ids=["-".join(c) for c in CASES])
 def test_3d_residual_and_jacobian_action_match_the_reference(
@@ -91,12 +91,11 @@ def test_3d_residual_and_jacobian_action_match_the_reference(
     new = build(mesh, representation, model, family)
     # Three rotation rows and three centre-of-mass rows, by name.
     assert {"m1", "m2", "m3", "centre_of_mass_2"} <= set(new.field_index)
-    # The generator, its seed and the order of the draws are those of the
-    # recording.
-    rng = np.random.default_rng(7)
-    state = C.random_state(new, rng)
+    # The labels of the state and the directions are those of the recording.
+    state = C.coordinate_state(new)
     C.write_state(new, state, previous_dt=None)
-    directions = [C.random_function(new.solution_space, rng, 1.0) for _ in range(2)]
+    directions = [C.coordinate_mixed_function(new, f"direction{k}", 1.0)
+                  for k in range(2)]
     residual, actions = C.residual_and_actions(new, directions)
     reference = REFERENCE["-".join((representation, model, family))]
     for vector, ref in zip([residual, *actions], reference):
