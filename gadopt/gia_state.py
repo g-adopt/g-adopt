@@ -20,6 +20,13 @@ it, builds the solver on those meshes and calls
 
 The round trip copies nodal values and is exact.
 
+A Quadrature history is stored with the physical coordinates of its
+quadrature points (`CheckpointField.save`), and `read_state` pairs the
+values by position. The restart can therefore run on another number of
+ranks, or on a new partition, than the run that wrote the file. The other
+fields are stored in polynomial elements, which `CheckpointFile` maps to
+any partition itself.
+
 ## Files of the earlier solver
 
 `state_from_checkpoint` reads the layouts of `selfgrav_common` (gia-mip):
@@ -31,6 +38,12 @@ the earlier mixed space is the order of this solver's mixed space, so an
 index names the same field in both. The Exp01 driver stores the `Real` rows
 as `real_{i}` in its metadata and the fields under its own names, which the
 `aliases` argument maps.
+
+Those files hold no point coordinates, so their Quadrature history can be
+read only on the number of ranks that wrote them. `state_from_checkpoint`
+takes that number (`writer_ranks`, from
+`gadopt.viscoelastic_checkpointing.written_rank_count`) and refuses
+another one.
 """
 
 from collections.abc import Mapping
@@ -58,6 +71,10 @@ def decode_into(target: Function, value, parent, name: str) -> None:
       target: a Function of the solver's state.
       value: a number (for a `Real` field), a Function on the target's own
         mesh and element, or the parent-mesh encoding of `CheckpointField`.
+        A Quadrature encoding is copied in its stored node order, which is
+        right on the partition that encoded it only; `read_state` and
+        `state_from_checkpoint` decode the Quadrature entries of a file
+        themselves, with the checks of `CheckpointField.load`.
       parent: the parent mesh of the encoding.
       name: the state name, for messages.
     """
@@ -120,14 +137,15 @@ def write_state(checkpoint, solver, *, idx=None, timestepping_info=None,
     checkpoint.require_group(_GROUP + prefix)
     for key, value in configuration(solver).items():
         checkpoint.set_attr(_GROUP + prefix, key, value)
+    kwargs = {} if idx is None else {"idx": idx}
+    if timestepping_info is not None:
+        kwargs["timestepping_info"] = timestepping_info
     with stop_annotating():
         for name, field in solver.state().items():
-            stored = CheckpointField(prefix + name, field, parent,
-                                     broken=False).encode()
-            kwargs = {} if idx is None else {"idx": idx}
-            if timestepping_info is not None:
-                kwargs["timestepping_info"] = timestepping_info
-            checkpoint.save_function(stored, **kwargs)
+            # `save` also stores the quadrature point coordinates of a
+            # Quadrature history, once per file, for a read on any partition.
+            CheckpointField(prefix + name, field, parent,
+                            broken=False).save(checkpoint, **kwargs)
 
 
 def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
@@ -135,13 +153,18 @@ def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
 
     The solver must be built on the parent mesh that `checkpoint.load_mesh`
     returned, because `CheckpointFile` loads a Function only onto that mesh.
+    The number of ranks and the partition may differ from the writer's.
 
     Returns:
-      `{name: Function on the parent}`, for `solver.restore`.
+      `{name: Function}`, for `solver.restore`: a Quadrature history decoded
+      into its own space (paired by the stored point positions), every other
+      entry as its encoding on the parent.
 
     Raises:
       ValueError: when the file was written by a solver of another time
-        scheme, history family, history degree or DtN representation.
+        scheme, history family, history degree or DtN representation, or
+        when a Quadrature history cannot be read on this partition
+        (`CheckpointField.load`).
     """
     expected = configuration(solver)
     for key, value in expected.items():
@@ -158,12 +181,30 @@ def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
                              f"this solver has {value!r}.")
     parent = solver.potential_mesh
     kwargs = {} if idx is None else {"idx": idx}
-    return {name: checkpoint.load_function(parent, prefix + name, **kwargs)
-            for name in solver.state()}
+    state = {}
+    with stop_annotating():
+        for name, target in solver.state().items():
+            if _is_quadrature(target):
+                # Decoded here, where the file and its point coordinates are
+                # at hand; `restore` then assigns a Function of the target's
+                # own space.
+                scratch = Function(target.function_space())
+                state[name] = CheckpointField(prefix + name, scratch, parent).load(
+                    checkpoint, **kwargs)
+            else:
+                state[name] = checkpoint.load_function(parent, prefix + name, **kwargs)
+    return state
+
+
+def _is_quadrature(target) -> bool:
+    """Whether a state entry is a Function of a Quadrature element."""
+    return (isinstance(target, Function)
+            and target.ufl_element().family() == "Quadrature")
 
 
 def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = None,
-                          *, aliases: Mapping | None = None) -> dict:
+                          *, aliases: Mapping | None = None,
+                          writer_ranks: int | None = None) -> dict:
     """Convert a checkpoint of the earlier solver into a state of `solver`.
 
     Args:
@@ -177,13 +218,20 @@ def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = No
       aliases: `{state name: stored name}` for fields stored under other
         names, for example `{"displacement": "u", "potential": "psi",
         "history": "m"}`.
+      writer_ranks: the number of ranks that wrote the file
+        (`gadopt.viscoelastic_checkpointing.written_rank_count`). Required
+        for a Quadrature history, which these files store in the node order
+        of the writer's partition, with no point coordinates.
 
     Returns:
-      A state for `solver.restore`.
+      A state for `solver.restore`; a Quadrature history decoded into its
+      own space.
 
     Raises:
       ValueError: when the file's scheme or history family disagrees with
-        the solver, or when a state entry has no source in the file.
+        the solver, when a state entry has no source in the file, or when a
+        Quadrature history is read without `writer_ranks` or on another
+        number of ranks than `writer_ranks`.
     """
     metadata = dict(metadata or {})
     aliases = dict(aliases or {})
@@ -228,4 +276,23 @@ def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = No
     missing = expected - set(state)
     if missing:
         raise ValueError(f"The checkpoint has no source for {sorted(missing)}.")
+    targets = solver.state()
+    parent = solver.potential_mesh
+    for name in expected:
+        target, value = targets[name], state[name]
+        if not (_is_quadrature(target) and isinstance(value, Function)
+                and not _same_space(target, value)):
+            continue
+        if writer_ranks is None:
+            raise ValueError(
+                f"The Quadrature history {name!r} of a file of the earlier "
+                "solver is stored in the node order of the writer's partition. "
+                "Pass writer_ranks=written_rank_count(checkpoint, mesh_name) "
+                "(gadopt.viscoelastic_checkpointing), so that a read on another "
+                "number of ranks is refused.")
+        scratch = Function(target.function_space())
+        with stop_annotating():
+            CheckpointField(name, scratch, parent).restore(
+                value, writer_ranks=writer_ranks)
+        state[name] = scratch
     return {name: state[name] for name in expected}

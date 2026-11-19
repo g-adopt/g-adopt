@@ -74,13 +74,17 @@ def curve_mesh(linear_mesh):
     return fd.Mesh(X_p2)
 
 
-def annulus_meshes():
+def annulus_meshes(comm=fd.COMM_WORLD):
     """The parent annulus and its mantle submesh, both P2-curved.
 
     The parent is read from `MESH_FILE`. `Submesh` does not inherit the P2
     coordinates of its parent, so the submesh is curved separately.
+
+    Args:
+      comm: the communicator of the meshes; `COMM_SELF` gives one rank its
+        own serial meshes inside a parallel test.
     """
-    parent = curve_mesh(fd.Mesh(str(MESH_FILE)))
+    parent = curve_mesh(fd.Mesh(str(MESH_FILE), comm=comm))
     parent.cartesian = False
     sub = curve_mesh(fd.Submesh(parent, 2, CELL_MANTLE))
     sub.cartesian = False

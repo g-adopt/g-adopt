@@ -31,6 +31,7 @@ import gia_solver_cases as C
 from gadopt import gia_couplings as cp
 from gadopt.gia_solver import SelfGravitatingGIASolver as NewSolver
 from gadopt.gia_state import read_state, state_from_checkpoint, write_state
+from gadopt.viscoelastic_checkpointing import written_rank_count
 from test_gravity_adjoint import assert_taylor_with_guards
 
 Case = C.Case
@@ -367,13 +368,13 @@ def states_differ(first, second, solver, rtol):
     return out
 
 
-def load_meshes(path, name):
+def load_meshes(path, name, comm=fd.COMM_WORLD):
     """The parent from a checkpoint file and its curved mantle submesh.
 
     The file stores the parent with its P2 coordinates. `Submesh` does not
     inherit them, so the submesh is curved again.
     """
-    with fd.CheckpointFile(str(path), "r") as chk:
+    with fd.CheckpointFile(str(path), "r", comm=comm) as chk:
         parent = chk.load_mesh(name)
     parent.cartesian = False
     sub = C.curve_mesh(fd.Submesh(parent, 2, C.CELL_MANTLE))
@@ -558,10 +559,12 @@ def _old_checkpoint_converts(label):
     with fd.CheckpointFile(path, "r") as chk:
         loaded = {n: chk.load_function(parent, n, idx=0) for n in names}
         history = chk.get_timestepping_history(parent, names[0])
+        writer_ranks = written_rank_count(chk, OLD_MESH_NAME)
     metadata = {k: float(v[-1]) for k, v in history.items() if k != "index"}
     aliases = ({"displacement": "checkpoint_displacement",
                 "potential": "checkpoint_potential"} if exp01 else None)
-    state = state_from_checkpoint(new, loaded, metadata, aliases=aliases)
+    state = state_from_checkpoint(new, loaded, metadata, aliases=aliases,
+                                  writer_ranks=writer_ranks)
     if exp01 and "time_current_0" not in loaded:
         state["history"] = loaded["checkpoint_internal_variables"]
     new.restore(state)
@@ -585,26 +588,30 @@ def _old_checkpoint_converts(label):
     return new, loaded, metadata
 
 
-@pytest.mark.xfail(
-    fd.COMM_WORLD.size > 1, strict=True,
-    reason="A quadrature history read on another number of ranks than it was "
-           "written on comes back permuted inside each cell: "
-           "`CheckpointField` stores the values at the quadrature points in "
-           "the local node order of each cell, and that order follows the "
-           "cell orientation, which changes when the mesh is redistributed. "
-           "The file was written in serial.")
 def test_a_checkpoint_of_the_old_solver_converts():
     """A file of the earlier solver in the `selfgrav_common` layout, Quadrature, BDF2.
 
     The file is the earlier solver's own output (`OLD_CHECKPOINTS`), so this
     checks that a file the earlier code wrote restarts this solver
     (`_old_checkpoint_converts`). A file with the wrong time order is
-    refused. On more than one rank the restored history is wrong (the
-    `xfail` reason), because the file was written in serial.
+    refused, and so is a conversion without the number of ranks of the
+    writer.
+
+    The file was written in serial and holds no quadrature point
+    coordinates, so its history is stored in the node order of the serial
+    partition. On more than one rank the conversion is refused, because the
+    values would come back permuted inside each cell.
     """
+    if fd.COMM_WORLD.size > 1:
+        with pytest.raises(ValueError, match=r"written on 1 rank\(s\)"):
+            _old_checkpoint_converts("Quadrature-bdf2-selfgrav")
+        return
     new, loaded, metadata = _old_checkpoint_converts("Quadrature-bdf2-selfgrav")
     with pytest.raises(ValueError, match="time order"):
-        state_from_checkpoint(new, loaded, {**metadata, "time_scheme_order": 1.0})
+        state_from_checkpoint(new, loaded, {**metadata, "time_scheme_order": 1.0},
+                              writer_ranks=1)
+    with pytest.raises(ValueError, match="writer_ranks"):
+        state_from_checkpoint(new, loaded, metadata)
 
 
 def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
