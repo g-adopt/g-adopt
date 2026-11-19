@@ -129,6 +129,7 @@ import itertools
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
+from numbers import Number
 from warnings import warn
 
 import numpy as np
@@ -142,6 +143,7 @@ from firedrake import (DirichletBC, Function, FunctionSpace,
 from mpi4py import MPI
 from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.algorithms import expand_derivatives, extract_coefficients
+from ufl.domain import extract_domains
 
 from .gia_couplings import CouplingContext, ordered, scalar_value
 from .gia_presets import (NULL_COUPLING_ROW_SCALE,
@@ -312,7 +314,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
       dtn_alpha: the Robin shift of the DtN form, `None` for its default.
       gravity_bcs: the potential's conditions (`"dtn"`, `"psi"`, `"flux"`).
       bcs: the displacement conditions (`"u"`, `"un"`, `"normal_stress"`,
-        ...), as for the other G-ADOPT momentum solvers.
+        ...), as for the other G-ADOPT momentum solvers. A `Real` Function
+        in a weak condition must be a Function of the mechanics mesh; one of
+        the parent is refused (`_refuse_parent_reals_on_mechanics_facets`).
       couplings: a list of `gadopt.gia_couplings.Coupling` objects.
       dtn_representation: `"lowrank"` (default; the DtN modes are a rank-n
         update and the space does not grow with the truncation) or
@@ -337,7 +341,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         one copy of the mode per condition.
       near_nullspace: the modes GAMG is given on the condensed displacement
         operator: `"incompressible"` (default), `"rigid"` or `"none"`.
-      scaling_factor: `c`, a factor of the whole momentum residual.
+      scaling_factor: `c`, a factor of the whole momentum residual. Like
+        `approximation.B_mu` and `approximation.self_gravity_number`, which
+        scale whole rows too, it is a number, a `Constant` or a Function of
+        the potential's (parent) mesh; another mesh is refused. A `Real`
+        `scaling_factor` cannot be used together with a weak displacement
+        condition or a `normal_stress` in `bcs`
+        (`_refuse_parent_reals_on_mechanics_facets`).
       solver_parameters: `None` (direct in 2-D, iterative in 3-D),
         `"direct"`, `"iterative"`, or a complete dictionary.
       preset_options: arguments of
@@ -467,6 +477,8 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         order = 2 if time_scheme == "bdf2" else 1
         self.history = history_formulation(
             self.family, self, internal_variable_degree, order)
+        self.cross_mesh = self.mesh is not self.potential_mesh
+        self._check_row_scaling_meshes()
         self.set_space()
         self.set_boundary_conditions()
         self.set_couplings()
@@ -615,11 +627,6 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                      "centre-of-mass rows do not see its mass. For a surface "
                      "load give SurfaceLoad(boundary=..., sigma=..., "
                      "g_surface=...) in couplings instead.")
-        for coupling in self.couplings:
-            for bc_id, conditions in coupling.mechanics_bcs(ctx).items():
-                weak = self.weak_bcs.setdefault(bc_id, defaultdict(float))
-                for bc_type, value in conditions.items():
-                    weak[bc_type] += value
 
     @property
     def shear_coefficient(self):
@@ -648,6 +655,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             unknowns.append(self.solution_split[1])
         F = sum(eq.residual(sol) for eq, sol in zip(self.equations, unknowns, strict=True))
         self._mechanics_form = F
+        self._refuse_parent_reals_on_mechanics_facets(F)
         multipliers = [(self.solution_split[i], self.tests[i])
                        for i in self.multiplier_indices]
         F += self.gravity.residual(
@@ -662,6 +670,106 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.strong_bcs.extend(self.gravity.dirichlet_bcs(
             self.solution_space.sub(self.potential_index)))
         self._detect_solution_dependence()
+
+    def _check_row_scaling_meshes(self) -> None:
+        """Refuse a row scaling (`c`, `B_mu`, `Lambda`) on a mesh other than the parent.
+
+        The three scale whole rows of both meshes: `theta_psi = c B_mu /
+        Lambda` scales the potential rows, which are integrals over every
+        cell of the parent, and `c B_mu` the facet rows of the couplings,
+        where they are restricted as quantities of the parent
+        (`CouplingContext.on_parent_facet`). A quantity of the mechanics
+        mesh has no value on the cells of the parent outside the mechanics
+        mesh, and UFL refuses its restriction on an exterior facet of the
+        mechanics mesh. So each must be a number, a `Constant`, or a
+        Function of the parent; a `Real` Function of the parent is the
+        form of a control.
+
+        Raises:
+          ValueError: naming the row scaling that lives on another mesh.
+        """
+        if not self.cross_mesh:
+            return
+        scalings = {"scaling_factor": self.scaling_factor,
+                    "approximation.B_mu": self.approximation.B_mu,
+                    "approximation.self_gravity_number (Lambda)": self.Lambda}
+        for label, value in scalings.items():
+            if isinstance(value, Number):
+                continue
+            meshes = set(extract_domains(value))
+            if meshes - {self.potential_mesh}:
+                raise ValueError(
+                    f"{label} lives on a mesh other than the potential's "
+                    "(parent) mesh. It scales the potential rows over every "
+                    "cell of the parent and the coupling rows on the facets "
+                    "of the parent, so give it as a number, a Constant or a "
+                    "Function of the parent mesh, for example "
+                    "Function(FunctionSpace(psi_mesh, 'R', 0)).")
+
+    def _refuse_parent_reals_on_mechanics_facets(self, mechanics_form) -> None:
+        """Refuse a `Real` Function of the parent in a facet term of the momentum equation.
+
+        The momentum equation pairs its exterior facets with the parent's
+        cells (`Equation` with `intersect_measures`), because it cannot know
+        which of its boundaries are interior facets of the parent. On that
+        pairing Firedrake assembles the derivative with respect to a `Real`
+        Function of the parent twice in the adjoint and once in the tangent
+        (measured: an adjoint pairing of 2.000 times the tangent pairing for
+        a `normal_stress` in `bcs`). The residual and the tangent are right,
+        so a gradient through that coefficient would be wrong with no error.
+        The same value as a `Real` Function of the mechanics mesh has no
+        such pairing and is exact. Volume terms on the parent's cells are
+        exact too, and so are the coupling rows, which use the facet-to-facet
+        measure (`CouplingContext.surface_measure`). Only a boundary that is
+        an interior facet of the parent is affected; the check refuses the
+        coefficient on every boundary, because the form does not say which
+        boundary is which.
+
+        A row scaling cannot move to the mechanics mesh
+        (`_check_row_scaling_meshes`), so a `Real` `scaling_factor` is
+        refused here together with a weak displacement condition or a
+        `normal_stress`, which are the terms that put it on such a facet.
+
+        This check reads the coefficients of the form and changes nothing.
+        It can go once Firedrake assembles the adjoint of a parent `Real`
+        on such a facet once, as it does in the tangent.
+
+        Args:
+          mechanics_form: the residual of the momentum (and DG history)
+            equation, before the potential and coupling rows are added.
+
+        Raises:
+          ValueError: naming the coefficient and what to do instead.
+        """
+        if not self.cross_mesh:
+            return
+        for integral in mechanics_form.integrals_by_type("exterior_facet"):
+            for coefficient in extract_coefficients(integral.integrand()):
+                if not isinstance(coefficient, Function):
+                    continue
+                space = coefficient.function_space()
+                if (space.mesh() is self.potential_mesh
+                        and coefficient.ufl_element().family() == "Real"):
+                    if coefficient is self.scaling_factor:
+                        advice = (
+                            "scaling_factor must live on the parent mesh "
+                            "(it scales the potential rows too), so a Real "
+                            "scaling_factor cannot be used with a weak "
+                            "displacement condition or a normal_stress in "
+                            "bcs; give it as a number or a Constant")
+                    else:
+                        advice = (
+                            "define it as a Real Function of the mechanics "
+                            "mesh, Function(FunctionSpace(u_mesh, 'R', 0)), "
+                            "which gives the same residual and an exact "
+                            "derivative")
+                    raise ValueError(
+                        f"The Real Function {coefficient.name()!r} of the "
+                        "potential's (parent) mesh appears in a boundary term "
+                        "of the momentum equation (a weak displacement "
+                        "condition or a normal_stress in bcs). Firedrake "
+                        "assembles its adjoint twice on that boundary, so a "
+                        f"gradient with respect to it would be wrong; {advice}.")
 
     def _detect_solution_dependence(self) -> None:
         """Decide from the forms whether the Jacobian moves inside one solve.

@@ -616,7 +616,7 @@ def test_a_checkpoint_of_the_old_solver_converts():
 
 def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
         meshes, tmp_path):
-    """R4 and R5: a BDF2 state without `previous_dt`, a file of another scheme."""
+    """A BDF2 state without `previous_dt`, and a file of another scheme, are refused."""
     from pathlib import Path
     bdf2 = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
                 model="maxwell2", core="fluid", centre=True)
@@ -886,13 +886,13 @@ def test_the_nullspace_check_can_be_skipped(meshes):
 
 
 def test_backstress_refuses_a_displacement_condition(meshes):
-    """R2: the backstress history equation has no boundary part."""
+    """The backstress history equation has no boundary part."""
     with pytest.raises(NotImplementedError, match="natural displacement"):
         C.build_new(meshes, Case(model="backstress", core="rigid"))
 
 
 def test_a_traction_without_a_surface_load_warns(meshes):
-    """R10: a `normal_stress` loads the mechanics only."""
+    """A `normal_stress` loads the mechanics only, with a warning."""
     parent, sub = meshes
     with pytest.warns(UserWarning, match="normal_stress"):
         NewSolver(fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
@@ -905,7 +905,7 @@ def test_a_traction_without_a_surface_load_warns(meshes):
 
 
 def test_the_coefficients_are_real_functions_on_the_multiplier_path(meshes):
-    """R9: no Python float, so a functional keeps its dependency."""
+    """No Python float, so a functional keeps its dependency."""
     solver, _, _ = C.build_new(meshes, Case(rotation=True))
     solver.solve()
     values = [v for boundary in solver.coefficients().values() for v in boundary.values()]
@@ -1100,3 +1100,111 @@ def test_a_coupling_parameter_can_be_a_real_function_on_either_mesh(
     # The parameter enters the residual: the derivative is not zero.
     assert abs(forward_pairing) > 0
     assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
+
+
+def _adjoint_and_tangent(solver, real):
+    """The tangent and adjoint pairings of `dF/dm` for the `Real` Function `m`.
+
+    At a fixed coordinate-defined state, `w . (dF/dm dm)` and
+    `((dF/dm)^T w) dm` with `dm = 1` and a coordinate-defined `w`. The two
+    agree when the derivative is assembled right.
+    """
+    C.write_state(solver, C.coordinate_state(solver), previous_dt=None)
+    dF = fd.derivative(solver.F, real)
+    dm = fd.Function(real.function_space()).assign(1.0)
+    w = C.coordinate_mixed_function(solver, "adjoint", 1.0)
+    tangent = fd.assemble(fd.action(dF, dm))
+    adjoint = fd.assemble(fd.action(fd.adjoint(dF), w))
+    with tangent.dat.vec_ro as t, w.dat.vec_ro as wv:
+        forward_pairing = t.dot(wv)
+    with adjoint.dat.vec_ro as a:
+        adjoint_pairing = a.sum()
+    return forward_pairing, adjoint_pairing
+
+
+def test_a_parent_real_in_a_momentum_boundary_term_is_refused(meshes):
+    """A `Real` Function of the parent in a `normal_stress` in `bcs` is refused.
+
+    The momentum equation pairs its boundary terms with the parent's cells,
+    where Firedrake assembles the adjoint of a parent `Real` twice (an
+    adjoint pairing of 2.000 times the tangent pairing). The solver refuses
+    such a coefficient at construction and names it. The same factor as a
+    `Real` Function of the mechanics mesh is accepted, and its tangent and
+    adjoint pairings agree.
+    """
+    parent, sub = meshes
+    X = fd.SpatialCoordinate(sub)
+    shape = 1e-3 * (1 + fd.cos(fd.atan2(X[1], X[0])))
+
+    def build(factor):
+        with pytest.warns(UserWarning, match="normal_stress"):
+            solver = NewSolver(
+                fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)),
+                fd.Function(fd.FunctionSpace(parent, "CG", 2)),
+                C.approximation(Case(core="fluid")), dt=C.dt_function(sub),
+                gravity_bcs=C.gravity_bcs(parent),
+                bcs={C.CURVE_RE: {"normal_stress": factor * shape}},
+                couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
+                dtn_representation="multiplier", solver_parameters="direct")
+        return solver
+
+    on_parent = fd.Function(fd.FunctionSpace(parent, "R", 0), name="load_factor")
+    on_parent.assign(1.0)
+    with pytest.raises(ValueError, match="'load_factor'.*mechanics mesh"):
+        build(on_parent)
+    on_mechanics = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0)
+    forward_pairing, adjoint_pairing = _adjoint_and_tangent(build(on_mechanics), on_mechanics)
+    assert abs(forward_pairing) > 0
+    assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
+
+
+def test_a_real_scaling_factor_lives_on_the_parent_without_weak_conditions(meshes):
+    """A `Real` `scaling_factor`: on the parent only, and not with a weak condition.
+
+    `scaling_factor` scales the potential rows over every cell of the parent
+    as well as the momentum rows, so a Function of the mechanics mesh is
+    refused with a message that names it. On the parent it is accepted with
+    a fluid core, whose rows use the facet-to-facet measure, and its tangent
+    and adjoint pairings agree. With a rigid core it stands in the weak `un`
+    condition of the momentum equation, where its adjoint would be assembled
+    twice, and it is refused. A parent `Real` time step with the same rigid
+    core does not enter a boundary term of the momentum equation and keeps
+    working.
+    """
+    parent, sub = meshes
+    with pytest.raises(ValueError, match="scaling_factor lives on a mesh other"):
+        C.build_new(meshes, Case(core="fluid", load="surface"),
+                    scaling_factor=fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0))
+
+    c = fd.Function(fd.FunctionSpace(parent, "R", 0), name="c").assign(1.0)
+    solver, _, _ = C.build_new(meshes, Case(core="fluid", load="surface"), scaling_factor=c)
+    forward_pairing, adjoint_pairing = _adjoint_and_tangent(solver, c)
+    assert abs(forward_pairing) > 0
+    assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
+
+    with pytest.raises(ValueError, match="'c'.*a Real scaling_factor cannot be used"):
+        C.build_new(meshes, Case(core="rigid", load="surface"), scaling_factor=c)
+
+    dt = fd.Function(fd.FunctionSpace(parent, "R", 0)).assign(C.DT0)
+    solver, _, _ = C.build_new(meshes, Case(core="rigid", load="surface"), dt=dt)
+    forward_pairing, adjoint_pairing = _adjoint_and_tangent(solver, dt)
+    assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
+
+
+def test_a_discontinuous_parent_field_is_refused_as_a_coupling_parameter(meshes):
+    """A DG field of the parent as a coupling parameter is refused.
+
+    On a coupling facet, an interior facet of the parent, `avg` of a
+    discontinuous field is the mean of the mantle side and the outer side,
+    not the mantle's value. A continuous (CG) field of the parent is
+    accepted, and so is the DG field on the mechanics mesh.
+    """
+    parent, sub = meshes
+    case = Case(core="fluid", load="surface")
+    dg = fd.Function(fd.FunctionSpace(parent, "DG", 0)).assign(1.2)
+    with pytest.raises(ValueError, match="discontinuous element"):
+        C.build_new(meshes, case, parameters={"FluidCore.rho_core": dg})
+    cg = fd.Function(fd.FunctionSpace(parent, "CG", 1)).assign(1.2)
+    C.build_new(meshes, case, parameters={"FluidCore.rho_core": cg})
+    dg_mechanics = fd.Function(fd.FunctionSpace(sub, "DG", 0)).assign(1.2)
+    C.build_new(meshes, case, parameters={"FluidCore.rho_core": dg_mechanics})

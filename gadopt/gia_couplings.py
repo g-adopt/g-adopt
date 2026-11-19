@@ -52,9 +52,11 @@ a second entry would count it twice.
   unevaluated derivative keeps a parent-mesh integral in every sub-block of
   the Jacobian after Firedrake splits the form, and the Slate compiler of the
   block-0 preconditioners then refuses the block.
-- A `Real` field of the parent, its test function and a constant on a facet
-  of the mechanics mesh go through `CouplingContext.on_parent_facet`, which
-  restricts them where the facet is an interior facet of the parent.
+- A `Real` field of the parent, its test function, a constant and the row
+  scalings `c`, `B_mu` and `Lambda` (which live on the parent or have no
+  mesh; the solver refuses another mesh) on a facet of the mechanics mesh go
+  through `CouplingContext.on_parent_facet`, which restricts them where the
+  facet is an interior facet of the parent.
 - A coupling parameter that the caller gives (a number, a `Constant`, or a
   `Real` Function of either mesh) goes through
   `CouplingContext.on_coupling_facet` in a facet integrand. That method
@@ -74,8 +76,10 @@ from firedrake import (Constant, FacetNormal, Form, Measure,
                        ds, grad, split, sqrt)
 from mpi4py import MPI
 from ufl import derivative as ufl_derivative
+from ufl.algorithms import extract_coefficients
 from ufl.algorithms.ad import expand_derivatives
 from ufl.domain import extract_domains
+from ufl.sobolevspace import H1, H2, HInf
 
 from .momentum_equation import rotational_potential
 from .sea_level_sheet import ocean_fraction, softplus_column, water_fraction
@@ -238,6 +242,14 @@ class CouplingContext:
         is. A parameter whose terminals live on both meshes is refused,
         because no single restriction is valid for it.
 
+        `avg` gives the value on the facet only for a parent field that is
+        continuous across it: a `Real` Function, or a field of an
+        H1-conforming element (continuous Lagrange). For a discontinuous
+        parent field (DG, Quadrature) `avg` is the mean of the mantle side
+        and the side outside the mantle, which is not the mantle's value, so
+        such a field is refused. The same parameter on the mechanics mesh
+        has one side only and is accepted.
+
         Args:
           value: a UFL expression of the parameter.
 
@@ -245,8 +257,9 @@ class CouplingContext:
           `value`, restricted with `avg` if it lives on the parent.
 
         Raises:
-          ValueError: If `value` mixes quantities of the two meshes, or lives
-            on a mesh that is neither of them.
+          ValueError: If `value` mixes quantities of the two meshes, lives
+            on a mesh that is neither of them, or holds a discontinuous
+            field of the parent.
         """
         value = ensure_constant(value)
         if not self.cross_mesh:
@@ -255,6 +268,17 @@ class CouplingContext:
         if not meshes or meshes == {self.mesh}:
             return value
         if meshes == {self.potential_mesh}:
+            for coefficient in extract_coefficients(value):
+                element = coefficient.ufl_element()
+                if element.sobolev_space not in (H1, H2, HInf):
+                    raise ValueError(
+                        f"The coupling parameter {value} holds {coefficient}, a "
+                        f"field of the parent in the discontinuous element "
+                        f"{element}. A coupling facet is an interior facet of "
+                        "the parent, and the average over its two sides is not "
+                        "the mantle's value of a discontinuous field. Give the "
+                        "field on the mechanics mesh, or in a continuous or "
+                        "Real element of the parent.")
             return interior_facet_integrand(value)
         raise ValueError(
             "A coupling parameter must be a number, a Constant, or a Real "
@@ -392,10 +416,6 @@ class Coupling(abc.ABC):
     def sheets(self, ctx: CouplingContext) -> list[MassSheet]:
         """Stage 2: the mass sheets this coupling moves."""
         return []
-
-    def mechanics_bcs(self, ctx: CouplingContext) -> dict:
-        """Weak conditions this coupling adds to the momentum equation."""
-        return {}
 
     @abc.abstractmethod
     def residual(self, ctx: CouplingContext) -> Form:
@@ -1175,11 +1195,12 @@ class SurfaceLoad(Coupling):
         # not as a condition of the momentum equation because that equation
         # pairs its facets with the parent's cells, where the derivative with
         # respect to a `Real` Function of the parent (`B_mu`, `g_s`, `c`) is
-        # assembled twice. On the coupling facet measure every parameter is
-        # restricted as its mesh requires.
+        # assembled twice. On the coupling facet measure the row scaling
+        # `c B_mu`, which lives on the parent or has no mesh, takes the
+        # restriction of every parent quantity, and the coupling parameter
+        # `g_s` the restriction of its own mesh.
         w = ctx.tests["displacement"]
-        traction = (ctx.on_coupling_facet(ctx.scaling_factor)
-                    * ctx.on_coupling_facet(ctx.approximation.B_mu)
+        traction = (ctx.on_parent_facet(ctx.scaling_factor * ctx.approximation.B_mu)
                     * ctx.on_coupling_facet(self.g_surface) * self.sigma)
         F = (traction * dot(w, FacetNormal(ctx.mesh))
              * ctx.surface_measure(self.boundary, degree=ctx.mechanics_quad_degree))
