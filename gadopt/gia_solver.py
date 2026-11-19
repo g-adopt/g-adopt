@@ -1539,15 +1539,16 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         The datum solves start from zero (`GravityPotential.update_total_mass`),
         so a run restarted from a checkpoint reproduces the datum bit for bit.
-        The net-mass check is a diagnostic and is not recorded.
+        The net-mass check is a diagnostic and leaves nothing on the tape
+        (`GravityPotential.check_net_mass`). Every sheet counts in its scale,
+        including the sheets that the datum does not count.
         """
         sheets = self.coupling_context.sheets
         self.gravity.update_total_mass(
             extra_masses=[(sh.density, sh.measure) for sh in sheets
                           if sh.in_monopole_datum])
-        with stop_annotating():
-            self.gravity.check_net_mass(
-                extra_scales=[(sh.density, sh.measure) for sh in sheets])
+        self.gravity.check_net_mass(
+            extra_scales=[(sh.density, sh.measure) for sh in sheets])
 
     def _copy_out(self) -> None:
         """Write the displacement and the potential into `u` and `psi`, recorded."""

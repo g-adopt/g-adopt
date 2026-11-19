@@ -41,6 +41,7 @@ import numpy as np
 from firedrake import (Constant, DirichletBC, Form, Function, FunctionSpace,
                        Measure, SpatialCoordinate, TestFunction, TrialFunction,
                        assemble, dot, grad, solve, sqrt)
+from pyadjoint.tape import stop_annotating
 from warnings import warn
 
 from .dtn_coupled import CoupledLowRankDtN
@@ -435,7 +436,7 @@ class GravityPotential:
             flux = term if flux is None else flux + term
         return identity, mass, flux
 
-    def update_total_mass(self, extra_masses=(), *, zero_initial_guess=True) -> None:
+    def update_total_mass(self, extra_masses=()) -> None:
         """Refresh the enclosed-mass scalars the datum reads, as recorded solves.
 
         The caller runs this at the start of every solve, under annotation,
@@ -465,6 +466,19 @@ class GravityPotential:
         `numpy.float64` that `derivative` refuses. The last two are the same
         mass-matrix solve; the explicit one is written here.
 
+        Each scalar is set to zero, by a recorded assign, before its solve. A
+        linear solve under `ksponly` adds one update to its initial guess:
+        it returns `x0 + (b - a x0) / a`, so a guess left from the last call
+        keeps that call's round-off in the new value. The error is about
+        1e-16 times the old mass relative to the new one, which is the last
+        digit for an ordinary change of the sources and a real error when the
+        mass drops by many orders of magnitude (measured: 7.5e-9 in the mass
+        after a density scaled down by 1e8). From zero the datum is a
+        function of the present sources alone, and a run restarted from a
+        checkpoint reproduces it bit for bit. The datum solve is `preonly`
+        with Jacobi on a one-by-one system, so the start value changes no
+        iteration count.
+
         The solve is made new on every call. A cached
         `LinearVariationalSolver` whose right-hand side has a facet integral
         into a `Real` space returns the right value on its first solve and
@@ -475,37 +489,27 @@ class GravityPotential:
         Args:
           extra_masses: `(density, measure)` pairs of the caller's sheets that
             the datum counts (`enclosed_mass_forms`).
-          zero_initial_guess: `True` starts each solve from zero. A linear
-            solve under `ksponly` adds an update to its initial guess, so a
-            guess left from the last call puts the round-off of that call
-            into the datum. From zero the datum is a function of the present
-            sources alone, and a run restarted from a checkpoint reproduces
-            it bit for bit; the reset is one recorded assign per scalar.
-            `False` starts from the last value, with no reset on the tape;
-            the result differs at round-off. `GravitySolver` uses `False`: it
-            has no state to restart from, and its recorded solve stays one
-            solve per scalar.
         """
         if not self.monopole_boundaries:
             return
         identity, mass, flux = self.enclosed_mass_forms(extra_masses)
         if mass is not None:
-            if zero_initial_guess:
-                self.source_mass.assign(0.0)
+            self.source_mass.assign(0.0)
             solve(identity == mass, self.source_mass,
                   solver_parameters=real_scalar_solver_parameters)
         if flux is not None:
-            if zero_initial_guess:
-                self.cavity_flux.assign(0.0)
+            self.cavity_flux.assign(0.0)
             solve(identity == flux, self.cavity_flux,
                   solver_parameters=real_scalar_solver_parameters)
 
     def check_net_mass(self, extra_scales=()) -> None:
         """Refuse a doubly anchored gauge; warn on a small net mass.
 
-        Run after `update_total_mass`. Nothing on the tape reads the result:
-        under annotation its assembles are recorded but reach no functional.
-        The coupled GIA solver runs it under `stop_annotating`.
+        Run after `update_total_mass`. The check assembles numbers that no
+        functional depends on, so it runs under `stop_annotating` and leaves
+        nothing on the tape, whatever the caller's annotation state. A tape
+        replay does not run it: a replay at a new control is not checked for
+        a doubly anchored gauge or for leakage.
 
         The scale is the mass the sources move: `int |rho|` of the volume
         density plus `int |sigma|` of every sheet. The test is relative to
@@ -532,6 +536,11 @@ class GravityPotential:
         """
         if not self.monopole_boundaries:
             return
+        with stop_annotating():
+            self._check_net_mass(extra_scales)
+
+    def _check_net_mass(self, extra_scales) -> None:
+        """The body of `check_net_mass`, which runs it off the tape."""
         terms = []
         if self.volume_density is not None:
             terms.append(abs(self.volume_density) * self.dx_density)
@@ -542,12 +551,7 @@ class GravityPotential:
                 abs(ensure_constant(sigma)), bc_id, integral_type))
         for density, measure in extra_scales:
             terms.append(abs(density) * measure)
-        scale = 0.0
-        for k, term in enumerate(terms):
-            value = assemble(term)
-            # The sum starts from the first assembled value, not from 0.0, so
-            # that under annotation no addition of zero is recorded.
-            scale = value if k == 0 else scale + value
+        scale = sum(float(assemble(term)) for term in terms)
         mass = abs(scalar_value(self.source_mass))
         relative = mass / scale if scale > 0.0 else float(mass > 0.0)
         # A prescribed flux is data, not a discretised field, so it cannot

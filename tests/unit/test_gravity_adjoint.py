@@ -386,10 +386,9 @@ def _reaches(tape, source_outputs, target_bv):
 
     This is the gradient-relevant notion of "dangling": the design's §1.4
     literal wording ("output is not a dependency of any later block") is
-    empirically false for the check_net_mass assembles - their output IS
-    consumed by the downstream abs()/comparison AdjFloat arithmetic - but that
-    arithmetic subgraph is terminal and never reaches the objective J, so it
-    cannot influence dJ/dm. Reachability-to-J is the property that actually
+    empirically false for assembles whose output is consumed by terminal
+    AdjFloat arithmetic (an abs() or a comparison) - but such a subgraph never
+    reaches the objective J, so it cannot influence dJ/dm. Reachability-to-J is the property that actually
     matters and is strictly stronger than "feeds nothing at all".
     """
     reachable = {id(o) for o in source_outputs}
@@ -416,8 +415,9 @@ def _reaches_objective(tape, block, objective):
 @pytest.mark.parametrize("variant", ["clean", "dirty"])
 def test_tape_structure(mesh_2d_mm, variant):
     """One annotated solve on CFG-2D-MM is exactly one NLVS solve block plus
-    the assign/subfunctions extraction, preceded by two dangling AssembleBlocks
-    from check_net_mass; the objective assemble that follows is not dangling.
+    the assign/subfunctions extraction, preceded by the enclosed-mass reset
+    and solve of the 2-D datum and by no AssembleBlock: the net-mass check
+    runs off the tape. The objective assemble that follows is not dangling.
 
     The clean variant constructs under stop_annotating(); the dirty variant
     constructs under annotation and must still yield one solve block with all
@@ -468,23 +468,22 @@ def test_tape_structure(mesh_2d_mm, variant):
     assert len(mass_solves) == 1
     assert _reaches_objective(tape, mass_solves[0], J)
 
-    # One 0-form AssembleBlock per solve, down from two: the enclosed mass has
-    # moved into the Real solve above, and what is left is `check_net_mass`
-    # assembling the |rho| scale for the leakage threshold. That one keeps the
-    # old "dangling but harmless" property - it feeds only terminal net-mass
-    # arithmetic and cannot perturb dJ/dm.
+    # No 0-form AssembleBlock in the solve: the enclosed mass is the Real
+    # solve above, and `check_net_mass` assembles its |rho| scale under
+    # `stop_annotating` whatever the caller's annotation state.
     solve_assembles = [
         b for b in solve_blocks if type(b).__name__ == "AssembleBlock"]
-    assert len(solve_assembles) == 1
-    assert not _reaches_objective(tape, solve_assembles[0], J)
+    assert len(solve_assembles) == 0
 
     # The gravity solve block itself DOES reach J (control -> psi -> J is live).
     assert _reaches_objective(tape, _mixed_space_solves(solve_blocks)[0], J)
 
-    # solution.assign(subfunctions[0]) taped as SubfunctionBlock(s) + one
-    # FunctionAssignBlock.
+    # Two FunctionAssignBlocks: the reset of `source_mass` to zero before the
+    # enclosed-mass solve (`GravityPotential.update_total_mass`), and
+    # solution.assign(subfunctions[0]) after the solve, which is taped with
+    # SubfunctionBlock(s).
     assert solve_counts["SubfunctionBlock"] >= 1
-    assert solve_counts["FunctionAssignBlock"] == 1
+    assert solve_counts["FunctionAssignBlock"] == 2
 
     # The objective assemble is on the live chain, not dangling.
     j_assembles = [
@@ -1109,17 +1108,6 @@ def test_monopole_gradient_against_fresh_solves(representation, control):
 # ---------------------------------------------------------------------------
 # T11 - which per-solve 0-form assembles are load-bearing  [P1]
 # ---------------------------------------------------------------------------
-class _QuietLeakageSolver(GravitySolver):
-    """CFG-2D-MM solver whose `check_net_mass` runs under stop_annotating().
-
-    That check assembles the |rho| scale for the leakage threshold and nothing
-    else, so suppressing it must remove one AssembleBlock and change nothing.
-    """
-    def check_net_mass(self):
-        with stop_annotating():
-            super().check_net_mass()
-
-
 class _FrozenMassSolver(GravitySolver):
     """CFG-2D-MM solver whose enclosed mass is frozen off the tape.
 
@@ -1129,14 +1117,13 @@ class _FrozenMassSolver(GravitySolver):
     only against a reference not computed from this tape. A Taylor test passes
     at 2.0000 here.
 
-    The leakage check is re-run under annotation afterwards so that this
-    variant differs from the stock one in exactly one thing: whether the
-    enclosed mass is on the tape.
+    The leakage check is off the tape in both variants, so this one differs
+    from the stock one in exactly one thing: whether the enclosed mass is on
+    the tape.
     """
     def update_total_mass(self):
         with stop_annotating():
             super().update_total_mass()
-        self.check_net_mass()
 
 
 def _forward_2d_mm_with(solver_class, m_rho):
@@ -1166,12 +1153,11 @@ def _tape_and_gradient(forward, m):
 def test_which_net_mass_work_is_load_bearing(mesh_2d_mm):
     """Of the two things `solve` does with the net mass, one matters.
 
-    Before the 2-D monopole datum, `check_net_mass` emitted two 0-form
-    assembles and both were dangling; this test asserted exactly that. Now the
-    enclosed mass is a Real-space solve that the datum reads, and only the
-    |rho| scale is still a diagnostic - so the two are separated here rather
-    than lumped together, and the load-bearing one is checked by *sabotage*:
-    freeze it off the tape and the gradient must move.
+    The enclosed mass is a Real-space solve that the datum reads; the |rho|
+    scale of the net-mass check is a diagnostic. The check runs off the tape,
+    so the only AssembleBlock left is the objective's. The load-bearing one
+    is checked by *sabotage*: freeze it off the tape and the gradient must
+    move.
 
     The control carries a monopole deliberately. `rho_control_2d` is
     azimuthally pure, so its adjoint is pure `m = 2` and the boundary integral
@@ -1185,8 +1171,6 @@ def test_which_net_mass_work_is_load_bearing(mesh_2d_mm):
         m.assign(m + 0.5)
 
     J_stock, c_stock, g_stock = _tape_and_gradient(forward_2d_mm, m)
-    J_quiet, c_quiet, g_quiet = _tape_and_gradient(
-        lambda rho: _forward_2d_mm_with(_QuietLeakageSolver, rho), m)
     J_frozen, c_frozen, g_frozen = _tape_and_gradient(
         lambda rho: _forward_2d_mm_with(_FrozenMassSolver, rho), m)
 
@@ -1195,24 +1179,18 @@ def test_which_net_mass_work_is_load_bearing(mesh_2d_mm):
                 / np.max(np.abs(g_stock.dat.data_ro)))
 
     print(f"    [T11] AssembleBlocks {c_stock['AssembleBlock']}/"
-          f"{c_quiet['AssembleBlock']}/{c_frozen['AssembleBlock']} "
-          f"mass solves {c_stock['mass_solves']}/"
-          f"{c_quiet['mass_solves']}/{c_frozen['mass_solves']}; "
-          f"gradient change quiet={gradient_change(g_quiet):.2e} "
-          f"frozen={gradient_change(g_frozen):.2e}")
+          f"{c_frozen['AssembleBlock']} "
+          f"mass solves {c_stock['mass_solves']}/{c_frozen['mass_solves']}; "
+          f"gradient change frozen={gradient_change(g_frozen):.2e}")
 
-    # Stock: the |rho| scale assemble and the objective, plus the mass solve.
-    assert c_stock["AssembleBlock"] == 2
+    # Stock: the objective's assemble and the mass solve. The |rho| scale of
+    # the leakage check is assembled off the tape.
+    assert c_stock["AssembleBlock"] == 1
     assert c_stock["mass_solves"] == 1
 
-    # The leakage check is hygienic: one fewer assemble, same J, same gradient.
-    assert c_quiet["AssembleBlock"] == 1
-    assert c_quiet["mass_solves"] == 1
-    assert abs(float(J_quiet) - float(J_stock)) <= 1e-15 * abs(float(J_stock))
-    assert gradient_change(g_quiet) <= 1e-14
-
-    # The mass solve is not: same J to the last bit, different gradient.
-    assert c_frozen["AssembleBlock"] == 2
+    # The mass solve is load-bearing: same J to the last bit, different
+    # gradient.
+    assert c_frozen["AssembleBlock"] == 1
     assert c_frozen["mass_solves"] == 0
     assert abs(float(J_frozen) - float(J_stock)) <= 1e-15 * abs(float(J_stock))
     assert gradient_change(g_frozen) > 1e-6, (

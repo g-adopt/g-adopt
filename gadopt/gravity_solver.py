@@ -783,14 +783,17 @@ class GravitySolver(SolverConfigurationMixin):
         Called from `solve` and not from `__init__`, so that the assembles and
         the solves land on the tape: the mass has to be differentiable without
         becoming an unknown. `GravityPotential.update_total_mass` gives the
-        reasons for the recorded solve and the measurements behind them. Each
-        solve starts from the last value of its scalar, so the tape of one
-        `solve` holds one datum solve per scalar and no reset. Then
-        `check_net_mass` runs. A no-op outside 2-D, and in 2-D without an
-        exterior DtN boundary.
+        reasons for the recorded solve, the reset to zero before it, and the
+        measurements behind them. Then `GravityPotential.check_net_mass` runs
+        with the volume density and the sheets of `bcs` as the scale, off the
+        tape. A no-op outside 2-D, and in 2-D without an exterior DtN
+        boundary.
+
+        This is a method of the solver so that a test can override it, for
+        example to take the enclosed mass off the tape.
         """
-        self.gravity.update_total_mass(zero_initial_guess=False)
-        self.check_net_mass()
+        self.gravity.update_total_mass()
+        self.gravity.check_net_mass()
 
     def total_enclosed_mass(self) -> float:
         """Everything the 2-D exterior DtN boundary encloses, as a number.
@@ -810,15 +813,6 @@ class GravitySolver(SolverConfigurationMixin):
         return (scalar_value(self.source_mass)
                 + scalar_value(self.cavity_flux)
                 / (4.0 * np.pi * scalar_value(self.G)))
-
-    def check_net_mass(self) -> None:
-        """Warns about monopole leakage, and refuses a doubly-anchored gauge.
-
-        `GravityPotential.check_net_mass`, with the volume density and the
-        sheets of `bcs` as the scale. It runs under the caller's annotation
-        state; the assembles it records reach no functional.
-        """
-        self.gravity.check_net_mass()
 
     def solve(self) -> None:
         """Solves the system and updates the solution function in place."""
