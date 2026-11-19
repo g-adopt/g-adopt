@@ -7,14 +7,18 @@ NOTES/
 *.msh
 # The one exception: the small mesh that the GIA unit tests read, so that their
 # stored reference values do not depend on the gmsh of the machine.
-!tests/unit/data/*.msh
+!tests/unit/data/gia_triangle_annulus.msh
 
 *.pvd
 *.vtu
 *.pvtu
 *.h5
-# Small checkpoint files that the GIA unit tests read.
-!tests/unit/data/*.h5
+# The checkpoint files of the earlier GIA solver that the conversion tests read
+# (in git LFS, see .gitattributes; made by tests/unit/data/record_gia_references).
+!tests/unit/data/gia_old_checkpoint_dg_bdf2.h5
+!tests/unit/data/gia_old_checkpoint_dg_be.h5
+!tests/unit/data/gia_old_checkpoint_exp01.h5
+!tests/unit/data/gia_old_checkpoint_quadrature_bdf2.h5
 *.dat
 *.conv
 *.log
