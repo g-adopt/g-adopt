@@ -128,6 +128,7 @@ def mean_cell_size(mesh):
     vol = float(assemble(Constant(1.0) * dx(domain=mesh)))
     return (vol / FunctionSpace(mesh, "DG", 0).dim()) ** (1.0 / 3.0)
 
+
 QUAD = 8
 LU = {"ksp_type": "preonly", "pc_type": "lu",
       "pc_factor_mat_solver_type": "mumps"}

@@ -179,7 +179,7 @@ def test_matches_mpmath_at_the_hardest_degree(directions):
     _, _, points = directions
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     r = np.sqrt(x * x + y * y + z * z)
-    u_all, phi_all = z / r, np.arctan2(y, x)
+    u_all = z / r
 
     # Both poles, the two closest approaches to a pole, and four generic.
     order = np.argsort(-np.abs(u_all))

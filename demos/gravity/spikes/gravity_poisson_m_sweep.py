@@ -13,9 +13,9 @@ import os
 
 sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
 
-from gadopt import log
-from passess.polar import PoissonPolar2D
-from gravity_poisson_robin import (
+from gadopt import log  # noqa: E402
+from passess.polar import PoissonPolar2D  # noqa: E402
+from gravity_poisson_robin import (  # noqa: E402
     solve_case, get_mesh, rmax, r1_shell, r2_shell, rho_m, gamma)
 
 R_grav_factor = 2

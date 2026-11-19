@@ -1,11 +1,10 @@
 import os
-import matplotlib.pyplot as plt
 from firedrake import *
 from mpi4py import MPI
 
 output_path = os.getcwd()
 
-name = f"submesh-withurfDG-2d-internalvariable-dispvel-1dvisc"
+name = "submesh-withurfDG-2d-internalvariable-dispvel-1dvisc"
 
 full_mesh = Mesh("unstructured_annulus_refined_surface_gravity.msh")
 DG0_full = FunctionSpace(full_mesh, "DG", 0)
@@ -270,7 +269,7 @@ iterative_parameters = {
 x_rotV = Function(V).interpolate(as_vector((-X[1], X[0])))
 # V_nullspace = VectorSpaceBasis([x_rotV])
 # V_nullspace.orthonormalize()
-### rotational = False
+# rotational = False
 V_nullspace = Z.subspaces[0]
 p_nullspace = VectorSpaceBasis(constant=True)  # Constant nullspace for pressure n
 Z_nullspace = MixedVectorSpaceBasis(Z, [V_nullspace, p_nullspace, Z.sub(2)])  # Setting mixed nullspace
@@ -282,7 +281,7 @@ V_near_nullspace = VectorSpaceBasis([nns_x, nns_y, x_rotV])
 V_near_nullspace.orthonormalize()
 Z_near_nullspace = MixedVectorSpaceBasis(Z, [V_near_nullspace, Z.sub(1), Z.sub(2)])
 
-### Measures
+# Measures
 dx_all = Measure("dx", domain=mesh, intersect_measures=(Measure("dx", domain=subm),))
 dx_m = Measure("dx", domain=subm, intersect_measures=(Measure("dx", domain=mesh),))
 dS_m = Measure("dS", domain=subm, intersect_measures=(Measure("ds", domain=mesh),))
@@ -295,6 +294,7 @@ def upward_normal(mesh):
     X = SpatialCoordinate(mesh)
     r = sqrt(sum([x**2 for x in X]))
     return X / r
+
 
 def vc(u):
     mesh = u.function_space().mesh().unique()
@@ -332,7 +332,7 @@ g = 9.185  # need to remove this from Vi
 source_grav = -Vi * density / g * grad_phi
 source = source_mantle + source_grav
 strain = deviatoric_strain(u)
-###u_r = vc(u)
+# ##u_r = vc(u)
 u_r = sum([n_i * u_i for n_i, u_i in zip(upward_normal(subm), u)])
 maxwell_time = viscosity / shear_modulus
 scaling_factors = [1, -0.5]
@@ -345,7 +345,7 @@ def hydrostatic_prestress_advection(u_r):
     return Vi * density * u_r
 
 
-### Boundary conditions
+# Boundary conditions
 weak_bcs = {1: {"un": 0}, 2: {"normal_stress": ice_load + hydrostatic_prestress_advection(u_r)}}
 free_surface_dict = {2: {}}
 
@@ -398,7 +398,7 @@ def viscosity_term(trial):
     identity = Identity(dim)
     compressible_stress = True
 
-    ### stress = stress
+    # stress = stress
     F = inner(nabla_grad(test_funcs[0]), stress) * dx_m(degree=6)
 
     sigma = 36.0
@@ -487,7 +487,7 @@ residual_terms_internal_variable = [source_term, sink_term]
 solution_old = Function(Z)
 _, mold, _ = split(solution_old)
 
-### Gravity boundary condition
+# Gravity boundary condition
 grav_bcs = [DirichletBC(Z.sub(2), 0.0, Rg_id)]
 
 ##################
@@ -508,15 +508,15 @@ problem = NonlinearVariationalProblem(F, z, bcs=grav_bcs, J=None)
 coupled_solver = NonlinearVariationalSolver(
     problem,
     solver_parameters=iterative_parameters,
-    #nullspace=Z_nullspace,
-    #near_nullspace=Z_near_nullspace,
+    # nullspace=Z_nullspace,
+    # near_nullspace=Z_near_nullspace,
     appctx={"mu": mu},
 )
 
 grav_output_file = VTKFile("grav_iterative.pvd")
-output_file = VTKFile(f"out_iterative.pvd")
+output_file = VTKFile("out_iterative.pvd")
 G = VectorFunctionSpace(mesh, "CG", 2)
-g = Function(G,name="g")
+g = Function(G, name="g")
 
 vertical_displacement = Function(V.sub(1), name="radial displacement")
 bc_displacement = DirichletBC(vertical_displacement.function_space(), 0, Re_id)
@@ -540,5 +540,5 @@ for timestep in range(1, max_timesteps + 1):
     solution_old.sub(2).assign(z.sub(2))
 
     g.interpolate(-grad(z.sub(2)))
-    grav_output_file.write(z.sub(2),g)
+    grav_output_file.write(z.sub(2), g)
     output_file.write(z.sub(0), z.sub(1), vertical_displacement)

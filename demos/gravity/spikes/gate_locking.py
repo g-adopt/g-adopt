@@ -644,11 +644,11 @@ def main():
     print("  because Phase C needs the fit; it is not the locking test.")
     print()
     print("  configuration, reported unconditionally")
-    print(f"    element            P2 (CG2) vector on triangles, no pressure "
+    print("    element            P2 (CG2) vector on triangles, no pressure "
           "partner")
     print(f"    domain             annulus {RC} -> {RE}, single mesh, no "
           "submesh")
-    print(f"    curving            curve_mesh applied to every level (there is")
+    print("    curving            curve_mesh applied to every level (there is")
     print("                       only one mesh here; the parent/submesh pair")
     print("                       of the coupled solver does not arise)")
     print(f"    load               -{SIGMA_0} cos({n} phi) normal stress at Re")
@@ -656,7 +656,7 @@ def main():
     print(f"    distortion         {args.distort} h")
     print(f"    ladder             "
           f"{'independent gmsh meshes' if args.independent else 'MeshHierarchy (uniform red refinement)'}")
-    print(f"    g                  0 (Al-Attar prestress/buoyancy pair off)")
+    print("    g                  0 (Al-Attar prestress/buoyancy pair off)")
     print(f"    dt/tau             {DT / TAU:.1e}  -> R_eff/R = "
           f"{1.0 + DT / TAU:.10f}")
     print()
@@ -812,7 +812,7 @@ def main():
         J_inc.append(rich)
         print(f"    L{k}: 5-point fit {c0:+.9e}  residual {res:.3e} "
               f"({res / max(span, 1e-300):.2%} of span)")
-        print(f"         secant slopes " + "  ".join(f"{s:.4e}" for s in slopes))
+        print("         secant slopes " + "  ".join(f"{s:.4e}" for s in slopes))
         print(f"         two-rung Richardson (tightest pair) {rich:+.9e}")
     if len(J_inc) > 2:
         print("    J_inc(h) = " + "  ".join(f"{v:+.6e}" for v in J_inc) +
@@ -850,11 +850,11 @@ def main():
                 slopes = [np.log(b / a) / np.log(rb / ra)
                           for a, b, ra, rb in zip(its[:-1], its[1:],
                                                   reffs[:-1], reffs[1:])]
-                print(f"         log-log slope vs R_eff " +
+                print("         log-log slope vs R_eff " +
                       "  ".join(f"{s:5.2f}" for s in slopes) +
                       "   (expected bracket 0.5-1.0)")
             mism = [r["cg_mismatch"] for r in row]
-            print(f"         |u_cg - u_lu|/|u| " +
+            print("         |u_cg - u_lu|/|u| " +
                   "  ".join("   n/a" if v is None else f"{v:.0e}" for v in mism))
         print("    and with h at fixed nu (GAMG h-independence)")
         for nu in nus:
@@ -888,7 +888,7 @@ def main():
                 vals.append(r["J"])
                 print(f"      L{k}: J={r['J']:+.9e}  "
                       f"div/grad L2={r['div_over_grad_l2']:.3e}")
-            print(f"      orders " + "  ".join(f"{o:5.2f}" for o in orders(vals)))
+            print("      orders " + "  ".join(f"{o:5.2f}" for o in orders(vals)))
 
     print()
     print("  VERDICT is read off Q2 and Q2c: order preserved and the error")

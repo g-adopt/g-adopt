@@ -19,11 +19,10 @@ operator in this code area has previously been right once and wrong afterwards.
 import numpy as np
 import pytest
 import firedrake as fd
-from mpi4py import MPI
 
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
 from test_gravity_solver import (
-    RMAX, RMIN, annulus_mesh, relative_l2_error, shell_mesh_3d)
+    RMAX, annulus_mesh, relative_l2_error, shell_mesh_3d)
 
 
 @pytest.fixture(scope="module")

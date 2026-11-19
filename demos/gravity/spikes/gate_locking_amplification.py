@@ -79,13 +79,11 @@ import sys
 import time
 
 import numpy as np
-import scipy.linalg
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 import gadopt  # noqa: F401  (import before firedrake; Irksome's order guard)
 from firedrake import (
-    Function,
     FunctionSpace,
     Mesh,
     SpatialCoordinate,
@@ -108,7 +106,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 from gate_infsup_3d import (  # noqa: E402
-    RC_OVER_RE,
     census,
     cell_size,
     retained_dofs,

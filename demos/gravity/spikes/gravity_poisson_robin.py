@@ -19,10 +19,10 @@ import numpy as np
 
 sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
 
-from firedrake import *
-from gadopt import log
-from passess.polar import PoissonPolar2D
-from generate_gravity_disc import generate_mesh
+from firedrake import *  # noqa: E402
+from gadopt import log  # noqa: E402
+from passess.polar import PoissonPolar2D  # noqa: E402
+from generate_gravity_disc import generate_mesh  # noqa: E402
 
 # Non-dimensional parameters (as in gravity_poisson_test.py)
 rmin, rmax = 1.22, 2.22
@@ -188,7 +188,7 @@ if __name__ == "__main__":
         R = factor * rmax
         trunc = (analytical.psi_m(R) / analytical.psi_m(rmax)).real
         log(f"psi(R={R:.2f}) / psi(rmax) = {trunc:.3e}  "
-                        f"(Dirichlet truncation scale)")
+            f"(Dirichlet truncation scale)")
 
     log(f"\n{'case':>22s} | {'rel L2 (mantle)':>15s} | {'DOFs (psi)':>10s}")
     log("-" * 55)

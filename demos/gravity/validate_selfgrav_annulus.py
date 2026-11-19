@@ -84,6 +84,7 @@ from generate_selfgrav_annulus import (
     CELL_BUFFER, CELL_INNER, CELL_MANTLE, CURVE_INNER, CURVE_OUTER, CURVE_RC,
     CURVE_RE, RC, RE, R_OUTER)
 
+
 def _poisson_polar_2d():
     """Import `passess`'s closed-form solution, lazily and at the point of use.
 
@@ -102,6 +103,7 @@ def _poisson_polar_2d():
     sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
     from passess.polar import PoissonPolar2D
     return PoissonPolar2D
+
 
 #: Rewritten by every stage, so two runs of this script must not share it -
 #: hence `--mesh-file`.  Under MPI only rank 0 writes; gmsh is not collective.

@@ -36,15 +36,15 @@ import numpy as np
 
 sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
 
-from firedrake import (
+from firedrake import (  # noqa: E402
     Mesh, Function, FunctionSpace, VectorFunctionSpace, SpatialCoordinate,
     Constant, assemble, sqrt, dx, cos, atan2)
-from gadopt import log
-from passess.polar import PoissonPolar2D
-from gravity_dtn import GravityPoissonSolver
-from gravity_poisson_robin import (
+from gadopt import log  # noqa: E402
+from passess.polar import PoissonPolar2D  # noqa: E402
+from gravity_dtn import GravityPoissonSolver  # noqa: E402
+from gravity_poisson_robin import (  # noqa: E402
     curve_mesh, rmin, rmax, r1_shell, r2_shell, rho_m, gamma, OUTER_ID)
-from generate_gravity_annulus import generate_annulus
+from generate_gravity_annulus import generate_annulus  # noqa: E402
 
 INNER_ID = 2
 SHELL_ID = 103

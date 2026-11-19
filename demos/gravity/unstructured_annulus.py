@@ -9,7 +9,7 @@ def generate_mesh():
 
     lc = 500e3
     lcg = 5000e3
-    
+
     Rg = 31855e3
     Re = 6371e3
     grav_mesh_depth = Rg-Re
@@ -48,7 +48,7 @@ def generate_mesh():
     gmsh.model.geo.addCircleArc(p7, p1, p8, 6)
     gmsh.model.geo.addCircleArc(p8, p1, p9, 7)
     gmsh.model.geo.addCircleArc(p9, p1, p6, 8)
-    
+
     # Curves at Earth surface
     gmsh.model.geo.addCircleArc(p10, p1, p11, 9)
     gmsh.model.geo.addCircleArc(p11, p1, p12, 10)
@@ -126,8 +126,6 @@ def generate_mesh():
     gmsh.model.mesh.field.add("Min", 5)
     gmsh.model.mesh.field.setNumbers(5, "FieldsList", [2, 4])
     gmsh.model.mesh.field.setAsBackgroundMesh(5)
-
-
 
     # When the element size is fully specified by a mesh size field (as it is in
     # this example), it is thus often desirable to set

@@ -21,8 +21,6 @@ import os
 import sys
 import traceback
 
-import numpy as np
-
 # gadopt (hence irksome) MUST be imported before anything runs a UFL
 # multifunction, otherwise the deferred import that PETSc performs when it
 # resolves `pc_python_type: gadopt.DtNTwoBlockSchurPC` dies with
@@ -179,8 +177,6 @@ def main():
         cs, nus = fields[3:], tests[3:]
 
         rho0 = Function(FunctionSpace(sub, "DG", 0)).assign(1.0)
-        n_p = FacetNormal(parent)
-        X_p = SpatialCoordinate(parent)
         X_s = SpatialCoordinate(sub)
 
         # mechanics on the submesh

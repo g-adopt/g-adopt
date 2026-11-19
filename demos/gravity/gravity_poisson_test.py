@@ -15,8 +15,8 @@ import numpy as np
 
 sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
 
-from firedrake import *
-from passess.polar import PoissonPolar2D
+from firedrake import *  # noqa: E402
+from passess.polar import PoissonPolar2D  # noqa: E402
 
 # Non-dimensional parameters
 rmin, rmax = 1.22, 2.22
@@ -110,12 +110,10 @@ F = (
 
 bc = DirichletBC(W.sub(0), 0.0, 1)
 solve(F == 0, w, bcs=[bc],
-      solver_parameters={
-          "mat_type": "aij",
-          "ksp_type": "preonly",
-          "pc_type": "lu",
-          "pc_factor_mat_solver_type": "mumps",
-      })
+      solver_parameters={"mat_type": "aij",
+                         "ksp_type": "preonly",
+                         "pc_type": "lu",
+                         "pc_factor_mat_solver_type": "mumps"})
 
 psi_h = w.subfunctions[0]
 psi_h.rename("gravitational_potential")
@@ -152,7 +150,7 @@ idx = idx[order]
 
 psi_exact_ax = np.array([analytical.psi_m(ri).real for ri in r_ax])
 
-PETSc.Sys.Print(f"\nPoint comparison along phi=0 (mantle):")
+PETSc.Sys.Print("\nPoint comparison along phi=0 (mantle):")
 PETSc.Sys.Print(f"  {'r':>7s} | {'numerical':>11s} | {'analytical':>11s} | {'ratio':>7s}")
 PETSc.Sys.Print("  " + "-" * 47)
 step = max(1, len(r_ax) // 12)

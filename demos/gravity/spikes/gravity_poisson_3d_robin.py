@@ -27,13 +27,13 @@ import numpy as np
 
 sys.path.insert(0, os.path.expanduser("~/Workplace/passess"))
 
-from firedrake import (
+from firedrake import (  # noqa: E402
     CubedSphereMesh, ExtrudedMesh, Function, FunctionSpace,
-    VectorFunctionSpace, SpatialCoordinate, Constant, TestFunction,
+    VectorFunctionSpace, SpatialCoordinate, TestFunction,
     TrialFunction, dot, grad, dx, ds_t, ds_b, sqrt, conditional, And,
     assemble, solve, pi)
-from gadopt import log
-from passess.spherical import PoissonSpherical3D
+from gadopt import log  # noqa: E402
+from passess.spherical import PoissonSpherical3D  # noqa: E402
 
 # Non-dimensional shell (same as 2D)
 rmin, rmax = 1.22, 2.22
@@ -47,7 +47,7 @@ rho_lm = 1.0
 G_grav = 1.0
 
 analytical = PoissonSpherical3D(l=l_mode, m=m_mode, rho_lm=rho_lm,
-                               r1=r1_shell, r2=r2_shell, G_grav=G_grav)
+                                r1=r1_shell, r2=r2_shell, G_grav=G_grav)
 
 # Real orthonormal Y_20 = sqrt(5/(16 pi)) (3 cos^2(theta) - 1), cos(theta)=z/r,
 # matching scipy sph_harm_y(2, 0, theta, phi) used by passess.

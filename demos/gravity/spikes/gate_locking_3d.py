@@ -223,7 +223,7 @@ def load_expression(X, modes):
     return expr
 
 
-def build(mesh, ratio, dt=DT, modes=(( 6, 3),)):
+def build(mesh, ratio, dt=DT, modes=((6, 3),)):
     V = VectorFunctionSpace(mesh, "CG", 2)
     S = TensorFunctionSpace(mesh, "DG", 1)
     u = Function(V, name="displacement")
