@@ -234,7 +234,7 @@ class RichardsTimestepAdaptor:
         # making D singular; those DOFs are excluded (D set to 0) so they
         # do not pollute the max.  The advective CFL and SNES heuristic
         # still protect against timestep issues in saturated regions.
-        C_expr = soil_curve.water_retention(h)
+        C_expr = soil_curve.specific_moisture_capacity(h)
         D_unsat = K_expr / max_value(abs(C_expr), c_floor)
         D_expr = conditional(h < 0, D_unsat, 0)
         ref_diff_expr = D_expr / CellDiameter(self.mesh) ** 2
