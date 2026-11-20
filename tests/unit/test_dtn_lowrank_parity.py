@@ -10,6 +10,14 @@ The gates are the plan's: potentials <= 1e-14 relative, trace coefficients
 is the useful signal - a change that broke the elimination would not land at
 1e-13, it would land at 1e-4.
 
+The 2-D parity problems (two DtN boundaries, a sheet, a strong boundary
+condition), the monopole datum on the fast path, the accuracy against the
+closed form and the submesh parity are rows of the `closed-2d-lowrank` and
+`submesh` entries of the `gravity` case in `tests/gia` (driver
+`gia_gravity.py`), which imports `solve_both`, `shell_source`, `tight` and
+`multiplier_potential_iterations` from here. The 3-D parity and the CG counts
+stay here until the CI-only entries `closed-3d-*` have run.
+
 The repeated-application check exists because a wrong operator in this code
 area has previously been right once and wrong afterwards. The low-rank operator
 sums rank-local dot products through one `Allreduce`, so a rank-ownership
@@ -22,8 +30,7 @@ import pytest
 import firedrake as fd
 
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
-from test_gravity_solver import (
-    RMAX, annulus_mesh, relative_l2_error, shell_mesh_3d)
+from test_gravity_solver import annulus_mesh, relative_l2_error, shell_mesh_3d
 
 
 @pytest.fixture(scope="module")
@@ -86,32 +93,6 @@ def compare(mesh, results, psi_rtol=1e-14, coeff_atol=1e-12, label=""):
 # ---------------------------------------------------------------------------
 # Parity across the configurations of the shipped test suite
 # ---------------------------------------------------------------------------
-@pytest.mark.longtest
-def test_parity_annulus_two_boundaries(annulus):
-    """Both boundaries, so the interior `mean` mode is exercised - the mode
-    whose weight is negative and whose presence is what makes the SPD argument
-    non-trivial."""
-    rho = annulus_source(annulus)
-    results = solve_both(
-        annulus, rho,
-        lambda: {"top": {"dtn": CylindricalDtN(M=5)},
-                 "bottom": {"dtn": CylindricalDtN(M=5)}})
-    compare(annulus, results, label="annulus M=5")
-
-
-@pytest.mark.longtest
-def test_parity_annulus_sheet(annulus):
-    """A `sigma` sheet on a DtN boundary: the right-hand side term the fast
-    path re-assembles on every solve."""
-    X = fd.SpatialCoordinate(annulus)
-    phi = fd.atan2(X[1], X[0])
-    results = solve_both(
-        annulus, 0.0,
-        lambda: {"top": {"dtn": CylindricalDtN(M=4), "sigma": fd.cos(3 * phi)},
-                 "bottom": {"dtn": CylindricalDtN(M=4)}}, degree=2)
-    compare(annulus, results, label="annulus sheet")
-
-
 def tight(representation, rtol):
     """Solver options that make both paths solve to the same tight tolerance.
 
@@ -188,79 +169,6 @@ def test_shell_parity_is_tolerance_limited(shell):
     # And the gap is never much larger than the tolerance that produced it.
     for rtol, gap in gaps.items():
         assert gap < 10 * rtol
-
-
-@pytest.mark.longtest
-def test_parity_with_strong_bc(annulus):
-    """A prescribed `psi` alongside a DtN boundary.
-
-    This is the configuration that fails if the columns of `C` are not zeroed
-    at constrained degrees of freedom: `A` has those rows and columns
-    eliminated, so a `B` still coupling through them is inconsistent with it.
-    """
-    X = fd.SpatialCoordinate(annulus)
-    r = fd.sqrt(fd.dot(X, X))
-    phi = fd.atan2(X[1], X[0])
-    reference = (r / RMAX) ** 2 * fd.cos(2 * phi)
-    results = solve_both(
-        annulus, 0.0,
-        lambda: {"top": {"psi": reference},
-                 "bottom": {"dtn": CylindricalDtN(M=4)}}, degree=2)
-    compare(annulus, results, label="strong bc")
-
-
-@pytest.mark.longtest
-def test_monopole_datum_reaches_the_fast_path(annulus):
-    """The 2-D monopole datum runs from `solve()` on the fast path too.
-
-    It used to be `check_net_mass` refusing here. The datum replaced the
-    refusal, and the property worth guarding is the same one: the enclosed-mass
-    bookkeeping is driven from `solve`, so it cannot be silently skipped by the
-    representation that does not go through a variational solve.
-    """
-    psi = fd.Function(fd.FunctionSpace(annulus, "CG", 2))
-    solver = GravitySolver(
-        psi, 1.0, bcs={"top": {"dtn": CylindricalDtN(M=1)}},
-        solver_parameters="direct", dtn_representation="lowrank")
-    assert solver.total_enclosed_mass() == 0.0  # not yet solved
-    solver.solve()
-    assert solver.total_enclosed_mass() == pytest.approx(
-        fd.assemble(1 * solver.dx), rel=1e-12)
-
-    # The mass being computed is not enough - it would still be computed if the
-    # datum were dropped from the form. The gauge is what says the term is in
-    # the residual: without it the boundary mean sits at the spurious
-    # 2 G M / alpha instead of zero.
-    perimeter = fd.assemble(1 * solver.ds("top"))
-    boundary_mean = fd.assemble(psi * solver.ds("top")) / perimeter
-    assert abs(boundary_mean) < 1e-9 * abs(solver.total_enclosed_mass())
-
-
-@pytest.mark.longtest
-def test_accuracy_against_the_closed_form(annulus):
-    """Both paths are equally right about the physics, not merely equal.
-
-    Parity alone cannot detect a shared error, so one configuration is also
-    checked against the closed form: a sheet `sigma cos(m phi)` at radius `a`
-    gives `(2 pi G sigma a / m) (r/a)^m cos(m phi)` inside.
-    """
-    m_mode = 3
-    X = fd.SpatialCoordinate(annulus)
-    r = fd.sqrt(fd.dot(X, X))
-    phi = fd.atan2(X[1], X[0])
-    psi = fd.Function(fd.FunctionSpace(annulus, "CG", 2))
-    solver = GravitySolver(
-        psi, 0.0,
-        bcs={"top": {"dtn": CylindricalDtN(M=4), "sigma": fd.cos(m_mode * phi)},
-             "bottom": {"dtn": CylindricalDtN(M=4)}},
-        dtn_representation="lowrank")
-    solver.solve()
-    amplitude = 2 * np.pi * RMAX / m_mode
-    exact = amplitude * (r / RMAX) ** m_mode * fd.cos(m_mode * phi)
-    error = relative_l2_error(psi, exact, annulus)
-    print(f"    [closed form] {error:.3e}")
-    assert error < 1e-4
-    assert abs(solver.coefficients()["top"][f"cos{m_mode}"] / amplitude - 1) < 1e-4
 
 
 # ---------------------------------------------------------------------------
@@ -433,64 +341,3 @@ def test_cg_gap_does_not_grow_with_refinement():
 # ---------------------------------------------------------------------------
 # Cross-mesh: density on a Submesh, potential on the parent
 # ---------------------------------------------------------------------------
-@pytest.fixture(scope="module")
-def submesh_pair():
-    mesh = fd.UnitDiskMesh(refinement_level=3)
-    X = fd.SpatialCoordinate(mesh)
-    r = fd.sqrt(fd.dot(X, X))
-    DG0 = fd.FunctionSpace(mesh, "DG", 0)
-    indicator = fd.Function(DG0).interpolate(fd.conditional(r < 0.55, 1.0, 0.0))
-    marked = fd.RelabeledMesh(mesh, [indicator], [99])
-    return marked, fd.Submesh(marked, marked.topological_dimension, 99)
-
-
-@pytest.mark.longtest
-def test_submesh_parity_and_the_mixed_space_disappearing(submesh_pair):
-    """The cross-mesh configuration, and the structural claim behind it.
-
-    The mixed space exists on the multiplier path for two reasons: one Real
-    field per mode, and a DG0 dummy whose only job is to make Firedrake set up
-    the cross-mesh entity maps, needed because the *bilinear* form has
-    arguments on two meshes. With the multipliers eliminated there is no
-    bilinear form spanning two meshes at all - only the linear source term
-    `4 pi G rho v dx` with `rho` on the submesh and `v` on the parent - so both
-    reasons go away together.
-
-    That is asserted rather than assumed, because it is the part of the plan
-    that was predicted from reading rather than measured: the multiplier path
-    carries 8 sub-spaces here (psi + dummy + 6 multipliers) and the fast path
-    carries one.
-    """
-    marked, submesh = submesh_pair
-    Xs = fd.SpatialCoordinate(submesh)
-    phis = fd.atan2(Xs[1], Xs[0])
-    rho = fd.Function(fd.FunctionSpace(submesh, "DG", 0)).interpolate(
-        fd.cos(2 * phis))
-
-    solvers, potentials = {}, {}
-    for representation in ("multiplier", "lowrank"):
-        psi = fd.Function(fd.FunctionSpace(marked, "CG", 2))
-        solver = GravitySolver(psi, rho, bcs={1: {"dtn": CylindricalDtN(M=3)}},
-                               dtn_representation=representation)
-        assert solver.cross_mesh
-        solver.mixed_solution.assign(0)
-        solver.solve()
-        solvers[representation], potentials[representation] = solver, psi
-
-    assert len(solvers["multiplier"].mixed_space) == 8
-    assert solvers["multiplier"].n_multipliers == 6
-    assert solvers["multiplier"]._multiplier_offset == 2  # psi, then the dummy
-    # No mixed space, no dummy, no multipliers.
-    assert solvers["lowrank"].mixed_space is solvers["lowrank"].solution_space
-    assert solvers["lowrank"].n_multipliers == 0
-
-    error = relative_l2_error(potentials["lowrank"], potentials["multiplier"],
-                              marked)
-    worst = max(
-        abs(solvers["multiplier"].coefficients()[b][k]
-            - solvers["lowrank"].coefficients()[b][k])
-        for b in solvers["multiplier"].coefficients()
-        for k in solvers["multiplier"].coefficients()[b])
-    print(f"    [submesh] psi {error:.3e}   coefficients {worst:.3e}")
-    assert error <= 1e-14
-    assert worst <= 1e-12
