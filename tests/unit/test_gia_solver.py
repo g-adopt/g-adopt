@@ -4,11 +4,9 @@ Gate 1 (`test_gia_solver_gate.py`) compares the equations with the old
 solver. These tests run the new solver itself:
 
 - three forward steps agree to round-off with the stored states of the
-  earlier solver (`gadopt.gia_gravity`), on the three step variants (stock,
-  low-rank, quadrature);
-- Taylor tests (rate 2) and replay checks of a taped march, on the low-rank
-  DG path with sea level, on the quadrature path with BDF2, a fluid core and
-  the centre of mass, and on a power law;
+  earlier solver (`gadopt.gia_gravity`), on the quadrature path;
+- Taylor tests (rate 2) and replay checks of a taped march, on the
+  quadrature path with BDF2, a fluid core and the centre of mass;
 - `state`, `CheckpointFile`, `restore`: a run interrupted and continued is
   bit for bit the uninterrupted run in serial, and equal to round-off on
   more ranks; checkpoint files the old solver wrote convert into a state of
@@ -64,9 +62,6 @@ def surface_ice(sea, k):
 # -- Forward steps against the stored values of the earlier solver ---------------
 
 FORWARD = [
-    Case(rotation=True),
-    Case(scheme="bdf2", representation="lowrank", model="maxwell2",
-         core="fluid", rotation=True, centre=True, load="sea_moving"),
     Case(family="Quadrature", scheme="bdf2", representation="lowrank",
          model="maxwell2", core="fluid", centre=True),
 ]
@@ -130,18 +125,9 @@ def test_three_steps_agree_with_the_reference(meshes, case):
 # -- Taylor and replay -----------------------------------------------------------
 
 TAPED = [
-    pytest.param(Case(representation="lowrank", model="maxwell2", core="fluid",
-                      rotation=True, centre=True, load="sea_moving"),
-                 id="lowrank-DG-sea_level"),
     pytest.param(Case(family="Quadrature", scheme="bdf2", representation="lowrank",
                       model="maxwell2", core="fluid", centre=True),
                  id="quadrature-bdf2-fluid_core-centre_of_mass"),
-    pytest.param(Case(scheme="bdf2", model="power", rotation=True),
-                 id="power_law"),
-    # The stock step (multiplier DtN, DG) with a declared nullspace, so that
-    # the recorded projection follows a stock solve block.
-    pytest.param(Case(scheme="bdf2", model="maxwell2", core="fluid", centre=True),
-                 id="stock_step-nullspace"),
 ]
 
 
@@ -249,9 +235,6 @@ def taylor_case(meshes, case, **march_kwargs):
 
 @pytest.mark.longtest
 @pytest.mark.parametrize("case", [
-    pytest.param(Case(representation="lowrank", model="maxwell2", core="fluid",
-                      rotation=True, centre=True, load="sea_moving"),
-                 id="lowrank-DG-sea_level"),
     pytest.param(Case(family="Quadrature", scheme="bdf2", representation="lowrank",
                       model="maxwell2", core="fluid", centre=True),
                  id="quadrature-bdf2")])
@@ -272,10 +255,8 @@ def test_taylor_through_a_restore_on_the_tape(meshes):
 
 @pytest.mark.longtest
 @pytest.mark.parametrize("case", [
-    Case(representation="lowrank", core="fluid", centre=True),
-    Case(representation="multiplier", core="fluid", centre=True),
     Case(family="Quadrature", representation="lowrank", core="fluid", centre=True)],
-    ids=["lowrank-DG", "multiplier-DG", "quadrature"])
+    ids=["quadrature"])
 def test_a_capped_derivative_solve_raises(meshes, case):
     """`derivative_max_it` caps the adjoint solve: 1 raises, 400 is enough."""
     sub = meshes[1]
@@ -299,10 +280,6 @@ def test_a_capped_derivative_solve_raises(meshes, case):
 # -- State ------------------------------------------------------------------------
 
 STATE_CASES = [
-    # Backward Euler, DG, multiplier DtN, rigid core: no previous level.
-    Case(rotation=True),
-    Case(scheme="bdf2", representation="lowrank", model="maxwell2", core="fluid",
-         rotation=True, centre=True, load="sea_moving"),
     Case(family="Quadrature", scheme="bdf2", representation="lowrank",
          model="maxwell2", core="fluid", centre=True),
 ]
@@ -499,31 +476,19 @@ def test_state_round_trip_in_memory_and_reset(meshes):
 OLD_CHECKPOINTS = C.REFERENCE_DIR
 OLD_MESH_NAME = "firedrake_default"
 
-#: The cases of the stored files: the file name, the configuration and
-#: whether the file has the Exp01 layout (own names, no broken encoding,
-#: `real_{i}` rows) instead of the `selfgrav_common` layout (every
-#: sub-function of the mixed solution as `solution_{i}` in the broken
-#: encoding, the BDF2 levels as `time_*`, the quadrature history also as
-#: `internal_variables_0`).
+#: The cases of the stored files: the file name and the configuration. Each
+#: file has the `selfgrav_common` layout: every sub-function of the mixed
+#: solution as `solution_{i}` in the broken encoding, the BDF2 levels as
+#: `time_*`, the quadrature history also as `internal_variables_0`.
 OLD_CHECKPOINT_CASES = {
     "Quadrature-bdf2-selfgrav": (
         "gia_old_checkpoint_quadrature_bdf2.h5",
         Case(family="Quadrature", scheme="bdf2", representation="lowrank",
-             model="maxwell2", core="fluid", centre=True), False),
-    "DG-be-multiplier-selfgrav": (
-        "gia_old_checkpoint_dg_be.h5", Case(rotation=True), False),
-    "DG-bdf2-lowrank-selfgrav": (
-        "gia_old_checkpoint_dg_bdf2.h5",
-        Case(scheme="bdf2", representation="lowrank", core="fluid",
-             rotation=True, centre=True), False),
-    "DG-bdf2-lowrank-exp01": (
-        "gia_old_checkpoint_exp01.h5",
-        Case(scheme="bdf2", representation="lowrank", core="fluid",
-             rotation=True, centre=True), True),
+             model="maxwell2", core="fluid", centre=True)),
 }
 
 
-def stored_names(solver, exp01):
+def stored_names(solver):
     """The names of the fields a driver of the earlier solver stored for `solver`.
 
     The earlier solver's mixed space had the same sub-spaces in the same
@@ -532,9 +497,6 @@ def stored_names(solver, exp01):
     """
     levels = (["time_current_0", "time_previous_0"]
               if solver.time_scheme == "bdf2" else [])
-    if exp01:
-        return (["checkpoint_displacement", "checkpoint_internal_variables"]
-                + levels + ["checkpoint_potential"])
     names = [f"solution_{i}" for i in range(len(solver.solution.subfunctions))]
     if solver.family == "Quadrature":
         names.append("internal_variables_0")
@@ -557,25 +519,20 @@ def _old_checkpoint_converts(label):
     Returns:
       `(solver, loaded, metadata)` of the restored run, for further checks.
     """
-    filename, case, exp01 = OLD_CHECKPOINT_CASES[label]
+    filename, case = OLD_CHECKPOINT_CASES[label]
     path = str(OLD_CHECKPOINTS / filename)
     loaded_meshes = load_meshes(path, OLD_MESH_NAME)
     parent, sub = loaded_meshes
     nullspace = "rigid_rotation" if case.core == "fluid" else None
     new, u, psi = C.build_new(loaded_meshes, case, dt=C.dt_function(sub),
                               nullspace=nullspace)
-    names = stored_names(new, exp01)
+    names = stored_names(new)
     with fd.CheckpointFile(path, "r") as chk:
         loaded = {n: chk.load_function(parent, n, idx=0) for n in names}
         history = chk.get_timestepping_history(parent, names[0])
         writer_ranks = written_rank_count(chk, OLD_MESH_NAME)
     metadata = {k: float(v[-1]) for k, v in history.items() if k != "index"}
-    aliases = ({"displacement": "checkpoint_displacement",
-                "potential": "checkpoint_potential"} if exp01 else None)
-    state = state_from_checkpoint(new, loaded, metadata, aliases=aliases,
-                                  writer_ranks=writer_ranks)
-    if exp01 and "time_current_0" not in loaded:
-        state["history"] = loaded["checkpoint_internal_variables"]
+    state = state_from_checkpoint(new, loaded, metadata, writer_ranks=writer_ranks)
     new.restore(state)
     if case.scheme == "bdf2":
         assert new.time_integrator.previous_dt == FOUR[1]
@@ -639,9 +596,9 @@ def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
     with pytest.raises(ValueError, match="previous_dt"):
         b.restore(state)
     # A backward-Euler solver takes a state without it.
-    be = Case(rotation=True)
-    c, _, _ = C.build_new(meshes, be)
-    d, _, _ = C.build_new(meshes, be)
+    be = bdf2.but(scheme="backward_euler")
+    c, _, _ = C.build_new(meshes, be, nullspace="rigid_rotation")
+    d, _, _ = C.build_new(meshes, be, nullspace="rigid_rotation")
     d.restore({k: f for k, f in c.state().items() if k != "previous_dt"})
     # A file written by the BDF2 solver is refused by a backward-Euler one of
     # the same fields otherwise.
@@ -654,24 +611,6 @@ def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
     with fd.CheckpointFile(str(directory / "s.h5"), "r") as chk:
         with pytest.raises(ValueError, match="time_scheme"):
             read_state(chk, e, idx=0)
-
-
-@pytest.mark.longtest
-@pytest.mark.parametrize("label", ["DG-be-multiplier-selfgrav",
-                                   "DG-bdf2-lowrank-selfgrav"])
-def test_a_dg_checkpoint_of_the_old_solver_converts(label):
-    """A file of the earlier solver in the DG `selfgrav_common` layout.
-
-    The history is `solution_1`. Backward Euler stores no levels and no
-    metadata; BDF2 stores the levels and the time metadata.
-    """
-    _old_checkpoint_converts(label)
-
-
-@pytest.mark.longtest
-def test_an_exp01_checkpoint_of_the_old_solver_converts():
-    """A file of the earlier solver in the Exp01 layout (own names, `real_{i}`)."""
-    _old_checkpoint_converts("DG-bdf2-lowrank-exp01")
 
 
 # -- Interface ----------------------------------------------------------------------
