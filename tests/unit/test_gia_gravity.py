@@ -4,9 +4,7 @@ What these tests are for, and what they are not. They cover the *structure* of
 `gadopt.gia_solver.SelfGravitatingGIASolver` and its couplings - the space
 layout the preconditioner depends on, the two row-scaling constants, the
 identity that makes the rotational body force the transpose of the inertia
-row, the assertions that turn silently-empty measures into exceptions, and V4 -
-and they run the solver once end to end on a small mesh to show that it solves
-at all.
+row, the assertions that turn silently-empty measures into exceptions, and V4.
 
 They are **not** the physics gates. V1 (per-block Jacobian symmetry), V3'
 (the potential against a closed form), V7 (the rotational closure), V8 (the
@@ -18,6 +16,18 @@ The mesh is gmsh, and it has to be: the geometry stands the DtN boundaries off
 from the sources, which puts the Earth's surface *inside* the domain as a
 tagged interior facet, and only gmsh can tag one. It is coarse - the tests here
 are structural, and nothing in them is a convergence statement.
+
+## Properties checked by the GIA cases
+
+The solves of this module are rows of the GIA cases in `tests/gia`: the
+degree of the answer, the volume of the fluid core, the centre of mass, the
+null coupling against the uncoupled solver, the declared rigid rotation and
+the Newtonian limit are rows of the `mechanics` and `rheology` entries of
+`limits` (`gia_limits.py`); the claimed diagonal of the `Real` block in 2-D
+and 3-D, the polar pair, the potential row at zero `B_mu` and the
+centre-of-mass saddle pair are rows of `operators` (`gia_operators.py`); the
+iterative preset and the power law on the low-rank path are entries of
+`forward`. Those drivers import the builders and constants of this module.
 
 ## The module helpers other test files use
 
@@ -40,7 +50,6 @@ from ufl.algorithms import extract_coefficients
 
 from gadopt import (
     CompressibleInternalVariableApproximation,
-    CoupledInternalVariableSolver,
     CylindricalDtN,
     rigid_body_modes,
 )
@@ -56,9 +65,7 @@ from gadopt.gia_presets import (
     selfgrav_dtn_iterative_solver_parameters,
 )
 from gadopt.gia_solver import SelfGravitatingGIASolver
-from gadopt.internal_variable_equation import history_slices
 from gadopt.momentum_equation import rotational_potential
-from gadopt.nullspaces import apply_kernel_projection
 from gadopt.utility import scalar_value
 
 # Road-map §2.2 with the production constants.
@@ -627,171 +634,6 @@ class TestConstruction:
                                         "transition_stress": 1e-3},
                   solver_parameters_extra={"snes_type": "ksponly"})
 
-    @pytest.mark.longtest
-    def test_power_law_is_accepted_on_the_lowrank_representation(self, meshes):
-        """A power law builds and solves on the low-rank representation.
-
-        This pins the acceptance and that the Newton solve converges: `B` does not
-        depend on the rheology and is reinstalled after every Jacobian
-        assembly, so nothing in the low-rank path reads the exponent.
-        """
-        solver, u, _ = build(
-            meshes, rotation=False, dtn_representation="lowrank",
-            approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
-        solver.solve()
-        assert solver.solver.snes.getConvergedReason() > 0
-        assert fd.norm(u) > 0.0
-
-    @pytest.mark.longtest
-    def test_it_solves(self, solved):
-        solver, u, psi = solved
-        assert fd.norm(u) > 0.0
-        assert fd.norm(psi) > 0.0
-        assert np.isfinite(fd.norm(psi))
-
-    @pytest.mark.longtest
-    def test_the_answer_is_degree_two(self, solved):
-        """A `cos 2phi` load excites `cos 2phi` and nothing else.
-
-        The cheapest end-to-end statement that the coupling is wired to the
-        right places at all: every other trace coefficient, on both DtN
-        boundaries, sits at roundoff.
-        """
-        solver, _, _ = solved
-        for bc_id, modes in solver.coefficients().items():
-            assert abs(modes["cos2"]) > 1e-6
-            for key, value in modes.items():
-                if key != "cos2":
-                    assert abs(value) < 1e-9 * abs(modes["cos2"]) + 1e-15
-
-
-@pytest.mark.longtest
-class TestNewtonianLimit:
-    """A power-law configuration that is Newtonian must solve the Newtonian problem.
-
-    Two statements, and they are different. The first is exact: at
-    `exponent = 1` the `0^0` guard in `power_law_factor` makes the factor
-    identically 1, whatever the transition and background stresses are, so the
-    two residuals are the same form up to UFL simplification and the two
-    solutions agree to roundoff. The second is a limit: at `exponent = 1 + eps`
-    with a positive background stress the factor is `1 + O(eps)` and the
-    solutions agree to that order.
-
-    Both are route tests on a 2-D annulus, so neither says anything about
-    power-law physics: in 2-D the factor is evaluated on a stress carrying the
-    spurious trace of the fixed 2/3 in the deviatoric operator.
-    """
-
-    @staticmethod
-    def _fields(solver, u, psi):
-        """The three states to compare: displacement, history, potential.
-
-        The history is the DG field of the mixed solution; with one Maxwell
-        element it holds one `(d, d)` slice.
-
-        Args:
-          solver: the solved `SelfGravitatingGIASolver`.
-          u: the displacement Function the solver writes.
-          psi: the potential Function the solver writes.
-
-        Returns:
-          A tuple `(u, m, psi)`.
-        """
-        m, = history_slices(
-            solver.solution.subfunctions[solver.field_index["history"]])
-        return u, m, psi
-
-    def test_exponent_one_with_power_law_parameters_is_the_newtonian_solve(
-            self, meshes):
-        """Exponent 1 makes the transition and background stresses inert.
-
-        `power_law_factor` guards the `0^0` that UFL evaluates as 0 by
-        conditioning on `eq(n - 1, 0)`, so at `n = 1` both powers are 1 and the
-        factor is `(1 + 1) / (1 + 1) = 1` for every transition stress and every
-        background stress, the zero background included. The two residuals are
-        then the same form up to UFL simplification, and 1e-12 relative is the
-        roundoff that simplification can cost.
-        """
-        plain, u_plain, psi_plain = build(meshes, solver_parameters="direct")
-        power, u_power, psi_power = build(
-            meshes, solver_parameters="direct",
-            approximation_kwargs={"exponent": 1, "transition_stress": 1e-4,
-                                  "background_stress": 0.5})
-        plain.solve()
-        power.solve()
-
-        u_p, m_p, psi_p = self._fields(plain, u_plain, psi_plain)
-        u_q, m_q, psi_q = self._fields(power, u_power, psi_power)
-        assert fd.norm(u_p) > 0.0
-        assert fd.norm(m_p) > 0.0
-        # Measured on this annulus, uncondensed: 7.0e-17 in `u`, 0 in `m`,
-        # 6.9e-17 in `psi` (plan review, table under B1). The gate is five
-        # orders above that, so a factor that is not exactly 1 fails it.
-        differences = {"u": relative_difference(u_q, u_p),
-                       "m": relative_difference(m_q, m_p),
-                       "psi": relative_difference(psi_q, psi_p)}
-        summary = "  ".join(f"{k}={v:.2e}" for k, v in differences.items())
-        print(f"\n    [exponent 1] {summary}")
-        for key, value in differences.items():
-            assert value < 1e-12, f"{key} differs by {value:.3e}"
-
-    def test_exponent_near_one_is_the_newtonian_solve_to_first_order(
-            self, meshes):
-        r"""At `n = 1 + eps` with a positive background stress, `f = 1 + O(eps)`.
-
-        With `a = sigma_bg / sigma*` and `b = (sigma + sigma_bg) / sigma*`, the
-        factor is `f = (1 + a^eps) / (1 + b^eps)`. Choosing
-        `background_stress = transition_stress` gives `a = 1` exactly, so
-        `f = 2 / (1 + b^eps)` and
-
-            |f - 1| <= (eps / 2) ln(1 + sigma_max / sigma*),
-
-        of order 1e-7 on this annulus. The displacement gate is 1e-6 relative;
-        the measured difference is 5.8e-10 (plan review, table under B1).
-
-        **The limit needs a positive background stress, and the third
-        assertion pins why.** With `background_stress = 0` the model is
-        discontinuous in the exponent at `n = 1`: UFL evaluates a zero base to
-        a positive power as 0, so `a^(n-1)` is 0 for every `n > 1`, while the
-        guard sets it to 1 at `n = 1` exactly. The factor therefore tends to
-        1/2 rather than to 1 as `n` approaches 1 from above, the Maxwell times
-        halve, and the state differs from the Newtonian one by 25 percent in
-        `u` (measured). Asserting that gap keeps the property visible: a future
-        change to the guard that makes the zero-background case continuous
-        fails here, and so gets read rather than absorbed.
-        """
-        newtonian, u_newtonian, _ = build(meshes, solver_parameters="direct")
-        near, u_near, _ = build(
-            meshes, solver_parameters="direct",
-            approximation_kwargs={"exponent": 1 + 1e-6,
-                                  "transition_stress": 1e-3,
-                                  "background_stress": 1e-3})
-        # Newton is the outer method, which is the whole reason this
-        # configuration is reachable: the residual is nonlinear for any
-        # exponent other than 1.
-        assert near.solver_parameters["snes_type"] == "newtonls"
-        newtonian.solve()
-        near.solve()
-        assert near.solver.snes.getConvergedReason() > 0
-
-        assert fd.norm(u_newtonian) > 0.0
-        near_difference = relative_difference(u_near, u_newtonian)
-        print(f"\n    [exponent 1+1e-6] background 1e-3: "
-              f"u={near_difference:.2e}")
-        assert near_difference < 1e-6
-
-        # The zero-background control: same exponent, same transition stress,
-        # a model that is discontinuous at n = 1 and a state that says so.
-        zero_background, u_zero, _ = build(
-            meshes, solver_parameters="direct",
-            approximation_kwargs={"exponent": 1 + 1e-6,
-                                  "transition_stress": 1e-3,
-                                  "background_stress": 0.0})
-        zero_background.solve()
-        zero_difference = relative_difference(u_zero, u_newtonian)
-        print(f"    [exponent 1+1e-6] background 0: u={zero_difference:.2e}")
-        assert zero_difference > 1e-1
-
 
 # ---------------------------------------------------------------------------
 # The block-1 probe.
@@ -1149,45 +991,6 @@ def offdiagonal_ratios(block):
     return np.abs(off).max(axis=1) / np.abs(np.diag(block))
 
 
-def block_asymmetry(F, z, J=None):
-    """Per-block `max|A_ij - A_ji^T|`, and the max-abs grid beside it.
-
-    A hand copy of `demos/gravity/selfgrav_gia_annulus.py`, deliberately, and
-    not an import: that module imports `generate_selfgrav_annulus` and
-    `validate_selfgrav_annulus` at module scope, which pull in `gmsh` and
-    `scipy`, so importing it at the top of this file would hard-fail collection
-    of the whole module on a machine without them instead of skipping the
-    tests that need a mesh.
-
-    `mat_type="nest"` with `getNestSubMatrix` is spike S5's route B: it
-    assembles with `Real` blocks present, where monolithic `aij` does not, it is
-    sharp to ~1e-17, and it names the block. It needs a global dense transpose,
-    so it is serial.
-
-    Args:
-      F: the residual.
-      z: the mixed unknown of `F`.
-      J: the Jacobian to measure; `None` takes `derivative(F, z)`.
-    """
-    Z = z.function_space()
-    J = fd.derivative(F, z) if J is None else J
-    A = fd.assemble(J, mat_type="nest").petscmat
-    n = len(Z)
-    diff = np.zeros((n, n))
-    size = np.zeros((n, n))
-    for i in range(n):
-        for j in range(n):
-            Mij = A.getNestSubMatrix(i, j)
-            Mji = A.getNestSubMatrix(j, i)
-            if Mij is None or Mji is None:
-                continue
-            aij = Mij.convert("dense").getDenseArray()
-            aji = Mji.convert("dense").getDenseArray()
-            diff[i, j] = np.abs(aij - aji.T).max()
-            size[i, j] = np.abs(aij).max()
-    return diff, size
-
-
 @pytest.mark.longtest
 class TestEliminatedBlockSymmetry:
     """Block 0 with the history eliminated is symmetric; with it, it is not."""
@@ -1355,36 +1158,6 @@ class TestBlockOneIsTheDiagonalItClaims:
     `theta_rot_i * K_i` and both factors carry `s_i`, so a flip moves the
     prediction and the assembled row together.
     """
-
-    @pytest.mark.longtest
-    @pytest.mark.parametrize("rotation", [True, False])
-    @pytest.mark.parametrize("truncation", [3, 5])
-    def test_the_block_is_the_claimed_diagonal(self, meshes, rotation,
-                                               truncation):
-        """Truncation 5 is production's `L`; 3 is what the rest of this file uses.
-
-        Both are carried because the multiplier count is the one thing that
-        changes with it - 14 rows at truncation 3, 22 at 5 - and a diagonal
-        built by zipping two sequences is exactly the kind of thing that is
-        right at one length and wrong at another.
-        """
-        solver, _, _ = build(meshes, rotation=rotation, truncation=truncation,
-                             dtn_representation="multiplier")
-        block = real_block(solver)
-        claimed = predicted_real_diagonal(solver)
-
-        assert len(claimed) == len(solver.real_indices)
-        assert len(claimed) == (2 * truncation) + (2 * truncation + 1) + (
-            1 if rotation else 0)
-        assert np.all(np.abs(np.diag(block)) > 0.0), (
-            "a zero diagonal entry would make the gate vacuous and the "
-            "preconditioner a division by zero")
-
-        assert np.abs(claimed - np.diag(block)).max() <= DIAG_TOL * np.abs(
-            np.diag(block)).max()
-        assert np.max(np.abs(claimed - np.diag(block))
-                      / np.abs(np.diag(block))) <= DIAG_TOL
-        assert offdiagonal_ratios(block).max() <= OFFDIAG_TOL
 
     @pytest.mark.skipif(
         fd.COMM_WORLD.size > 1,
@@ -1664,35 +1437,6 @@ class TestBlockOneInThreeDimensions:
         assert entries[index["displacement"]] is rbm
         assert entries[index["core_pressure"]] == Z.sub(index["core_pressure"])
 
-    def test_the_block_is_the_claimed_diagonal(self):
-        """Measured `max rel |d - diag(A)| = 1.787e-15`; gate at 1e-12.
-
-        `SphericalDtN._mode` gives `scale = 1/(4 pi)` to **every** mode, so
-        unlike 2-D there is no per-mode variation at all: the eight multiplier
-        entries here take 2 distinct values, one per boundary radius
-        (`-4.5889137914` and `-1.1472284479`), and at production `L = 5` it is 2
-        distinct values among 72 rows. The diagonal is even blinder to a mode
-        shuffle in 3-D than in 2-D, which is the reason
-        `TestBlockOneIsTheDiagonalItClaims` pins the alignment separately.
-
-        Spread over the whole block, rotation included: 295.5, against 235.7 in
-        2-D. That is what the per-row off-diagonal form is for.
-        """
-        solver, _, _ = self.build()
-        block = real_block(solver)
-        claimed = predicted_real_diagonal(solver)
-        assert np.max(np.abs(claimed - np.diag(block))
-                      / np.abs(np.diag(block))) <= DIAG_TOL
-        assert offdiagonal_ratios(block).max() <= OFFDIAG_TOL
-        # As in 2-D: bit zero, because the form contains no such term.
-        off = block.copy()
-        np.fill_diagonal(off, 0.0)
-        if SERIAL:
-            assert np.abs(off).max() == 0.0
-        # Two distinct multiplier values, one per boundary, from 8 rows.
-        n_mult = len(solver.multiplier_indices)
-        assert len(set(np.round(np.diag(block)[:n_mult], 12))) == 2
-
     @pytest.mark.parametrize("L, refinement, silent_tol",
                              [(1, 1, 1e-6), (3, 2, 1e-2)])
     def test_each_multiplier_row_is_the_mode_its_key_names(self, L, refinement,
@@ -1734,41 +1478,6 @@ class TestBlockOneInThreeDimensions:
             "the premise of this test: the diagonal cannot tell the modes "
             "apart, so if it suddenly can, read this docstring again")
         check_multiplier_alignment(solver, silent_tol=silent_tol)
-
-    def test_the_polar_pair_is_uncoupled_and_carries_C_minus_A(self):
-        """The one thing 2-D cannot say, in three parts.
-
-        `m_1` and `m_2` do not couple to each other, neither couples to the
-        multipliers, and both carry `C - A` while `m_3` carries `C` with the
-        opposite closure sign. Measured rotation diagonal
-        `[+0.01552799, +0.01552799, -0.15527988]`: the pair equal, `m_3` of the
-        opposite sign, and ten times the magnitude because `C_minus_A` was set
-        to `0.1 C` above. The sign is `s_3 = -1` showing through
-        `theta_rot_3 K_3`, both factors of which carry it - so this reads the
-        product and **cannot** see a flip of `CLOSURE_SIGNS`, which moves the
-        prediction and the assembled row together.
-        """
-        solver, _, _ = self.build()
-        block = real_block(solver)
-        n_mult = len(solver.multiplier_indices)
-        rotation = np.diag(block)[n_mult:]
-
-        assert rotation[0] == pytest.approx(rotation[1], rel=1e-14)
-        assert rotation[0] > 0.0 and rotation[2] < 0.0
-        assert rotation[2] / rotation[0] == pytest.approx(-10.0, rel=1e-12)
-        assert rotation[0] == pytest.approx(+0.01552799, rel=1e-6)
-        assert rotation[2] == pytest.approx(-0.15527988, rel=1e-6)
-
-        # The two off-diagonal corners, separately, because they fail for
-        # different reasons: `(m, c)` would mean the closure row saw the
-        # potential's trace, `(c, m)` that a constraint row saw the rotation.
-        floor = OFFDIAG_TOL * np.abs(rotation).min()
-        assert np.abs(block[:n_mult, n_mult:]).max() <= floor
-        assert np.abs(block[n_mult:, :n_mult]).max() <= floor
-        assert np.abs(block[n_mult:, n_mult:] - np.diag(rotation)).max() <= floor
-        if SERIAL:
-            assert np.abs(block[:n_mult, n_mult:]).max() == 0.0
-            assert np.abs(block[n_mult:, :n_mult]).max() == 0.0
 
 
 class TestPresetWiring:
@@ -1930,37 +1639,6 @@ class TestPresetWiring:
                     == selfgrav_dtn_iterative_solver_parameters(
                         u_ksp_max_it=0, **kwargs)), kwargs
 
-    @pytest.mark.longtest
-    def test_the_iterative_preset_solves_the_same_system(self, meshes, solved):
-        """The one that is not about dictionaries: does the iterative path solve?
-
-        Wiring a preset up is worth nothing if the path it reaches does not
-        converge to the same answer. `solved` is the module fixture, which
-        takes the default, which in 2-D is direct.
-
-        The tolerance is the iterative preset's own `outer_rtol` of 1e-6 and
-        not a fudge: measured on this system the disagreement is 1.9e-06 at
-        1e-6, 1.5e-08 at 1e-8 and 1.0e-10 at 1e-10, i.e. it tracks the Krylov
-        tolerance four orders down. That is what says the two presets solve one
-        discrete system rather than two close ones - a formulation difference
-        would sit on a floor and refuse to move.
-        """
-        reference, u_ref, psi_ref = solved
-        solver, u, psi = build(meshes, solver_parameters="iterative")
-        solver.solve()
-
-        for a_field, b_field in ((u_ref, u), (psi_ref, psi)):
-            a = a_field.dat.data_ro
-            b = b_field.dat.data_ro
-            scale = max(abs(a).max(), 1e-300)
-            assert abs(a - b).max() / scale < 1e-5
-
-        ref_c, got_c = reference.coefficients(), solver.coefficients()
-        for bc_id, modes in ref_c.items():
-            scale = max(abs(v) for v in modes.values())
-            for key, value in modes.items():
-                assert abs(value - got_c[bc_id][key]) < 1e-5 * scale
-
     def test_every_sub_ksp_reports_its_exit_status(self, meshes):
         """Block 0 and block 1 are preconditioner applications inside FGMRES.
 
@@ -2120,86 +1798,6 @@ class TestNullCoupling:
         solver, _, _ = build(meshes, approximation_kwargs={"B_mu": 1e-12})
         assert float(solver.theta_psi) == 1e-12 / LAMBDA
 
-    @pytest.mark.longtest
-    @pytest.mark.skipif(
-        fd.COMM_WORLD.size > 1,
-        reason="the per-block instrument needs a global dense transpose")
-    def test_the_potential_row_is_not_annihilated(self, meshes):
-        """The measurement the defect was found by: `max|A(psi, psi)|`.
-
-        Serial: `getNestSubMatrix(...).convert("dense")` is spike S5's route B,
-        which builds a global dense block and is the reason every per-block
-        measurement in this project is a serial one.
-        """
-        solver, _, _ = build(meshes, approximation_kwargs={"B_mu": 0.0},
-                             dtn_representation="multiplier")
-        z = solver.solution
-        index = solver.field_index
-        A = fd.assemble(fd.derivative(solver.F, z), mat_type="nest").petscmat
-
-        def amax(i, j):
-            M = A.getNestSubMatrix(i, j)
-            return 0.0 if M is None else float(
-                np.abs(M.convert("dense").getDenseArray()).max())
-
-        assert amax(index["potential"], index["potential"]) > 0.0
-        assert amax(solver.multiplier_indices[0], index["potential"]) > 0.0
-        # The coupling itself *is* off: the body force is gone.
-        assert amax(index["displacement"], index["potential"]) == 0.0
-        # ... while the one-way leg survives, so psi is still driven by u.
-        assert amax(index["potential"], index["displacement"]) > 0.0
-
-    @pytest.mark.longtest
-    def test_it_reproduces_the_uncoupled_solver(self, meshes):
-        """V2, run as specified rather than around the defect.
-
-        Both sides declare the rigid-rotation kernel (defect D-2); without it
-        the displacements agree only to ~1e-07, the difference being entirely
-        that zero-energy mode.
-
-        The load is the traction of `mechanics_bcs` on both sides
-        (`sheet=False`). A `SurfaceLoad` weighs its sheet with the
-        approximation's `B_mu`, which is zero here, so it would apply no
-        traction at all; the mechanics-only reference has the traction
-        `B_MU g sigma`.
-        """
-        _, sub = meshes
-        solver, u, psi = build(
-            meshes, sheet=False, approximation_kwargs={"B_mu": 0.0},
-            declare_nullspace=True)
-        solver.solve()
-
-        V = fd.VectorFunctionSpace(sub, "CG", 2)
-        S = fd.TensorFunctionSpace(sub, "DG", 1)
-        Zm = fd.MixedFunctionSpace([V, S])
-        zm = fd.Function(Zm)
-        X = fd.SpatialCoordinate(sub)
-        basis = fd.VectorSpaceBasis(
-            [fd.Function(Zm.sub(0)).interpolate(fd.as_vector([-X[1], X[0]]))])
-        basis.orthonormalize()
-        ref = CoupledInternalVariableSolver(
-            zm, approximation(B_mu=0.0), dt=1.0, bcs=mechanics_bcs(sub),
-            solver_parameters="direct",
-            nullspace=fd.MixedVectorSpaceBasis(Zm, [basis, Zm.sub(1)]))
-        ref.solve()
-        # `apply_kernel_projection` makes the PETSc call of
-        # `basis.orthogonalize` with a read-write access to the vector.
-        apply_kernel_projection(basis, zm.subfunctions[0])
-
-        ur = zm.subfunctions[0]
-        assert fd.norm(ur) > 0.0
-        assert fd.norm(fd.assemble(u - ur)) / fd.norm(ur) < 1e-11
-        # The gravity space stores the history as one (n, d, d) field with
-        # symmetric storage; the reference holds a (d, d) field. Compare
-        # slice by slice as expressions.
-        stored = history_slices(
-            solver.solution.subfunctions[solver.field_index["history"]])
-        for k, m in enumerate(stored):
-            mr = zm.subfunctions[1 + k]
-            assert fd.norm(m - mr) / fd.norm(mr) < 1e-11
-        # ... and psi is still driven, so the test is not vacuous.
-        assert fd.norm(psi) > 0.0
-
 
 class TestRigidRotationNullspace:
     """Defect D-2: the zero-energy mode `u = (-y, x)`, declared and removed.
@@ -2240,34 +1838,6 @@ class TestRigidRotationNullspace:
         for i, entry in enumerate(bases):
             if i != displacement:
                 assert not isinstance(entry, fd.VectorSpaceBasis)
-
-    @pytest.mark.longtest
-    def test_declaring_it_removes_it_from_the_answer(self, meshes):
-        """PETSc alone does not: FGMRES is right-preconditioned.
-
-        The declaration removes the kernel from the right-hand side but not
-        from the preconditioner's output, and with an almost-exact
-        preconditioner the answer is the preconditioner's output. So the solver
-        projects after solving; this is the measurement that it does.
-        """
-        _, sub = meshes
-        X = fd.SpatialCoordinate(sub)
-
-        def rotation_content(u):
-            V = u.function_space()
-            r0 = fd.Function(V).interpolate(fd.as_vector([-X[1], X[0]]))
-            dxm = fd.Measure("dx", domain=sub)
-            c = (fd.assemble(fd.dot(u, r0) * dxm)
-                 / fd.assemble(fd.dot(r0, r0) * dxm))
-            return abs(c) * fd.norm(r0) / fd.norm(u)
-
-        plain, u_plain, _ = build(meshes)
-        plain.solve()
-        declared, u_declared, _ = build(meshes, declare_nullspace=True)
-        declared.solve()
-
-        assert rotation_content(u_declared) < 1e-14
-        assert rotation_content(u_declared) < 1e-3 * rotation_content(u_plain)
 
 
 class TestFluidCore:
@@ -2422,108 +1992,6 @@ class TestFluidCore:
         assert amax(iu, ip) == 0.0
         assert amax(iu, iu) == 0.0
 
-    @pytest.mark.longtest
-    @pytest.mark.xfail(
-        # Not strict: the outcome depends on round-off in a singular block-0
-        # LU, so a pass is as uninformative as a failure. With the dense Schur
-        # complement on block 1 of the direct preset (2026-09-15) the test
-        # passes on phoenix; with `pc_type none` there it failed. Neither
-        # result shows that block 0 is non-singular.
-        strict=False,
-        reason=(
-            "Fragile by construction: with a fluid core and B_mu = 0 nothing "
-            "pins a rigid motion of the mantle, so the block-0 LU of the "
-            "direct preset factors a singular matrix and the outer GMRES "
-            "reaches 1e-14 or stalls at 1e-9 depending on round-off. A "
-            "mathematically identical rewrite of deviatoric_strain on main "
-            "(PR #540) flipped it from 11 iterations to a stall. Declaring "
-            "the kernel and enabling MUMPS null-pivot detection makes the "
-            "solve deterministic but leaves the flux at 3.7e-10 and the "
-            "pressure 2.6e-7 relative from the reference, outside these "
-            "tolerances. Needs a non-singular block 0 (pin the rigid modes "
-            "in the residual, or compare at B_mu > 0). Recorded 2026-09-10; "
-            "read NOTES/HANDOVER.md 4.3."
-        ),
-    )
-    def test_zero_B_mu_matches_independently_constrained_mechanics(
-            self, meshes):
-        """The zero-coupling solve keeps the physical core constraint.
-
-        The load is a traction alone (`sheet=False` and a `normal_stress`),
-        because a `SurfaceLoad` weighs its sheet with the approximation's
-        `B_mu`, which is zero here.
-        """
-        _, sub = meshes
-        X = fd.SpatialCoordinate(sub)
-        load = B_MU * SIGMA_HAT * (
-            fd.cos(2 * fd.atan2(X[1], X[0])) + fd.Constant(0.25))
-        surface_bcs = {CURVE_RE: {"normal_stress": load}}
-        # The DG family: the comparison reads the DG history field.
-        solver, u, _ = self.build_fluid(
-            meshes, sheet=False, approximation_kwargs={"B_mu": 0.0},
-            dtn_representation="multiplier", extra_bcs=surface_bcs,
-            internal_variable_family="DG")
-        solver.solve()
-
-        V = fd.VectorFunctionSpace(sub, "CG", 2)
-        S = fd.TensorFunctionSpace(sub, "DG", 1)
-        Zm = fd.MixedFunctionSpace([V, S])
-        zm = fd.Function(Zm)
-        pressure = fd.Constant(0.0)
-        w = fd.TestFunctions(Zm)[0]
-        n = fd.FacetNormal(sub)
-        dss = fd.Measure("ds", domain=sub)(CURVE_RC)
-        reference = CoupledInternalVariableSolver(
-            zm, approximation(B_mu=0.0), dt=1.0, bcs=surface_bcs,
-            additional_forcing_term=pressure * fd.dot(w, n) * dss,
-            solver_parameters="direct")
-
-        def solve_at(value):
-            pressure.assign(value)
-            zm.assign(0.0)
-            reference.solution_old.assign(0.0)
-            reference.solve()
-            return zm.copy(deepcopy=True)
-
-        base = solve_at(0.0)
-        direction = solve_at(1.0)
-        direction -= base
-        base_flux = fd.assemble(fd.dot(base.subfunctions[0], n) * dss)
-        response_flux = fd.assemble(
-            fd.dot(direction.subfunctions[0], n) * dss)
-        assert abs(response_flux) > 1e-12
-        reference_pressure = -base_flux / response_flux
-        constrained = base.copy(deepcopy=True)
-        for target, base_field, direction_field in zip(
-                constrained.subfunctions, base.subfunctions,
-                direction.subfunctions):
-            with target.dat.vec_wo as target_vec, \
-                    base_field.dat.vec_ro as base_vec, \
-                    direction_field.dat.vec_ro as direction_vec:
-                target_vec.waxpy(
-                    reference_pressure, direction_vec, base_vec)
-
-        flux = fd.assemble(fd.dot(u, n) * dss)
-        flux_ref = fd.assemble(
-            fd.dot(constrained.subfunctions[0], n) * dss)
-        assert abs(flux) < 1e-12
-        assert abs(flux_ref) < 1e-12
-        assert float(coupling(solver, FluidCore).pressure()) == pytest.approx(
-            reference_pressure, rel=1e-11, abs=1e-13)
-
-        dxm = fd.Measure("dx", domain=sub)
-        displacement_error = u - constrained.subfunctions[0]
-        error_strain = fd.sym(fd.grad(displacement_error))
-        reference_strain = fd.sym(fd.grad(constrained.subfunctions[0]))
-        relative_strain_error = np.sqrt(fd.assemble(
-            fd.inner(error_strain, error_strain) * dxm) / fd.assemble(
-                fd.inner(reference_strain, reference_strain) * dxm))
-        assert relative_strain_error < 1e-10
-        m, = history_slices(
-            solver.solution.subfunctions[solver.field_index["history"]])
-        m_ref = constrained.subfunctions[1]
-        assert fd.norm(m - m_ref) / fd.norm(m_ref) < 1e-10
-
     def test_rigid_rotation_nullspace_composes_with_core_pressure(self, meshes):
         solver, _, _ = self.build_fluid(meshes, nullspace="rigid_rotation")
         basis = list(solver.nullspace)
@@ -2531,18 +1999,6 @@ class TestFluidCore:
         assert len(basis) == len(solver.solution_space)
         assert isinstance(basis[index["displacement"]], fd.VectorSpaceBasis)
         assert not isinstance(basis[index["core_pressure"]], fd.VectorSpaceBasis)
-
-    @pytest.mark.longtest
-    def test_solve_enforces_zero_integrated_cmb_displacement(self, meshes):
-        solver, u, _ = self.build_fluid(meshes)
-        solver.solve()
-        dss = coupling(solver, FluidCore).measure()
-        un = fd.dot(u, fd.FacetNormal(solver.mesh))
-        flux = fd.assemble(un * dss)
-        scale = np.sqrt(fd.assemble(un * un * dss)
-                        * fd.assemble(fd.Constant(1.0) * dss))
-        assert fd.norm(u) > 0.0
-        assert abs(flux) <= 1e-10 * scale + 1e-13
 
     @REAL_BLOCK_ON_PARENT_FACETS
     def test_the_pair_transposes_exactly(self, meshes):
@@ -2868,68 +2324,6 @@ class TestCentreOfMassFrame:
                 assert abs(D[1 - i]) < 1e-10 * mass
         finally:
             ctx.sheets[:] = saved
-
-    @pytest.mark.longtest
-    @pytest.mark.skipif(
-        fd.COMM_WORLD.size > 1,
-        reason="the per-block instrument needs global dense blocks")
-    @pytest.mark.parametrize("rotation", [False, True])
-    @REAL_BLOCK_ON_PARENT_FACETS
-    def test_blocks_form_an_exact_saddle_pair(self, meshes, rotation):
-        solver, _, _ = self.build(meshes, rotation=rotation)
-        A = fd.assemble(fd.derivative(solver.F, solver.solution),
-                        mat_type="nest").petscmat
-        iu = solver.field_index["displacement"]
-        frame = [solver.field_index[f"centre_of_mass_{i}"] for i in range(2)]
-        for il in frame:
-            ul = A.getNestSubMatrix(iu, il).convert("dense").getDenseArray()
-            lu = A.getNestSubMatrix(il, iu).convert("dense").getDenseArray()
-            scale = max(np.abs(ul).max(), np.abs(lu).max())
-            assert scale > 0.0
-            assert np.abs(ul - lu.T).max() / scale < 1e-14
-            for jl in frame:
-                ll = A.getNestSubMatrix(il, jl)
-                if ll is not None:
-                    assert np.abs(ll.convert("dense").getDenseArray()).max() \
-                        == 0.0
-
-    @pytest.mark.longtest
-    @pytest.mark.parametrize("dtn_representation", ["multiplier", "lowrank"])
-    def test_solve_holds_the_centre_of_mass(self, meshes, dtn_representation):
-        """After a solve with a degree-1 load, `D = 0` to the solver tolerance.
-
-        The scale is the moment of the load sheet alone, which the displacement
-        has to cancel.
-
-        The test runs on both DtN representations. It is the only unit test
-        that solves the frame without sea level on the low-rank path, and that
-        is the configuration of the 3-D frame run G0-on. The multiplier arm
-        uses the default solver parameters of the solver. The low-rank arm
-        uses the iterative preset with the dense Schur complement on the
-        `Real` block, as `test_sea_level.solve_settings` does, with an outer
-        relative tolerance of 1e-12 and a Newton relative tolerance of 1e-10,
-        so that the bound on `D` below is set by the discretisation and not by
-        an inexact linear solve.
-        """
-        solver_kwargs = {}
-        if dtn_representation == "lowrank":
-            solver_kwargs = dict(
-                solver_parameters="iterative",
-                preset_options=dict(
-                    multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
-                    outer_rtol=1e-12, block0_rtol=1e-4, snes_rtol=1e-10))
-        solver, _, _ = self.build(
-            meshes, load_degree=1, dtn_representation=dtn_representation,
-            **solver_kwargs)
-        # The solver runs on the named representation.
-        assert solver.dtn_representation == dtn_representation
-        centre = coupling(solver, CentreOfMass)
-        load_moment = SIGMA_HAT * np.pi * RE ** 2
-        solver.solve()
-        D = [fd.assemble(form) for form in centre.dipole()]
-        assert abs(D[0]) < 1e-8 * load_moment
-        assert abs(D[1]) < 1e-8 * load_moment
-        assert all(np.isfinite([float(lam) for lam in centre.multipliers()]))
 
     def test_residual_is_the_variation_of_the_energy(self, meshes):
         """The written-out residual equals `derivative` of the energy.
