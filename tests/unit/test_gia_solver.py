@@ -632,7 +632,8 @@ def test_the_order_of_the_couplings_does_not_matter(meshes):
                          gravity_bcs=C.gravity_bcs(parent),
                          couplings=couplings[::order],
                          dtn_representation=case.representation,
-                         solver_parameters="direct")
+                         solver_parameters="direct",
+                         internal_variable_family="Quadrature")
 
     a, b = build(1), build(-1)
     assert b.field_names == a.field_names
@@ -734,7 +735,7 @@ def _solver_with_density(meshes, kind, K, **kwargs):
                      fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
                      dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
                      couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-                     nullspace="rigid_rotation", solver_parameters="direct", **kwargs)
+                     nullspace="rigid_rotation", internal_variable_family="Quadrature", solver_parameters="direct", **kwargs)
 
 
 @pytest.mark.parametrize("K", [1.0, 1000.0])
@@ -772,7 +773,7 @@ def test_a_lateral_density_of_degree_three_and_four_is_refused(meshes, degree):
                   fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
                   dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
                   couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-                  nullspace="rigid_rotation", solver_parameters="direct")
+                  nullspace="rigid_rotation", internal_variable_family="Quadrature", solver_parameters="direct")
 
 
 def test_a_mode_that_violates_a_strong_condition_is_refused(meshes):
@@ -791,7 +792,7 @@ def test_a_mode_that_violates_a_strong_condition_is_refused(meshes):
 
 @pytest.mark.longtest
 def test_a_symmetric_configuration_passes_the_nullspace_check(meshes):
-    solver, _, _ = C.build_new(meshes, Case(core="fluid", load=None),
+    solver, _, _ = C.build_new(meshes, Case(family="Quadrature", core="fluid", load=None),
                                nullspace="rigid_rotation")
     lateral, ratio, ratio_t = solver.kernel_residuals[0]
     # Round-off of the degree-4 moments: about 1e-12.
@@ -806,7 +807,7 @@ def test_a_zero_time_step_at_construction_gives_a_finite_probe(meshes):
     bound without testing anything. The probe runs at a unit step instead,
     gives the numbers of a positive step, and leaves the caller's zero.
     """
-    case = Case(core="fluid", load=None)
+    case = Case(family="Quadrature", core="fluid", load=None)
     dt = C.dt_function(meshes[1], 0.0)
     solver, _, _ = C.build_new(meshes, case, dt=dt, nullspace="rigid_rotation")
     reference, _, _ = C.build_new(meshes, case, nullspace="rigid_rotation")
@@ -841,7 +842,7 @@ def test_the_nullspace_check_can_be_skipped(meshes):
 def test_backstress_refuses_a_displacement_condition(meshes):
     """The backstress history equation has no boundary part."""
     with pytest.raises(NotImplementedError, match="natural displacement"):
-        C.build_new(meshes, Case(model="backstress", core="rigid"))
+        C.build_new(meshes, Case(family="Quadrature", model="backstress", core="rigid"))
 
 
 def test_a_traction_without_a_surface_load_warns(meshes):
@@ -875,7 +876,7 @@ def test_ksponly_is_refused_on_a_power_law(meshes):
 
 def test_the_preset_options_and_the_derivative_cap(meshes):
     parent, sub = meshes
-    case = Case(representation="lowrank", core="fluid", centre=True)
+    case = Case(family="Quadrature", representation="lowrank", core="fluid", centre=True)
     solver, _, _ = C.build_new(
         meshes, case, solver_parameters="iterative",
         preset_options={"outer_rtol": 1e-9, "outer_max_it": 30},
@@ -970,7 +971,7 @@ def test_taylor_with_a_real_control_in_the_row_scalings(meshes, control_name):
                 couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.),
                            cp.Rotation(C=C.polar_moment(meshes), Omega_sq=1.566e-3),
                            cp.CentreOfMass(), sea_level],
-                nullspace="rigid_rotation", solver_parameters="direct",
+                nullspace="rigid_rotation", internal_variable_family="Quadrature", solver_parameters="direct",
                 solver_parameters_extra=dict(snes_rtol=1e-11, snes_atol=1e-13,
                                              ksp_rtol=1e-11))
         for k, h in enumerate(STEPS[:2]):
@@ -1032,7 +1033,7 @@ def test_a_coupling_parameter_can_be_a_real_function_on_either_mesh(
     """
     parent, sub = meshes
     load, number = REAL_PARAMETERS[parameter]
-    case = Case(core="fluid", rotation=True, centre=True, load=load)
+    case = Case(family="Quadrature", core="fluid", rotation=True, centre=True, load=load)
     mesh = sub if on == "mechanics" else parent
     R = fd.FunctionSpace(mesh, "R", 0)
     real = fd.Function(R).assign(number)
@@ -1105,7 +1106,7 @@ def _normal_stress_solver(meshes, factor):
             gravity_bcs=C.gravity_bcs(parent),
             bcs={C.CURVE_RE: {"normal_stress": factor * shape}},
             couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-            dtn_representation="multiplier", solver_parameters="direct")
+            dtn_representation="multiplier", internal_variable_family="Quadrature", solver_parameters="direct")
     return solver
 
 
@@ -1195,7 +1196,7 @@ def test_the_B_mu_floor_is_decided_once_at_construction(meshes):
     """
     from gadopt.gia_presets import NULL_COUPLING_ROW_SCALE
     parent = meshes[0]
-    case = Case(representation="lowrank", core="fluid", centre=True)
+    case = Case(family="Quadrature", representation="lowrank", core="fluid", centre=True)
 
     B_mu = fd.Function(fd.FunctionSpace(parent, "R", 0)).assign(0.0)
     solver, _, _ = C.build_new(meshes, case, parameters={"approximation.B_mu": B_mu},
@@ -1257,7 +1258,7 @@ def test_a_discontinuous_parent_field_is_refused_as_a_coupling_parameter(meshes)
     accepted, and so is the DG field on the mechanics mesh.
     """
     parent, sub = meshes
-    case = Case(core="fluid", load="surface")
+    case = Case(family="Quadrature", core="fluid", load="surface")
     dg = fd.Function(fd.FunctionSpace(parent, "DG", 0)).assign(1.2)
     with pytest.raises(ValueError, match="discontinuous element"):
         C.build_new(meshes, case, parameters={"FluidCore.rho_core": dg})
@@ -1353,4 +1354,5 @@ def test_a_discontinuous_displacement_is_refused(meshes):
             fd.Function(fd.VectorFunctionSpace(sub, "DG", 2)),
             fd.Function(fd.FunctionSpace(parent, "CG", 2)),
             C.approximation(Case()), dt=C.dt_function(sub),
-            gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"un": 0.0}})
+            gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"un": 0.0}},
+            internal_variable_family="Quadrature")
