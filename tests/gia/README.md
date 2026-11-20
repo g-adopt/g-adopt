@@ -27,6 +27,12 @@ and the tolerances. `meta.py` makes one `doit run_case` step of each entry.
 march loop and the diagnostics of one step. A test file imports only
 `numpy`, `pandas`, `pytest` and `gia_entries`, so it never builds a solver.
 
+The unit tests in `tests/unit` run on one rank. A check that needs more
+than one rank is an entry with `cores` above 1: an entry of the `parallel`
+case (`gia_parallel.py`), or a multi-rank entry of another case. A check of
+a file read on another number of ranks is a write entry and a read entry,
+with `deps` from the read entry to the files of the write entry.
+
 To run one entry and its tests:
 
 ```

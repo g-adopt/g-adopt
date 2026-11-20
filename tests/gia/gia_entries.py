@@ -894,6 +894,153 @@ def _adjoint_entries():
     return out
 
 
+# -- parallel -----------------------------------------------------------------------
+
+#: The entries of the `parallel` case (`gia_parallel.py`): the checks that need
+#: more than one rank. The unit tests in `tests/unit` run on one rank only, so
+#: every property that only a run on several ranks can show is an entry here
+#: (or a multi-rank entry of another case). Each entry writes its measured
+#: values, and 1 or 0 for a refusal or a flag, as `name value` lines to
+#: `out/parallel-<entry>.dat`. No value is recorded; the tolerances below are
+#: those of the unit tests that the entries come from. The value `cores` is
+#: the number of ranks; `deps` names the entries whose files the entry reads.
+#: An entry that reads a file of another entry runs on another number of
+#: ranks than the writer, so the order of the degrees of freedom in the file
+#: differs from the order in the reader.
+#:
+#: - `dtn-guard-np2`: the reference check of the low-rank DtN
+#:   (`gadopt.dtn_lowrank._assert_against_reference`) takes the same branch on
+#:   every rank (`test_dtn_lowrank_parallel.py`);
+#: - `checkpoint-round-trip-np2`: `CheckpointField` round trips on two ranks,
+#:   with a submesh of which one rank owns no cell
+#:   (`test_viscoelastic_checkpointing.py::test_round_trip_two_ranks`);
+#: - `checkpoint-write`, `checkpoint-write-np2`, `checkpoint-read`,
+#:   `checkpoint-read-np2`: files of Quadrature fields written on one rank
+#:   and read on two, and the other way round
+#:   (`test_quadrature_fields_read_on_another_number_of_ranks`,
+#:   `test_a_file_without_point_coordinates_is_refused_on_another_number_of_ranks`);
+#: - `projection-np2`: the recorded kernel projection on two ranks, where the
+#:   products with the basis are global
+#:   (`test_gia_nullspace_projection_adjoint.py::test_small_parallel_replay_and_gradient`);
+#: - `rotation-radius-np2`: the radius check of `Rotation` reduces over the
+#:   ranks (`test_gia_rotation_moments.py::test_the_radius_check_agrees_across_ranks`);
+#: - `gravity-np2`: `GravitySolver` alone on two ranks
+#:   (`test_dtn_lowrank_parity.py::test_parallel_parity`,
+#:   `test_parallel_coefficients_are_rank_consistent`, and three tests of
+#:   `test_gravity_solver.py`). The roadmap's `gravity` case is not written
+#:   yet; this entry holds only the rows that need two ranks.
+PARALLEL = {
+    "dtn-guard-np2": dict(cores=2),
+    "checkpoint-round-trip-np2": dict(cores=2),
+    "checkpoint-write": dict(cores=1),
+    "checkpoint-write-np2": dict(cores=2),
+    "checkpoint-read": dict(cores=1, deps=("checkpoint-write-np2",)),
+    "checkpoint-read-np2": dict(cores=2, deps=("checkpoint-write", "checkpoint-write-np2")),
+    "projection-np2": dict(cores=2),
+    "rotation-radius-np2": dict(cores=2),
+    "gravity-np2": dict(cores=2),
+}
+
+#: The files of Quadrature fields that the `checkpoint-write` entries write,
+#: by entry: `with-points` stores the coordinates of the quadrature points
+#: (`CheckpointField.save`), `without-points` does not (`encode` and
+#: `save_function` alone).
+CHECKPOINT_FILES = {
+    "checkpoint-write": ("one-with-points",),
+    "checkpoint-write-np2": ("two-with-points", "two-without-points"),
+}
+
+#: `dtn-guard-np2`: the messages of the reference check, matched with
+#: `re.search`. Zeroed rows on one rank must give this error on every rank.
+DTN_GUARD_MESSAGE = "disagrees with the symbolic one"
+
+#: `checkpoint-*`: the tensor, scalar and `Real` fields on the parent, on a
+#: cell submesh and on an extruded mesh (`test_viscoelastic_checkpointing.
+#: fields_on`), and the two meshes of the file entries.
+CHECKPOINT_MESHES = ("parent", "submesh", "extruded")
+CHECKPOINT_FIELDS = ("tensor", "scalar", "real")
+#: The largest relative error of a field read on another number of ranks:
+#: round-off of the recomputed reference, measured below 1e-15
+#: (`test_viscoelastic_checkpointing.CROSS_PARTITION_RTOL`).
+CROSS_PARTITION_RTOL = 1e-13
+#: The control reads the file of one rank on two without the pairing by
+#: position; its error is above this value, which shows that the partitions
+#: differ and the pairing has work to do.
+CROSS_PARTITION_CONTROL = 1e-3
+#: The refusal of a file without point coordinates names the number of ranks
+#: of the writer.
+WRITTEN_RANKS_MESSAGE = r"written on 2 rank\(s\)"
+
+#: `projection-np2`: the replay of the shifted control against a fresh run
+#: (relative); the Taylor rate with the gradient; the band of the rate without
+#: it; the floors of the guards of `test_gravity_adjoint.
+#: assert_taylor_with_guards` (`|dJ| >= 1e-6 |J|`, the response of `J` to the
+#: largest step at least 1e-8 `|J|`); and the projection changes the shifted
+#: functional by more than 1e-2 of its value.
+PROJECTION_SHIFTED_RTOL = 1e-13
+PROJECTION_RATE_MIN = 1.98
+PROJECTION_NO_GRADIENT_BAND = (0.85, 1.15)
+PROJECTION_DERIVATIVE_FLOOR = 1e-6
+PROJECTION_RESPONSE_FLOOR = 1e-8
+PROJECTION_EFFECT_FLOOR = 1e-2
+
+#: `rotation-radius-np2`: the polar moment that closes the `m_3` row against
+#: the one assembled from the mantle
+#: (`test_gia_rotation_moments.FORMULA_RTOL`).
+ROTATION_FORMULA_RTOL = 1e-13
+
+#: `gravity-np2`: low-rank against multiplier on two ranks, the potential
+#: (relative L2) and the trace coefficients (absolute)
+#: (`test_dtn_lowrank_parity.compare`).
+GRAVITY_PARITY_PSI_RTOL = 1e-14
+GRAVITY_PARITY_COEFFICIENT_ATOL = 1e-12
+#: The repeated monopole solves: the first enclosed mass against the closed
+#: form, and the drift of the mass and of the norm of the potential over
+#: three more solves (`test_parallel_repeated_monopole_solves_are_stable`).
+GRAVITY_MONOPOLE_MASS_RTOL = 1e-5
+GRAVITY_MONOPOLE_DRIFT_RTOL = 1e-12
+#: The split by index sets against the split by field numbers (relative L2 of
+#: the potential, absolute on the coefficients), and the iterative preset
+#: against the direct one (`test_parallel_matches_the_field_number_split`).
+GRAVITY_SPLIT_RTOL = 1e-12
+GRAVITY_DIRECT_RTOL = 1e-9
+#: Three applications of the matrix-free Jacobian against the assembled one,
+#: relative to the norm of the assembled image
+#: (`test_parallel_repeated_matfree_application_is_stable`).
+GRAVITY_MATFREE_RTOL = 1e-12
+GRAVITY_MATFREE_APPLICATIONS = 3
+#: The DtN representations of the repeated monopole solves.
+GRAVITY_REPRESENTATIONS = ("multiplier", "lowrank")
+
+
+def parallel_values(entry):
+    """The path of the `name value` file of a `parallel` entry."""
+    return f"{OUT}/parallel-{entry}.dat"
+
+
+def parallel_checkpoint(name):
+    """The path of a file of Quadrature fields of the `checkpoint-write` entries."""
+    return f"{OUT}/parallel-checkpoint-{name}.h5"
+
+
+def _parallel_entries():
+    """The `ENTRIES` items of the `parallel` case."""
+    out = []
+    for name, entry in PARALLEL.items():
+        outputs = [parallel_values(name)]
+        outputs += [parallel_checkpoint(f) for f in CHECKPOINT_FILES.get(name, ())]
+        item = {"case": "parallel", "entry": name, "driver": "gia_parallel.py",
+                "cores": entry["cores"], "outputs": outputs}
+        if "deps" in entry:
+            # The files of the writing entries, read where they are.
+            item["deps"] = [{"case": "tests/gia", "link": False,
+                             "artifact": parallel_checkpoint(f)}
+                            for writer in entry["deps"]
+                            for f in CHECKPOINT_FILES[writer]]
+        out.append(item)
+    return out
+
+
 #: The files that `gia_record_expected.py` copies, by case: pairs of the
 #: driver output and the expected file, both relative to `CASE_DIR`.
 RECORDED = {
@@ -906,4 +1053,4 @@ RECORDED = {
 #: Every step of `meta.py`: `case`, `entry`, `driver`, `cores`, `outputs`,
 #: and optionally `deps`, `hpc` and `launcher_args`.
 ENTRIES = (_forward_entries() + _limits_entries() + _operators_entries()
-           + _time_convergence_entries() + _adjoint_entries())
+           + _time_convergence_entries() + _adjoint_entries() + _parallel_entries())
