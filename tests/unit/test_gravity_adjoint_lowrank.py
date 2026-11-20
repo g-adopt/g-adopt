@@ -5,23 +5,19 @@ solve. The low-rank path drives a PETSc KSP directly, so the tape sees nothing
 and the derivative is hand-written in `gadopt.dtn_adjoint`. These are the tests
 that say whether that hand-written derivative is right.
 
-**The acceptance criterion is the portable subset of `test_gravity_adjoint.py`,
-with no tolerance weakened**, and it is reused rather than reimplemented: the
-guarded Taylor harness, the perturbation builders and the meshes are imported
-from that module, so a gradient that passes here passes the same four
-anti-false-green guards the multiplier path is held to - a nonzero directional
-derivative, a functional that demonstrably moves, rate >= 1.90 with the
-gradient, and rate ~1 without it.
-
-Structurally exempt, because they are assertions *about the multiplier tape*
-rather than about the derivative: `test_tape_structure` (counts
-NonlinearVariationalSolveBlocks), `test_taylor_through_multiplier` (reads an R
-subfunction that does not exist here), `test_coefficient_float_severs_tape`
-(about `float()` on a multiplier), and
-`test_which_net_mass_assembles_are_load_bearing` (counts AssembleBlocks emitted
-by the multiplier path). `test_monopole_gradient_against_fresh_solves` is not
-exempt and is not duplicated either - it is parametrized over both
-representations where it is defined.
+The 2-D tests (Taylor tests for density and sheet, replay, the
+`subfunctions`/`assign` chain, TLM-adjoint dot product, the closed-form sheet
+gradient, the sabotage control, the taped coefficient integral and the
+truncation that the multiplier path cannot reach) are rows of the
+`adjoint-2d-lowrank` entry of the `gravity` case in `tests/gia` (driver
+`gia_gravity.py`), which imports the forward maps of this module. The tests
+left here are the 3-D ones (`adjoint-3d-lowrank` runs on CI only) and the
+2-D/3-D parametrisations whose 3-D half has no local run. They use the
+guarded Taylor harness, the perturbation builders and the meshes of
+`test_gravity_adjoint.py`, so a gradient that passes here passes the same
+four guards as the multiplier path: a nonzero directional derivative, a
+functional that moves, rate >= 1.90 with the gradient, and rate ~1 without
+it.
 
 Every test builds its own control objects. Sharing one control `Function`
 between two ReducedFunctionals silently cross-contaminates them - pyadjoint's
@@ -41,9 +37,8 @@ from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
 from gadopt.spherical_harmonics import real_spherical_harmonic
 from test_gravity_adjoint import (  # noqa: F401  (clean_tape is an autouse fixture)
     assert_replay_b1, assert_replay_b2, assert_taylor_with_guards, clean_tape,
-    real_scalar, rho_control_2d, rho_control2_2d, rho_control_3d,
-    rho_control2_3d, rho_perturb_2d, rho_perturb_3d, tape_forward,
-    taylor_first_order_ladder)
+    real_scalar, rho_control_2d, rho_control_3d, rho_control2_3d,
+    rho_perturb_3d, tape_forward)
 from test_gravity_solver import RMAX, annulus_mesh, shell_mesh_3d
 
 
@@ -130,44 +125,6 @@ def forward_G(G_const, geometry, rho_fixed):
 # ---------------------------------------------------------------------------
 # Taylor on rho
 # ---------------------------------------------------------------------------
-@pytest.mark.longtest
-@pytest.mark.parametrize("bc_variant", ["dirichlet2d", "lu2d"])
-def test_taylor_rho_no_multiplier(mesh_2d, bc_variant):
-    """No DtN modes: the empty-`C` corner, and a plain Dirichlet Poisson."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-        h = rho_perturb_2d(mesh_2d)
-        m2 = rho_control2_2d(mesh_2d)
-
-    J, _, rf = tape_forward(forward_no_multiplier, m, bc_variant)
-    assert_replay_b1(rf, m, J)
-    assert_replay_b2(rf, forward_no_multiplier, m2, bc_variant)
-    assert_taylor_with_guards(rf, m, h, J)
-
-
-@pytest.mark.longtest
-def test_taylor_rho_2d(mesh_2d):
-    """The 2-D DtN configuration, with both boundaries and the interior mean
-    mode, i.e. the negative low-rank weight."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-        h = rho_perturb_2d(mesh_2d)
-        m2 = rho_control2_2d(mesh_2d)
-
-    J, _, rf = tape_forward(forward_rho_2d, m)
-    assert_replay_b1(rf, m, J)
-    assert_replay_b2(rf, forward_rho_2d, m2)
-
-    residuals = taylor_first_order_ladder(rf, m, h)
-    print(f"    [2d rho] R0 {residuals['R0_rate']}  R1 {residuals['R1_rate']}")
-    assert min(residuals["R0_rate"]) >= 0.9
-    assert min(residuals["R1_rate"]) >= 1.90
-    assert min(residuals["R1"]) >= 1e-15
-
-    assert_taylor_with_guards(rf, m, h, J)
-    assert np.max(np.abs(rf.derivative().dat.data_ro)) > 0.0
-
-
 @pytest.mark.longtest
 def test_taylor_rho_3d(mesh_3d):
     with stop_annotating():
@@ -256,109 +213,9 @@ def test_gradient_G_constant(geometry, mesh_2d, mesh_3d):
 # ---------------------------------------------------------------------------
 # Transpose consistency and sabotage detection
 # ---------------------------------------------------------------------------
-@pytest.mark.longtest
-def test_tlm_adjoint_dot_product(mesh_2d):
-    """`<J^T g, h> == <g, J h>`, isolated from finite-difference truncation.
-
-    Both routes are exercised: pyadjoint's native tangent sweep, which the
-    multiplier path cannot run at all (its TLM issues a bare `solve()` with no
-    solver parameters and the R-space mixed system defeats it), and the exact
-    independent tangent available because rho -> psi is linear. The fast path
-    supports the native sweep, so this is a capability the multiplier path does
-    not have.
-    """
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-        h = rho_perturb_2d(mesh_2d)
-
-    J, _, rf = tape_forward(forward_rho_2d, m)
-    adjoint_value = h._ad_dot(rf.derivative())
-
-    m.block_variable.tlm_value = h
-    get_working_tape().evaluate_tlm()
-    tlm_value = float(J.block_variable.tlm_value)
-    relative = abs(tlm_value - adjoint_value) / abs(adjoint_value)
-    print(f"    [tlm native] adj {adjoint_value:.10e} tlm {tlm_value:.10e} "
-          f"rel {relative:.3e}")
-    assert abs(adjoint_value) >= 1e-12
-    assert relative <= 1e-8
-
-    with stop_annotating():
-        psi_m = forward_rho_2d(m)[1].solution.copy(deepcopy=True)
-        psi_h = forward_rho_2d(h)[1].solution.copy(deepcopy=True)
-        exact = 2.0 * fd.assemble(psi_m * psi_h * fd.dx)
-    relative = abs(exact - adjoint_value) / abs(adjoint_value)
-    print(f"    [tlm exact] adj {adjoint_value:.10e} tan {exact:.10e} "
-          f"rel {relative:.3e}")
-    assert relative <= 1e-8
-
-
-@pytest.mark.longtest
-def test_taylor_detects_sabotaged_gradient(mesh_2d):
-    """The suite's detection floor, measured on this path rather than assumed."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-        h = rho_perturb_2d(mesh_2d)
-        noise = rho_control2_2d(mesh_2d)
-
-    _, _, rf = tape_forward(forward_rho_2d, m)
-    g = rf.derivative()
-    true_value = h._ad_dot(g)
-
-    def ladder(value):
-        with stop_annotating():
-            Jm = float(rf(m))
-            epsilons = [0.01 / 2 ** i for i in range(4)]
-            residuals = []
-            for epsilon in epsilons:
-                Jp = float(rf(m._ad_add(h._ad_mul(epsilon))))
-                residuals.append(abs(Jp - Jm - epsilon * value))
-            rf(m)
-        rates = [np.log(residuals[i] / residuals[i + 1]) / np.log(2)
-                 for i in range(len(residuals) - 1)]
-        return residuals, min(rates)
-
-    clean, clean_rate = ladder(true_value)
-    assert clean_rate >= 1.90
-
-    _, multiplicative = ladder(1.01 * true_value)
-    corrupted = rf.derivative()
-    scale = (0.01 * np.linalg.norm(g.dat.data_ro)
-             / np.linalg.norm(noise.dat.data_ro))
-    corrupted.dat.data[:] = g.dat.data_ro + scale * noise.dat.data_ro
-    noisy, noise_rate = ladder(h._ad_dot(corrupted))
-
-    print(f"    [sabotage] clean {clean_rate:.4f} mult {multiplicative:.4f} "
-          f"noise {noise_rate:.4f}")
-    assert multiplicative <= 1.15
-    assert noise_rate <= 1.15
-    assert noisy[-1] >= 10 * clean[-1]
-
-
 # ---------------------------------------------------------------------------
 # Cross-mesh
 # ---------------------------------------------------------------------------
-@pytest.fixture(scope="module")
-def submesh_pair():
-    with stop_annotating():
-        mesh = fd.UnitDiskMesh(refinement_level=2)
-        X = fd.SpatialCoordinate(mesh)
-        r = fd.sqrt(fd.dot(X, X))
-        DG0 = fd.FunctionSpace(mesh, "DG", 0)
-        indicator = fd.Function(DG0).interpolate(
-            fd.conditional(r < 0.55, 1.0, 0.0))
-        marked = fd.RelabeledMesh(mesh, [indicator], [99])
-        submesh = fd.Submesh(marked, marked.topological_dimension, 99)
-    return marked, submesh
-
-
-def _rho_sub(submesh, coefficients):
-    Xs = fd.SpatialCoordinate(submesh)
-    phis = fd.atan2(Xs[1], Xs[0])
-    expression = sum(a * fd.cos(k * phis) for k, a in coefficients)
-    return fd.Function(fd.FunctionSpace(submesh, "DG", 0)).interpolate(expression)
-
-
 def forward_submesh(m_rho_sub, marked):
     with stop_annotating():
         psi = fd.Function(fd.FunctionSpace(marked, "CG", 1))
@@ -369,98 +226,9 @@ def forward_submesh(m_rho_sub, marked):
     return fd.assemble(solver.solution ** 2 * fd.dx), solver
 
 
-@pytest.mark.longtest
-def test_taylor_rho_submesh(submesh_pair):
-    """The cross-mesh path, differentiated end to end, with no mixed space."""
-    marked, submesh = submesh_pair
-    with stop_annotating():
-        m = _rho_sub(submesh, [(2, 1.0)])
-        h = _rho_sub(submesh, [(2, 0.8), (1, 0.2)])
-        m2 = _rho_sub(submesh, [(2, 1.0), (3, 0.5)])
-
-    J, solver, rf = tape_forward(forward_submesh, m, marked)
-    assert solver.mixed_space is solver.solution_space
-    assert np.isfinite(float(J)) and float(J) > 0.0
-    assert_replay_b1(rf, m, J)
-    assert_replay_b2(rf, forward_submesh, m2, marked)
-    assert np.isfinite(np.max(np.abs(rf.derivative().dat.data_ro)))
-    assert_taylor_with_guards(rf, m, h, J)
-
-
 # ---------------------------------------------------------------------------
 # The rest of the portable subset
 # ---------------------------------------------------------------------------
-@pytest.mark.longtest
-def test_reduced_functional_replay(mesh_2d):
-    """Replay at a new control equals a fresh solve there, and returns.
-
-    Includes a control with nonzero net mass, which used to be the gap this
-    test documented - replay bypassed the Python-level `check_net_mass`, so a
-    net-mass iterate replayed while a direct solve raised. The monopole datum
-    closed it: the mass is on the tape, so replay and a fresh solve agree
-    rather than one of them merely being tolerated.
-    """
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-        m2 = rho_control2_2d(mesh_2d)
-
-    J, _, rf = tape_forward(forward_rho_2d, m)
-    assert abs(float(rf(m)) - float(J)) <= 1e-9 * abs(float(J))
-
-    with stop_annotating():
-        direct, _ = forward_rho_2d(m2)
-    value = float(rf(m2))
-    relative = abs(value - float(direct)) / abs(float(direct))
-    print(f"    [replay] rf(m2) {value:.8e} direct {float(direct):.8e} "
-          f"rel {relative:.2e}")
-    assert relative <= 1e-9
-
-    with stop_annotating():
-        Q = fd.FunctionSpace(mesh_2d, "CG", 1)
-        X = fd.SpatialCoordinate(mesh_2d)
-        r = fd.sqrt(fd.dot(X, X))
-        with_mass = fd.Function(Q).interpolate(fd.exp(-(((r - 1.7) / 0.15) ** 2)))
-    replayed = float(rf(with_mass))
-    with stop_annotating():
-        fresh, _ = forward_rho_2d(with_mass)
-    assert abs(replayed - float(fresh)) <= 1e-9 * abs(float(fresh))
-
-
-@pytest.mark.longtest
-def test_solution_assign_preserves_tape(mesh_2d):
-    """`solver.solution` and `mixed_solution` give the same gradient.
-
-    On the fast path `mixed_solution` is a plain Function on the potential
-    space rather than a mixed one, so `subfunctions[0]` is the object itself
-    and the extraction chain is shorter - which is exactly why it is worth
-    checking that the chain still carries the derivative.
-    """
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh_2d, "CG", 1))
-        solver = GravitySolver(
-            psi, m,
-            bcs={"top": {"dtn": CylindricalDtN(M=2)},
-                 "bottom": {"dtn": CylindricalDtN(M=2)}}, **LOW)
-    solver.solve()
-    J_solution = fd.assemble(solver.solution ** 2 * fd.dx)
-    J_mixed = fd.assemble(solver.mixed_solution.subfunctions[0] ** 2 * fd.dx)
-    pause_annotation()
-
-    g_solution = ReducedFunctional(J_solution, Control(m)).derivative()
-    g_mixed = ReducedFunctional(J_mixed, Control(m)).derivative()
-    assert abs(float(J_solution) - float(J_mixed)) <= 1e-14 * abs(float(J_mixed))
-    denominator = np.max(np.abs(g_mixed.dat.data_ro))
-    relative = np.max(np.abs(g_solution.dat.data_ro - g_mixed.dat.data_ro)) / denominator
-    print(f"    [assign] grad rel {relative:.3e}")
-    assert relative <= 1e-14
-
-
 @pytest.mark.longtest
 def test_taylor_monopole_constraint_row_3d(mesh_3d):
     """The degenerate `L = 0` exterior corner, which is a better test here.
@@ -496,182 +264,6 @@ def test_taylor_monopole_constraint_row_3d(mesh_3d):
     assert_replay_b1(rf, m, J)
     print(f"    [L=0 corner] J {float(J):.6e}")
     assert_taylor_with_guards(rf, m, h, J)
-
-
-@pytest.mark.longtest
-def test_gradient_matches_closed_form_sheet_2d():
-    """Physics-pinned: `dc/ds = 2 pi G a / m` for a sheet at radius `a`.
-
-    The only test here with an independent closed form behind the *value* of a
-    derivative rather than only its convergence rate, and it uses the trace
-    coefficient rather than an energy, so it pins the recovery expression too.
-    """
-    m_mode, a = 2, RMAX
-    mesh = annulus_mesh(n_azimuthal=192, dr=0.1)
-    with stop_annotating():
-        s = real_scalar(mesh, 1.0)
-        hs = real_scalar(mesh, 1.0)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
-        X = fd.SpatialCoordinate(mesh)
-        phi = fd.atan2(X[1], X[0])
-        solver = GravitySolver(
-            psi, 0.0,
-            bcs={"top": {"dtn": CylindricalDtN(M=4), "sigma": s * fd.cos(m_mode * phi)},
-                 "bottom": {"dtn": CylindricalDtN(M=4)}}, **LOW)
-    solver.solve()
-    _, R = solver.boundary_geometry["top"]
-    c = fd.assemble(solver.solution * fd.cos(m_mode * phi) * solver.ds("top")) / (np.pi * R)
-    J = c ** 2
-    pause_annotation()
-
-    dcds = hs._ad_dot(ReducedFunctional(c, Control(s)).derivative())
-    analytic = 2 * np.pi * a / m_mode
-    relative = abs(dcds - analytic) / abs(analytic)
-    print(f"    [closed form] dc/ds {dcds:.6f} vs 2 pi a/m {analytic:.6f} "
-          f"rel {relative:.3e}")
-    assert relative <= 1e-3
-    # The nearest wrong closed form is O(1) away and must be excluded.
-    assert abs(dcds - 2 * np.pi * a / (m_mode + 1)) / abs(analytic) > 0.1
-
-    assert_taylor_with_guards(ReducedFunctional(J, Control(s)), s, hs, J)
-
-
-@pytest.mark.longtest
-def test_taylor_at_a_truncation_the_multiplier_path_cannot_reach():
-    """The replacement for the field-enumeration-wall test.
-
-    The multiplier path's version of this exists because PETSc refuses to
-    enumerate more than 128 sub-fields, and it demonstrates that the gradient
-    survives past that wall. The wall does not exist here - there is one field
-    - so the index-set reasoning does not port. What ports is the *purpose*:
-    that the derivative exists at a truncation the shipped default solver
-    cannot practically reach, which is the capability this whole path is for.
-
-    `M = 35` gives 141 modes. Its own docstring records that the multiplier
-    version costs ~40 s of per-process symbolic form processing that no cache
-    can remove; on this path that term is gone, so this test is cheap and
-    there is no cost argument for omitting it.
-    """
-    mesh = annulus_mesh(n_azimuthal=96, dr=0.5)
-    with stop_annotating():
-        m = rho_control_2d(mesh)
-        h = rho_perturb_2d(mesh)
-
-    def forward(m_rho):
-        with stop_annotating():
-            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-            solver = GravitySolver(
-                psi, m_rho,
-                bcs={"top": {"dtn": CylindricalDtN(M=35)},
-                     "bottom": {"dtn": CylindricalDtN(M=35)}},
-                solver_parameters="iterative", **LOW)
-        solver.solve()
-        return fd.assemble(solver.solution ** 2 * fd.dx), solver
-
-    J, solver, rf = tape_forward(forward, m)
-    # Counted off the objects, never from a formula for the truncation.
-    n_modes = len(solver._multiplier_keys)
-    assert n_modes == 141
-    assert solver.n_multipliers == 0  # no fields to enumerate at all
-    assert_replay_b1(rf, m, J)
-    stats = assert_taylor_with_guards(rf, m, h, J)
-    print(f"    [past the wall] {n_modes} modes, rate {stats['rate']:.4f}, "
-          f"control {stats['rate0']:.4f}")
-    assert np.max(np.abs(rf.derivative().dat.data_ro)) > 0.0
-
-
-@pytest.mark.longtest
-def test_coefficient_taped_integral_taylor(mesh_2d):
-    """`coefficients()` is differentiable, and agrees with the integral form.
-
-    On the multiplier path the analogous test exists because reading a
-    coefficient through `float()` severs the tape, and the repair is to rebuild
-    it as a taped boundary integral. Here `coefficients()` is taped directly -
-    `c_k = u_k . psi / (scale_k * A_h)` is a linear functional of psi with a
-    constant vector - so both forms are available and must agree.
-
-    They are genuinely different routes: the taped `coefficients()` contracts
-    against the assembled row vector the low-rank operator was built from,
-    while the integral form re-assembles `psi e_k ds` symbolically. Agreement
-    of their gradients is therefore a statement about the recovery expression,
-    not about one implementation of it.
-
-    This test could not exist while `coefficients()` returned raw floats, and
-    its absence was consistent with that - nothing was ever red. Worth
-    remembering: a missing capability and its missing test hide each other.
-    """
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d)
-        h = rho_perturb_2d(mesh_2d)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh_2d, "CG", 1))
-        solver = GravitySolver(
-            psi, m,
-            bcs={"top": {"dtn": CylindricalDtN(M=2)},
-                 "bottom": {"dtn": CylindricalDtN(M=2)}}, **LOW)
-    solver.solve()
-
-    c_recovered = solver.coefficients()["top"]["cos2"]
-    X = fd.SpatialCoordinate(mesh_2d)
-    phi = fd.atan2(X[1], X[0])
-    _, R = solver.boundary_geometry["top"]
-    c_integral = fd.assemble(
-        solver.mixed_solution * fd.cos(2 * phi) * solver.ds("top")) / (np.pi * R)
-    J_recovered = c_recovered ** 2
-    J_integral = c_integral ** 2
-    pause_annotation()
-
-    # Same value on the solution manifold, by construction.
-    assert abs(float(c_recovered) - float(c_integral)) <= 1e-8 * abs(float(c_integral))
-
-    rf_recovered = ReducedFunctional(J_recovered, Control(m))
-    rf_integral = ReducedFunctional(J_integral, Control(m))
-
-    g_recovered = rf_recovered.derivative()
-    g_integral = rf_integral.derivative()
-    recovered_norm = np.max(np.abs(g_recovered.dat.data_ro))
-    denominator = np.max(np.abs(g_integral.dat.data_ro))
-    print(f"    [taped coefficients] c {float(c_recovered):.6e}  "
-          f"|grad via coefficients()| {recovered_norm:.6e}  "
-          f"|grad via integral| {denominator:.6e}")
-
-    # THE DISCRIMINATOR, and it is a mechanism check rather than a magnitude
-    # one. If coefficients() goes back to reading .dat.data_ro and returning
-    # float(), pyadjoint sees no dependency at all and this derivative is
-    # EXACTLY zero - not merely inaccurate.
-    #
-    # Verified by reverting the capability and measuring, rather than asserted:
-    # with the untaped implementation `c` comes back as a plain `float` and the
-    # gradient is 0.0 exactly, against 3.695499e-02 for the taped one. (The
-    # untaped version also trips the value assertion above, because a plain
-    # float cannot carry a tape at all - that is additional evidence, not a
-    # substitute for this line, since a version taped in name only would reach
-    # here.)
-    assert recovered_norm > 0.0, (
-        "the gradient through coefficients() is identically zero: the tape is "
-        "severed, so coefficients() is not differentiable")
-    assert denominator > 0.0, "the integral-form gradient is identically zero"
-
-    # And the pair checks itself: one number comes from the capability, the
-    # other from a route that re-assembles the same quantity symbolically and
-    # therefore cannot use it. Agreement is possible only if the capability is
-    # real, so neither assertion is load-bearing on its own.
-    relative = np.max(
-        np.abs(g_recovered.dat.data_ro - g_integral.dat.data_ro)) / denominator
-    print(f"    [taped coefficients] grad rel {relative:.3e}")
-    assert relative <= 1e-8
-
-    assert_replay_b1(rf_recovered, m, J_recovered)
-    assert_taylor_with_guards(rf_recovered, m, h, J_recovered)
 
 
 @pytest.mark.longtest
