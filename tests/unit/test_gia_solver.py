@@ -1,18 +1,19 @@
 """The new self-gravitating GIA solver: steps, adjoint, state and interface.
 
 Gate 1 (`test_gia_solver_gate.py`) compares the equations with the old
-solver. These tests run the new solver itself:
+solver. These tests run the new solver itself: Taylor tests with `Real`
+controls in the row scalings, the in-memory state round trip and the
+refusals of `restore`, and the interface rules (the order of the couplings,
+the refusals, the nullspace check, the presets, `approximation.mu`, the
+closure constant).
 
-- three forward steps agree to round-off with the stored states of the
-  earlier solver (`gadopt.gia_gravity`), on the quadrature path;
-- Taylor tests (rate 2) and replay checks of a taped march, on the
-  quadrature path with BDF2, a fluid core and the centre of mass;
-- `state`, `CheckpointFile`, `restore`: a run interrupted and continued is
-  bit for bit the uninterrupted run in serial, and equal to round-off on
-  more ranks; checkpoint files the old solver wrote convert into a state of
-  the new one;
-- the interface rules: the order of the couplings, the refusals, the
-  nullspace check, the presets, `approximation.mu`, the closure constant.
+The forward steps against the stored states of the earlier solver, the
+conversion of its checkpoint files, the restart from a `CheckpointFile`,
+the Taylor and replay checks of a taped march (also through a restore and
+under disk checkpointing) and the capped derivative solve are entries of
+the `forward` and `adjoint` cases in `tests/gia` (`reference-quadrature`,
+`convert-quadrature-bdf2`, `restart`, `sea-direct-viscosity`,
+`sea-direct-viscosity-disk` and `guards`).
 """
 
 import warnings
@@ -59,67 +60,14 @@ def surface_ice(sea, k):
     sea.I.interpolate(.002 * (1 + .2 * k) * (1 - fd.cos(theta)) / 2)
 
 
-# -- Forward steps against the stored values of the earlier solver ---------------
-
+#: The configuration of the stored states of the earlier solver. The
+#: recording script `tests/unit/data/record_gia_references/record_all.py`
+#: reads it; the `reference-quadrature` entry of the `forward` case in
+#: `tests/gia` compares with those states.
 FORWARD = [
     Case(family="Quadrature", scheme="bdf2", representation="lowrank",
          model="maxwell2", core="fluid", centre=True),
 ]
-
-#: Fingerprints of the earlier solver's (`gadopt.gia_gravity`) state after
-#: each of the three steps, by case label: per step the displacement, the
-#: potential and the accepted history as `[norm, probe, probe norm]`
-#: (`gia_cases.probe_pairing`), and the value of every `Real` field.
-FORWARD_REFERENCE = C.reference_values("forward")
-
-#: Bound on the relative difference of a solved field from the stored one.
-#: The earlier solver and this one agreed to about 1e-15 when they were run
-#: side by side on one machine. On another machine, another BLAS, another
-#: MUMPS ordering or another rank count moves a solved state by round-off
-#: times the condition number of the step, which can exceed 1e-12; a defect
-#: in a term moves it by far more than 1e-10.
-SOLVED_RTOL = 1e-10
-
-
-@pytest.mark.longtest
-@pytest.mark.parametrize("case", FORWARD, ids=[c.label for c in FORWARD])
-def test_three_steps_agree_with_the_reference(meshes, case):
-    """Direct presets: after each step the state agrees with the stored one.
-
-    The displacement, the potential and the accepted history are compared
-    through their coordinate-defined fingerprints, and every `Real` field by
-    value, at `SOLVED_RTOL`.
-    """
-    sub = meshes[1]
-    dt = C.dt_function(sub)
-    sea = C.SeaFields(sub)
-    new, u, psi = C.build_new(meshes, case, dt=dt, sea=sea,
-                              nullspace="rigid_rotation")
-    for k, (h, reference) in enumerate(zip(STEPS, FORWARD_REFERENCE[case.label])):
-        dt.assign(h)
-        if case.load:
-            surface_ice(sea, k)
-        new.solve()
-        fields = {"displacement": C.probe_pairing(u, "displacement"),
-                  "potential": C.probe_pairing(psi, "potential"),
-                  "history": C.probe_pairing(new.internal_variables, "history")}
-        C.assert_fingerprints_agree(
-            fields, {name: reference[name] for name in fields}, rtol=SOLVED_RTOL)
-        # A `Real` field whose exact value is zero (the core pressure under a
-        # load with no degree-0 part) is round-off, so every `Real` field is
-        # compared against the largest `Real` value of the step. In a case
-        # where every `Real` value is round-off (the Quadrature case: no
-        # rotation, a load with no degree-0 part), the check is that they
-        # stay round-off against the size of the displacement vector.
-        reals = reference["reals"]
-        assert set(reals) == set(new.field_index) - {"displacement", "history", "potential"}
-        displacement_size = reference["displacement"][0]
-        scale = max(abs(value) for value in reals.values())
-        bound = (SOLVED_RTOL * scale if scale > 1e-12 * displacement_size
-                 else 1e-12 * displacement_size)
-        for name, value in reals.items():
-            difference = abs(float(new.real_field(name)) - value)
-            assert difference <= bound, (k, name, difference)
 
 
 # -- Taylor and replay -----------------------------------------------------------
@@ -195,90 +143,7 @@ def march(meshes, case, control, steps=STEPS[:2], *, checkpoint_dir=None,
     return J
 
 
-@pytest.mark.longtest
-@pytest.mark.parametrize("case", TAPED)
-def test_taylor_and_replay(meshes, case):
-    sub = meshes[1]
-    with stop_annotating():
-        control = fd.Function(fd.FunctionSpace(sub, "CG", 1)).assign(.1)
-        direction = fd.Function(control.function_space()).interpolate(
-            .1 + .03 * fd.SpatialCoordinate(sub)[0])
-    continue_annotation()
-    J = march(meshes, case, control)
-    rf = ReducedFunctional(J, Control(control))
-    pause_annotation()
-    # Replay at the recorded control returns the recorded value.
-    assert abs(float(rf(control)) - float(J)) <= 1e-10 * abs(float(J))
-    # Replay at another control returns a new forward run there.
-    with stop_annotating():
-        other = control.copy(deepcopy=True).assign(control + .05 * direction)
-        fresh = float(march(meshes, case, other))
-    assert abs(float(rf(other)) - fresh) <= 1e-8 * abs(fresh)
-    assert_taylor_with_guards(rf, control, direction, J, min_rate=1.9)
-
-
-def taylor_case(meshes, case, **march_kwargs):
-    """A Taylor test with replay at the recorded control of one taped march."""
-    sub = meshes[1]
-    with stop_annotating():
-        control = fd.Function(fd.FunctionSpace(sub, "CG", 1)).assign(.1)
-        direction = fd.Function(control.function_space()).interpolate(
-            .1 + .03 * fd.SpatialCoordinate(sub)[0])
-    continue_annotation()
-    J = march(meshes, case, control, **march_kwargs)
-    rf = ReducedFunctional(J, Control(control))
-    pause_annotation()
-    assert abs(float(rf(control)) - float(J)) <= 1e-10 * abs(float(J))
-    assert_taylor_with_guards(rf, control, direction, J, min_rate=1.9)
-    return rf, control
-
-
-@pytest.mark.longtest
-@pytest.mark.parametrize("case", [
-    pytest.param(Case(family="Quadrature", scheme="bdf2", representation="lowrank",
-                      model="maxwell2", core="fluid", centre=True),
-                 id="quadrature-bdf2")])
-def test_taylor_with_disk_checkpointing(meshes, case, tmp_path):
-    """Three steps under `SingleDiskStorageSchedule`: replay and rate 2."""
-    from pathlib import Path
-    directory = Path(meshes[1].comm.bcast(str(tmp_path / "checkpoints"), root=0))
-    taylor_case(meshes, case, steps=STEPS, checkpoint_dir=directory)
-
-
-@pytest.mark.longtest
-def test_taylor_through_a_restore_on_the_tape(meshes):
-    """A state copied and restored into a second solver mid-march, on the tape."""
-    case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
-                model="maxwell2", core="fluid", centre=True)
-    taylor_case(meshes, case, steps=STEPS, restore_after=2)
-
-
-@pytest.mark.longtest
-@pytest.mark.parametrize("case", [
-    Case(family="Quadrature", representation="lowrank", core="fluid", centre=True)],
-    ids=["quadrature"])
-def test_a_capped_derivative_solve_raises(meshes, case):
-    """`derivative_max_it` caps the adjoint solve: 1 raises, 400 is enough."""
-    sub = meshes[1]
-    for cap, raises in ((1, True), (400, False)):
-        get_working_tape().clear_tape()
-        with stop_annotating():
-            control = fd.Function(fd.FunctionSpace(sub, "CG", 1)).assign(.1)
-        continue_annotation()
-        J = march(meshes, case, control, steps=STEPS[:1],
-                  solver_parameters="iterative", derivative_max_it=cap,
-                  default_options=False)
-        rf = ReducedFunctional(J, Control(control))
-        pause_annotation()
-        if raises:
-            with pytest.raises(fd.ConvergenceError):
-                rf.derivative()
-        else:
-            rf.derivative()
-
-
 # -- State ------------------------------------------------------------------------
-
 STATE_CASES = [
     Case(family="Quadrature", scheme="bdf2", representation="lowrank",
          model="maxwell2", core="fluid", centre=True),
@@ -374,56 +239,6 @@ def relative(a, b):
     num = comm.allreduce(float(np.sum((x - y) ** 2)))
     den = comm.allreduce(float(np.sum(y ** 2)))
     return np.sqrt(num / den)
-
-
-@pytest.mark.longtest
-@pytest.mark.parametrize("case", STATE_CASES, ids=[c.label for c in STATE_CASES])
-def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
-    """Interrupted, checkpointed, restored on a loaded mesh, continued.
-
-    The restored state equals the saved one bit for bit on any number of
-    ranks. The continued run equals the uninterrupted run bit for bit in
-    serial; on more than one rank it agrees to `PARALLEL_RTOL`, because two
-    parallel MUMPS factorisations of one matrix do not give the same bits
-    (`SelfGravitatingGIASolver.restore`).
-    """
-    from pathlib import Path
-    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
-    name = meshes[0].name
-
-    def load(path):
-        return load_meshes(path, name)
-
-    def solver_on(m):
-        sea = C.SeaFields(m[1]) if case.load in ("sea_fixed", "sea_moving") else None
-        solver, _, _ = C.build_new(m, case, dt=C.dt_function(m[1]), sea=sea,
-                                   nullspace="rigid_rotation")
-        return solver, sea
-
-    # A mesh written and loaded once, so that every run below uses one
-    # numbering of the degrees of freedom.
-    with fd.CheckpointFile(str(directory / "mesh.h5"), "w") as chk:
-        chk.save_mesh(meshes[0])
-    first = load(directory / "mesh.h5")
-    interrupted, sea = solver_on(first)
-    run(interrupted, sea, FOUR[:2])
-    with fd.CheckpointFile(str(directory / "state.h5"), "w") as chk:
-        chk.save_mesh(first[0])
-        write_state(chk, interrupted, idx=0)
-    saved = values(interrupted)
-
-    second = load(directory / "state.h5")
-    restarted, sea2 = solver_on(second)
-    with fd.CheckpointFile(str(directory / "state.h5"), "r") as chk:
-        restarted.restore(read_state(chk, restarted, idx=0))
-    assert not states_differ(values(restarted), saved, restarted, rtol=0)
-    run(restarted, sea2, FOUR[2:], first=2)
-    continued = values(restarted)
-
-    reference, sea3 = solver_on(first)
-    run(reference, sea3, FOUR)
-    rtol = 0 if reference.mesh.comm.size == 1 else PARALLEL_RTOL
-    assert not states_differ(values(reference), continued, restarted, rtol=rtol)
 
 
 @pytest.mark.longtest
@@ -552,33 +367,6 @@ def _old_checkpoint_converts(label):
     run(reference, None, FOUR[2:3], first=2)
     assert_agree("continued")
     return new, loaded, metadata
-
-
-@pytest.mark.longtest
-def test_a_checkpoint_of_the_old_solver_converts():
-    """A file of the earlier solver in the `selfgrav_common` layout, Quadrature, BDF2.
-
-    The file is the earlier solver's own output (`OLD_CHECKPOINTS`), so this
-    checks that a file the earlier code wrote restarts this solver
-    (`_old_checkpoint_converts`). A file with the wrong time order is
-    refused, and so is a conversion without the number of ranks of the
-    writer.
-
-    The file was written in serial and holds no quadrature point
-    coordinates, so its history is stored in the node order of the serial
-    partition. On more than one rank the conversion is refused, because the
-    values would come back permuted inside each cell.
-    """
-    if fd.COMM_WORLD.size > 1:
-        with pytest.raises(ValueError, match=r"written on 1 rank\(s\)"):
-            _old_checkpoint_converts("Quadrature-bdf2-selfgrav")
-        return
-    new, loaded, metadata = _old_checkpoint_converts("Quadrature-bdf2-selfgrav")
-    with pytest.raises(ValueError, match="time order"):
-        state_from_checkpoint(new, loaded, {**metadata, "time_scheme_order": 1.0},
-                              writer_ranks=1)
-    with pytest.raises(ValueError, match="writer_ranks"):
-        state_from_checkpoint(new, loaded, metadata)
 
 
 @pytest.mark.longtest
