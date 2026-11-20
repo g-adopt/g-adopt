@@ -419,6 +419,136 @@ def _limits_entries():
              "outputs": [limits_values(name)]} for name in LIMITS]
 
 
+# -- operators ----------------------------------------------------------------------
+
+#: The entries of the `operators` case (`gia_operators.py`), one process each.
+#: No entry solves: each builds its solvers, sets a coordinate-defined state
+#: (`gia_cases.coordinate_state`) and measures the Jacobian through its
+#: actions on coordinate-defined vectors. A `Real` row or column is read as
+#: the action on a unit `Real` function, never from an assembled matrix
+#: block (firedrakeproject/firedrake#5665). Each entry writes the measured
+#: and the reference number of every row as `name value` lines to
+#: `out/operators-<entry>.dat`. No row has a recorded value; the tolerances
+#: below are those of the unit tests that the rows come from.
+OPERATORS = ("sea-transposes", "frame", "block0", "block1", "schur", "schur-np2")
+
+#: The core count of each entry; the entries not listed run on one core.
+OPERATOR_CORES = {"schur-np2": 2}
+
+#: The block pairs of `test_sea_level.py::TestTransposes`, by the short names
+#: of that file (`u`, `psi`, `Shift`, `lambda_x`, `lambda_y`), on the two
+#: surface states `cap` (every quadrature point far from the rounding of the
+#: sheet) and `shoreline` (a live coastline inside facets).
+SEA_STATES = ("cap", "shoreline")
+SEA_PAIRS = (("u", "psi"), ("u", "Shift"), ("psi", "Shift"),
+             ("u", "lambda_x"), ("u", "lambda_y"),
+             ("psi", "lambda_x"), ("psi", "lambda_y"),
+             ("Shift", "lambda_x"), ("Shift", "lambda_y"))
+#: The rotation pairs of `TestRotationTransposes`, on the shoreline state
+#: with the rotation row `rot` (the 2-D scalar `m3`).
+ROTATION_PAIRS = (("u", "rot"), ("psi", "rot"), ("Shift", "rot"))
+
+#: A pair `(a, b)` transposes when the two bilinear values
+#: `x_a . J_ab x_b` and `x_b . J_ba x_a` agree to `TRANSPOSE_RTOL` of the
+#: Cauchy-Schwarz scale `max(|x_a| |J_ab x_b|, |x_b| |J_ba x_a|)`, which is
+#: the size the pairing could have. The unit tests held
+#: `max|A_ab - A_ba^T| <= 1e-14 max(|A_ab|, |A_ba|)` on the dense blocks;
+#: both sides are variations of one energy and differ by round-off only.
+TRANSPOSE_RTOL = 1e-14
+#: The pairing itself is above this fraction of its scale, so that the
+#: comparison above is made between two numbers that carry the block and
+#: not between two round-off values. A sign error in either block gives a
+#: difference of twice the pairing.
+PAIRING_FLOOR = 1e-6
+#: `(Shift, m3)` and `(m3, Shift)` are both above this fraction of the
+#: `(Shift, Shift)` diagonal (`test_the_shift_rotation_block_is_nonzero`):
+#: the sheet is in `Rotation.inertia_form` and `psi_rot` is in the sea level.
+SHIFT_ROTATION_FLOOR = 1e-10
+#: The displacement row of the sea level at `u = psi = 0` equals the row of
+#: a plain `normal_stress` of `B_mu g(Re) rho_w S`
+#: (`TestSheetSigns::test_the_mechanics_row_matches_a_normal_stress`); the
+#: two rows integrate at the boundary degrees 6 and 10, measured 4e-9 apart.
+NORMAL_STRESS_RTOL = 1e-6
+
+#: The centre-of-mass saddle pair (`TestCentreOfMassFrame::
+#: test_blocks_form_an_exact_saddle_pair`, 1e-14 of the larger block) on
+#: both representations, with and without rotation, and on the 24-column
+#: sphere (`test_extruded_sphere_assembles_the_saddle_pair`). The
+#: multiplier-multiplier entries are exactly zero, as in the unit test.
+FRAME_CONFIGURATIONS = (("multiplier", False), ("multiplier", True),
+                        ("lowrank", False), ("lowrank", True))
+FRAME_RTOL = 1e-14
+#: The translation moment of the sphere: `D[e_i] = M e_i` to 1e-2 of the
+#: whole mass `M` (the core volume is read from its faceted surface) and
+#: the other two moments below 1e-10 of it.
+SPHERE_MOMENT_RTOL = 1e-2
+SPHERE_MOMENT_CROSS_RTOL = 1e-10
+#: `|int sigma (x^2 + y^2) dS|` of the `cos 2 phi` load is below this
+#: absolute value (`TestInertiaTranspose::test_inertia_of_a_cos2_sheet_vanishes`).
+INERTIA_COS2_ATOL = 1e-14
+
+#: The eliminated Quadrature block 0 (`TestEliminatedBlockSymmetry`) and the
+#: block 0 with a live coastline: the bilinear asymmetry of three
+#: coordinate-defined directions with zero `Real` part, relative to the
+#: largest pairing, is at most this.
+BLOCK0_SYMMETRY_RTOL = 1e-12
+#: The sea-level part of block 0 is above this fraction of the whole, so
+#: that the live-coastline row measures a block that contains the sheet.
+SEA_BLOCK0_FLOOR = 1e-6
+
+#: The `Real` block against its derived diagonal
+#: (`TestBlockOneIsTheDiagonalItClaims`, `TestBlockOneInThreeDimensions`):
+#: `|d_k - A_kk| <= DIAG_TOL |A_kk|` per row with a nonzero derived entry,
+#: `|A_kk| <= DIAG_TOL max|A_jj|` for a Lagrange multiplier (the core
+#: pressure, derived zero), and per row `max_j |A_kj| / |A_kk| <=
+#: OFFDIAG_TOL` (relative to `max|A_jj|` for the zero rows).
+DIAG_TOL = 1e-12
+OFFDIAG_TOL = 1e-12
+BLOCK1_TRUNCATIONS = (3, 5)
+#: The multiplier alignment (`check_multiplier_alignment`): a fired row
+#: against its discrete prediction, a row the mode must not move against the
+#: weakest fired row (`ALIGNMENT_SILENT_2D` on the annulus,
+#: `ALIGNMENT_SILENT_SPHERE` on the sphere at `L = 1`), and the analytic
+#: deviation, the boundary's resolution of the mode, below
+#: `ALIGNMENT_ANALYTIC`.
+ALIGNMENT_PREDICTED = 1e-12
+ALIGNMENT_SILENT_2D = 1e-6
+ALIGNMENT_SILENT_SPHERE = 1e-6
+ALIGNMENT_ANALYTIC = 1e-2
+#: The polar pair of the sphere (`test_the_polar_pair_is_uncoupled_and_carries_C_minus_A`):
+#: `m1` and `m2` carry the same entry to `POLAR_PAIR_RTOL`, `m3` carries
+#: `-C / (C - A) = -10` times it to `POLAR_RATIO_RTOL`.
+POLAR_PAIR_RTOL = 1e-14
+POLAR_RATIO = -10.0
+POLAR_RATIO_RTOL = 1e-12
+
+#: The Schur preconditioners after `pc.setUp()` (`test_dtn_schur_ainvb.py`,
+#: `test_dtn_multiplier_dense_schur.py`). `P^{-1} A x = x` and
+#: `P^{-T} A^T x = x` to `SCHUR_IDENTITY_FLOOR`; the complement against an
+#: independent elimination, the adjoint identity and the dense solves to
+#: `SCHUR_PARITY_FLOOR`; the forward and the transpose apply of the cached
+#: path differ by more than `SCHUR_TRANSPOSE_MARGIN`, the forward and the
+#: transpose solve of the dense complement by more than
+#: `DENSE_TRANSPOSE_MARGIN`. The vectors and the errors have the rigid
+#: rotation of the mantle removed (see `gia_operators.py`).
+SCHUR_IDENTITY_FLOOR = 1e-7
+SCHUR_PARITY_FLOOR = 1e-10
+SCHUR_TRANSPOSE_MARGIN = 1e-5
+DENSE_TRANSPOSE_MARGIN = 1e-3
+
+
+def operators_values(entry):
+    """The path of the `name value` file of an `operators` entry."""
+    return f"{OUT}/operators-{entry}.dat"
+
+
+def _operators_entries():
+    """The `ENTRIES` items of the `operators` case."""
+    return [{"case": "operators", "entry": name, "driver": "gia_operators.py",
+             "cores": OPERATOR_CORES.get(name, 1),
+             "outputs": [operators_values(name)]} for name in OPERATORS]
+
+
 #: The files that `gia_record_expected.py` copies, by case: pairs of the
 #: driver output and the expected file, both relative to `CASE_DIR`.
 RECORDED = {
@@ -428,4 +558,4 @@ RECORDED = {
 
 #: Every step of `meta.py`: `case`, `entry`, `driver`, `cores`, `outputs`,
 #: and optionally `deps`, `hpc` and `launcher_args`.
-ENTRIES = _forward_entries() + _limits_entries()
+ENTRIES = _forward_entries() + _limits_entries() + _operators_entries()
