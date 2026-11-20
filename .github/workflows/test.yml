@@ -144,20 +144,19 @@ jobs:
           mv ./tsp_build/tsp-hpc /usr/local/bin/tsp
 
       - name: Fetch gplates
-        uses: actions/checkout@v5
-        with:
-          repository: dsroberts/GPlates
-          path: ./gplates
-          ref: PyGPlates-1.0.0
+        shell: bash
+        run: |
+          curl -fsSLO https://github.com/dsroberts/GPlates/archive/refs/tags/PyGPlates-1.0.0.tar.gz
+          tar -xzf PyGPlates-1.0.0.tar.gz
 
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
-          uv pip install ./gplates
+          uv pip install ./GPlates-PyGPlates-1.0.0
           uv pip install .[demos,optimisation,gplates]
           # Clear gplates otherwise pytest picks up the tests from
           # its source tree
-          rm -rf ./gplates
+          rm -rf ./GPlates-PyGPlates-1.0.0
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v5
