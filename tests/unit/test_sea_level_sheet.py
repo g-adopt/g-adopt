@@ -20,6 +20,10 @@ The tests check three things:
    and a marine grounding line converge and conserve mass, and Taylor tests of
    first order (adjoint) and second order (Hessian) pass.
 
+The eustatic shift with the softplus sheet and the moving marine grounding
+line are rows of the `sea` entry of the `limits` case in `tests/gia` (driver
+`gia_limits.py`), which imports `marine_fields` and `width` from here.
+
 The configuration and the helpers are those of `test_sea_level.py`, which
 documents them and holds the tests of the sea-level equation on states where
 the sheet is the sharp maximum.
@@ -527,48 +531,6 @@ class TestSolves:
         solver, _, sea, initial_norm, _ = solve_state(meshes,
                                                       representation, which)
         assert_mass_conserved(solver, sea, initial_norm)
-
-    def test_the_marine_grounding_line_moves(self, meshes):
-        """The marine case exercises the rounding at the grounding line.
-
-        The water fraction must change by more than 0.5 somewhere between the
-        reference state and the solved state, so the case is not a fixed
-        grounding line. Read on the multiplier path.
-        """
-        solver, _, sea, _, _ = solve_state(meshes, "multiplier", "marine")
-        dss = re_measure(solver)
-        W_now = sea.water_fraction()
-        W_ref = sls.water_fraction(sea.I_init, sea.SL_init, EPS, RHO_W, RHO_I)
-        # The arc length over which the water fraction changed, integrated.
-        # Two grounding lines that each move by one facet of the 32-cell
-        # annulus give two facet lengths; half a facet length in total is the
-        # threshold.
-        change = fd.assemble(abs(W_now - W_ref) * dss)
-        facet = fd.assemble(fd.Constant(1.0) * dss) / 32
-        print(f"marine: integral of |W - W_ref| {change:.4e}, facet {facet:.4e}")
-        assert change > 0.5 * facet
-
-    def test_the_shift_is_the_eustatic_value(self, meshes, representation):
-        """`test_sea_level.TestEustaticLimit` with the softplus sheet.
-
-        Deep ocean, grounded ice melts on two opposite caps, stiff Earth,
-        `Lambda = 1e-6`: `Shift = -(rho_i/rho_w) int dI / L_ocean` to 1e-4.
-        """
-        _, sub = meshes
-        d_ice = -1e-2
-        solver, z, sea = build(
-            meshes, surface_fields(sub, "caps", d_ice=d_ice), lam=1e-6,
-            stiff=True, representation=representation,
-            sea_level_overrides=width(),
-            **solve_settings(representation))
-        solver.solve()
-        assert solver_converged(solver)
-        dss = re_measure(solver)
-        caps = indicator(sub, "caps")
-        eustatic = (-(RHO_I / RHO_W) * fd.assemble(d_ice * caps * dss)
-                    / fd.assemble((1 - caps) * dss))
-        assert eustatic > 0.0
-        assert real_value(sea.shift()) == pytest.approx(eustatic, rel=1e-4)
 
 
 def ice_control_and_direction(sub, which):
