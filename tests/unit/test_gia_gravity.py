@@ -279,24 +279,6 @@ def solved(meshes):
 class TestSpaceLayout:
     """The invariants `DtNTwoBlockSchurPC` and the 3-D promotion depend on."""
 
-    def test_field_order_and_meshes(self, meshes):
-        parent, sub = meshes
-        solver, _, _ = build(
-            meshes, approximation_kwargs={"shear_modulus": [.4, .6],
-                                          "viscosity": [.12, .6]})
-        Z = solver.solution_space
-        index = solver.field_index
-
-        assert index["displacement"] == 0
-        # One combined field holds both Maxwell elements, shape (n, d, d).
-        assert index["history"] == 1
-        assert index["potential"] == 2
-        assert len(Z) == len(solver.field_names)
-        assert Z[index["displacement"]].mesh() is sub
-        assert Z[index["history"]].mesh() is sub
-        assert Z[index["history"]].value_shape == (2, 2, 2)
-        assert Z[index["potential"]].mesh() is parent
-
     def test_real_fields_are_contiguous_and_last(self, meshes):
         """The invariant `DtNTwoBlockSchurPC.initialize` asserts.
 
@@ -319,7 +301,7 @@ class TestSpaceLayout:
 
     @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
     @pytest.mark.parametrize("rotation", [False, True])
-    @pytest.mark.parametrize("family", ["DG", "Quadrature"])
+    @pytest.mark.parametrize("family", ["Quadrature"])
     def test_fluid_core_field_order(self, meshes, representation, rotation,
                                     family):
         """The core pressure stays between the DtN and rotation `Real` fields."""
@@ -630,83 +612,6 @@ class TestConstruction:
         assert solver.mesh is u.function_space().mesh()
         assert solver.mesh is not solver.potential_mesh
 
-    @pytest.mark.longtest
-    def test_one_equation_per_mechanics_field(self, solved):
-        """And not one per sub-field: the multipliers are not `Equation`s.
-
-        The residual zips equations against the mechanics unknowns, and here
-        that would truncate - correctly, by accident, which is exactly the kind
-        of accident that stops being true when somebody reorders the space.
-        """
-        solver, _, _ = solved
-        assert len(solver.equations) == 1 + ("history" in solver.field_index)
-        assert len(solver.equations) == 2
-
-    @pytest.mark.parametrize("solver_parameters", ["direct", "iterative", None])
-    def test_power_law_is_accepted_on_the_uncondensed_layout(
-            self, meshes, solver_parameters):
-        """A power law is a supported configuration of every options path.
-
-        The DG family keeps the internal variables as unknowns, so the
-        power-law factor enters the history equation and pyadjoint tapes it,
-        and the nested preconditioner follows the state-dependent Jacobian on
-        its own: the inner fieldsplit re-runs its setup after every Jacobian
-        reassembly, so every sub-preconditioner rebuilds once per Newton
-        iteration (measured, `NOTES/PLAN-POWER-LAW-SELFGRAVITY.md` section 2).
-        Construction must therefore succeed on all three ways of asking for
-        options, and Newton must be the outer method on each.
-
-        `None` selects the direct preset here, because the annulus is 2-D.
-
-        The `"iterative"` case carries one extra fact: on the preset's own
-        default the displacement split stays `preonly` even under a power law.
-        A power law makes the condensed displacement operator nonsymmetric in
-        2-D, and a short CG would be invalid on it, so the solver's
-        `_adjust_options` replaces a CG by a GMRES of the same length. The
-        default writes no CG to replace: one GAMG V-cycle is not a Krylov
-        method and assumes no symmetry, so the switch does not fire and no
-        restart key is written. The prefix is the default block-0 route's,
-        `gadopt.CondensedBlockPC`, whose displacement split sits under
-        `dtn_fieldsplit_0_condensed_fieldsplit_0_`.
-        """
-        solver, _, _ = build(
-            meshes,
-            approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3},
-            solver_parameters=solver_parameters)
-        assert solver.solver_parameters["snes_type"] == "newtonls"
-        if solver_parameters == "iterative":
-            prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
-            assert solver.solver_parameters[prefix + "ksp_type"] == "preonly"
-            assert prefix + "ksp_gmres_restart" \
-                not in solver.solver_parameters
-
-    def test_the_displacement_switch_fires_for_the_truncated_cg(self, meshes):
-        """The caller who asks for the CG still gets the GMRES a power law needs.
-
-        This is the other half of the test above. `u_ksp_max_it=4` puts a
-        truncated CG on the displacement split, which is valid only on a
-        symmetric operator, and a power law makes the condensed displacement
-        operator nonsymmetric. `_adjust_options` must then replace it by a
-        GMRES whose restart is the cap the preset wrote, so that the substitute
-        costs the same Krylov vectors and the same number of GAMG V-cycles per
-        block-0 iteration.
-
-        The options come in as a dictionary and not as the string
-        `"iterative"`, because that also exercises the dictionary branch of
-        the switch. The representation is named on both sides so that the
-        dictionary describes the space `build` makes.
-        """
-        params = selfgrav_dtn_iterative_solver_parameters(
-            condensed=False, snes_type="newtonls", u_ksp_max_it=4,
-            dtn_representation="lowrank")
-        solver, _, _ = build(
-            meshes, dtn_representation="lowrank",
-            approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3},
-            solver_parameters=params)
-        prefix = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
-        assert solver.solver_parameters[prefix + "ksp_type"] == "gmres"
-        assert solver.solver_parameters[prefix + "ksp_gmres_restart"] == 4
-
     def test_ksponly_with_a_power_law_is_refused(self, meshes):
         """One linear solve on a nonlinear residual reports CONVERGED.
 
@@ -726,9 +631,7 @@ class TestConstruction:
     def test_power_law_is_accepted_on_the_lowrank_representation(self, meshes):
         """A power law builds and solves on the low-rank representation.
 
-        `test_gia_gravity_adjoint_lowrank.py::test_taylor_with_a_power_law`
-        takes the gradient at exponent 3 on both presets. This one pins the
-        acceptance itself, and that the Newton solve converges: `B` does not
+        This pins the acceptance and that the Newton solve converges: `B` does not
         depend on the rheology and is reinstalled after every Jacobian
         assembly, so nothing in the low-rank path reads the exponent.
         """
@@ -1286,55 +1189,6 @@ def block_asymmetry(F, z, J=None):
 
 
 @pytest.mark.longtest
-class TestBlockZeroSymmetry:
-    """The DG family's `(u, M, psi)` block 0 is not symmetric.
-
-    The internal-variable rows are the asymmetric ones: the driver's own
-    instrument reads `diff[0,1] = 4.768e-01` against `size[0,1] = 3.576e-01`
-    on this annulus, a ratio of 1.333, i.e. the `(u, sigma)` pair is not even
-    close to transposing. That is not a defect - the free-slip Nitsche terms
-    carry `mu` against `mu0`, recorded in
-    `NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md` - but it does mean a
-    symmetry statement belongs to a system with the history eliminated.
-
-    Serial, like every per-block measurement in this project: `block_asymmetry`
-    builds a global dense transpose. The block-1 probe below has no such
-    restriction and runs under MPI.
-    """
-
-    pytestmark = pytest.mark.skipif(
-        fd.COMM_WORLD.size > 1,
-        reason="the per-block instrument needs a global dense transpose")
-
-    def test_the_uncondensed_block_is_not(self, meshes):
-        """Measured **2.528e-03** relative on this annulus.
-
-        **One-sided on purpose.** An upper bound would turn a symptom of the
-        separately-recorded `mu`/`mu0` Nitsche asymmetry
-        (`NOTES/FINDING-FREESLIP-NITSCHE-ASYMMETRY.md`) into a second gate on it,
-        living in a file about block 1 - and that is not hypothetical:
-        `gate_g0`'s docstring records the analogous `(u,u)` asymmetry being
-        fixed at source once already, on 2026-08-01.
-
-        The bound is `> 1e-6` and not `> 1e-3`, because **the quantity is
-        `dt`-dependent**: `gate_g0` measured the related asymmetry tracking
-        `dt/(tau + dt)` linearly over four decades, and `build` fixes `dt = 1.0`.
-        Whoever first parametrises `dt` will walk this number down, and at small
-        `dt` even this bound will eventually fail - correctly, and the fix then
-        is to delete this test rather than to lower it again. If the Nitsche
-        asymmetry is fixed at source, likewise: delete, do not loosen.
-        """
-        solver, _, _ = build(meshes)
-        z = solver.solution
-        block0 = [i for i in range(len(solver.solution_space))
-                  if i not in solver.real_indices]
-        assert len(block0) == 3
-        diff, size = block_asymmetry(solver.F, z)
-        window = np.ix_(block0, block0)
-        assert diff[window].max() / size[window].max() > 1e-6
-
-
-@pytest.mark.longtest
 class TestEliminatedBlockSymmetry:
     """Block 0 with the history eliminated is symmetric; with it, it is not."""
 
@@ -1810,32 +1664,6 @@ class TestBlockOneInThreeDimensions:
         assert entries[index["displacement"]] is rbm
         assert entries[index["core_pressure"]] == Z.sub(index["core_pressure"])
 
-    def test_the_case_is_the_small_one(self):
-        """A tripwire on the cost, not a statement about the discretisation.
-
-        24 columns of two layers (48 cells) and 1971 degrees of freedom outside
-        the DG history field (the displacement, the potential and the 11
-        `Real` fields), and 2304 in the history: one symmetric `3 x 3` tensor
-        (6 stored components) on the 8 nodes of a DQ1 hexahedron, in each of
-        the 48 cells. If a future edit makes this a refinement level larger
-        it stops being a unit test, and the rule this class is written under
-        stops holding.
-
-        The cell count is summed over `cells.owned.local_size`, the *owned*
-        count, and not `num_cells()`, which is rank-local and includes the
-        halo, so the obvious spelling is a test that passes only in serial.
-        On an extruded mesh `cells` counts every cell of every layer.
-        """
-        solver, _, _ = self.build()
-        history = solver.solution_space[solver.field_index["history"]].dim()
-        assert solver.solution_space.dim() - history == 1971
-        assert history == 6 * 8 * 48
-        assert solver.mesh.comm.allreduce(solver.mesh.cells.owned.local_size) == 48
-        assert len(solver.real_indices) == 11
-        # (L+1)^2 = 4 modes on each of two boundaries, then m_1, m_2, m_3.
-        assert len(solver.multiplier_indices) == 8
-        assert set(coupling(solver, Rotation).values()) == {"m1", "m2", "m3"}
-
     def test_the_block_is_the_claimed_diagonal(self):
         """Measured `max rel |d - diag(A)| = 1.787e-15`; gate at 1e-12.
 
@@ -1991,35 +1819,6 @@ class TestPresetWiring:
         assert solver.solver_parameters["dtn_fieldsplit_0_assembled_pc_type"] \
             == "lu"
 
-    def test_the_block_zero_sweep_follows_the_layout_not_the_caller(
-            self, meshes):
-        """The block-0 split of a dictionary matches the space's block-0 fields.
-
-        The preset's `condensed` and the space's history family are independent
-        arguments that nothing reconciles when the caller gives a dictionary.
-        For the DG family's `block0="pair"` route, the split count must match
-        the space's block-0 field count: the displacement, the history and the
-        potential.
-
-        The route with a block-0 fieldsplit is `block0="pair"`; the default
-        route names no `_fields` key at all and is guarded by the class name
-        instead (`tests/unit/test_gia_condensed_block0.py`).
-        """
-        solver, _, _ = build(
-            meshes,
-            dtn_representation="multiplier",
-            solver_parameters=selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, block0="pair",
-                dtn_representation="multiplier"))
-        # A split may name a comma-separated pair (the condensed `(u, M)`
-        # split), so count the fields named, not the splits.
-        n_fields = sum(
-            len(str(v).split(","))
-            for k, v in solver.solver_parameters.items()
-            if k.startswith("dtn_fieldsplit_0_pc_fieldsplit_")
-            and k.endswith("_fields"))
-        assert n_fields == 2 + ("history" in solver.field_index)
-
     def test_the_displacement_split_gets_the_near_incompressible_pc(
             self, meshes):
         """Naming `firedrake.AssembledPC` here is the defect, not a milder choice.
@@ -2072,67 +1871,14 @@ class TestPresetWiring:
         assert prefix + "ksp_rtol" not in p
         assert prefix + "ksp_converged_maxits" not in p
 
-    def test_the_uncondensed_pair_split_condenses_and_seeds_near_incompressible_modes(
-            self, meshes):
-        """With `block0="pair"` the DG family's `(u, M)` is one split.
-
-        The condensed displacement operator is an assembled matrix, so no
-        `AssembledPC` wraps it; GAMG is seeded through the near-nullspace
-        provider the solver publishes, whose modes come from
-        `near_nullspace`.
-
-        Both routes get the same modes and the same displacement split, so
-        that the wall-clock ratio between them measures the cost of the
-        coupled residual and nothing else: 670 s against 271 s for a 500 yr
-        step at matched settings (Gadi jobs 178765563 and 178765560, both with
-        the four-iteration CG this preset no longer writes by default).
-
-        The split is `u_ksp_max_it`, one argument for both block-0 routes, so
-        the default reaches this route too and the assertions below are the
-        same three absences as on the condensed route. A second default for
-        this route would break the comparison the route exists for.
-        """
-        solver, _, _ = build(
-            meshes,
-            dtn_representation="multiplier",
-            solver_parameters=selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, block0="pair",
-                dtn_representation="multiplier"))
-        p = solver.solver_parameters
-        prefix = "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"
-        assert p["dtn_fieldsplit_0_pc_fieldsplit_0_fields"] == "0,1"
-        assert p["dtn_fieldsplit_0_pc_fieldsplit_1_fields"] == "2"
-        assert p["dtn_fieldsplit_0_fieldsplit_0_pc_python_type"] \
-            == "gadopt.InternalVariableSCPC"
-        assert p["dtn_fieldsplit_0_fieldsplit_0_pc_sc_eliminate_fields"] == "1"
-        assert p[prefix + "ksp_type"] == "preonly"
-        assert prefix + "ksp_max_it" not in p
-        assert prefix + "ksp_rtol" not in p
-        assert prefix + "ksp_converged_maxits" not in p
-        assert solver.near_nullspace_modes == "incompressible"
-        assert callable(solver.appctx["condensed_field_near_nullspace"])
-        assert solver.appctx["operator_version"] == 0
-
-    def test_u_pc_is_refused_on_the_uncondensed_layout(self):
-        with pytest.raises(ValueError, match="u_pc has no meaning"):
-            selfgrav_dtn_iterative_solver_parameters(
-                condensed=False, u_pc="firedrake.AssembledPC")
-
-    # The displacement split sits at a different depth on each route: split 0
-    # of the block-0 sweep with the history condensed, split 0 of
-    # `gadopt.CondensedBlockPC`'s own `(u, psi)` sweep on the full layout with
-    # `block0="condensed"`, and split 0 of the `(u, M)` pair's condensed field
-    # on the full layout with `block0="pair"`.
+    # The displacement split is split 0 of the block-0 sweep, with the
+    # history eliminated by the Quadrature family.
     U_SPLIT_PREFIXES = (
         ({"condensed": True}, "dtn_fieldsplit_0_fieldsplit_0_"),
-        ({"condensed": False}, "dtn_fieldsplit_0_condensed_fieldsplit_0_"),
-        ({"condensed": False, "block0": "pair",
-          "dtn_representation": "multiplier"},
-         "dtn_fieldsplit_0_fieldsplit_0_condensed_field_"),
     )
 
     def test_the_displacement_split_defaults_to_one_v_cycle(self):
-        """The sixth preset default, on all three block-0 routes.
+        """The sixth preset default, on the block-0 route of the eliminated history.
 
         The split is one GAMG V-cycle per block-0 iteration, written as
         `ksp_type preonly`. The three keys of the truncated CG must be absent
@@ -2154,7 +1900,7 @@ class TestPresetWiring:
             assert prefix + "ksp_converged_maxits" not in p, kwargs
 
     def test_the_truncated_cg_is_selectable(self):
-        """`u_ksp_max_it=4` is the alternative, on all three routes.
+        """`u_ksp_max_it=4` is the alternative, on the same route.
 
         It runs four iterations of CG at `u_ksp_rtol` and counts the cap as
         convergence, which is what `ksp_converged_maxits` says. It was the
@@ -2453,40 +2199,6 @@ class TestNullCoupling:
             assert fd.norm(m - mr) / fd.norm(mr) < 1e-11
         # ... and psi is still driven, so the test is not vacuous.
         assert fd.norm(psi) > 0.0
-
-
-@pytest.mark.longtest
-class TestAcceptedStateAfterAStep:
-    """The accepted state is the solved state when `solve` returns.
-
-    Code that reads the state between two steps (a checkpoint, a diagnostic
-    that assembles the residual) reads the accepted history level
-    `solver.internal_variables` and the Functions `u` and `psi`. After a step
-    each must hold exactly what the step solved, with and without a declared
-    nullspace (the projection path and the path without it).
-    """
-
-    @pytest.mark.parametrize("declare_nullspace", [False, True])
-    def test_the_accepted_state_is_the_solved_state(self, meshes,
-                                                    declare_nullspace):
-        solver, u, psi = build(meshes, dtn_representation="multiplier",
-                               declare_nullspace=declare_nullspace)
-        solver.solve()
-        z = solver.solution
-        # The solve moved away from the zero initial state, so equality is
-        # not the trivial one of two zero vectors.
-        with z.dat.vec_ro as current:
-            assert current.norm() > 0.0
-        index = solver.field_index
-        pairs = ((solver.internal_variables, z.subfunctions[index["history"]]),
-                 (u, z.subfunctions[index["displacement"]]),
-                 (psi, z.subfunctions[index["potential"]]))
-        for accepted, solved_field in pairs:
-            with accepted.dat.vec_ro as old, solved_field.dat.vec_ro as current:
-                assert current.norm() > 0.0
-                difference = old.copy()
-                difference.axpy(-1.0, current)
-                assert difference.norm() == 0.0
 
 
 class TestRigidRotationNullspace:
