@@ -13,7 +13,7 @@ Typical usage:
     ...     'alpha': 0.0335, 'n': 2.0,
     ...     'Ks': 0.00922, 'Ss': 1e-5
     ... }
-    >>> soil_curve = VanGenuchtenCurve(soil_params)
+    >>> soil_curve = VanGenuchtenCurve(**soil_params)
     >>> # Setup solver
     >>> richards_solver = RichardsSolver(
     ...     h, soil_curve, delta_t, DIRK22,

@@ -90,8 +90,7 @@ def richards_mass_term(
     # never be float()'d and so always keeps the term.
     Ss = soil_curve.Ss
     if not (isinstance(Ss, Constant) and float(Ss) == 0.0):
-        theta = soil_curve.moisture_content(trial)
-        S = (theta - soil_curve.theta_r) / (soil_curve.theta_s - soil_curve.theta_r)
+        S = soil_curve.effective_saturation(trial)
         F += inner(eq.test, Ss * S * Dt(trial)) * eq.dx
 
     return F
