@@ -564,9 +564,9 @@ class GravityPotential:
         `22168dc98` (the `nlvs-hessian-fix` branch with PRs 5657 and 5659
         and main `4e3dde4fa`) the same system gives the right value on every
         solve on two ranks, for exterior-facet, interior-facet and volume
-        terms. `test_parallel_repeated_monopole_solves_are_stable` in
-        `tests/unit/test_gravity_solver.py` repeats the solves on two ranks
-        and fails if the values drift.
+        terms. The entry `gravity-np2` of the `parallel` case in `tests/gia`
+        (`test_gia_parallel.py::test_parallel_repeated_monopole_solves_are_stable`)
+        repeats the solves on two ranks and fails if the values drift.
         """
         if not self.monopole_boundaries:
             return

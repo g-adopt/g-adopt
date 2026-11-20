@@ -10,10 +10,11 @@ The gates are the plan's: potentials <= 1e-14 relative, trace coefficients
 is the useful signal - a change that broke the elimination would not land at
 1e-13, it would land at 1e-4.
 
-Run under `mpiexec` as well as serially. The low-rank operator sums rank-local
-dot products through one `Allreduce`, so a rank-ownership mistake would show up
-only in parallel, and the repeated-application check exists because a wrong
-operator in this code area has previously been right once and wrong afterwards.
+The repeated-application check exists because a wrong operator in this code
+area has previously been right once and wrong afterwards. The low-rank operator
+sums rank-local dot products through one `Allreduce`, so a rank-ownership
+mistake shows only on several ranks; the parity on two ranks is the entry
+`gravity-np2` of the `parallel` case in `tests/gia`, which uses `solve_both`.
 """
 
 import numpy as np
@@ -23,7 +24,6 @@ import firedrake as fd
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
 from test_gravity_solver import (
     RMAX, annulus_mesh, relative_l2_error, shell_mesh_3d)
-from parallel_ranks import assert_marked_rank_count
 
 
 @pytest.fixture(scope="module")
@@ -428,55 +428,6 @@ def test_cg_gap_does_not_grow_with_refinement():
         pytest.skip("needs both refinements from test_cg_iteration_counts")
     print(f"    [cg gap] refinement 2: {gaps[2]}   refinement 3: {gaps[3]}")
     assert gaps[3] <= gaps[2] + 2
-
-
-# ---------------------------------------------------------------------------
-# Parallel
-# ---------------------------------------------------------------------------
-@pytest.mark.longtest
-@pytest.mark.parallel(nprocs=2)
-def test_parallel_parity(request, annulus):
-    """Same comparison on more than one rank.
-
-    The low-rank apply is the only place in this path where ranks have to
-    agree, and it does so through a single `Allreduce` of the mode vector; an
-    ownership mistake there is invisible in serial.
-    """
-    assert_marked_rank_count(request)
-    if fd.COMM_WORLD.size < 2:
-        pytest.skip("needs >= 2 MPI ranks; run under mpiexec")
-    rho = annulus_source(annulus)
-    results = solve_both(
-        annulus, rho,
-        lambda: {"top": {"dtn": CylindricalDtN(M=5)},
-                 "bottom": {"dtn": CylindricalDtN(M=5)}})
-    compare(annulus, results, label=f"parallel np={fd.COMM_WORLD.size}")
-
-
-@pytest.mark.longtest
-@pytest.mark.parallel(nprocs=2)
-def test_parallel_coefficients_are_rank_consistent(request, annulus):
-    """Every rank must report the same trace spectrum.
-
-    `coefficients()` sums rank-local dot products, so a rank that skipped the
-    reduction would return its own partial sum and nothing would complain.
-    """
-    assert_marked_rank_count(request)
-    if fd.COMM_WORLD.size < 2:
-        pytest.skip("needs >= 2 MPI ranks; run under mpiexec")
-    psi = fd.Function(fd.FunctionSpace(annulus, "CG", 1))
-    solver = GravitySolver(
-        psi, annulus_source(annulus),
-        bcs={"top": {"dtn": CylindricalDtN(M=4)},
-             "bottom": {"dtn": CylindricalDtN(M=4)}},
-        dtn_representation="lowrank")
-    solver.solve()
-    local = solver.coefficients()
-    gathered = fd.COMM_WORLD.allgather(local)
-    for other in gathered[1:]:
-        for bc_id in local:
-            for key in local[bc_id]:
-                assert local[bc_id][key] == other[bc_id][key]
 
 
 # ---------------------------------------------------------------------------

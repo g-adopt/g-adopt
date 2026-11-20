@@ -51,10 +51,10 @@ dimension:
   approximation. This is the code path of the constructor without the 3-D
   forms, so nothing is assembled, compiled or solved.
 
-Nothing here solves, and nothing here is marked `slow`. The 2-rank test at the
-end is a module-level function, which `mpi-pytest` requires: the plugin drops
-the class from a marked node id, so a parallel test inside a class never runs
-(see the comment at `test_gravity_solver.py:622`).
+Nothing here solves, and nothing here is marked `slow`. The radius check on
+two ranks, where the mesh radius is a maximum over the ranks, is the entry
+`rotation-radius-np2` of the `parallel` case in `tests/gia`, which uses
+`build_rotation`, `closure` and `K_S_SPADA` of this file.
 """
 
 import re
@@ -82,7 +82,6 @@ from test_gia_gravity import (  # noqa: E402  (module-level helpers)
 # its own line because pyflakes reports the whole `from` statement as unused
 # when the only unused name is in it.
 from test_gia_gravity import meshes  # noqa: E402,F401  (pytest fixture)
-from parallel_ranks import assert_marked_rank_count
 
 
 class refstate:
@@ -535,33 +534,3 @@ def test_resolving_twice_gives_the_same_C_minus_A(ks_rotation):
 
     assert closure(ks_rotation, 0) == before
     assert ks_rotation.k_s == K_S_SPADA
-
-
-# -- Case 10: the parallel maximum over the mesh radius ----------------------
-
-
-@pytest.mark.longtest
-@pytest.mark.parallel(nprocs=2)
-def test_the_radius_check_agrees_across_ranks(request, meshes):  # noqa: F811
-    """On 2 ranks the radius check reduces, so both ranks reach the same answer.
-
-    The mesh radius is measured as the largest coordinate radius over the whole
-    communicator, and this annulus really does split so that one rank misses
-    the outer boundary: measured on 2 ranks, the local maxima are 2.2037 and
-    **2.0037**, the second 9.1 percent below `RE` and so far outside
-    `Rotation.SURFACE_RADIUS_RTOL = 2e-2`. An un-reduced check would therefore
-    refuse the correct `surface_radius` on rank 1 alone, which inside a
-    collective constructor is a one-sided exception or a hang, not a clean
-    failure. The claim is that the 2-rank build of the 2-D solver succeeds on
-    both ranks with the `k_s` route's radius, and closes the `m_3` row with
-    the same polar moment the serial build does.
-
-    A module-level function, not a method: `mpi-pytest` drops the class from a
-    marked node id and the test would never run.
-    """
-    assert_marked_rank_count(request)
-    _, rotation = build_rotation(meshes, k_s=K_S_SPADA, surface_radius=RE)
-
-    assert rotation.surface_radius == RE
-    assert np.isclose(closure(rotation, 2), polar_moment(meshes),
-                      rtol=FORMULA_RTOL, atol=0.0)

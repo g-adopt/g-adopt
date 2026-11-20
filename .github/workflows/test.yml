@@ -191,25 +191,14 @@ jobs:
         id: run_pytest
         run: |
           . .venv/bin/activate
-          python -m pytest -m 'not longtest and not parallel' --junit-xml=test_results.xml
-
-      # The mpi-pytest plugin cannot start mpiexec from inside a pytest
-      # process with the Open MPI of the Ubuntu container (mpiexec dies with
-      # signal 11 before any rank starts), so the tests marked
-      # `parallel(nprocs=2)` run here under an outer mpiexec instead.
-      - name: Pytest on 2 ranks
-        id: run_pytest_np2
-        if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
-        run: |
-          . .venv/bin/activate
-          mpiexec -n 2 python -m pytest -m 'parallel[2] and not longtest' --junit-xml=test_results_np2.xml tests/unit
+          python -m pytest -m 'not longtest' --junit-xml=test_results.xml
 
       - name: Pytest report
         uses: mikepenz/action-junit-report@v6
         if: ${{ !cancelled() && steps.run_pytest.conclusion != 'skipped' }}
         with:
           check_name: Test suite report
-          report_paths: 'test_results*.xml'
+          report_paths: test_results.xml
           include_passed: true
           annotate_only: true
 

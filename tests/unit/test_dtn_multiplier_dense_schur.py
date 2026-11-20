@@ -46,7 +46,6 @@ from gadopt.stokes_integrators import newton_stokes_solver_parameters
 # The xfail marker of the tests that assemble a `Real` block on the parent's
 # interior facets (the sibling test module, on the test path).
 from test_gia_gravity import REAL_BLOCK_ON_PARENT_FACETS  # noqa: E402
-from parallel_ranks import assert_marked_rank_count
 
 # ---------------------------------------------------------------------------
 # Geometry and constants: the coarse 2-D annulus of the adjoint suite
@@ -536,61 +535,6 @@ def test_T6_missized_raises_named(capsys):
     with pytest.raises(ValueError, match="square"):
         ctx.initialize(pc)
     assert "square" in capsys.readouterr().err
-
-
-# ---------------------------------------------------------------------------
-# T7  parallel: the build keys on the GLOBAL size, on every rank
-#
-# This is the test the serial suite structurally cannot be. Every Real dof sits
-# on one rank, so on a 2-rank run the block-1 LOCAL column count is the whole
-# block on the owning rank and 0 on the other. The PC builds S redundantly on
-# every rank (`_gather` Allreduces a global-length buffer; `_solve` runs the
-# dense factor everywhere), so it must key the build on the GLOBAL size.
-#
-# Keyed on the local size instead, the non-owning rank forms a 0x0 S, skips the
-# COLLECTIVE MatMult loop, and raises "zero-size array to reduction" -- while the
-# owning rank blocks inside that same collective. That is the exact failure a
-# 104-rank Gadi run produced (Unhandled Python Exception on every rank but 0),
-# and it is invisible to every test above because a serial run has local ==
-# global. Module-level function, not a method: mpi-pytest cannot relaunch a test
-# that lives inside a class.
-# ---------------------------------------------------------------------------
-@pytest.mark.longtest
-@pytest.mark.parallel(nprocs=2)
-@pytest.mark.parametrize("fluid_core", [False, True])
-def test_T7_parallel_build_keys_on_global_size(request, meshes, fluid_core):
-    """The dense complement builds on every rank at the GLOBAL multiplier count.
-
-    FAILS (crashes/hangs) IF the build keys on the local size: the rank owning no
-    Real dofs raises inside a collective. CHECK, after a real 2-rank solve: the
-    build did not raise, `ctx._n` is identical and non-zero on both ranks, `S` is
-    square at that size, and the two ranks hold the SAME `S` to round-off (the
-    redundant build agrees). FLOOR: the cross-rank `S` difference is round-off,
-    ~1e-13; gate 1e-10.
-    """
-    assert_marked_rank_count(request)
-    comm = fd.COMM_WORLD
-    assert comm.size == 2, "T7 must run on exactly 2 ranks"
-
-    solver, _, _ = _build_solver(meshes, fluid_core=fluid_core)
-    # If the build keyed on the local size, this solve raises on the rank that
-    # owns no Real dofs (and the other blocks in the collective MatMult).
-    solver.solve()
-    _, ctx = _dense_ctx(solver)
-
-    # ctx._n is the global size, so it must agree across ranks and be > 0 on both
-    # -- the local-keyed bug gives 13 on one rank and 0 on the other.
-    ns = comm.allgather(ctx._n)
-    assert ns[0] == ns[1] > 0, f"per-rank block-1 size disagrees: {ns}"
-    assert ctx._S.shape == (ctx._n, ctx._n)
-
-    # The redundant build must produce the SAME S on both ranks.
-    norms = comm.allgather(float(np.linalg.norm(ctx._S)))
-    assert norms[0] == pytest.approx(norms[1], rel=0.0, abs=0.0), \
-        f"the two ranks built different S (norms {norms})"
-    other = comm.bcast(ctx._S.copy(), root=1)
-    rel = np.linalg.norm(ctx._S - other) / np.linalg.norm(ctx._S)
-    assert rel < PARITY_FLOOR, f"S differs across ranks by {rel:.3e}"
 
 
 # ---------------------------------------------------------------------------

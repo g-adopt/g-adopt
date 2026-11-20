@@ -22,7 +22,7 @@ helpers come from these files of `tests/unit`, which this script puts on
 `sys.path`:
 
 - `test_viscoelastic_checkpointing.py`: `parent_and_submesh`, `fields_on`,
-  `round_trip_error`, `write_file`, `read_file`;
+  `round_trip_error`, `SUBMESH_TAG`;
 - `test_gia_nullspace_projection_adjoint.py`: `_small_case`,
   `_small_forward`, `_small_taped`, `_shifted`;
 - `test_gia_rotation_moments.py`: `build_rotation`, `closure`, `K_S_SPADA`;
@@ -48,7 +48,7 @@ from firedrake.adjoint import get_working_tape, stop_annotating, taylor_test
 from gadopt import CylindricalDtN, GravitySolver, KernelProjectionBlock
 from gadopt.dtn_lowrank import _assert_against_reference
 from gadopt.gia_couplings import Rotation
-from gadopt.viscoelastic_checkpointing import written_rank_count
+from gadopt.viscoelastic_checkpointing import CheckpointField, written_rank_count
 from mpi4py import MPI
 
 import gia_march as M
@@ -192,6 +192,75 @@ def run_dtn_guard():
 
 # -- checkpoint entries -------------------------------------------------------------
 
+#: The meshes of the files of the checkpoint entries: label, and whether the
+#: field lives on the submesh (`True`) or on the parent itself.
+FILE_MESHES = (("parent", False), ("submesh", True))
+
+
+def write_file(path, comm, *, with_points=True):
+    """Write the parent and every field of the parent and the submesh.
+
+    Args:
+      path: the file.
+      comm: the communicator of the writer.
+      with_points: store through `CheckpointField.save` (with the point
+        coordinates), or through `encode` and `save_function` alone, the
+        layout of a file without coordinates.
+    """
+    labelled, sub = TV.parent_and_submesh(comm, split_by_rank=False)
+    with fd.CheckpointFile(str(path), "w", comm=comm) as chk:
+        chk.save_mesh(labelled)
+        for label, on_sub in FILE_MESHES:
+            for name, field in TV.fields_on(sub if on_sub else labelled).items():
+                checkpoint = CheckpointField(f"{label}_{name}", field, labelled)
+                if with_points:
+                    checkpoint.save(chk)
+                else:
+                    chk.save_function(checkpoint.encode())
+
+
+def read_file(path, comm, *, direct=False):
+    """Read every field of `write_file` on `comm`; return the largest errors.
+
+    The reference is each field computed again on the loaded mesh. Its
+    values differ from the written ones by round-off, because a quadrature
+    point computed from another vertex order of the cell is another
+    floating-point number.
+
+    Args:
+      path: the file.
+      comm: the communicator of the reader.
+      direct: restore the values in the stored node order, without the
+        pairing by position (the control of the entry `checkpoint-read-np2`).
+
+    Returns:
+      `(error, exact)`: the largest relative error of any field against the
+      recomputed values, and whether every field re-encodes to the stored
+      encoding bit for bit.
+    """
+    error, exact = 0.0, True
+    with fd.CheckpointFile(str(path), "r", comm=comm) as chk:
+        labelled = chk.load_mesh(fd.mesh.DEFAULT_MESH_NAME)
+        sub = fd.Submesh(labelled, labelled.topological_dimension, TV.SUBMESH_TAG)
+        for label, on_sub in FILE_MESHES:
+            for name, reference in TV.fields_on(sub if on_sub else labelled).items():
+                field = fd.Function(reference.function_space())
+                checkpoint = CheckpointField(f"{label}_{name}", field, labelled)
+                if direct:
+                    checkpoint.restore(chk.load_function(labelled, checkpoint.name))
+                else:
+                    checkpoint.load(chk)
+                difference = np.max(np.abs(field.dat.data_ro - reference.dat.data_ro),
+                                    initial=0.0)
+                scale = np.max(np.abs(reference.dat.data_ro), initial=0.0)
+                error = max(error, comm.allreduce(float(difference), op=MPI.MAX)
+                            / comm.allreduce(float(scale), op=MPI.MAX))
+                stored = chk.load_function(labelled, checkpoint.name)
+                same = np.array_equal(checkpoint.encode().dat.data_ro, stored.dat.data_ro)
+                exact &= comm.allreduce(bool(same), op=MPI.LAND)
+    return error, exact
+
+
 def run_checkpoint_round_trip():
     """`CheckpointField` round trips on the parent, a submesh and an extruded mesh.
 
@@ -225,7 +294,7 @@ def run_checkpoint_round_trip():
 def run_checkpoint_write(name):
     """Write the files of the entry `name` on the ranks of this process.
 
-    `test_viscoelastic_checkpointing.write_file` writes the parent and every
+    `write_file` writes the parent and every
     field of the parent and of its left-half submesh, with the coordinates of
     the quadrature points (`with-points`) or without them
     (`without-points`).
@@ -236,7 +305,7 @@ def run_checkpoint_write(name):
     comm = fd.COMM_WORLD
     for label in CHECKPOINT_FILES[name]:
         path = CASE_DIR / parallel_checkpoint(label)
-        TV.write_file(path, comm, with_points=label.endswith("-with-points"))
+        write_file(path, comm, with_points=label.endswith("-with-points"))
     return {"ranks": comm.size}
 
 
@@ -259,11 +328,11 @@ def run_checkpoint_read_two_ranks():
     comm = fd.COMM_WORLD
     out = {"ranks": comm.size}
     one = CASE_DIR / parallel_checkpoint("one-with-points")
-    out["one_error"], _ = TV.read_file(one, comm)
-    out["one_control"], _ = TV.read_file(one, comm, direct=True)
-    _, exact = TV.read_file(CASE_DIR / parallel_checkpoint("two-with-points"), comm)
+    out["one_error"], _ = read_file(one, comm)
+    out["one_control"], _ = read_file(one, comm, direct=True)
+    _, exact = read_file(CASE_DIR / parallel_checkpoint("two-with-points"), comm)
     out["two_exact"] = int(exact)
-    _, exact = TV.read_file(CASE_DIR / parallel_checkpoint("two-without-points"), comm)
+    _, exact = read_file(CASE_DIR / parallel_checkpoint("two-without-points"), comm)
     out["two_without_points_exact"] = int(exact)
     return out
 
@@ -283,13 +352,12 @@ def run_checkpoint_read_one_rank():
     """
     comm = fd.COMM_WORLD
     out = {"ranks": comm.size}
-    out["two_error"], _ = TV.read_file(CASE_DIR / parallel_checkpoint("two-with-points"),
-                                       comm)
+    out["two_error"], _ = read_file(CASE_DIR / parallel_checkpoint("two-with-points"), comm)
     path = CASE_DIR / parallel_checkpoint("two-without-points")
     with fd.CheckpointFile(str(path), "r", comm=comm) as chk:
         out["without_points_writer_ranks"] = written_rank_count(chk)
     try:
-        TV.read_file(path, comm)
+        read_file(path, comm)
         refused = 0
     except ValueError as error:
         refused = int(re.search(WRITTEN_RANKS_MESSAGE, str(error)) is not None)

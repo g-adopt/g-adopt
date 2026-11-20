@@ -20,8 +20,6 @@ What each test checks:
   remainders converge at rates 1, 2 and 3 (gradient and Hessian action), and
   the tangent linear model equals the adjoint directional derivative. Fails if
   the adjoint, the Hessian or the tangent of the block is wrong.
-- `test_small_parallel_replay_and_gradient`: the replay and gradient checks
-  on two ranks, where the basis products are global.
 - `test_no_block_without_basis_or_annotation`,
   `test_non_orthonormal_basis_is_refused`: the bookkeeping and the refusal of
   a basis that would make the projection non-symmetric.
@@ -51,6 +49,11 @@ What each test checks:
   adjoint on the low-rank path, and this test applies the
   block's adjoint directly and checks it against its tangent with a
   dot-product test.
+
+The replay and gradient checks of the small problem on two ranks, where the
+products with the basis are global, are the entry `projection-np2` of the
+`parallel` case in `tests/gia`, which uses `_small_case`, `_small_forward`,
+`_small_taped` and `_shifted` of this file.
 """
 
 import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
@@ -77,7 +80,6 @@ from test_gia_lowrank_block0 import (  # noqa: F401
     clean_tape,
 )
 from test_gravity_adjoint import assert_taylor_with_guards
-from parallel_ranks import assert_marked_rank_count
 
 #: Number of coupled time steps. Three steps give two steps in which the
 #: replayed initial guess and `solution_old` come from a recorded projection.
@@ -230,22 +232,6 @@ def test_small_derivatives_to_second_order():
     tlm = float(J.block_variable.tlm_value)
     print(f"    [small] tlm {tlm:.15e}  adjoint {adjoint:.15e}")
     assert abs(tlm - adjoint) <= 1e-12 * abs(adjoint)
-
-
-@pytest.mark.longtest
-@pytest.mark.parallel(nprocs=2)
-def test_small_parallel_replay_and_gradient(request):
-    """The same block on two ranks: the basis products are global."""
-    assert_marked_rank_count(request)
-    assert fd.COMM_WORLD.size == 2
-    Z, nullspace, control, direction = _small_case()
-    J, rf = _small_taped(Z, nullspace, control)
-    assert float(rf(control)) == float(J)
-    shifted = _shifted(control, direction)
-    with stop_annotating():
-        fresh = float(_small_forward(Z, nullspace, shifted))
-    assert abs(float(rf(shifted)) - fresh) <= 1e-13 * abs(fresh)
-    assert_taylor_with_guards(rf, control, direction, J, min_rate=MIN_RATE)
 
 
 def test_no_block_without_basis_or_annotation():

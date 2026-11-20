@@ -68,7 +68,6 @@ from gadopt.gia_solver import SelfGravitatingGIASolver  # noqa: E402
 from gadopt.preconditioners import _RebuildRule, _SchurAinvBCache  # noqa: E402
 import gadopt.preconditioners  # noqa: E402
 from gadopt.stokes_integrators import newton_stokes_solver_parameters  # noqa: E402
-from parallel_ranks import assert_marked_rank_count  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -1952,52 +1951,7 @@ def test_the_preset_default_is_the_dictionary_ainvb_true_writes():
 
 
 # ===========================================================================
-# D. Two ranks
-# ===========================================================================
-# Module-level function, not a method: mpi-pytest cannot relaunch a test that
-# lives inside a class.
-@pytest.mark.longtest
-@pytest.mark.parallel(nprocs=2)
-def test_two_ranks_build_the_same_complement(request, meshes):
-    """The build is collective and `S` is redundant, so both ranks agree.
-
-    `S` is gathered with an `Allreduce` of length `n` and factored on every
-    rank, and the block-1 apply writes only the owned slice of a redundantly
-    computed solution. Every `Real` degree of freedom happens to sit on one
-    rank today, so the rank that owns none must still enter every collective:
-    the `n` block-0 solves of the build, the `Allreduce` per column and the
-    `VecMDot` of the transpose apply.
-
-    CATCHES: a build keyed on the LOCAL column count, which makes the
-    non-owning rank form a 0x0 complement and skip the collective block-0
-    solves while the owning rank blocks inside them -- the failure a 104-rank
-    Gadi run produced for `DtNMultiplierDenseSchurPC` and which no serial test
-    can see; a rebuild decision taken from rank-local data.
-    FLOOR: `PARITY_FLOOR` for the cross-rank difference of `S`.
-    """
-    assert_marked_rank_count(request)
-    comm = fd.COMM_WORLD
-    assert comm.size == 2, "this test must run on exactly two ranks"
-    solver, _, _ = build_coupled(
-        meshes, "lowrank", solver_parameters=iterative_params(ainvb=True))
-    solver.solve()
-    assert solver.solver.snes.ksp.getConvergedReason() > 0
-
-    cache = ainvb_cache(outer_pc(solver))
-    sizes = comm.allgather(int(cache.n))
-    assert sizes[0] == sizes[1] == len(solver.real_indices) > 0, (
-        f"the per-rank Real block size disagrees: {sizes}")
-    builds = comm.allgather(int(cache.build_count))
-    assert builds[0] == builds[1] == 1, f"build counts disagree: {builds}"
-
-    S = np.asarray(cache.S)
-    other = comm.bcast(S.copy(), root=1)
-    relative = np.linalg.norm(S - other) / np.linalg.norm(S)
-    assert relative < PARITY_FLOOR, f"S differs across ranks by {relative:.3e}"
-
-
-# ===========================================================================
-# E. Three dimensions, 24 cells
+# D. Three dimensions, 24 cells
 # ===========================================================================
 @pytest.mark.longtest
 class TestThreeDimensions:
@@ -2101,7 +2055,7 @@ class TestThreeDimensions:
 
 
 # ===========================================================================
-# F. The adjoint
+# E. The adjoint
 # ===========================================================================
 @pytest.mark.longtest
 def test_the_gradient_is_right_through_the_cached_path(meshes):
