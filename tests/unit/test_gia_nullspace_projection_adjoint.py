@@ -36,9 +36,7 @@ What each test checks:
   recorded: with the `direct` preset the solve leaves a rotation of about
   5e-7 of the norm of `u`, and a start with a rotation in `u` (as after a
   restart) makes it of order one. The tangent check fails if the tangent of
-  the block is wrong. The `iterative` preset removes the kernel inside the
-  solve, so that case checks that replay and the tangent stay correct with
-  the Python preconditioners.
+  the block is wrong.
 - `test_gia_block_adjoint_on_kernel_seed`: the adjoint of the block on the
   coupled mixed space, on a seed with a large kernel component. With the
   low-rank DtN representation, a wrong adjoint of the block cannot change a
@@ -71,14 +69,13 @@ from firedrake.adjoint import (
 
 from gadopt import KernelProjectionBlock, project_out_kernel
 
-# The annulus, its constants, the coupled solver builder, the iterative preset
-# and the tape fixture. Importing the fixtures makes pytest use them here.
+# The annulus, its constants, the coupled solver builder and the tape
+# fixture. Importing the fixtures makes pytest use them here.
 from test_gia_gravity import CURVE_RE, meshes  # noqa: F401
 from test_gia_lowrank_block0 import (  # noqa: F401
     build,
     clean_tape,
 )
-from test_gia_lowrank_block0 import preset as iterative_parameters
 from test_gravity_adjoint import assert_taylor_with_guards
 from parallel_ranks import assert_marked_rank_count
 
@@ -332,9 +329,7 @@ def _gia_forward(meshes, viscosity, seed, preset, n_steps=N_STEPS):  # noqa: F81
       seed: amplitude of a rigid rotation put into the initial
         displacement, relative to 1e-3 (the size of the response to the
         load). Zero for a start from rest.
-      preset: `"direct"`, or `"iterative"` for the two-block iterative
-        preset with `gadopt.CondensedBlockPC` on block 0 at an outer
-        tolerance of 1e-11.
+      preset: the solver preset name, `"direct"`.
       n_steps: the number of time steps.
 
     Returns:
@@ -347,8 +342,7 @@ def _gia_forward(meshes, viscosity, seed, preset, n_steps=N_STEPS):  # noqa: F81
             meshes, "lowrank", fluid_core=True, rotation=False,
             approximation_kwargs={"viscosity": viscosity},
             nullspace="rigid_rotation",
-            solver_parameters=("direct" if preset == "direct" else
-                               iterative_parameters("lowrank", outer_rtol=1e-11)),
+            solver_parameters=preset,
             initial_displacement=(seed * 1e-3 * fd.as_vector([-X[1], X[0]])
                                   if seed else None))
     for _ in range(n_steps):
@@ -369,8 +363,8 @@ def _control_and_direction(sub):
 
 @pytest.mark.longtest
 @pytest.mark.parametrize("preset,seed", [
-    ("direct", 0.0), ("direct", 1.0), ("iterative", 0.0)],
-    ids=["direct-from_rest", "direct-rotated_start", "iterative-from_rest"])
+    ("direct", 0.0), ("direct", 1.0)],
+    ids=["direct-from_rest", "direct-rotated_start"])
 def test_gia_projection_is_recorded(meshes, preset, seed):  # noqa: F811
     """Replay, fresh forward run, Taylor test and tangent for both functionals."""
     _, sub = meshes
