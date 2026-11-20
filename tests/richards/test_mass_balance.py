@@ -4,10 +4,16 @@ A constant inflow of 1e-6 m/s enters the top of a unit square, with zero
 flux on the remaining boundaries. Specific storage is zero, so the change
 in total moisture content should equal the prescribed inflow.
 
+The stage-value time discretisation writes Dt(theta(h)) as an exact
+difference of theta, so DQ spaces, which conserve mass on each element,
+should match the inflow to solver tolerance (threshold 1e-10). CG spaces
+do not conserve mass on each element and show an error of a few times 1e-4
+(threshold 1e-3).
+
 The tests compare CG and DQ function spaces with backward Euler, and
-several time integration schemes with DQ1. Mass conservation is assessed
-by comparing the change in moisture content against the boundary flux
-at each time step.
+backward Euler, implicit midpoint and two-stage Gauss-Legendre with DQ1.
+Mass conservation is assessed by comparing the change in moisture content
+against the boundary flux at each time step.
 """
 
 import pytest
@@ -71,7 +77,7 @@ def compute_mass_balance(grid_points, time_step, t_final,
         inflow = float(dt) * assemble(Constant(inflow_rate) * ds(boundary_ids.top, domain=mesh))
         current_mass = assemble(theta * dx)
 
-        mass_error += abs(abs(current_mass - previous_mass) - abs(inflow))
+        mass_error += abs(current_mass - previous_mass - inflow)
         previous_mass = current_mass
 
     PETSc.Sys.Print(

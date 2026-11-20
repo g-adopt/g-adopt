@@ -1,18 +1,20 @@
 """Test temporal convergence using a manufactured solution.
 
 We prescribe a spatially uniform pressure head h(x, y, t) = h0(t) on a
-unit square. The divergence of the flux is zero, reducing the Richards
-equation to dtheta/dt = S. For the exponential soil model, the required
-source term is
+unit square, imposed as a Dirichlet condition on all four sides. The
+divergence of the flux is zero, reducing the Richards equation to
+dtheta/dt = S. For the exponential soil model, the required source term is
 
     S(t) = (theta_s - theta_r) * alpha * exp(alpha * h0(t)) * h0'(t).
 
 The boundary conditions and source term depend on the time Constant
 passed to Irksome, so they are evaluated at the appropriate Runge-Kutta
-stage times.
+stage times. Without this the multi-stage schemes drop to first order.
 
 The test checks the temporal convergence orders of backward Euler (1),
-implicit midpoint (2) and two-stage Gauss-Legendre (4).
+implicit midpoint (2) and two-stage Gauss-Legendre (4). The numerical
+solution is also uniform, so the L2 error at the final time is
+|h - h0(t_final)| and contains only the time discretisation error.
 """
 
 import numpy as np
@@ -118,7 +120,8 @@ def test_temporal_convergence(scheme, scheme_kwargs, expected_order, label):
     )
 
     # Check the coarsest-step convergence rate to avoid solver-tolerance
-    # effects at finer time steps.
+    # effects at finer time steps. A floor of 85% of the formal order still
+    # fails a second- or fourth-order scheme that drops to first order.
     floor = 0.85 * expected_order
     assert rates[0] >= floor, (
         f"{label}: coarsest-pair rate {rates[0]:.2f} below expected "
