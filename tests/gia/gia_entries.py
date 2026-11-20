@@ -81,6 +81,27 @@ FORWARD = {
 #:   restores this one, which then continues as a run from rest does.
 FORWARD_VALUES = ["unreduced", "reference-quadrature", "convert-quadrature-bdf2"]
 
+#: The 3-D entry of the forward case, run by `gia_forward.run_sphere`: the
+#: 24-column radially extruded cubed sphere of
+#: `tests/unit/test_gia_solver_gate_3d.py` (one mesh for the displacement
+#: and the potential), the Quadrature history with BDF2, the low-rank DtN,
+#: two Maxwell elements, a fluid core, the three rotation rows, the three
+#: centre-of-mass rows and a prescribed load centred off the axis, under the
+#: iterative preset on 2 ranks for `SPHERE_STEP_COUNT` steps. The
+#: development machine does not run it (no 3-D solve there), so it has no
+#: recorded values: its tests check only bounds and couplings that need no
+#: recorded value. Its cost is read from the CI run.
+SPHERE = "sphere-iterative"
+SPHERE_CORES = 2
+SPHERE_STEP_COUNT = 3
+
+#: In the sphere entry each of the three rotation unknowns and the core
+#: pressure is above `COUPLING_FLOOR * u_l2` at the last step: the load has
+#: a mean (core pressure), a `z` part (centre of mass) and `x z`, `y z`
+#: parts (the polar-wander pair `m1`, `m2`), and its weight on the
+#: rotating Earth moves `m3`.
+SPHERE_COUPLING_COLUMNS = ("m1", "m2", "m3", "core_pressure")
+
 #: Serial march entries with recorded values in `expected/`. The restart
 #: and multi-rank entries are compared with `sea-direct` instead.
 FORWARD_RECORDED = ["sea-direct", "sea-iterative", "sea-multiplier", "sea-fixed",
@@ -293,6 +314,8 @@ def _forward_entries():
     for name in FORWARD_VALUES:
         out.append({"case": "forward", "entry": name, "driver": "gia_forward.py",
                     "cores": 1, "outputs": [forward_values(name)]})
+    out.append({"case": "forward", "entry": SPHERE, "driver": "gia_forward.py",
+                "cores": SPHERE_CORES, "outputs": [forward_log(SPHERE)]})
     return out
 
 

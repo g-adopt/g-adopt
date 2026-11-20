@@ -406,3 +406,65 @@ def test_a_checkpoint_of_the_earlier_solver_converts():
     assert values["refuses_time_order"] == 1.0, "a state of the wrong time order was accepted"
     assert values["refuses_missing_writer_ranks"] == 1.0, (
         "a conversion without the number of writer ranks was accepted")
+
+
+# -- 3-D entry -----------------------------------------------------------------------
+
+def sphere_table():
+    """The table of the 3-D entry; skipped where that entry did not run.
+
+    The development machine runs no 3-D solve, so the table exists only on
+    CI. The entry has no recorded values: every check below is a bound or a
+    coupling floor.
+    """
+    path = E.CASE_DIR / E.forward_log(E.SPHERE)
+    if not path.exists():
+        pytest.skip(f"{E.SPHERE} runs on CI only")
+    return pd.read_csv(path, sep=r"\s+")
+
+
+def test_the_sphere_ran_every_step():
+    """The 3-D entry wrote one row per step and moved the Earth."""
+    table = sphere_table()
+    assert len(table) == E.SPHERE_STEP_COUNT, (
+        f"{E.SPHERE}: {len(table)} rows, expected {E.SPHERE_STEP_COUNT}")
+    assert np.all(table["u_l2"] > 0), f"{E.SPHERE} u_l2: {table['u_l2'].to_numpy()!r}"
+
+
+@pytest.mark.parametrize("column", E.SPHERE_COUPLING_COLUMNS)
+def test_each_coupling_acts_on_the_sphere(column):
+    """At the last step each rotation unknown and the core pressure is above the floor.
+
+    In 3-D the polar-wander pair `m1`, `m2` exists only here; a pair that the
+    load does not reach would leave its rows unchecked.
+    """
+    last = sphere_table().iloc[-1]
+    floor = E.COUPLING_FLOOR * last["u_l2"]
+    assert abs(last[column]) > floor, (
+        f"{E.SPHERE} {column}: measured {last[column]!r}, must exceed {floor!r}")
+
+
+def test_the_centre_of_mass_holds_on_the_sphere():
+    """`|D_i| <= DIPOLE_RTOL_ITERATIVE * sheet_moment_i` in all three directions."""
+    table = sphere_table()
+    for i in range(3):
+        moment = table[f"sheet_moment_{i}"].to_numpy()
+        dipole = table[f"dipole_{i}"].to_numpy()
+        assert np.all(moment > 0), f"{E.SPHERE} sheet_moment_{i}: {moment!r}"
+        bound = E.DIPOLE_RTOL_ITERATIVE * moment
+        assert np.all(np.abs(dipole) <= bound), (
+            f"{E.SPHERE} dipole_{i}: measured {dipole!r}, bound {bound!r}")
+
+
+def test_the_core_volume_is_kept_on_the_sphere():
+    """`|int u . n dS_cmb| <= CMB_FLUX_RTOL * u_l2` on the bottom of the extruded mesh."""
+    table = sphere_table()
+    flux, scale = table["cmb_flux"].to_numpy(), table["u_l2"].to_numpy()
+    assert np.all(np.abs(flux) <= E.CMB_FLUX_RTOL * scale), (
+        f"{E.SPHERE} cmb_flux: measured {flux!r}, bound {E.CMB_FLUX_RTOL!r} * {scale!r}")
+
+
+def test_the_sphere_takes_one_newton_step():
+    """A prescribed load on a Maxwell Earth is linear: one Newton step per time step."""
+    newton = sphere_table()["newton"].to_numpy()
+    assert np.all(newton == 1), f"{E.SPHERE} newton: measured {newton!r}, expected 1"

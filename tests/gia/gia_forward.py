@@ -12,6 +12,9 @@ and the solver state after `RESTART_STEP` steps to `out/forward-<entry>.h5`
 (`gadopt.gia_state.write_state`). With `restart_from` it reads that file of
 another entry, restores the state, and marches the remaining steps.
 
+The entry `SPHERE` marches a small 3-D configuration (`run_sphere`) and
+writes its table in the same format.
+
 The entries of `FORWARD_VALUES` compare the solver with an independent
 system or with the stored results of the earlier solver, and write
 `name value` lines to `out/forward-<entry>.dat`.
@@ -22,17 +25,19 @@ The test `test_gia_forward.py` reads the files; this script asserts nothing.
 import argparse
 from dataclasses import replace
 
-import gadopt  # noqa: F401  (gadopt is imported before firedrake)
+import gadopt  # imported before firedrake
 import firedrake as fd
 import numpy as np
 from firedrake.adjoint import stop_annotating
+from gadopt import gia_couplings as cp
 from gadopt.gia_state import read_state, state_from_checkpoint, write_state
 from gadopt.viscoelastic_checkpointing import written_rank_count
 
 import gia_cases as C
 import gia_march as M
 from gia_entries import (CASE_DIR, FORWARD, FORWARD_VALUES, REFERENCE_LABEL,
-                         RESTART_STEP, forward_log, forward_state, forward_values)
+                         RESTART_STEP, SPHERE, SPHERE_STEP_COUNT, forward_log,
+                         forward_state, forward_values)
 
 BASES = {"SEA": M.SEA, "LOAD": M.LOAD}
 
@@ -307,6 +312,113 @@ def _raises(call, match):
     return 0.0
 
 
+# -- 3-D entry ---------------------------------------------------------------------
+
+#: The rotation and the outer radius of the extruded sphere, as in
+#: `tests/unit/test_gia_solver_gate_3d.py`: the Earth's `Omega^2` in the
+#: units of the cases, the secular Love number that closes the polar-wander
+#: pair (`C - A = Q k_s`), and the radius `1 + 2 x 0.5` of the top surface.
+SPHERE_OMEGA_SQ = 1.566e-3
+SPHERE_K_S = 0.9
+SPHERE_RADIUS = 2.0
+
+
+def sphere_mesh():
+    """The 24-column radially extruded cubed sphere, inner radius 1, outer 2.
+
+    One mesh carries the displacement and the potential; the CMB is its
+    `"bottom"` surface and the loaded surface its `"top"`.
+    """
+    base = fd.CubedSphereMesh(radius=1.0, refinement_level=1, degree=2)
+    mesh = fd.ExtrudedMesh(base, layers=2, layer_height=0.5, extrusion_type="radial")
+    mesh.cartesian = False
+    return mesh
+
+
+def build_sphere(mesh, dt):
+    """The solver of the 3-D entry on `mesh`, with the iterative preset.
+
+    The prescribed surface density `SIGMA_HAT (0.3 + z + x z + y z)` has
+    every moment that a row reads: a mean (the core pressure), `z` (the
+    third centre-of-mass row) and `x z`, `y z` (the polar-wander rows). No
+    nullspace is declared: the three rotation rows fix the rigid rotations.
+
+    Args:
+      mesh: `sphere_mesh()`.
+      dt: the time step, a `Real` Function on `mesh`.
+
+    Returns:
+      `(solver, u, psi)`.
+    """
+    X = fd.SpatialCoordinate(mesh)
+    polar_moment = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
+    sigma = C.SIGMA_HAT * (0.3 + X[2] + X[0] * X[2] + X[1] * X[2])
+    u = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2), name="potential")
+    dtn = {"top": {"dtn": gadopt.SphericalDtN(1)},
+           "bottom": {"dtn": gadopt.SphericalDtN(1)}}
+    with stop_annotating():
+        solver = gadopt.SelfGravitatingGIASolver(
+            u, psi, C.approximation(C.Case(model="maxwell2")), dt=dt,
+            gravity_bcs=dtn, time_scheme="bdf2", internal_variable_family="Quadrature",
+            quad_degree=C.QUAD, dtn_representation="lowrank",
+            couplings=[cp.FluidCore(boundary="bottom", rho_core=2.0),
+                       cp.Rotation(C=polar_moment, k_s=SPHERE_K_S,
+                                   surface_radius=SPHERE_RADIUS,
+                                   Omega_sq=SPHERE_OMEGA_SQ),
+                       cp.CentreOfMass(),
+                       cp.SurfaceLoad(boundary="top", sigma=sigma, g_surface=1.0)],
+            solver_parameters="iterative")
+    return solver, u, psi
+
+
+def sphere_diagnostics(solver, u, psi, k, time, dt):
+    """The row of the 3-D entry after step `k` (0-based).
+
+    The columns: `step time dt`, the L2 norms `u_l2 psi_l2 history_l2`, the
+    three rotation unknowns `m1 m2 m3`, the frame columns of
+    `gia_march._frame_columns` (three directions), `core_pressure`,
+    `cmb_flux` (the integral of `u . n` over the CMB), and the counts
+    `newton linear newton_reduction`. All are integrals, norms, `Real`
+    values or counts, so the row does not depend on the partition.
+    """
+    history = solver.internal_variables
+    dx_h = fd.dx(domain=history.function_space().mesh(),
+                 metadata={"quadrature_degree": int(solver.history.degree)})
+    row = {"step": k + 1, "time": time, "dt": float(dt),
+           "u_l2": fd.norm(u), "psi_l2": fd.norm(psi),
+           "history_l2": float(np.sqrt(fd.assemble(fd.inner(history, history) * dx_h)))}
+    for name in ("m1", "m2", "m3"):
+        row[name] = M._real(solver, name)
+    row.update(M._frame_columns(solver))
+    row["core_pressure"] = M._real(solver, "core_pressure")
+    n = fd.FacetNormal(solver.mesh)
+    row["cmb_flux"] = fd.assemble(
+        fd.dot(solver.field("displacement"), n)
+        * solver.coupling_context.surface_measure("bottom"))
+    row["newton"] = solver.appctx["gia_last_solve_newton_its"]
+    row["linear"] = solver.appctx["gia_last_solve_linear_its"]
+    history_norms = M.residual_history(solver)
+    row["newton_reduction"] = (float(history_norms[-1] / history_norms[0])
+                               if len(history_norms) > 1 else float("nan"))
+    return row
+
+
+def run_sphere():
+    """March the 3-D entry over the first `SPHERE_STEP_COUNT` forward steps."""
+    mesh = sphere_mesh()
+    dt = fd.Function(fd.FunctionSpace(mesh, "R", 0))
+    solver, u, psi = build_sphere(mesh, dt)
+    M.enable_residual_history(solver)
+    rows, time = [], 0.0
+    for k, h in enumerate(M.FORWARD_STEPS[:SPHERE_STEP_COUNT]):
+        dt.assign(h)
+        solver.solve()
+        time += h
+        rows.append(sphere_diagnostics(solver, u, psi, k, time, dt))
+    M.write_log(CASE_DIR / forward_log(SPHERE), rows)
+
+
 VALUE_ENTRIES = {"unreduced": run_unreduced, "reference-quadrature": run_reference,
                  "convert-quadrature-bdf2": run_convert}
 assert set(VALUE_ENTRIES) == set(FORWARD_VALUES)
@@ -315,9 +427,11 @@ assert set(VALUE_ENTRIES) == set(FORWARD_VALUES)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--entry", required=True,
-                        choices=sorted([*FORWARD, *FORWARD_VALUES]))
+                        choices=sorted([*FORWARD, *FORWARD_VALUES, SPHERE]))
     name = parser.parse_args().entry
-    if name in VALUE_ENTRIES:
+    if name == SPHERE:
+        run_sphere()
+    elif name in VALUE_ENTRIES:
         VALUE_ENTRIES[name]()
     else:
         run_march(name)

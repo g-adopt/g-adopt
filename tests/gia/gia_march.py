@@ -398,7 +398,8 @@ def _frame_columns(solver):
     is assembled here from the density, the displacement and the sheets of
     the coupling context, and not with `CentreOfMass.dipole`, so that a
     sheet missing from the constraint row of the solver shows as a nonzero
-    `D_i` instead of being missing from both.
+    `D_i` instead of being missing from both. One column per coordinate
+    direction of the mesh: two on the annulus, three on the sphere.
     """
     com = _coupling(solver, cp.CentreOfMass)
     out = {}
@@ -406,7 +407,7 @@ def _frame_columns(solver):
     X = fd.SpatialCoordinate(solver.mesh)
     u = solver.field("displacement")
     sheets = ctx.sheets
-    for i in range(2):
+    for i in range(solver.mesh.geometric_dimension):
         if com is None:
             out[f"com_{i}"] = out[f"dipole_{i}"] = math.nan
         else:
