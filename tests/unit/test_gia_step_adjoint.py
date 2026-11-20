@@ -3,14 +3,15 @@
 Every step kind with a block of G-ADOPT's own (the Quadrature history with
 either DtN representation) records the same structure: a sweep marker, the step block, a sweep marker
 and the kernel projection (`gadopt.gia_step_adjoint`). The tests here check
-that structure, the tangent sweep of the Quadrature step block against its
-adjoint and against a finite difference, the refusal of its second-order
-adjoint, and that a finished run leaves no solver alive once the tape is
-gone, with either preset.
+that structure and that a finished run leaves no solver alive once the tape
+is gone, with either preset.
 
-The gradients themselves are checked by the Taylor tests of
-`test_gia_solver.py` (`test_taylor_and_replay` and the `Real`-control
-tests), which run on both step kinds.
+The tangent sweep of the Quadrature step block (against the adjoint and
+against a difference of replays) and the refusal of its second-order adjoint
+are rows of the `adjoint` case in `tests/gia` (`sea-direct-viscosity`,
+`load-direct-Lambda`, `sea-direct-dt` and `guards`). The gradients
+themselves are checked there and by the `Real`-control Taylor tests of
+`test_gia_solver.py`.
 """
 import gc
 import weakref
@@ -23,10 +24,8 @@ from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
 from petsc4py import PETSc
 from pyadjoint.tape import annotate_tape
 
-import gadopt
 import gia_cases as C
-from gadopt import gia_couplings as cp
-from test_gia_solver import STEPS, NewSolver, march
+from test_gia_solver import STEPS, march
 
 # Every test in this module runs a solve or a time step, so the whole
 # module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
@@ -65,24 +64,6 @@ def _field_control(sub):
         direction = fd.Function(control.function_space()).interpolate(
             .1 + .03 * fd.SpatialCoordinate(sub)[0])
     return control, direction
-
-
-def _tangent_and_gradient(rf, control, direction):
-    """The tangent sweep `dJ/dm h` and the adjoint pairing `<dJ/dm, h>`.
-
-    Both at the taped control: the replay first sets the saved values of
-    the tape to it.
-    """
-    rf(control)
-    gradient = rf.derivative()
-    with gradient.dat.vec_ro as g, direction.dat.vec_ro as h:
-        pairing = g.dot(h)
-    tape = get_working_tape()
-    rf(control)
-    tape.reset_tlm_values()
-    rf.controls[0].block_variable.tlm_value = direction.copy(deepcopy=True)
-    tape.evaluate_tlm()
-    return float(rf.functional.block_variable.tlm_value), pairing
 
 
 @pytest.mark.parametrize("case", STEP_KINDS)
@@ -124,95 +105,6 @@ def _central_difference(rf, control, direction, eps=1e-4):
         plus = fd.Function(control.function_space()).assign(control + eps * direction)
         minus = fd.Function(control.function_space()).assign(control - eps * direction)
     return (float(rf(plus)) - float(rf(minus))) / (2 * eps)
-
-
-@pytest.mark.parametrize("control_kind", ["field", "Lambda", "dt"])
-def test_the_quadrature_step_has_a_tangent(meshes, control_kind):
-    """The tangent sweep through the Quadrature step block is the derivative.
-
-    Two checks on the same tape: the tangent equals the adjoint pairing,
-    and it equals a central finite difference of the replayed functional,
-    which uses neither the adjoint nor the tangent code.
-
-    The `Lambda` control is a factor of the low-rank prefactor `theta_psi`,
-    so it also checks the `theta_psi` column of the tangent right-hand side.
-    The `dt` control scales the time step of both steps, so it checks the
-    time coefficients of the step and, over two steps, the history inputs
-    of the second one.
-    """
-    parent, sub = meshes
-    case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
-                model="maxwell2", core="fluid", centre=True)
-    if control_kind == "field":
-        control, direction = _field_control(sub)
-        continue_annotation()
-        J = march(meshes, case, control)
-    elif control_kind == "dt":
-        # A Real factor on the time step of every step: dt = h * control.
-        with stop_annotating():
-            control = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0)
-            direction = fd.Function(control.function_space()).assign(0.3)
-            dt = C.dt_function(sub)
-            solver, u, psi = C.build_new(meshes, case, dt=dt,
-                                         nullspace="rigid_rotation")
-        continue_annotation()
-        for h in STEPS[:2]:
-            dt.assign(h * control)
-            solver.solve()
-        J = (fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
-             + fd.assemble(psi * psi * fd.dx(domain=parent)))
-    else:
-        with stop_annotating():
-            control = fd.Function(fd.FunctionSpace(parent, "R", 0)).assign(C.LAMBDA)
-            direction = fd.Function(control.function_space()).assign(.1 * C.LAMBDA)
-            dt = C.dt_function(sub)
-            u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2))
-            psi = fd.Function(fd.FunctionSpace(parent, "CG", 2))
-            material = gadopt.CompressibleInternalVariableApproximation(
-                bulk_modulus=1.0, density=1.0, g=1.0, B_mu=C.B_MU,
-                self_gravity_number=control, shear_modulus=[.4, .6],
-                viscosity=[.12, .6])
-            solver = NewSolver(
-                u, psi, material, dt=dt, time_scheme=case.scheme,
-                internal_variable_family="Quadrature", quad_degree=C.QUAD,
-                gravity_bcs=C.gravity_bcs(parent),
-                couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.),
-                           cp.CentreOfMass(),
-                           cp.SurfaceLoad(boundary=C.CURVE_RE,
-                                          sigma=C.load_expression(sub), g_surface=1.0)],
-                nullspace="rigid_rotation", solver_parameters="direct",
-                solver_parameters_extra=dict(snes_rtol=1e-11, snes_atol=1e-13,
-                                             ksp_rtol=1e-11))
-        continue_annotation()
-        for h in STEPS[:2]:
-            dt.assign(h)
-            solver.solve()
-        J = (fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
-             + fd.assemble(psi * psi * fd.dx(domain=parent)))
-    rf = ReducedFunctional(J, Control(control))
-    pause_annotation()
-    tangent, pairing = _tangent_and_gradient(rf, control, direction)
-    assert abs(pairing) >= 1e-6 * abs(float(J))
-    assert abs(tangent - pairing) <= 1e-8 * abs(pairing), (tangent, pairing)
-    # The error of a central difference is O(eps^2). On this case it is
-    # 1.0e-10 (field) and 4.7e-11 (dt) relative at eps = 1e-4, so the bound
-    # leaves four orders of margin.
-    central = _central_difference(rf, control, direction)
-    assert abs(central - tangent) <= 1e-6 * abs(tangent), (central, tangent)
-
-
-def test_the_quadrature_step_refuses_a_hessian(meshes):
-    """The second-order adjoint of the Quadrature step is not written: it raises."""
-    case = Case(family="Quadrature", representation="multiplier", core="fluid",
-                centre=True)
-    control, direction = _field_control(meshes[1])
-    continue_annotation()
-    J = march(meshes, case, control, steps=STEPS[:1])
-    rf = ReducedFunctional(J, Control(control))
-    pause_annotation()
-    rf.derivative()
-    with pytest.raises(NotImplementedError, match="Quadrature history step"):
-        rf.hessian(direction)
 
 
 #: The configurations of `test_a_finished_run_is_collected`: the step kind,
