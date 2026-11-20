@@ -6,7 +6,7 @@ spool files are named ``pbs_*`` so they never collide with the JSON sidecars and
 profile files the case produces.
 """
 
-from .scaling import cases, COUPLED_L, CAPACITANCE_L, REPRESENTATIONS
+from .gravity_scaling import cases, COUPLED_L, CAPACITANCE_L, REPRESENTATIONS
 
 CAPACITANCE_LEVELS = [4, 5]
 
@@ -22,7 +22,7 @@ def _step(name, level, lmax, kind, sidecar, representation=None):
     jobname = f"g{_PREFIX[kind]}{level}L{lmax}{suffix}"   # e.g. gsv4L5m, gcap4L30
     extra = f" --representation {representation}" if representation else ""
     return {
-        "hpc_entrypoint": "scaling.py",
+        "hpc_entrypoint": "gravity_scaling.py",
         "cores": cases[level]["cores"],
         "args": f"{level} --lmax {lmax} --kind {kind}{extra}",
         "outputs": [

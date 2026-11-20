@@ -25,8 +25,8 @@ import pytest
 import pandas as pd
 from pathlib import Path
 
-from scaling import (CAPACITANCE_L, COUPLED_L, REPRESENTATIONS, get_capacitance,
-                     get_coupled)
+from gravity_scaling import (CAPACITANCE_L, COUPLED_L, REPRESENTATIONS, get_capacitance,
+                             get_coupled)
 
 COUPLED_LEVELS = [4, 5, 6, 7]
 CAPACITANCE_LEVELS = [4, 5]

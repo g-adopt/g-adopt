@@ -140,7 +140,7 @@ time, so its walltime is sized from the level-6 measurement rather than guessed.
 | `capacitance_gravity.py`  | wall-free capacitance L-cost diagnostic (superseded) |
 | `submit_gravity_scaling.py` | Gadi PBS generator (dry run / `--submit`) |
 | `summarize_gravity_scaling.py` | reads sidecars, prints the tables, enforces the floor |
-| `scaling.py`, `meta.py`, `run.template`, `test_scaling.py` | layer-two doit/longtest integration |
+| `gravity_scaling.py`, `meta.py`, `run.template`, `test_gravity_scaling.py` | layer-two doit/longtest integration |
 | `expected.csv`, `expected_capacitance.csv` | regression references, **currently empty** |
 
 ## The empty reference files
@@ -152,7 +152,7 @@ dependence in it, since replaced by one in `L h / R` — and under the pre-recur
 path's numerical output. Asserting against them would be asserting against a
 different solver.
 
-`test_scaling.py` therefore *skips* a case with no reference row rather than
+`test_gravity_scaling.py` therefore *skips* a case with no reference row rather than
 failing it: a suite that is red for a known reason stops being read, which is
 worse than one that says plainly what it has not yet been told. Repopulating the
 files from a campaign turns the assertions back on with no other change.
