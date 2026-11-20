@@ -21,6 +21,16 @@ counts of block-0 solves (on the fixture that runs the production route).
 
 Each test says in its docstring which wrong implementation it catches.
 
+The exact identities of the cached apply (the complement against an
+independent elimination, the forward and transpose applies against the
+operator, their adjoint pairing, the transpose margin) are rows of the
+`schur` and `schur-np2` entries of the `operators` case in `tests/gia`
+(driver `gia_operators.py`, which imports `direct_params` and `ainvb_cache`).
+The rebuild at a change of the time step and the single build at a fixed
+operator are the rebuild rows of the `forward` case, and the gradient
+through the cached path is the `sea-iterative-viscosity` entry of the
+`adjoint` case.
+
 ## The two fixtures, and why each section uses the one it does
 
 - **`direct`**: the 2-D annulus under `selfgrav_dtn_schur_solver_parameters`,
@@ -316,30 +326,6 @@ def identity_residual(pc, seed):
 # A. The exact arm: the algebra, pinned to round-off
 # ===========================================================================
 @pytest.mark.longtest
-def test_the_cached_complement_matches_an_independent_elimination(direct):
-    """`S` is `A11 - A10 A00^{-1} A01` and nothing else.
-
-    The reference is `test_dtn_multiplier_dense_schur._reference_S`, which
-    assembles the coupled Jacobian as a PETSc `nest`, reads its dense blocks
-    and eliminates block 0 exactly. Nothing of the code under test enters it.
-
-    CATCHES: a wrong block partition; a dropped or sign-flipped `A11 e_k` term
-    (the design forms `S[:, k] = A11 e_k - A10 z_k` by hand instead of letting
-    `MatMult_SchurComplement` do it, so that term is newly hand-written and can
-    be lost); columns built against the wrong right-hand side.
-    FLOOR: `PARITY_FLOOR`, see its definition.
-    """
-    cache = ainvb_cache(direct["pc"])
-    S = np.asarray(cache.S)
-    S_ref = direct["S_ref"]
-    assert S.shape == S_ref.shape, (
-        f"the cache holds a {S.shape} complement where the Real block is "
-        f"{S_ref.shape}")
-    relative = np.linalg.norm(S - S_ref) / np.linalg.norm(S_ref)
-    assert relative < PARITY_FLOOR, f"S vs S_ref relative error {relative:.3e}"
-
-
-@pytest.mark.longtest
 def test_the_cached_columns_solve_the_block_zero_system(direct):
     """Column `k` of `Z` satisfies `A00 z_k = A01 e_k`, for every `k`.
 
@@ -392,27 +378,6 @@ def test_the_cached_columns_solve_the_block_zero_system(direct):
     assert scale > 0.0, "A01 is identically zero, so this test is vacuous"
     assert max(errors) / scale < IDENTITY_FLOOR, (
         f"||A00 z_k - A01 e_k|| / max_k ||A01 e_k|| = {max(errors)/scale:.3e}")
-
-
-@pytest.mark.longtest
-def test_the_forward_apply_inverts_the_operator(direct):
-    """`P^{-1} A x = x`: with an exact `M0` and an exact `S`, `full` is exact.
-
-    This is the whole of the forward apply (design section 4.2) in one
-    assertion, on the fixture where every approximation has been removed.
-
-    CATCHES any step of the forward apply: a missing lower-triangular
-    correction `x1 - A10 y0`, a `+Z s1` where `-Z s1` is meant, a `VecMAXPY`
-    over the wrong columns, a solve of `S` where `S^{-1}` was already applied,
-    a scatter that leaves part of `y` unwritten (PETSc does not guarantee `y`
-    is zero on entry).
-    FLOOR: `IDENTITY_FLOOR`. MEASURED on the equivalent exact arm that exists
-    today (`full` + `gadopt.DtNMultiplierDenseSchurPC` + `preonly` block 1):
-    1.5e-9.
-    """
-    relative = identity_residual(direct["pc"], seed=0)
-    assert relative < IDENTITY_FLOOR, (
-        f"||P^-1 A x - x|| / ||x|| = {relative:.3e}")
 
 
 @pytest.mark.longtest
@@ -524,135 +489,6 @@ def test_a_capped_block_zero_solve_leaves_the_next_step_solvable(meshes):
         == PETSc.KSP.ConvergedReason.DIVERGED_MAX_IT, (
         "block 0 was meant to stop at its cap on every solve, and its last "
         f"converged reason is {cache.ksp0.getConvergedReason()}")
-
-
-@pytest.mark.longtest
-def test_the_transpose_apply_inverts_the_transposed_operator(direct):
-    """`P^{-T} A^T x = x`, the transpose of the same statement.
-
-    The transpose apply is a separate arithmetic (design section 4.3): the
-    columns of `Z` enter through `VecMDot` instead of `VecMAXPY`, the dense
-    factors are used with `trans=1`, `A10` through `multTranspose`, and block 0
-    through `solveTranspose`. On this fixture block 0 is `preonly` + LU, which
-    has a transpose solve, so the path is reachable.
-
-    CATCHES: `VecMAXPY` where `VecMDot` is meant; the forward LU solve where
-    the transposed one is meant; `A10.mult` where `A10.multTranspose` is meant;
-    `ksp0.solve` where `ksp0.solveTranspose` is meant; the two transpose
-    solves of PETSc's own path collapsed onto the wrong vector.
-    FLOOR: `IDENTITY_FLOOR`. MEASURED on the exact arm: 3.7e-9.
-    """
-    pc = direct["pc"]
-    A, _ = pc.getOperators()
-    rng = np.random.default_rng(1)
-    x = A.createVecRight()
-    lo, hi = x.owner_range
-    x.array_w[:] = rng.standard_normal(hi - lo)
-    x.assemble()
-    b = A.createVecLeft()
-    A.multTranspose(x, b)
-
-    y = A.createVecRight()
-    pc.applyTranspose(b, y)
-    y.axpy(-1.0, x)
-    relative = y.norm() / x.norm()
-    assert relative < IDENTITY_FLOOR, (
-        f"||P^-T A^T x - x|| / ||x|| = {relative:.3e}")
-
-
-@pytest.mark.longtest
-def test_the_transpose_apply_is_not_the_forward_apply(direct):
-    """The vacuity guard for the test above: `P^{-T}` differs from `P^{-1}`.
-
-    If the preconditioner happened to be symmetric, an `applyTranspose` that
-    simply ran the forward path would satisfy the identity above and the test
-    would prove nothing. It is not symmetric -- `A01` and `A10` are different
-    blocks and `S` carries the structural asymmetry the dense Schur PC's
-    docstring records -- so the two answers must differ by a wide margin.
-
-    CATCHES: `applyTranspose` delegating to `apply`, which is the single most
-    likely wrong implementation and is silent, because a wrong transpose
-    changes no residual either.
-    FLOOR: `TRANSPOSE_MARGIN`. MEASURED on the exact arm: 8.6e-4.
-    """
-    # The claim is about the CACHED applies. Without this line the test passes
-    # against the delegating path, whose transpose is PETSc's own and equally
-    # asymmetric, and it would then gate nothing.
-    ainvb_cache(direct["pc"])
-    pc = direct["pc"]
-    A, _ = pc.getOperators()
-    rng = np.random.default_rng(2)
-    b = A.createVecLeft()
-    lo, hi = b.owner_range
-    b.array_w[:] = rng.standard_normal(hi - lo)
-    b.assemble()
-
-    forward = A.createVecRight()
-    pc.apply(b, forward)
-    transpose = A.createVecRight()
-    pc.applyTranspose(b, transpose)
-    difference = forward.copy()
-    difference.axpy(-1.0, transpose)
-    margin = difference.norm() / forward.norm()
-    assert margin > TRANSPOSE_MARGIN, (
-        f"the forward and the transpose apply differ by only {margin:.3e}; "
-        "the transpose is not being taken")
-
-
-@pytest.mark.longtest
-def test_the_forward_and_transpose_applies_are_adjoint(direct):
-    """`<P^{-1} a, b> = <a, P^{-T} b>` for random `a` and `b`.
-
-    Independent of the two identity tests: it compares the two applies against
-    each other rather than each against the operator, and it holds to
-    round-off rather than to the accuracy of the block-0 LU, because the same
-    LU appears on both sides. So it is the sharpest statement about the
-    transpose in this file, five orders sharper than `IDENTITY_FLOOR`.
-
-    CATCHES: a transpose apply that is self-consistent but built from a
-    different operator than the forward one -- for instance one that transposes
-    `S` but not `A10`, or that uses a `Z` from a stale build.
-    FLOOR: `PARITY_FLOOR`. MEASURED on the exact arm: 4.0e-15.
-    """
-    # As above: the identity holds for the delegating path too, so the test
-    # must first say which apply it is about.
-    ainvb_cache(direct["pc"])
-    pc = direct["pc"]
-    A, _ = pc.getOperators()
-    rng = np.random.default_rng(3)
-    lo, hi = A.createVecLeft().owner_range
-    a = A.createVecLeft()
-    a.array_w[:] = rng.standard_normal(hi - lo)
-    a.assemble()
-    b = A.createVecLeft()
-    b.array_w[:] = rng.standard_normal(hi - lo)
-    b.assemble()
-
-    forward = A.createVecRight()
-    pc.apply(a, forward)
-    transpose = A.createVecRight()
-    pc.applyTranspose(b, transpose)
-    left = forward.dot(b)
-    right = a.dot(transpose)
-    assert abs(left - right) / abs(left) < PARITY_FLOOR, (
-        f"<P^-1 a, b> = {left:.12e} but <a, P^-T b> = {right:.12e}")
-
-
-@pytest.mark.longtest
-def test_the_outer_krylov_converges_in_one_iteration(direct):
-    """On the exact arm the preconditioned operator is the identity.
-
-    This is the count that separates `full` from `lower`: `lower` leaves a
-    rank-`n` nilpotent correction `I + N` and needs two iterations, `full`
-    needs one. It also separates an exact block-1 solve from an
-    unpreconditioned one, which on this fixture takes three.
-
-    CATCHES: an apply that implements `lower`, `upper` or `diag` while
-    claiming `full`; a block-1 solve that uses something other than the exact
-    factors of `S`.
-    MEASURED on the equivalent exact arm that exists today: 1, `CONVERGED_RTOL`.
-    """
-    assert outer_iterations(direct["solver"]) == 1
 
 
 # ===========================================================================
@@ -1018,76 +854,6 @@ def marched(meshes):
         "block0_assemblies_before": block0_assemblies_before,
         "block0_assemblies_after": block0_context(solver).assembly_count,
     }
-
-
-@pytest.mark.longtest
-def test_the_cache_is_built_once_at_a_fixed_operator(marched):
-    """Three solves at one `dt` leave the build counter at one.
-
-    A rebuild is `n` block-0 solves, so a cache that rebuilds when nothing
-    moved spends the saving the design exists to collect, and converges to the
-    same answer while doing it.
-
-    CATCHES: a rebuild keyed on the Jacobian's object state (which moves at
-    every assembly) instead of on the two staleness markers; a build moved into
-    `apply`.
-    """
-    assert marched["fixed_step_builds"] == 1, (
-        "build count after three solves at one dt: "
-        f"{marched['fixed_step_builds']} (None means the option "
-        "installed no cache)")
-
-
-@pytest.mark.longtest
-def test_a_time_step_change_rebuilds_the_cache(marched):
-    """`dt.assign` moves `operator_version`, so the cache must be rebuilt.
-
-    The effective bulk/shear ratio is `bulk_shear_ratio * (1 + dt/tau)`, so a
-    new time step is a different mechanics block and the columns of the old one
-    describe an operator that no longer exists.
-
-    CATCHES: a cache built once at `initialize` and never revisited, which is
-    a valid preconditioner and therefore silent.
-    """
-    assert marched["builds_after_dt_change"] == 2, (
-        "build count after the dt change: "
-        f"{marched['builds_after_dt_change']} (None means the "
-        "option installed no cache)")
-
-
-@pytest.mark.longtest
-def test_the_inner_fieldsplit_is_set_up_from_update(marched):
-    """`update` must call `self.pc.setUp()` before anything else.
-
-    THE TRAP OF THIS DESIGN (section 3.4). On the delegating path
-    `self.pc.apply` calls `PCApply` on the inner fieldsplit, which calls
-    `PCSetUp` on it, which re-extracts the sub-matrices with
-    `MAT_REUSE_MATRIX`; Firedrake's `createSubMatrix` assembles into the reused
-    target, which moves every sub-block's object state, which is what makes
-    `CondensedBlockPC.update` run and reassemble its four blocks. Under the
-    option nothing calls `PCApply` on the inner fieldsplit, so unless `update`
-    sets it up by hand the block-0 sub-operator's state never moves,
-    `CondensedBlockPC` keeps the blocks of the FIRST Jacobian for the whole
-    march, and every answer stays right.
-
-    The witness is `CondensedBlockPC.assembly_count`, which belongs to another
-    class and counts reassemblies of the four block-0 blocks.
-
-    CATCHES exactly one omission: a missing `self.pc.setUp()` at the top of
-    `update`. Nothing else in this file can see it -- the states agree, the
-    complement is rebuilt (the first assertion below), and only the iteration
-    count suffers.
-    """
-    # Vacuity guard: this says the cached path did notice the dt change. If it
-    # had not, the assertion below would be measuring the wrong omission.
-    assert marched["builds_after_dt_change"] == 2, (
-        "the cache did not rebuild at all, so this test cannot distinguish a "
-        "missing inner setUp from a missing rebuild rule")
-    assert (marched["block0_assemblies_after"]
-            > marched["block0_assemblies_before"]), (
-        "CondensedBlockPC never reassembled after the time step changed: the "
-        "inner fieldsplit was never set up, so block 0 is still preconditioned "
-        "with the blocks of the first Jacobian")
 
 
 @pytest.mark.longtest
@@ -1578,34 +1344,6 @@ def test_lagged_reaches_the_same_state(lagged_arms):
 
 
 @pytest.mark.longtest
-def test_a_time_step_change_rebuilds_a_lagged_cache(meshes):
-    """The same claim as the stub test above, through the real solver.
-
-    `every = 100` holds the complement over the two solves at one `dt`; the
-    third solve, after `dt.assign`, must build once more.
-
-    CATCHES: `_published_dt` reading a context that does not carry the
-    solver's `dt`, in which case the stub test passes and this one does not.
-    """
-    params = iterative_params(ainvb=True, snes_type="newtonls")
-    params.update(gia_rebuild="lagged", gia_rebuild_every=100)
-    solver, _, _ = build_coupled(
-        meshes, "lowrank", solver_parameters=params,
-        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
-    solver.solve()
-    solver.solve()
-    cache = ainvb_cache(outer_pc(solver))
-    assert cache.build_count == 1, (
-        f"{cache.build_count} builds over two solves at one dt under a lag "
-        "of 100: the lag does not hold")
-    solver.dt.assign(2.0 * float(solver.dt))
-    solver.solve()
-    assert cache.build_count == 2, (
-        f"{cache.build_count} builds after the dt change: the lag kept the "
-        "complement of the old time step")
-
-
-@pytest.mark.longtest
 def test_the_solver_publishes_the_counts_of_the_last_solve(marched):
     """After each solve the context carries that solve's own counts.
 
@@ -2052,79 +1790,3 @@ class TestThreeDimensions:
             reference["n"] + 2 * reference["iterations"]), (
             "the reference arm's cost model has moved")
         assert cached["block0"] == cached["n"] + cached["iterations"]
-
-
-# ===========================================================================
-# E. The adjoint
-# ===========================================================================
-@pytest.mark.longtest
-def test_the_gradient_is_right_through_the_cached_path(meshes):
-    """The cache builds on `adjoint(J)` and the gradient is unchanged.
-
-    pyadjoint assembles `adjoint(dFdu)` and solves it with the FORWARD solver
-    options, so an adjoint solve of this system reaches `apply` over the
-    transposed operator, not `applyTranspose`. The class introspects that
-    operator like any other: the `Real` fields are still last, block 0 is
-    `A00^T`, and the whole of the build and the forward apply runs on it. On
-    the low-rank path the live application context is carried through
-    `LowRankVariationalSolver`, with both staleness markers frozen for the
-    sweep, so the adjoint's cache is built once and kept.
-
-    The reference is the same gradient with the option off. A preconditioner
-    cannot change a converged gradient, so a difference means the adjoint solve
-    did not converge to the same place.
-
-    CATCHES: a cache that reads something pyadjoint strips from the adjoint
-    solve's kwargs and raises there; a rebuild rule that thrashes or stalls on
-    the frozen markers; a build that fails on the transposed operator.
-    FLOOR: 1e-6 relative, the bar the adjoint suite uses. The two solves reach
-    the same linear system to the same outer tolerance, so they agree far
-    closer than that.
-    """
-    from pyadjoint import (Control, ReducedFunctional, continue_annotation,
-                           get_working_tape, pause_annotation,
-                           stop_annotating)
-    from gadopt.dtn_coupled_adjoint import adjoint_solver as find_adjoint_solver
-
-    _, sub = meshes
-    gradients = {}
-    cache_builds = None
-    for name, ainvb in (("cached", True), ("reference", False)):
-        params = iterative_params(ainvb=ainvb, outer_rtol=1e-11)
-        tape = get_working_tape()
-        tape.clear_tape()
-        # The control: the shear modulus, a `Real` Function on the mantle
-        # mesh, at 1. The objective is `J = ||u||^2` over the mantle, on the
-        # low-rank path with a fluid core and no rotation.
-        with stop_annotating():
-            control = fd.Function(fd.FunctionSpace(sub, "R", 0)).assign(1.0)
-        continue_annotation()
-        try:
-            m = Control(control)
-            with stop_annotating():
-                solver, u, _ = build_coupled(
-                    meshes, "lowrank", rotation=False,
-                    solver_parameters=params, shear_modulus=control)
-            solver.solve()
-            J = fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
-            functional = ReducedFunctional(J, m)
-        finally:
-            pause_annotation()
-        gradients[name] = float(functional.derivative())
-        if ainvb:
-            # The stock or the cached adjoint solver, whichever this
-            # Firedrake builds.
-            adjoint_solver = find_adjoint_solver(solver.adjoint_block)
-            cache_builds = ainvb_cache(
-                adjoint_solver.snes.ksp.pc).build_count
-        tape.clear_tape()
-
-    # Vacuity guard: the gradient comparison alone would pass whether or not
-    # the adjoint solve ever reached the cached path.
-    assert cache_builds == 1, (
-        "the adjoint solve did not build the cache exactly once; the gradient "
-        "below would then say nothing about the cached path")
-    relative = abs(gradients["cached"] - gradients["reference"]) / abs(
-        gradients["reference"])
-    assert relative < 1e-6, (
-        f"the cached path moved the gradient by {relative:.3e} relative")
