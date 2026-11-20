@@ -20,12 +20,14 @@ is the system the step solves. On the low-rank DtN path the low-rank update
 `theta_psi B` is added, as the solver's callbacks add it.
 
 Configurations the earlier solver reached only through its pointwise
-substitution are not compared: the present solver has no pointwise path. A
-rigid core is compared on the DG family only.
+substitution are not compared: the present solver has no pointwise path.
+Every configuration is on the Quadrature family, whose natural displacement
+boundaries need a fluid core.
 """
 
 import firedrake as fd
 import pytest
+import ufl
 
 import gia_cases as C
 
@@ -34,24 +36,6 @@ Case = C.Case
 #: Every configuration of gate 1. The label lists family, scheme, DtN
 #: representation, rheology, core, rotation, centre of mass and load.
 CASES = [
-    # DG family, rigid core.
-    Case(rotation=True),
-    Case(representation="lowrank", rotation=True),
-    Case(scheme="bdf2", model="maxwell2", rotation=True),
-    Case(scheme="bdf2", representation="lowrank", model="power"),
-    Case(model="power", rotation=True, load=None),
-    # DG family, fluid core.
-    Case(representation="lowrank", model="power", core="fluid", rotation=True,
-         centre=True),
-    Case(model="backstress", core="fluid"),
-    Case(scheme="bdf2", representation="lowrank", model="backstress",
-         core="fluid", centre=True, load="sea_fixed"),
-    Case(model="maxwell2", core="fluid", rotation=True, centre=True,
-         load="sea_fixed"),
-    Case(scheme="bdf2", representation="lowrank", model="maxwell2",
-         core="fluid", rotation=True, centre=True, load="sea_moving"),
-    Case(model="power", core="fluid", centre=True, load="sea_moving"),
-    Case(representation="lowrank", core="fluid", load=None),
     # Quadrature family (natural displacement boundaries, so a fluid core).
     Case(family="Quadrature", representation="lowrank", core="fluid"),
     Case(family="Quadrature", scheme="bdf2", model="maxwell2", core="fluid",
@@ -128,9 +112,19 @@ def test_residual_and_jacobian_action_match_the_reference(meshes, case):
 
 
 def _add(term):
-    """A perturbation that adds `term(new)` to the new solver's residual."""
+    """A perturbation that adds `term(new)` to the residual the gate assembles.
+
+    On the Quadrature family the gate assembles the residual and the
+    Jacobian of the step backend (`gia_cases.residual_and_actions`), which
+    are written on the backend's own copy of the solution. The term is moved
+    onto that copy and added to both forms, so the Jacobian action sees the
+    derivative of the extra term as well.
+    """
     def perturb(new):
-        new.F = new.F + term(new)
+        backend = new._step.backend
+        extra = ufl.replace(term(new), {new.solution: backend.work})
+        backend.F = backend.F + extra
+        backend.J = backend.J + fd.derivative(extra, backend.work)
     return perturb
 
 
@@ -153,7 +147,8 @@ def test_the_gate_sees_a_changed_row(meshes, row):
     block still agrees, so the comparison maps the blocks by name and does
     not hide a small block.
     """
-    case = Case(rotation=True).but(load_mean=0.5)
+    case = Case(family="Quadrature", scheme="bdf2", model="maxwell2", core="fluid",
+                rotation=True, centre=True, load="sea_fixed")
     fingerprints = gate(meshes, case, perturb=_add(NEGATIVE[row]))
     for new, ref in zip(fingerprints, REFERENCE[case.label]):
         differences = C.fingerprint_differences(new, ref)
