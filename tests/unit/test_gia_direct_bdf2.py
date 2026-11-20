@@ -22,13 +22,13 @@ from gadopt.gia_presets import OMEGA_SQ_EARTH
 from gadopt.gia_solver import SelfGravitatingGIASolver
 import test_gia_gravity as base
 from test_gravity_adjoint import assert_taylor_with_guards
-import gia_solver_cases
+import gia_cases
 
 
 @pytest.fixture(scope='module')
 def meshes():
     """The small triangle annulus, read from `tests/unit/data` (no gmsh needed)."""
-    return gia_solver_cases.annulus_meshes()
+    return gia_cases.annulus_meshes()
 
 
 STEPS = (.08, .13, .07, .12)

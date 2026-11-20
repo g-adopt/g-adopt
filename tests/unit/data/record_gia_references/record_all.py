@@ -5,8 +5,10 @@ commit 2f4b1397 and not later. It writes `gia_gate_reference.json` and
 `gia_forward_reference.json` of `tests/unit/data`. The README of this
 directory gives the procedure. In short: run it serially from the root of a
 checkout of 2f4b1397, with `tests/unit/cases_coord.py` a copy of the present
-`tests/unit/gia_solver_cases.py` (only its stored mesh and its coordinate
-helpers are used), and with the output directory as the first argument.
+`tests/gia/gia_cases.py` (only its stored mesh and its coordinate helpers are
+used), and with the output directory as the first argument. The module
+`gia_solver_cases` that this script imports is the one of 2f4b1397, in
+`tests/unit` of that checkout.
 
 The gate references are the residual and two Jacobian actions of the
 earlier solver at a coordinate-defined state; the forward references are

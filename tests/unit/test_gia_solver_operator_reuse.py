@@ -14,7 +14,7 @@ the version changes directly, so they do not depend on a particular cache.
 import gadopt  # noqa: F401  (gadopt before firedrake)
 import pytest
 
-from gia_solver_cases import Case, annulus_meshes, build_new
+from gia_cases import Case, annulus_meshes, build_new
 
 
 @pytest.fixture(scope="module")

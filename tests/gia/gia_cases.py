@@ -1,4 +1,4 @@
-"""Builders shared by the tests of `gadopt.gia_solver`.
+"""Builders shared by the unit tests and the case runs of `gadopt.gia_solver`.
 
 `Case` describes one configuration of the coupled GIA system and `build_new`
 builds it with `gadopt.gia_solver.SelfGravitatingGIASolver`.
@@ -9,7 +9,7 @@ solver.
 
 The geometry is the small triangle annulus of `test_gia_direct_bdf2.py`: a
 parent with a stand-off buffer, the mantle a `Submesh`, both P2-curved. The
-linear mesh is stored in `data/gia_triangle_annulus.msh`.
+linear mesh is stored in `tests/unit/data/gia_triangle_annulus.msh`.
 
 Everything that enters a stored value is defined by the coordinates and not
 by the order of the degrees of freedom: the state and the directions are
@@ -43,11 +43,17 @@ DT0 = 0.1
 QUAD = 4
 
 
+#: The stored data of the GIA unit tests (the mesh and the reference values)
+#: is in `tests/unit/data`. The path is resolved from this file, which is in
+#: `tests/gia`, so that it does not depend on the working directory.
+DATA_DIR = Path(__file__).resolve().parents[1] / "unit" / "data"
+
+
 #: The linear triangle annulus of the GIA unit tests. Written once by
 #: `demos/gravity/generate_selfgrav_annulus.generate(path, dr_mantle=.3,
 #: n_azimuthal=16, quads=False)` with gmsh 4.15.2 and stored, so that the
 #: cells are the same on every machine and no test needs gmsh.
-MESH_FILE = Path(__file__).resolve().parent / "data" / "gia_triangle_annulus.msh"
+MESH_FILE = DATA_DIR / "gia_triangle_annulus.msh"
 
 
 def curve_mesh(linear_mesh):
@@ -541,7 +547,7 @@ def assert_fingerprints_agree(new, reference, rtol=FIELD_RTOL):
 #: earlier solver (`gadopt.gia_gravity` at commit 2f4b1397) with the
 #: coordinate-defined states, directions and probes of this module, so the
 #: comparisons hold on any machine and any number of ranks.
-REFERENCE_DIR = Path(__file__).resolve().parent / "data"
+REFERENCE_DIR = DATA_DIR
 
 
 def reference_values(kind):

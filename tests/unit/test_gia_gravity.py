@@ -1346,7 +1346,7 @@ class TestEliminatedBlockSymmetry:
         holds the history rows, reads far above round-off, so it is not
         vacuous there.
         """
-        import gia_solver_cases as cases
+        import gia_cases as cases
 
         def asymmetry(family):
             solver, _, _ = TestFluidCore.build_fluid(

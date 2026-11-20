@@ -11,7 +11,7 @@ numbers and the same state, and its residual and two Jacobian actions are
 stored as fingerprints in `data/gia_gate_reference.json` (key "3d"). The
 present solver is compared against those values field by field. The state,
 the directions and the probes are defined by the coordinates
-(`gia_solver_cases.coordinate_function`), so the comparison runs on any
+(`gia_cases.coordinate_function`), so the comparison runs on any
 number of ranks.
 """
 
@@ -19,7 +19,7 @@ import firedrake as fd
 import pytest
 
 import gadopt
-import gia_solver_cases as C
+import gia_cases as C
 from gadopt import gia_couplings as cp
 from gadopt.gia_solver import SelfGravitatingGIASolver as NewSolver
 
@@ -47,7 +47,7 @@ def build(mesh, representation, model, family):
     Args:
       mesh: the extruded sphere, for the displacement and the potential.
       representation: "multiplier" or "lowrank".
-      model: the rheology name of `gia_solver_cases.approximation`.
+      model: the rheology name of `gia_cases.approximation`.
       family: "DG" or "Quadrature".
     """
     X = fd.SpatialCoordinate(mesh)

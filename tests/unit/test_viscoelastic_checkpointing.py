@@ -294,7 +294,7 @@ def test_a_parent_and_a_submesh_of_one_name_keep_their_own_points(tmp_path):
 
     The parent and the submesh carry one mesh name here, as a parent and a
     submesh do when each is curved by `Mesh(coordinate_function)`
-    (`gia_solver_cases.annulus_meshes`). Their Quadrature fields of one rule
+    (`gia_cases.annulus_meshes`). Their Quadrature fields of one rule
     are written to one file, the submesh field first, and read back on the
     writer's partition; both must come back bit for bit. This needs a
     stored point set per field: the points of the submesh cover the submesh

@@ -18,7 +18,7 @@ from mpi4py import MPI
 
 import gadopt  # noqa: F401  (gadopt before firedrake)
 import firedrake as fd
-import gia_solver_cases as C
+import gia_cases as C
 from gadopt.gia_state import read_state, write_state
 from test_gia_solver import (FOUR, PARALLEL_RTOL, STATE_CASES, load_meshes,
                              relative, run)

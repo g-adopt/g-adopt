@@ -76,8 +76,6 @@ two-disc moving-shoreline case and Irksome.
 """
 
 import importlib
-import importlib.util
-from pathlib import Path
 
 import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
 import firedrake as fd
@@ -130,9 +128,8 @@ meshes = test_gia_gravity.meshes
 # ---------------------------------------------------------------------------
 
 #: Water and ice densities in the units of the test's mantle density, which is
-#: 1. The mantle stands for the Spada upper mantle, 4978 kg/m^3, and Will
-#: Scott's code uses 1000 and 931 kg/m^3. The ratio rho_i/rho_w = 0.931 must
-#: match Will's class attributes for the comparison test.
+#: 1. The mantle stands for the Spada upper mantle, 4978 kg/m^3, and the water
+#: and ice densities are 1000 and 931 kg/m^3.
 RHO_W = 1000.0 / 4978.0
 RHO_I = 931.0 / 4978.0
 
@@ -180,11 +177,6 @@ GROUNDED = 100.0
 #: `eps / (r s)`, is a quarter of a facet wide.
 EPS = 0.05
 
-#: The steepness factor that Will Scott's `SeaLevelSolver` takes
-#: (`TestAgainstWillScott`). It sets that solver's own masks, on a state where
-#: they are saturated.
-WILL_ALPHA = 0.5
-
 #: Rotation of the smooth shoreline state, so that it has no mirror symmetry in
 #: `x` or `y` and every first-moment integral of the ocean is nonzero.
 PHASE = 0.5
@@ -203,9 +195,16 @@ TIGHT = {"snes_rtol": SNES_RTOL, "snes_atol": SNES_ATOL, "ksp_rtol": 1e-12}
 #: The two DtN representations that the physics tests run on.
 REPRESENTATIONS = ("multiplier", "lowrank")
 
-#: Path of Will Scott's `SeaLevelSolver`, copied into the untracked NOTES.
-WILL_SEA_LEVEL = (Path(__file__).resolve().parents[2] / "NOTES" / "will"
-                  / "sea_level.py")
+#: An Earth with an elastic step (viscosity 1e18, so the Maxwell time is far
+#: above `dt = 1`) with shear and bulk modulus 30.
+#: Chosen so that the ocean means of the geoid change and of the uplift are
+#: both a large part of the non-eustatic remainder of the shift. Measured on
+#: the current solver with the fixed-shoreline load `rho_i dI (2 caps - 1)`
+#: given as a sheet: `|mean_dN| / |rest| = 0.59`, `|mean_ur| / |rest| = 0.41`,
+#: `|rest| / |eustatic| = 0.086`. The default Earth (viscosity 1, modulus 1,
+#: `dt = 1`) gave 0.058 for the geoid, below the guard of 0.1; modulus 10 gave
+#: 0.35 and 0.65, modulus 100 gave 0.82 and 0.18.
+ELASTIC_EARTH = dict(shear_modulus=30.0, bulk_modulus=30.0, viscosity=1e18)
 
 
 # ---------------------------------------------------------------------------
@@ -1132,7 +1131,7 @@ class TestRepeatedSolve:
         """`Shift` and `psi` agree between two successive solves to 1e-8 relative.
 
         Configuration of the correctness probe: `"caps"` state with
-        `d_ice = 1e-2`, `WILL_EARTH`, full `Lambda`, direct preset, `TIGHT`.
+        `d_ice = 1e-2`, `ELASTIC_EARTH`, full `Lambda`, direct preset, `TIGHT`.
 
         Tolerance 1e-8 relative. The Newton tolerance is `snes_rtol = 1e-10`
         and the outer Krylov solve runs to 1e-12, so a converged solve is
@@ -1149,7 +1148,7 @@ class TestRepeatedSolve:
         d_ice = 1e-2
         solver, z, sea = build(meshes, surface_fields(sub, "caps",
                                                       d_ice=d_ice),
-                               earth=WILL_EARTH,
+                               earth=ELASTIC_EARTH,
                                representation=representation,
                                **solve_settings(representation))
         solver.solve()
@@ -1755,118 +1754,6 @@ class TestSignAgainstPhysics:
         mean_far = fd.assemble(far * delta * dss) / fd.assemble(far * dss)
         eustatic = RHO_I / RHO_W * d_ice
         assert mean_near - mean_far > 1e-3 * eustatic
-
-
-def load_will_sea_level():
-    """Will Scott's `sea_level.py` as a module, or a skip if it is absent."""
-    if not WILL_SEA_LEVEL.exists():
-        pytest.skip(f"Will Scott's SeaLevelSolver is not at {WILL_SEA_LEVEL}. "
-                    "It is untracked comparison code under NOTES/; copy it "
-                    "from ~/Workplace/sl_testing/globe_test/sea_level.py.")
-    spec = importlib.util.spec_from_file_location("will_sea_level",
-                                                  WILL_SEA_LEVEL)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-#: The Earth of the Will Scott comparison: an elastic step (viscosity 1e18,
-#: so the Maxwell time is far above `dt = 1`) with shear and bulk modulus 30.
-#: Chosen so that the ocean means of the geoid change and of the uplift are
-#: both a large part of the non-eustatic remainder of the shift. Measured on
-#: the current solver with the fixed-shoreline load `rho_i dI (2 caps - 1)`
-#: given as a sheet: `|mean_dN| / |rest| = 0.59`, `|mean_ur| / |rest| = 0.41`,
-#: `|rest| / |eustatic| = 0.086`. The default Earth (viscosity 1, modulus 1,
-#: `dt = 1`) gave 0.058 for the geoid, below the guard of 0.1; modulus 10 gave
-#: 0.35 and 0.65, modulus 100 gave 0.82 and 0.18.
-WILL_EARTH = dict(shear_modulus=30.0, bulk_modulus=30.0, viscosity=1e18)
-
-
-class TestAgainstWillScott:
-
-    def test_the_shift_matches_the_separate_surface_solver(
-            self, meshes, representation):
-        """Given our `dN` and `du_r`, Will's shift equals our `Shift`.
-
-        Fixed shorelines: a uniform deep ocean (Will's `C` is 1) and grounded
-        ice growing on the two caps, a degree-2 load. The Earth is
-        `WILL_EARTH` and `Lambda` is full. The coupled solve gives `Shift`,
-        `psi` and `u`. Will's `SeaLevelSolver` runs on a 32-segment circle
-        whose vertices are the Re vertices, with `dphi = psi / g(Re)` and
-        `du_r = u . rhat` interpolated onto CG2, and returns its `shift`.
-
-        The two shifts share the eustatic part `-(rho_i/rho_w) dI L_ice /
-        L_ocean`, which is identical on both meshes because the caps cover
-        half the circle on both. The comparison is on the remainder
-        `rest = -mean_ocean(dN - du_r)`, which carries the sign of the geoid
-        and of the uplift.
-
-        Both codes read the same `psi` and `u`. A flipped sign of `dN` in our
-        `sea_level()` therefore moves our remainder by `2 |mean_ocean(dN)|`,
-        and a flipped `du_r` by `2 |mean_ocean(du_r)|`. The guards require
-        each ocean mean to exceed 0.1 of `|rest|`, so either flip moves the
-        remainder by at least 20 percent, four times the tolerance. The guards
-        are computed from the solved fields, so they hold for the state the
-        comparison uses and not only for the probe.
-
-        Tolerance 5 percent of the remainder: the two computations differ by
-        the polygon geometry and the CG2 interpolation, both of order `h^2`
-        (about 1e-3 relative of the eustatic value, that is about 1 percent
-        of the remainder here).
-        """
-        will = load_will_sea_level()
-        parent, sub = meshes
-        d_ice = 1e-2
-        fields = surface_fields(sub, "caps", d_ice=d_ice)
-        solver, z, sea = build(meshes, fields, earth=WILL_EARTH,
-                               representation=representation,
-                               **solve_settings(representation))
-        solver.solve()
-        assert solver_converged(solver)
-        shift_ours = real_value(sea.shift())
-
-        circle = fd.CircleManifoldMesh(32, radius=RE, degree=1)
-        V = fd.FunctionSpace(circle, "CG", 2)
-        Vv = fd.VectorFunctionSpace(circle, "CG", 2)
-        psi_c = fd.assemble(fd.interpolate(
-            solver.psi, V))
-        u_c = fd.assemble(fd.interpolate(
-            solver.u, Vv))
-        Xc = fd.SpatialCoordinate(circle)
-        du_r = fd.Function(V).interpolate(
-            fd.dot(u_c, Xc / fd.sqrt(fd.dot(Xc, Xc))))
-        dphi = fd.Function(V).interpolate(psi_c / G_RE)
-        caps_c = indicator(circle, "caps")
-        Ih0 = fd.Function(caps_c.function_space()).interpolate(
-            GROUNDED * caps_c)
-        Ih = fd.Function(caps_c.function_space()).interpolate(
-            (GROUNDED + d_ice) * caps_c)
-        SL = fd.Function(V).assign(DEEP)
-        will_solver = will.SeaLevelSolver(SL, Ih, Ih0, du_r, dphi, WILL_ALPHA)
-        will_solver.update_shorelines()
-        shift_will = float(will_solver.shift)
-
-        ratio = will.SeaLevelSolver.rho_ice / will.SeaLevelSolver.rho_water
-        assert ratio == pytest.approx(RHO_I / RHO_W, rel=1e-12)
-        eustatic = -ratio * d_ice  # the caps are half of the circle
-        rest_ours = shift_ours - eustatic
-        rest_will = shift_will - eustatic
-        assert abs(rest_will) > 1e-2 * abs(eustatic)
-
-        # Guards: each term of the remainder alone is large enough that a flip
-        # of its sign in `sea_level()` fails the 5 percent comparison below.
-        # The ocean is the complement of the caps, with the weight that Will's
-        # `B C` has for these fixed shorelines.
-        ocean_c = 1 - caps_c
-        ocean_length = fd.assemble(ocean_c * fd.dx(domain=circle))
-        mean_dN = fd.assemble(ocean_c * dphi * fd.dx(domain=circle)) \
-            / ocean_length
-        mean_ur = fd.assemble(ocean_c * du_r * fd.dx(domain=circle)) \
-            / ocean_length
-        assert abs(mean_dN) > 0.1 * abs(rest_will)
-        assert abs(mean_ur) > 0.1 * abs(rest_will)
-
-        assert abs(rest_ours - rest_will) <= 5e-2 * abs(rest_will)
 
 
 # ---------------------------------------------------------------------------

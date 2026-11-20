@@ -6,12 +6,12 @@ built on the same annulus, one fixed nonzero state was written into both
 (every field, both history levels, the BDF2 coefficients after a startup
 step), and the assembled residual and the Jacobian action on two fixed
 directions agreed field by field to round-off. The earlier solver's vectors
-are stored as fingerprints (`gia_solver_cases.fingerprint`: per field block
+are stored as fingerprints (`gia_cases.fingerprint`: per field block
 the norm and the pairing with a fixed probe) in
 `data/gia_gate_reference.json`, so this file now compares the present solver
 against those stored values. The state, the directions and the probes are
 interpolated from fixed expressions of the coordinates
-(`gia_solver_cases.coordinate_function`), so the comparison does not depend
+(`gia_cases.coordinate_function`), so the comparison does not depend
 on the order of the degrees of freedom and runs on any number of ranks.
 
 On the Quadrature family the residual and the Jacobian are those of the
@@ -27,7 +27,7 @@ rigid core is compared on the DG family only.
 import firedrake as fd
 import pytest
 
-import gia_solver_cases as C
+import gia_cases as C
 
 Case = C.Case
 

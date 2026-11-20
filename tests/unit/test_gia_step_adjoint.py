@@ -25,7 +25,7 @@ from petsc4py import PETSc
 from pyadjoint.tape import annotate_tape
 
 import gadopt
-import gia_solver_cases as C
+import gia_cases as C
 from gadopt import gia_couplings as cp
 from test_gia_solver import STEPS, NewSolver, march
 

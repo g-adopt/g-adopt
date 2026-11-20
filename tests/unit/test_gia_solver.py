@@ -29,7 +29,7 @@ from pyadjoint.tape import annotate_tape
 from ufl.algorithms import expand_derivatives, extract_coefficients
 
 import gadopt
-import gia_solver_cases as C
+import gia_cases as C
 from gadopt import gia_couplings as cp
 from gadopt.gia_solver import SelfGravitatingGIASolver as NewSolver
 from gadopt.gia_state import read_state, state_from_checkpoint, write_state
@@ -74,7 +74,7 @@ FORWARD = [
 #: Fingerprints of the earlier solver's (`gadopt.gia_gravity`) state after
 #: each of the three steps, by case label: per step the displacement, the
 #: potential and the accepted history as `[norm, probe, probe norm]`
-#: (`gia_solver_cases.probe_pairing`), and the value of every `Real` field.
+#: (`gia_cases.probe_pairing`), and the value of every `Real` field.
 FORWARD_REFERENCE = C.reference_values("forward")
 
 #: Bound on the relative difference of a solved field from the stored one.
@@ -483,7 +483,7 @@ def test_state_round_trip_in_memory_and_reset(meshes):
 
 
 #: Checkpoint files that the earlier solver (`gadopt.gia_gravity` at commit
-#: 2f4b1397) wrote after two steps on the mesh of `gia_solver_cases.MESH_FILE`,
+#: 2f4b1397) wrote after two steps on the mesh of `gia_cases.MESH_FILE`,
 #: in the layouts of the drivers that ran it. Written once, in serial, by a
 #: script that ran the earlier solver and the drivers' field lists
 #: (`time_history_fields`, `time_history_metadata`), then copied with gzip

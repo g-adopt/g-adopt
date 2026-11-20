@@ -73,7 +73,7 @@ from gadopt.gia_couplings import CentreOfMass, FluidCore, Rotation, SeaLevel
 from gadopt.gia_presets import OMEGA_SQ_EARTH
 from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.solver_options_manager import DeleteParam
-import gia_solver_cases
+import gia_cases
 import test_gia_gravity
 import test_gia_transient_power_law_gate as gate
 from parallel_ranks import assert_marked_rank_count
@@ -83,14 +83,14 @@ from parallel_ranks import assert_marked_rank_count
 def meshes():
     """The parent annulus and its curved mantle submesh of the GIA unit tests.
 
-    The stored triangle mesh of `gia_solver_cases.MESH_FILE`
+    The stored triangle mesh of `gia_cases.MESH_FILE`
     (`n_azimuthal=16`, `dr_mantle=0.3`), coarser than the quadrilateral
     mesh of `test_gia_gravity` (32 and 0.2) with the same tags and radii.
     The release concerns the solver objects, not the resolution, and every
     solve of this test costs in proportion to the number of cells. The
     stored file also spares the test gmsh.
     """
-    return gia_solver_cases.annulus_meshes()
+    return gia_cases.annulus_meshes()
 
 
 #: The lag of the rebuild rule of the case: the preconditioner pieces are

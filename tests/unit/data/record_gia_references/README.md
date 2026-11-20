@@ -20,10 +20,10 @@ numbering of the degrees of freedom.
 
 1. Create a temporary worktree at the earlier solver:
    `git worktree add /tmp/gia-2f4b1397 2f4b1397`.
-2. Copy `tests/unit/gia_solver_cases.py` of the present code into the
-   temporary worktree as `tests/unit/cases_coord.py`. The scripts use only
-   its stored mesh and its coordinate helpers, and they use the
-   `gia_solver_cases.py` of `2f4b1397` for the earlier solver.
+2. Copy `tests/gia/gia_cases.py` of the present code into the temporary
+   worktree as `tests/unit/cases_coord.py`. The scripts use only its stored
+   mesh and its coordinate helpers. For the earlier solver, they use
+   `tests/unit/gia_solver_cases.py` of `2f4b1397`.
 3. Copy `tests/unit/data/gia_triangle_annulus.msh` into
    `tests/unit/data/` of the temporary worktree.
 4. Copy the three scripts of this directory into the root of the temporary
