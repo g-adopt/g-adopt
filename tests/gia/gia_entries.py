@@ -319,6 +319,106 @@ def _forward_entries():
     return out
 
 
+# -- limits -------------------------------------------------------------------------
+
+#: The entries of the `limits` case (`gia_limits.py`), one process each, so
+#: that the three groups compile and run in parallel. Each writes the
+#: measured and the reference value of every row as `name value` lines to
+#: `out/limits-<entry>.dat`. No row has a recorded value; the tolerances
+#: below are those of the unit tests that the rows come from.
+LIMITS = ("sea", "mechanics", "rheology")
+
+#: The DtN representations of the rows that the original tests ran on both.
+REPRESENTATIONS = ("multiplier", "lowrank")
+
+#: Eustatic shift of a melting cap on a stiff, non-gravitating Earth against
+#: `-(rho_i / rho_w) int dI / L_ocean` (`test_sea_level.py::
+#: TestEustaticLimit`, `test_sea_level_sheet.py::TestSolves`).
+EUSTATIC_RTOL = 1e-4
+#: Fixed-coastline eustatic shift on a rigid Earth against
+#: `-rho_i int (1 - C0) dI / (rho_w int C0)` (`TestFixedOcean::
+#: test_the_shift_is_the_eustatic_value`).
+FIXED_EUSTATIC_RTOL = 1e-6
+#: Two solves of the same problem (saturated fixed against live coastline;
+#: ocean ice under a fixed coastline against none) agree per field in the
+#: max norm (`TestFixedOcean`).
+SAME_PROBLEM_RTOL = 1e-8
+#: Guards of those rows: the shift is above this value, so the relative
+#: comparison has a scale; the ice grown over the ocean is more than this
+#: multiple of the land ice change.
+SATURATED_SHIFT_FLOOR = 1e-4
+OCEAN_ICE_MASS_RATIO = 100.0
+#: The mean sea-level change next to added ice exceeds the one far from it
+#: by this fraction of the eustatic value (`TestSignAgainstPhysics`).
+SIGN_MARGIN = 1e-3
+#: The water fraction changes over more than this fraction of one facet of
+#: Re (`TestSolves::test_the_marine_grounding_line_moves`).
+GROUNDING_FACET_FRACTION = 0.5
+#: A second solve with nothing changed repeats `Shift` and the potential to
+#: this tolerance; the shift is above the floor (`TestRepeatedSolve`).
+REPEAT_RTOL = 1e-8
+REPEAT_SHIFT_FLOOR = 1e-3
+#: The surface sinks under added ice on an elastic Earth: the mean radial
+#: displacement under the caps is below `-SINK_RMS_FRACTION` times the root
+#: mean square of the radial displacement over Re.
+SINK_RMS_FRACTION = 0.1
+
+#: `B_mu = 0` with a fluid core against the uncoupled mechanics with the
+#: core constraint (`TestFluidCore::
+#: test_zero_B_mu_matches_independently_constrained_mechanics`,
+#: `TestNullCoupling::test_it_reproduces_the_uncoupled_solver`): both
+#: fluxes below `NULL_FLUX_ATOL`; the core pressure to `NULL_PRESSURE_RTOL`
+#: (absolute floor `NULL_PRESSURE_ATOL`); strain and history to
+#: `NULL_FIELD_RTOL`; the displacement after the rigid modes are projected
+#: out to `NULL_DISPLACEMENT_RTOL`.
+NULL_FLUX_ATOL = 1e-12
+NULL_PRESSURE_RTOL = 1e-11
+NULL_PRESSURE_ATOL = 1e-13
+NULL_FIELD_RTOL = 1e-10
+NULL_DISPLACEMENT_RTOL = 1e-11
+#: `|int u . n dS_cmb| <= CMB_FLUX_SCALE_RTOL scale + CMB_FLUX_ATOL`
+#: (`TestFluidCore::test_solve_enforces_zero_integrated_cmb_displacement`).
+CMB_FLUX_SCALE_RTOL = 1e-10
+CMB_FLUX_ATOL = 1e-13
+#: A `cos 2 phi` load: the `cos2` trace coefficient above `DEGREE_ACTIVE`,
+#: every other one below `DEGREE_INACTIVE_RTOL |cos2| + 1e-15`
+#: (`test_the_answer_is_degree_two`; the driver writes the largest
+#: `(|c| - 1e-15) / |cos2|`).
+DEGREE_ACTIVE = 1e-6
+DEGREE_INACTIVE_RTOL = 1e-9
+#: `|D_i| < COM_LOAD_RTOL * SIGMA_HAT pi Re^2` after a degree-1 load
+#: (`TestCentreOfMassFrame::test_solve_holds_the_centre_of_mass`).
+COM_LOAD_RTOL = 1e-8
+#: The content of the declared rigid rotation in the answer, and its ratio
+#: to the content without the declaration
+#: (`TestRigidRotationNullspace::test_declaring_it_removes_it_from_the_answer`).
+ROTATION_CONTENT_DECLARED = 1e-14
+ROTATION_CONTENT_RATIO = 1e-3
+
+#: `TestNewtonianLimit`: exponent 1 with power-law parameters against the
+#: Newtonian solve; exponent `1 + 1e-6` with a background stress against
+#: the Newtonian displacement; with zero background stress the gap is above
+#: `ZERO_BACKGROUND_GAP`.
+EXPONENT_ONE_RTOL = 1e-12
+NEAR_ONE_RTOL = 1e-6
+ZERO_BACKGROUND_GAP = 1e-1
+#: The stiff power-law march: each of its steps converges in at most this
+#: many Newton iterations (`test_newton_converges_on_a_stiff_power_law`).
+STIFF_STEPS = 3
+STIFF_NEWTON_MAX = 10
+
+
+def limits_values(entry):
+    """The path of the `name value` file of a `limits` entry."""
+    return f"{OUT}/limits-{entry}.dat"
+
+
+def _limits_entries():
+    """The `ENTRIES` items of the `limits` case."""
+    return [{"case": "limits", "entry": name, "driver": "gia_limits.py", "cores": 1,
+             "outputs": [limits_values(name)]} for name in LIMITS]
+
+
 #: The files that `gia_record_expected.py` copies, by case: pairs of the
 #: driver output and the expected file, both relative to `CASE_DIR`.
 RECORDED = {
@@ -328,4 +428,4 @@ RECORDED = {
 
 #: Every step of `meta.py`: `case`, `entry`, `driver`, `cores`, `outputs`,
 #: and optionally `deps`, `hpc` and `launcher_args`.
-ENTRIES = _forward_entries()
+ENTRIES = _forward_entries() + _limits_entries()
