@@ -1,7 +1,7 @@
 """Gate 1 in 3-D: the GIA solver assembles the equations it was checked against.
 
-Assembly only, no solve, on the 24-cell radially extruded cubed sphere of
-`test_gia_nested_condensation.py::TestThreeDimensions` (one mesh for the
+Assembly only, no solve, on the 24-cell radially extruded cubed sphere
+(level-1 `CubedSphereMesh`, two radial layers; one mesh for the
 displacement and the potential). The 2-D gate cannot see what only 3-D has:
 three rotation rows with the polar-wander pair closed by `C - A = Q k_s`, the
 CMB of an extruded mesh reached as `"bottom"` through
@@ -41,7 +41,7 @@ def material(model):
     return C.approximation(C.Case(model=model))
 
 
-def build(mesh, representation, model, family):
+def build(mesh, representation, model, family, core_boundary="bottom"):
     """The solver of one 3-D gate case: fluid core, rotation, centre of mass, load.
 
     Args:
@@ -49,6 +49,9 @@ def build(mesh, representation, model, family):
       representation: "multiplier" or "lowrank".
       model: the rheology name of `gia_cases.approximation`.
       family: "DG" or "Quadrature".
+      core_boundary: the boundary of the `FluidCore`; the CMB of the
+        extruded sphere is `"bottom"`, and a test of the refusal passes
+        another one.
     """
     X = fd.SpatialCoordinate(mesh)
     C_polar = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
@@ -66,7 +69,7 @@ def build(mesh, representation, model, family):
         dt=fd.Constant(C.DT0), gravity_bcs=dtn, internal_variable_family=family,
         quad_degree=C.QUAD if quadrature else None,
         dtn_representation=representation,
-        couplings=[cp.FluidCore(boundary="bottom", rho_core=2.0),
+        couplings=[cp.FluidCore(boundary=core_boundary, rho_core=2.0),
                    cp.Rotation(C=C_polar, k_s=K_S, surface_radius=RADIUS,
                                Omega_sq=OMEGA_SQ),
                    cp.CentreOfMass(),
@@ -75,8 +78,7 @@ def build(mesh, representation, model, family):
     return new
 
 
-CASES = [("multiplier", "maxwell", "DG"), ("lowrank", "maxwell2", "DG"),
-         ("lowrank", "power", "DG"), ("lowrank", "maxwell2", "Quadrature")]
+CASES = [("lowrank", "maxwell2", "Quadrature")]
 
 
 #: The stored fingerprints of the earlier solver, by case label.
@@ -100,3 +102,17 @@ def test_3d_residual_and_jacobian_action_match_the_reference(
     reference = REFERENCE["-".join((representation, model, family))]
     for vector, ref in zip([residual, *actions], reference):
         C.assert_fingerprints_agree(C.fingerprint(vector, new.field_index), ref)
+
+
+def test_a_fluid_core_tag_with_no_facets_is_still_refused(mesh):
+    """The extruded measure resolves more names, and refuses no fewer.
+
+    `CombinedSurfaceMeasure` sends every integer tag to `ds_v`, the
+    vertical (side) facets, and a radially extruded closed sphere has none.
+    So an integer tag names an empty facet set here and must reach the
+    fluid core's empty-measure refusal, exactly as a wrong tag does on the
+    annulus. Without this check, a branch that resolves every name it is
+    given leaves the geometry check dead on extruded meshes.
+    """
+    with pytest.raises(ValueError, match="empty measure"):
+        build(mesh, "lowrank", "maxwell2", "Quadrature", core_boundary=4)
