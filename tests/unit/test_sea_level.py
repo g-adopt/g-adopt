@@ -505,6 +505,9 @@ def build(meshes, fields=None, *, rotation=False, lam=LAMBDA, stiff=False,
         solver_kwargs["dtn_representation"] = representation
     if quad_degree is not None:
         solver_kwargs["dtn_quad_degree"] = quad_degree
+    # The sea level and the frame are shared code: the history family is the
+    # Quadrature family unless the caller names another.
+    solver_kwargs.setdefault("internal_variable_family", "Quadrature")
     solver = SelfGravitatingGIASolver(
         u, psi, approximation(**approximation_kwargs), dt=unit_time_step(sub),
         gravity_bcs=gravity_bcs(parent, sheet=False), bcs=surface_bcs or {},
@@ -1476,7 +1479,10 @@ def solve_shoreline(meshes, representation):
         _, sub = meshes
         solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
                                representation=representation,
-                               **solve_settings(representation))
+                               **solve_settings(representation),
+                               # The DG family: the probe values of
+                               # `TestRepresentationParity` were recorded on it.
+                               internal_variable_family="DG")
         initial_norm = vector_norm(fd.assemble(solver.F))
         solver.solve()
         iterations = solver.solver.snes.getIterationNumber()
@@ -1751,7 +1757,12 @@ class TestSignAgainstPhysics:
         fields = surface_fields(sub, "caps", d_ice=d_ice)
         solver, z, sea = build(meshes, fields, stiff=True,
                                representation=representation,
-                               **solve_settings(representation))
+                               **solve_settings(representation),
+                               # The DG family: on the Quadrature family the
+                               # low-rank iterative preset does not converge on
+                               # this stiff Earth (outer cap of 200 at the
+                               # first Newton step).
+                               internal_variable_family="DG")
         solver.solve()
         assert solver_converged(solver)
         dss = re_measure(solver)
@@ -1798,6 +1809,9 @@ def rebuild_parameters(preset=None, **overrides):
     settings["preset_options"].update(preset or {})
     settings["solver_parameters_extra"].update(overrides)
     settings["representation"] = "lowrank"
+    # The cache rules of this section are read from the DG family's block 0
+    # (`CondensedBlockPC` and its option prefixes).
+    settings["internal_variable_family"] = "DG"
     return settings
 
 
