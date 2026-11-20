@@ -31,15 +31,9 @@ RESTART_STEP = 4
 #: - `default_options`: True adds the tight tolerances of
 #:   `gia_cases.build_new` (Newton `snes_rtol` 1e-11, `snes_atol` 1e-13);
 #:   False keeps the tolerances of the preset. The entries with a fixed
-#:   coastline or the prescribed load use the preset tolerances. With the
-#:   tight ones the `LOAD` march stops at step 2 with
-#:   `DIVERGED_LINEAR_SOLVE`: after the first Newton step the residual is
-#:   4.3e-11, and all of it lies along the declared rigid rotation, which
-#:   the curved facets annihilate only to 8e-6 relative. The projected
-#:   linear solve cannot remove that part (its right-hand side is 2.2e-17),
-#:   so Newton cannot reach `snes_atol` 1e-13. Without the declared
-#:   nullspace the same step converges in one Newton step to 2.4e-17.
-#:   `sea-fixed` takes 2 Newton steps per step with the tight options;
+#:   coastline use the preset tolerances: with the tight ones the first
+#:   Newton step reduces the residual by about 1.6e-11, above `snes_rtol`,
+#:   so `sea-fixed` takes 2 Newton steps per step;
 #: - `cores`: the number of MPI ranks;
 #: - `parameters`: replaced parameters of `gia_cases.build_new`;
 #: - `save_state`: write the state after `RESTART_STEP` steps;
@@ -56,8 +50,8 @@ FORWARD = {
                       changes={"load": "sea_fixed"}),
     "sea-fixed-iterative": dict(base="SEA", preset="iterative", default_options=False,
                                 changes={"load": "sea_fixed"}),
-    "load-direct": dict(base="LOAD", preset="direct", default_options=False),
-    "load-iterative": dict(base="LOAD", preset="iterative", default_options=False),
+    "load-direct": dict(base="LOAD", preset="direct"),
+    "load-iterative": dict(base="LOAD", preset="iterative"),
     "power-direct": dict(base="SEA", preset="direct", changes={"model": "power"},
                          parameters={"approximation.transition_stress": 1e-3}),
     "sea-direct-np2": dict(base="SEA", preset="direct", cores=2, save_state=True),
@@ -225,11 +219,12 @@ COUPLING_COLUMNS = {"sea-direct": ("shift", "com_0"),
 #: step (`newton_reduction`) is at most `LINEAR_REDUCTION[preset]`: ten times
 #: the largest value measured.
 LINEAR_ENTRIES = ["sea-fixed", "sea-fixed-iterative", "load-direct", "load-iterative"]
-#: Measured largest reductions: 1.4e-7 (direct, `load-direct`) and 1.5e-7
-#: (iterative, `load-iterative`). The direct entries stop on the absolute
-#: Newton tolerance (`CONVERGED_FNORM_ABS`), the iterative ones on the
-#: relative one (`CONVERGED_FNORM_RELATIVE`).
-LINEAR_REDUCTION = {"direct": 1.4e-6, "iterative": 1.5e-6}
+#: Measured largest reductions: 1.6e-11 (direct, `sea-fixed`) and 4.4e-9
+#: (iterative, `sea-fixed-iterative`, on the preset tolerances); the `LOAD`
+#: entries, on the tight tolerances, reduce by 6.6e-14 (direct) and 5.1e-13
+#: (iterative) and stop on the absolute Newton tolerance
+#: (`CONVERGED_FNORM_ABS`).
+LINEAR_REDUCTION = {"direct": 1.6e-10, "iterative": 4.4e-8}
 
 #: The rebuild rule of the cached operators, checked in the iterative
 #: entries with a linear residual. Their solver publishes no operator version
@@ -678,9 +673,7 @@ def _time_convergence_entries():
 #:
 #: - `control`: the control, one of `ADJOINT_CONTROLS`;
 #: - `preset`, `changes`, `parameters`, `default_options`, `cores`: as in
-#:   `FORWARD`. The `LOAD` entries use the tolerances of the preset: with
-#:   the tight ones their Newton solve stalls on the declared rigid rotation
-#:   (see `FORWARD`);
+#:   `FORWARD`;
 #: - `checkpoint`: `"disk"` tapes the march under
 #:   `SingleDiskStorageSchedule` with disk checkpointing;
 #: - `counter_preset`, `counter_changes`: the preset and the `Case` changes
@@ -709,10 +702,8 @@ ADJOINT = {
     "sea-direct-dt": dict(base="SEA", preset="direct", control="dt",
                           counter_preset="iterative",
                           counter_changes={"load": "sea_fixed"}),
-    "load-direct-Lambda": dict(base="LOAD", preset="direct", control="Lambda",
-                               default_options=False),
-    "load-direct-B_mu": dict(base="LOAD", preset="direct", control="B_mu",
-                             default_options=False),
+    "load-direct-Lambda": dict(base="LOAD", preset="direct", control="Lambda"),
+    "load-direct-B_mu": dict(base="LOAD", preset="direct", control="B_mu"),
     "power-direct-sl_init": dict(base="SEA", preset="direct", control="sl_init",
                                  changes={"model": "power"},
                                  parameters={"approximation.transition_stress": 1e-3}),

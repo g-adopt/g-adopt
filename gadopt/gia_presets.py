@@ -553,7 +553,14 @@ def selfgrav_dtn_iterative_solver_parameters(
         17.4 and 18.9, in the giamip-exp01 worktree). The low-rank operator
         removes the declared spaces from its action
         (`gadopt.dtn_coupled.AugmentedImplicitMatrixContext`), so that floor
-        does not arise on the low-rank path. `outer_atol` (`ksp_atol`) is an
+        does not arise in the outer Krylov solve on the low-rank path. The
+        same part of the nonlinear residual is a second floor, for Newton:
+        `KSPSolve` removes it from the right-hand side, so no Newton update
+        reduces it. The solver removes the transpose nullspace from the
+        residual on every path
+        (`SelfGravitatingGIASolver.complete_residual`), so the norm that
+        `snes_atol` and `snes_rtol` test does not carry that floor either.
+        `outer_atol` (`ksp_atol`) is an
         absolute floor for any other case: the solve stops at the larger of
         the relative target and this value. It is 0 (off) by default because
         a useful value depends on the scaling of the residual and on the mesh.

@@ -302,14 +302,20 @@ class DirectConstitutiveBackend:
         # the Python preconditioner contexts, which PETSc holds), and the
         # solver would never be collected (`gadopt.utility.weak_callback`).
         refresh = weak_callback(self.refresh_from_vector)
+        callbacks = {}
+        # The residual of the step: the low-rank update on the potential
+        # rows, and without the part along a declared transpose nullspace,
+        # which the linear solve removes and so Newton cannot reduce
+        # (`SelfGravitatingGIASolver.complete_residual`).
+        if self.lowrank or owner.residual_kernel is not None:
+            callbacks["post_function_callback"] = weak_callback(owner.complete_residual)
+        if self.lowrank:
+            callbacks["post_jacobian_callback"] = weak_callback(owner.augment_jacobian)
         self.solver = fd.NonlinearVariationalSolver(
             self.problem, solver_parameters=owner.solver_parameters,
             options_prefix=owner.name, appctx=owner.appctx, nullspace=owner.nullspace,
             transpose_nullspace=owner.transpose_nullspace, near_nullspace=owner.near_nullspace,
-            pre_function_callback=refresh, pre_jacobian_callback=refresh,
-            **(dict(post_function_callback=weak_callback(owner.augment_residual),
-                    post_jacobian_callback=weak_callback(owner.augment_jacobian))
-               if self.lowrank else {}))
+            pre_function_callback=refresh, pre_jacobian_callback=refresh, **callbacks)
         #: `{"adjoint": (matrix, solver), "tangent": (matrix, solver)}`, the
         #: linear derivative solves, built at their first use.
         self.derivative_solvers = {}

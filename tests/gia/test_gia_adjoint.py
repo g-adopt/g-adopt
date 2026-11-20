@@ -57,20 +57,28 @@ def relative(measured, expected):
 
 ENTRIES = list(E.ADJOINT)
 
-#: The `LOAD` entries march with the tolerances of the preset (see
-#: `gia_entries.ADJOINT`). Newton then stops after one step with the
-#: residual reduced by about 1e-7, and a replay, which starts each step from
-#: zero (`ConstitutiveStepBlock.prepare_recompute_component`), stops at
-#: another point than the forward march, which starts from the previous
-#: state.
+#: The `LOAD` entries: the step solve leaves a large part of the solution
+#: along the declared rigid rotation (about 15 percent of its norm), and that
+#: part depends on the initial guess, because the right-preconditioned outer
+#: FGMRES does not remove the nullspace from its search directions. The
+#: rotation is a kernel of the discrete operator only to 8e-6, so its part
+#: changes the other components of the solution at that level, and the
+#: recorded projection after the step does not undo that. The forward march
+#: starts each step from the previous state, the replay from zero
+#: (`ConstitutiveStepBlock.prepare_recompute_component`), and the projected
+#: states differ by 1.4e-7 to 1.7e-7 relative in the max norm (scratch run,
+#: `NOTES/design/tests/logs-libfix/d2-load-gauge-*.txt`). Newton converges in
+#: one step on the tight options, so this is not a tolerance.
 _LOAD_REPLAY = (
     "{entry}: the replay repeats the recording to 1.81e-8 and the fresh march at "
-    "the other control to 1.82e-8 (bands 1e-9 and 1e-8). The march uses the "
-    "preset tolerances (one Newton step, residual reduction about 1.4e-7), and "
-    "the replay starts every step from zero while the forward march starts from "
-    "the previous state. The fresh march repeats the recording exactly, and the "
-    "derivatives agree (adjoint against the fresh difference {dJ}, Taylor rate "
-    "{rate}).")
+    "the other control to 1.82e-8 (bands 1e-9 and 1e-8). The unprojected step "
+    "solution has a part along the declared rigid rotation that depends on the "
+    "initial guess (at step 2, -5.1e-3 from the previous state and -4.6e-4 from "
+    "zero, of a norm of 3.3e-2), and the rotation is a kernel only to 8e-6, so "
+    "a replay from zero and a march from the previous "
+    "state reach projected states 1.4e-7 apart. The fresh march repeats the "
+    "recording exactly, and the derivatives agree (adjoint against the fresh "
+    "difference {dJ}, Taylor rate {rate}).")
 
 #: The disk schedule: the tangent sweep runs after a replay under
 #: `SingleDiskStorageSchedule` and reads saved values that the schedule does

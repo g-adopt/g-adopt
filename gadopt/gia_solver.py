@@ -158,7 +158,7 @@ from .gia_presets import (NULL_COUPLING_ROW_SCALE,
 from .gia_history import history_formulation
 from .gravity_potential import GravityPotential
 from .momentum_equation import rotational_potential_term, self_gravity_term
-from .nullspaces import check_kernel_basis, project_out_kernel
+from .nullspaces import check_kernel_basis, monolithic_kernel, project_out_kernel
 from .preconditioners import near_nullspace_basis
 from .solver_options_manager import SolverConfigurationMixin
 from .stokes_integrators import (InternalVariableMechanics, StokesSolverBase,
@@ -188,11 +188,13 @@ class _StockStep:
     def build(self):
         """Build the variational solver from the owner's present options."""
         owner = self.owner
+        callback = ({} if owner.residual_kernel is None else
+                    dict(post_function_callback=weak_callback(owner.complete_residual)))
         self.solver = NonlinearVariationalSolver(
             self.problem, solver_parameters=owner.solver_parameters,
             nullspace=owner.nullspace,
             transpose_nullspace=owner.transpose_nullspace,
-            appctx=owner.appctx, options_prefix=owner.name)
+            appctx=owner.appctx, options_prefix=owner.name, **callback)
 
     def solved_history(self):
         """The history of the solved state: the DG field of the mixed solution."""
@@ -226,7 +228,7 @@ class _LowRankStep(_StockStep):
             appctx=owner.appctx, options_prefix=owner.name,
             # Weak references: a strong one from the callbacks would close a
             # reference cycle through C (`gadopt.utility.weak_callback`).
-            post_function_callback=weak_callback(owner.augment_residual),
+            post_function_callback=weak_callback(owner.complete_residual),
             post_jacobian_callback=weak_callback(owner.augment_jacobian))
         self.solver.gia_solver = owner
 
@@ -942,6 +944,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         must nearly annihilate it.
         """
         self.nullspace = self.transpose_nullspace = None
+        #: The PETSc object of the transpose nullspace on the whole mixed
+        #: vector, which `complete_residual` removes from the residual;
+        #: `None` without a declared nullspace.
+        self.residual_kernel = None
         # The near-nullspace of the outer operator is not used: GAMG runs on
         # the condensed displacement operator inside block 0, and gets its
         # modes from `condensed_field_near_nullspace` (`near_nullspace`).
@@ -988,6 +994,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         with stop_annotating():
             self._check_kernel(basis)
         self.nullspace = self.transpose_nullspace = mixed
+        # The same PETSc object that the solvers attach to their matrices
+        # as the transpose nullspace, so that the residual and the KSP
+        # right-hand side lose the same part (`complete_residual`).
+        self.residual_kernel = monolithic_kernel(self.transpose_nullspace)
 
     #: The highest polynomial degree of the density measure of
     #: `_check_kernel`, so the highest harmonic degree of a lateral density
@@ -1548,6 +1558,38 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     def augment_residual(self, X, F) -> None:
         """`post_function_callback`: add `theta_psi B psi` to the potential rows."""
         self.dtn_operator.apply_local(X.array_r, F.array_w)
+
+    def complete_residual(self, X, F) -> None:
+        """`post_function_callback` of the step: the residual that Newton can reduce.
+
+        On the low-rank path this first adds `theta_psi B psi`
+        (`augment_residual`). With a declared nullspace it then removes the
+        transpose nullspace from `F` (`residual_kernel`).
+
+        The reason is the convergence test of SNES. A declared mode `e` (the
+        rigid rotation) is only an approximate kernel of the discrete
+        operator: curved facets annihilate it to about 1e-5 relative, so
+        `<F(u), e>` is small and not zero, and changes with `u` only through
+        `J^T e`, which the declaration sets to zero. `KSPSolve` removes the
+        transpose nullspace from its right-hand side `-F`, so no Newton
+        update reduces `<F, e>`. With that part left in `F`, the norm that
+        SNES tests keeps a floor that the linear solve cannot see. On the 2-D
+        annulus with a prescribed load, for example, the residual after one
+        converged Newton step of the second time step is 4.3e-11 and lies
+        along `e`, while the projected right-hand side of the next linear
+        solve is 2.2e-17, so Newton cannot reach a `snes_atol` of 1e-13 with
+        that part in the norm. Removing it here makes the norm of SNES and
+        the line search measure the equations that the declaration keeps,
+        which are the equations that the linear solve solves. The Newton
+        direction does not change, since the KSP removes the same part.
+
+        The derivative solves keep `augment_residual`: they are linear and
+        `ksponly`, and the KSP removes the part from their right-hand side.
+        """
+        if self.dtn_representation == "lowrank":
+            self.augment_residual(X, F)
+        if self.residual_kernel is not None:
+            self.residual_kernel.remove(F)
 
     def augment_jacobian(self, X, Jmat) -> None:
         """`post_jacobian_callback`: give the matrix-free action the same `B`."""

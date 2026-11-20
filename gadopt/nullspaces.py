@@ -15,6 +15,8 @@ and records the removal on the pyadjoint tape (`KernelProjectionBlock`), so
 that replay, adjoint, tangent linear and Hessian all apply the same
 projection as the forward run. `apply_kernel_projection` is the unrecorded
 operation that both use, and the one definition of the projection in G-ADOPT.
+`monolithic_kernel` returns the PETSc object of a declared kernel on the
+whole mixed vector, the one that a solver attaches to its matrix.
 """
 
 import itertools
@@ -630,6 +632,37 @@ def apply_kernel_projection(nullspace, target) -> bool:
         with target.subfunctions[i].dat.vec_rw as vector:
             basis.nullspace().remove(vector)
     return bool(bases)
+
+
+def monolithic_kernel(nullspace):
+    """Return the PETSc nullspace that Firedrake attaches to the whole matrix.
+
+    A solver that receives ``nullspace`` (or ``transpose_nullspace``) hangs
+    one PETSc nullspace on its matrix. For a `MixedVectorSpaceBasis` that
+    object lives on the whole mixed vector: each basis vector of a sub-space
+    is padded with zeros in the other sub-spaces, and the set is
+    orthonormalised (`MixedVectorSpaceBasis._build_monolithic_basis`).
+    Firedrake builds it at the first `_apply` and keeps it, so building it
+    here first gives the caller the same object that the solver attaches.
+    `KSPSolve` removes the transpose nullspace of its operator from the
+    right-hand side with this object, so a caller that removes it from the
+    nonlinear residual (`SelfGravitatingGIASolver.complete_residual`)
+    applies exactly the projection of the linear solve.
+
+    Args:
+      nullspace: a `VectorSpaceBasis`, a `MixedVectorSpaceBasis` or `None`.
+
+    Returns:
+      A `PETSc.NullSpace` on the full vector, or `None` when ``nullspace``
+      removes nothing.
+    """
+    if not _kernel_bases(nullspace):
+        return None
+    if isinstance(nullspace, fd.MixedVectorSpaceBasis):
+        if nullspace._nullspace is None:
+            nullspace._build_monolithic_basis()
+        return nullspace._nullspace
+    return nullspace.nullspace()
 
 
 class KernelProjectionBlock(Block):
