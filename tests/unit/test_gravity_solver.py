@@ -638,15 +638,16 @@ class TestCylindrical:
     def test_parallel_repeated_monopole_solves_are_stable(self, representation):
         """The enclosed mass must not drift when a solver is re-used in parallel.
 
-        Guards a live Firedrake defect, and one this suite has already been
-        bitten by once: a *cached* `LinearVariationalSolver` whose right-hand
-        side carries a facet integral into a `Real` space returns the right
-        value on its first solve and garbage afterwards - measured 1.881574
-        then 0.0 alternating on two ranks, and 1.881574, -3.763149, 13.171020,
+        `GravityPotential` builds the enclosed-mass solvers once and runs
+        them on every solve. On a Firedrake from before the pyop3 merge, a
+        cached `LinearVariationalSolver` whose right-hand side carries a facet
+        integral into a `Real` space returns the right value on its first
+        solve and wrong values afterwards - measured 1.881574 then 0.0
+        alternating on two ranks, and 1.881574, -3.763149, 13.171020,
         -37.631486 on four. The KSP converges either way, so the symptom is a
-        silently wrong potential, and only a repeated solve on more than one
-        rank can see it. `update_total_mass` therefore rebuilds its solve every
-        call; this is what stops that being quietly optimised away again.
+        wrong potential with no error, and only a repeated solve on more than
+        one rank can see it. This test fails on a Firedrake build with that
+        defect.
 
         Both mass channels that route through a facet integral are present -
         a `sigma` sheet and a `flux` condition - because the volume term alone

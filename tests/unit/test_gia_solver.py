@@ -17,6 +17,8 @@ solver. These tests run the new solver itself:
   nullspace check, the presets, `approximation.mu`, the closure constant.
 """
 
+import warnings
+
 import firedrake as fd
 import numpy as np
 import pytest
@@ -788,7 +790,6 @@ def _solver_with_density(meshes, kind, K, **kwargs):
 @pytest.mark.parametrize("kind", ["DG0", "CG1", "jump"])
 def test_a_radial_density_passes_the_nullspace_check(meshes, kind, K):
     """A density that is 1-D by intent, in any representation, at any bulk modulus."""
-    import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         solver = _solver_with_density(meshes, kind, K)
@@ -1245,26 +1246,65 @@ def test_a_discontinuous_parent_field_is_refused_as_a_coupling_parameter(meshes)
     C.build_new(meshes, case, parameters={"FluidCore.rho_core": dg_mechanics})
 
 
+#: The configurations of `test_no_parent_unknown_in_a_momentum_boundary_term`:
+#: `(core, load, normal_stress boundary or None)`. Each has at least one
+#: boundary term of the momentum equation: the weak `un` condition of a rigid
+#: core, a `normal_stress` in `bcs`, or both. A `normal_stress` stands on a
+#: boundary without a load, because `SurfaceLoad` and `SeaLevel` refuse one
+#: on their own boundary. `SeaLevel` needs `CentreOfMass`, which needs a fluid
+#: core, so the sea-level case has no weak `un`, and its `normal_stress` is at
+#: the CMB, next to the fluid core.
+_MOMENTUM_BOUNDARY_CASES = {
+    "rigid-un": ("rigid", "surface", None),
+    "rigid-un-normal-stress": ("rigid", None, C.CURVE_RE),
+    "fluid-core-normal-stress": ("fluid", None, C.CURVE_RE),
+    "fluid-core-sea-level-normal-stress": ("fluid", "sea_moving", C.CURVE_RC),
+}
+
+
 @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
-def test_no_parent_unknown_in_a_momentum_boundary_term(meshes, representation):
+@pytest.mark.parametrize("configuration", list(_MOMENTUM_BOUNDARY_CASES))
+def test_no_parent_unknown_in_a_momentum_boundary_term(meshes, representation,
+                                                       configuration):
     """No boundary term of the momentum equation depends on a parent unknown.
 
     The refusal of parent coefficients in momentum boundary terms reads the
     coefficients of those terms. A parent unknown (the potential, a DtN
-    multiplier, a rotation unknown) is a component of the
+    multiplier, a rotation or centre-of-mass unknown) is a component of the
     mixed solution, whose mesh is not the parent, so the refusal cannot see
     it. Its adjoint on a boundary that is an interior facet of the parent
     would meet the same Firedrake defect. This test takes the exterior-facet
-    integrals of the mechanics residual of a rigid-core case (weak `un`
-    condition) with rotation, which adds `Real` unknowns (and the DtN
-    multipliers on that path), differentiates them with respect to the
-    solution, and asserts that no column of the result belongs to a field
-    of the parent. A rigid core excludes the centre-of-mass rows.
+    integrals of the mechanics residual, differentiates them with respect to
+    the solution, and asserts that no column of the result belongs to a
+    field of the parent.
+
+    Every configuration has rotation, which adds `Real` unknowns (and the
+    DtN multipliers on that path). The boundary terms are the weak `un`
+    condition of a rigid core and a `normal_stress` in `bcs`, the only two
+    kinds of momentum boundary term. A fluid core adds the centre-of-mass
+    rows, which a rigid core excludes. A `SeaLevel` load writes a sheet that
+    reads the potential into the coupling rows, next to the boundary terms.
+
+    The weak `un` term reads the displacement, so on a rigid-core case the
+    Jacobian must have columns; none means the derivative was lost. A
+    prescribed `normal_stress` is a source and has no column. On a
+    fluid-core case the Jacobian then holds only the boundary terms that the
+    volume terms of the momentum equation bring with them, and the test
+    asserts that none of those reads a parent unknown.
     """
     from firedrake.formmanipulation import split_form
-    case = Case(core="rigid", rotation=True, load="surface",
+    core, load, stress_boundary = _MOMENTUM_BOUNDARY_CASES[configuration]
+    case = Case(core=core, rotation=True, centre=core == "fluid", load=load,
                 representation=representation)
-    solver, _, _ = C.build_new(meshes, case)
+    parent, sub = meshes
+    extra_bcs = None
+    if stress_boundary is not None:
+        extra_bcs = {stress_boundary: {"normal_stress": C.load_expression(sub)}}
+    # A `normal_stress` in `bcs` warns that it loads the mechanics only.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*normal_stress",
+                                category=UserWarning)
+        solver, _, _ = C.build_new(meshes, case, extra_bcs=extra_bcs)
     facet = fd.Form(solver._mechanics_form.integrals_by_type("exterior_facet"))
     assert facet.integrals(), "the case has no momentum boundary term"
     jacobian = expand_derivatives(fd.derivative(facet, solver.solution))
@@ -1273,7 +1313,8 @@ def test_no_parent_unknown_in_a_momentum_boundary_term(meshes, representation):
                if not expand_derivatives(block.form).empty()}
     parent_fields = {solver.potential_index, *solver.real_indices}
     assert solver.real_indices, "the case has no Real unknown"
-    assert columns, "the boundary terms depend on no unknown"
+    if core == "rigid":
+        assert columns, "the weak un term depends on no unknown"
     assert not columns & parent_fields, (
         f"a momentum boundary term depends on the parent fields "
         f"{sorted(columns & parent_fields)}")

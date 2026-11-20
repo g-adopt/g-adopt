@@ -43,8 +43,9 @@ density `rho` is a prescribed source with a net mass of its own, which the
 
 import numpy as np
 from firedrake import (Constant, DirichletBC, Form, Function, FunctionSpace,
+                       LinearVariationalProblem, LinearVariationalSolver,
                        Measure, TestFunction, TrialFunction, assemble, dot,
-                       grad, solve)
+                       grad)
 from pyadjoint.tape import stop_annotating
 from warnings import warn
 
@@ -86,7 +87,8 @@ class GravityPotential:
         `"interior_sigma"`). A sheet given here enters the residual through
         the boundary form and the 2-D datum through `enclosed_mass_forms`. A
         caller that writes its sheets into the residual itself passes them to
-        the datum as `(density, measure)` pairs instead (`update_total_mass`).
+        the datum as `(density, measure)` pairs instead
+        (`set_enclosed_mass_solvers`).
       Lambda: the self-gravity number `4 pi G rho_bar L / g_bar` of a
         non-dimensional coupled system. The boundary form's gravitational
         constant is `Lambda / (4 pi)`, so that a sheet's `4 pi G sigma` and
@@ -140,6 +142,10 @@ class GravityPotential:
         with stop_annotating():
             self.check_cross_mesh_measures()
         self.set_monopole_datum()
+        # The datum's solvers with the sources this part knows: the volume
+        # density and the sheets and fluxes of `gravity_bcs`. A caller with
+        # sheets of its own builds them again once, with those sheets.
+        self.set_enclosed_mass_solvers()
         #: The low-rank operator of a coupled solver, built by
         #: `build_lowrank_operator`.
         self.dtn_operator = None
@@ -337,7 +343,7 @@ class GravityPotential:
         the trace, because the exterior monopole solution is logarithmic. The
         datum supplies its flux, `-2 G M / R`, with `M` the enclosed mass:
         the net mass of the volume density, the sheets of the boundary form
-        and the sheets the caller passes to `update_total_mass`. The
+        and the sheets the caller passes to `set_enclosed_mass_solvers`. The
         displacement source carries no net mass. In 3-D nothing is built, not
         even the `Real` space and the volume assemble.
 
@@ -363,6 +369,10 @@ class GravityPotential:
         self.mesh_volume = None
         self.source_mass = None
         self.cavity_flux = None
+        #: The cached solvers of the two scalars, built by
+        #: `set_enclosed_mass_solvers`. `None` where a scalar has no source.
+        self.source_mass_solver = None
+        self.cavity_flux_solver = None
         if not self.monopole_boundaries:
             return
         if len(self.monopole_boundaries) > 1:
@@ -463,12 +473,53 @@ class GravityPotential:
             flux = term if flux is None else flux + term
         return identity, mass, flux
 
-    def update_total_mass(self, extra_masses=()) -> None:
+    def set_enclosed_mass_solvers(self, extra_masses=()) -> None:
+        """Build the solvers of the enclosed-mass scalars, once.
+
+        The constructor calls this with no extra masses, which covers a
+        caller whose sheets are all in `gravity_bcs`. A caller that writes
+        sheets into the residual itself calls it once more, after those
+        sheets exist and before the first solve, with the sheets the datum
+        counts. That call replaces the solver of `source_mass`. The solver
+        of `cavity_flux` depends on `gravity_bcs` alone, so it is built on
+        the first call and kept. `update_total_mass` only runs these
+        solvers. Nothing is built outside 2-D, and in 2-D without an
+        exterior DtN boundary.
+
+        Each solver is a `LinearVariationalSolver` on the `Real` space with
+        `real_scalar_solver_parameters` and an options prefix of its own,
+        so it inherits no option of the solver that owns the potential.
+        Building the solver records nothing on the tape. Each solve records
+        one solve block, whose dependencies are the coefficients of the
+        mass or flux form.
+
+        Args:
+          extra_masses: `(density, measure)` pairs of the caller's sheets that
+            the datum counts (`enclosed_mass_forms`).
+        """
+        if not self.monopole_boundaries:
+            return
+        identity, mass, flux = self.enclosed_mass_forms(extra_masses)
+        self.source_mass_solver = None
+        if mass is not None:
+            self.source_mass_solver = LinearVariationalSolver(
+                LinearVariationalProblem(identity, mass, self.source_mass),
+                solver_parameters=real_scalar_solver_parameters,
+                options_prefix="enclosed_source_mass_")
+        if flux is not None and self.cavity_flux_solver is None:
+            self.cavity_flux_solver = LinearVariationalSolver(
+                LinearVariationalProblem(identity, flux, self.cavity_flux),
+                solver_parameters=real_scalar_solver_parameters,
+                options_prefix="enclosed_cavity_flux_")
+
+    def update_total_mass(self) -> None:
         """Refresh the enclosed-mass scalars the datum reads, as recorded solves.
 
         The caller runs this at the start of every solve, under annotation,
-        so that the assembles and the solves are on the tape. The mass must
-        be differentiable without becoming an unknown.
+        so that the solves are on the tape. The mass must be differentiable
+        without becoming an unknown. The solvers come from
+        `set_enclosed_mass_solvers`; this method only resets the scalars
+        and runs them.
 
         Do not hold these values as numbers. A number cuts the dependency in
         a way that no Taylor test sees: the taped map is then
@@ -506,32 +557,25 @@ class GravityPotential:
         with Jacobi on a one-by-one system, so the start value changes no
         iteration count.
 
-        The solve is made new on every call, through the free function
-        `solve`. On the Firedrake before the pyop3 merge, a cached
-        `LinearVariationalSolver` whose right-hand side has a facet integral
-        into a `Real` space returned the right value on its first solve and
-        wrong values after it on two ranks (`1.881574` then `0.0`
-        alternately on a unit disc), with a converged KSP. On the present
-        Firedrake the same system gives the right value on every solve on
-        two ranks (exterior facets, interior facets, and a volume term). The
-        free `solve` stays until a cached solver is tested on every
-        Firedrake build this code supports.
-
-        Args:
-          extra_masses: `(density, measure)` pairs of the caller's sheets that
-            the datum counts (`enclosed_mass_forms`).
+        On a Firedrake from before the pyop3 merge, a cached solver whose
+        right-hand side has a facet integral into a `Real` space gives wrong
+        values after its first solve on two ranks (`1.881574` then `0.0`
+        alternately on a unit disc, with a converged KSP). On Firedrake
+        `22168dc98` (the `nlvs-hessian-fix` branch with PRs 5657 and 5659
+        and main `4e3dde4fa`) the same system gives the right value on every
+        solve on two ranks, for exterior-facet, interior-facet and volume
+        terms. `test_parallel_repeated_monopole_solves_are_stable` in
+        `tests/unit/test_gravity_solver.py` repeats the solves on two ranks
+        and fails if the values drift.
         """
         if not self.monopole_boundaries:
             return
-        identity, mass, flux = self.enclosed_mass_forms(extra_masses)
-        if mass is not None:
+        if self.source_mass_solver is not None:
             self.source_mass.assign(0.0)
-            solve(identity == mass, self.source_mass,
-                  solver_parameters=real_scalar_solver_parameters)
-        if flux is not None:
+            self.source_mass_solver.solve()
+        if self.cavity_flux_solver is not None:
             self.cavity_flux.assign(0.0)
-            solve(identity == flux, self.cavity_flux,
-                  solver_parameters=real_scalar_solver_parameters)
+            self.cavity_flux_solver.solve()
 
     def check_net_mass(self, extra_scales=()) -> None:
         """Refuse a doubly anchored gauge; warn on a small net mass.

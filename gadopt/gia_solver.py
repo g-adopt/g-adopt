@@ -640,6 +640,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             coupling.potentials(ctx)
         for coupling in self.couplings:
             ctx.sheets.extend(coupling.sheets(ctx))
+        # The 2-D monopole datum counts the sheets of the couplings, which
+        # exist only now, so its solvers are built here, once.
+        self.gravity.set_enclosed_mass_solvers(
+            extra_masses=[(sh.density, sh.measure) for sh in ctx.sheets
+                          if sh.in_monopole_datum])
         for bc_id, conditions in self.bcs.items():
             if "normal_stress" in conditions:
                 warn(f"Boundary {bc_id} carries a normal_stress in bcs. It loads "
@@ -1560,16 +1565,15 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     def update_total_mass(self) -> None:
         """Refresh the 2-D monopole datum from the sheets of the couplings.
 
-        The datum solves start from zero (`GravityPotential.update_total_mass`),
-        so a run restarted from a checkpoint reproduces the datum bit for bit.
+        The datum solvers, built in `set_couplings` with the sheets the datum
+        counts, start from zero (`GravityPotential.update_total_mass`), so a
+        run restarted from a checkpoint reproduces the datum bit for bit.
         The net-mass check is a diagnostic and leaves nothing on the tape
         (`GravityPotential.check_net_mass`). Every sheet counts in its scale,
         including the sheets that the datum does not count.
         """
         sheets = self.coupling_context.sheets
-        self.gravity.update_total_mass(
-            extra_masses=[(sh.density, sh.measure) for sh in sheets
-                          if sh.in_monopole_datum])
+        self.gravity.update_total_mass()
         self.gravity.check_net_mass(
             extra_scales=[(sh.density, sh.measure) for sh in sheets])
 

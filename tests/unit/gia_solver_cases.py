@@ -209,7 +209,7 @@ def dt_function(sub, value=DT0):
 
 def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
               solver_parameters="direct", extra=None, default_options=True,
-              parameters=None, **kwargs):
+              parameters=None, extra_bcs=None, **kwargs):
     """The new solver for `case`. Returns `(solver, u, psi)`.
 
     Args:
@@ -225,6 +225,9 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
       parameters: values that replace coupling parameters, keyed
         `"Coupling.argument"`, for example `{"FluidCore.g": g}`, and
         `"approximation.B_mu"` for the self-gravity coupling number.
+      extra_bcs: displacement conditions added to the ones the case gives,
+        `{boundary: {name: value}}`, merged per boundary, for example
+        `{CURVE_RE: {"normal_stress": sigma}}`.
       kwargs: further arguments of the solver.
     """
     parent, sub = meshes
@@ -243,6 +246,9 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
         couplings.append(new_couplings.FluidCore(
             boundary=CURVE_RC, rho_core=value("FluidCore.rho_core", 1.2),
             g=value("FluidCore.g", 1.)))
+    # The caller's conditions, merged per boundary into the case's own.
+    for bc_id, conditions in (extra_bcs or {}).items():
+        bcs.setdefault(bc_id, {}).update(conditions)
     if case.rotation:
         couplings.append(new_couplings.Rotation(
             C=polar_moment(meshes), Omega_sq=value("Rotation.Omega_sq", 1.566e-3)))

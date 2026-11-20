@@ -1201,7 +1201,7 @@ def test_one_solve_adds_one_block(meshes):
 # Measured: one post-solve assign lands a `FunctionAssignBlock` after the solve
 # block, and `get_blocks()[-1]` then picks up the wrong one. Not hypothetical --
 # `solve` adds a kernel projection and the assigns into `u` and `psi` after
-# the solve block, and `update_total_mass` assembles and assigns before it.
+# the solve block, and `update_total_mass` assigns and solves before it.
 # ===========================================================================
 def test_block_is_found_by_output_identity_not_position(meshes):
     """L26: an intervening block must not defeat the adoption."""

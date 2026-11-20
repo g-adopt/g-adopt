@@ -777,9 +777,10 @@ class GravitySolver(SolverConfigurationMixin):
     def update_total_mass(self) -> None:
         """Refreshes the enclosed-mass scalars the monopole datum reads.
 
-        Called from `solve` and not from `__init__`, so that the assembles and
-        the solves land on the tape: the mass has to be differentiable without
-        becoming an unknown. `GravityPotential.update_total_mass` gives the
+        Called from `solve` and not from `__init__`, so that the solves land
+        on the tape: the mass has to be differentiable without becoming an
+        unknown. The solvers are built once, by the constructor of
+        `GravityPotential`. `GravityPotential.update_total_mass` gives the
         reasons for the recorded solve, the reset to zero before it, and the
         measurements behind them. Then `GravityPotential.check_net_mass` runs
         with the volume density and the sheets of `bcs` as the scale, off the
