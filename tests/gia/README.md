@@ -33,6 +33,13 @@ case (`gia_parallel.py`), or a multi-rank entry of another case. A check of
 a file read on another number of ranks is a write entry and a read entry,
 with `deps` from the read entry to the files of the write entry.
 
+The `gravity` case (`gia_gravity.py`, tests in `test_gia_gravity_case.py`)
+runs `GravitySolver` alone against closed forms. Its test file has another
+basename than `test_gia_gravity.py`, because `tests/unit/test_gia_gravity.py`
+exists and pytest does not collect two test modules of one name. An entry
+with `local` set to False runs a 3-D solve. The development machine does not
+run it, and its tests skip where its output is missing.
+
 To run one entry and its tests:
 
 ```

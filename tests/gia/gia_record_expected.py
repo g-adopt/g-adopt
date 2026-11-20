@@ -66,10 +66,14 @@ def record(case, entry=None):
     names = [entry] if entry is not None else sorted(pairs)
     text = header()
     for name in names:
-        source, target = (CASE_DIR / path for path in pairs[name])
+        sources, target = pairs[name]
+        # One output, or a tuple of outputs whose lines go into one expected
+        # file in the order given (their names must not repeat).
+        sources = (sources,) if isinstance(sources, str) else sources
+        target = CASE_DIR / target
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text + source.read_text())
-        print(f"recorded {source.relative_to(CASE_DIR)} -> {target.relative_to(CASE_DIR)}")
+        target.write_text(text + "".join((CASE_DIR / s).read_text() for s in sources))
+        print(f"recorded {', '.join(sources)} -> {target.relative_to(CASE_DIR)}")
 
 
 if __name__ == "__main__":

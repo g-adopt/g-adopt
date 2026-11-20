@@ -1041,16 +1041,272 @@ def _parallel_entries():
     return out
 
 
+# -- gravity ------------------------------------------------------------------------
+
+#: The entries of the `gravity` case (`gia_gravity.py`): `GravitySolver` alone,
+#: against closed forms, on the meshes of `tests/unit/test_gravity_solver.py`
+#: (`annulus_mesh`, `shell_mesh_3d`, `UnitDiskMesh`). Each entry writes its
+#: measured values as `name value` lines to `out/gravity-<entry>.dat`; a
+#: `closed-*` entry also writes its CG counts to
+#: `out/gravity-<entry>-counts.dat`. The value `cores` is the number of ranks.
+#: An entry with `local` False runs a 3-D solve, which the development
+#: machine does not run; it runs on CI only, has no recorded values, and its
+#: tests skip where its output is missing.
+#:
+#: - `closed-2d-<representation>`: boundary sheets, the volumetric shell, the
+#:   uniform disc, the Dirichlet and flux conditions, every channel of
+#:   enclosed mass and the gauge of the monopole datum, three meshes each
+#:   (`TestCylindrical`); the low-rank entry adds the parity problems of
+#:   `test_dtn_lowrank_parity.py`, the multiplier entry the refusals of
+#:   `TestSetup` and the field-number split of `TestIndexSetSplit`;
+#: - `closed-2d-lowrank-np2`: the sheets and the mass channels of the low-rank
+#:   entry on two ranks, compared with the serial entry: the quadrature
+#:   degree, the boundary radius and area and the enclosed mass are
+#:   reductions over the ranks that both representations share, so the
+#:   parity of `parallel-gravity-np2` cannot see them;
+#: - `closed-3d-<representation>`: the `Y_21` sheet and the interior monopole
+#:   on two cubed-sphere shells (`TestSpherical`); the low-rank entry adds the
+#:   3-D parity and tolerance sweep, the multiplier entry
+#:   `test_monopole_absent_in_3d`;
+#: - `submesh`: the density on a `Submesh` (`test_cross_mesh_consistency`,
+#:   `test_cross_mesh_iterative_preset`,
+#:   `test_submesh_parity_and_the_mixed_space_disappearing`);
+#: - `adjoint-<dimension>-<representation>`: `test_gravity_adjoint.py`
+#:   (multiplier) and `test_gravity_adjoint_lowrank.py` (low-rank);
+#: - `quadrature-<warp>-<L>`: one warped shell of
+#:   `test_silence_implies_adequacy` each, the warp in hundredths;
+#: - `quadrature-rule`: the other quadrature-degree tests;
+#:   `quadrature-rank-np2`: the degree and the check on two ranks
+#:   (`test_degree_and_check_are_rank_independent`).
+#:
+#: The `quadrature-*` entries build solvers and integrate modes on 3-D
+#: meshes but do not solve, so they run on the development machine.
+GRAVITY_QUADRATURE_SWEEP = ((0.10, 5), (0.20, 5), (0.20, 8), (0.25, 5), (0.30, 8),
+                            (0.30, 12))
+
+
+def gravity_quadrature_entry(warp, L):
+    """The entry of one mesh of `GRAVITY_QUADRATURE_SWEEP`, the warp in hundredths."""
+    return f"quadrature-{round(100 * warp):02d}-{L}"
+
+
+GRAVITY = {
+    "closed-2d-multiplier": dict(cores=1),
+    "closed-2d-lowrank": dict(cores=1),
+    "closed-2d-lowrank-np2": dict(cores=2),
+    "closed-3d-multiplier": dict(cores=1, local=False),
+    "closed-3d-lowrank": dict(cores=1, local=False),
+    "submesh": dict(cores=1),
+    "adjoint-2d-multiplier": dict(cores=1),
+    "adjoint-2d-lowrank": dict(cores=1),
+    "adjoint-3d-multiplier": dict(cores=1, local=False),
+    "adjoint-3d-lowrank": dict(cores=1, local=False),
+    **{gravity_quadrature_entry(warp, L): dict(cores=1)
+       for warp, L in GRAVITY_QUADRATURE_SWEEP},
+    "quadrature-rule": dict(cores=1),
+    "quadrature-rank-np2": dict(cores=2),
+}
+
+#: The entries that write CG counts, and the two of them whose counts are
+#: recorded in `expected/gravity-counts.txt` (the 3-D ones run on CI only).
+GRAVITY_CLOSED = tuple(name for name in GRAVITY
+                       if name.startswith("closed-") and not name.endswith("-np2"))
+GRAVITY_COUNT_ENTRIES = ("closed-2d-multiplier", "closed-2d-lowrank")
+
+#: The number of meshes per closed-form row: in 2-D each mesh has half the
+#: facet size of the one before, and so does the second 3-D shell; the
+#: refinement levels of `UnitDiskMesh` for the uniform disc.
+GRAVITY_LEVELS_2D = 3
+GRAVITY_LEVELS_3D = 2
+GRAVITY_DISC_LEVELS = (2, 3, 4)
+#: The boundary sheets `cos(m phi)`: the boundary and `m`
+#: (`TestCylindrical::test_boundary_sheet`).
+GRAVITY_SHEETS = (("top", 2), ("top", 3), ("bottom", 2))
+#: The channels of enclosed mass (`test_monopole_counts_every_mass_channel`).
+GRAVITY_MASS_CHANNELS = ("density", "sheet", "flux")
+#: The right-hand-side controls of the monopole datum
+#: (`test_monopole_gradient_against_fresh_solves`).
+GRAVITY_MONOPOLE_CONTROLS = ("rho", "sigma", "G")
+#: The Krylov tolerances of the 3-D tolerance sweep
+#: (`test_shell_parity_is_tolerance_limited`).
+GRAVITY_TOLERANCE_SWEEP = (1e-9, 1e-11, 1e-13)
+
+#: The closed-form rows that converge at the order of CG2 with degree-2
+#: coordinates (3): their error at the finest mesh is at most the bound of
+#: the unit test, and the order between the two finest meshes is at least
+#: `GRAVITY_ORDER_MIN` (reported when below `GRAVITY_ORDER_REPORT`). The
+#: finest 2-D meshes are finer than the unit meshes, so the bound is met with
+#: margin; the order is the check.
+GRAVITY_ORDER_ROWS_2D = {"sheet_top2": 1e-4, "sheet_top3": 1e-4, "sheet_bottom2": 1e-4,
+                         "shell": 1e-4, "dirichlet_flux": 2e-5,
+                         "mass_density": 1e-6, "mass_sheet": 1e-6, "mass_flux": 1e-6}
+GRAVITY_ORDER_ROWS_3D = {"sphere_sheet": 5e-3, "sphere_monopole": 5e-3}
+GRAVITY_ORDER_MIN = 2.5
+GRAVITY_ORDER_REPORT = 2.7
+#: The trace coefficient of the active mode of a sheet, relative to the
+#: amplitude, at the finest mesh (`test_boundary_sheet`: 1e-4 in 2-D, 5e-4 in
+#: 3-D), and the largest inactive coefficient (1e-10 in 2-D, 1e-9 in 3-D).
+GRAVITY_COEFFICIENT_RTOL_2D = 1e-4
+GRAVITY_COEFFICIENT_RTOL_3D = 5e-4
+GRAVITY_INACTIVE_2D = 1e-10
+GRAVITY_INACTIVE_3D = 1e-9
+#: The `Y0,0` coefficients of the 3-D monopole against `sqrt(4 pi) psi(R)`.
+GRAVITY_MONOPOLE_COEFFICIENT_RTOL = 5e-3
+#: The uniform disc (`test_monopole_uniform_disc`): the error at the coarsest
+#: and the finest refinement, and each refinement below this fraction of the
+#: one before (order 2 of the polygon, `2^-2 = 0.25`); the same ratio and the
+#: finest bound for the boundary mean.
+GRAVITY_DISC_COARSE = 2e-2
+GRAVITY_DISC_FINE = 2e-3
+GRAVITY_DISC_RATIO = 0.35
+GRAVITY_DISC_MEAN = 1e-3
+#: Every channel of enclosed mass: the mass against its closed form
+#: (relative), and the mean of `psi` on the outer boundary (absolute), which
+#: is the gauge, both on the finest mesh (the unit mesh of the test).
+GRAVITY_MASS_RTOL = 1e-6
+GRAVITY_GAUGE_MEAN = 1e-10
+#: The gauge of the monopole datum does not depend on the Robin shift: the
+#: boundary length is `2 pi R` to this, the boundary mean and the L2
+#: difference between shifts are below `GRAVITY_ALPHA_RTOL`.
+GRAVITY_LENGTH_RTOL = 1e-9
+GRAVITY_ALPHA_RTOL = 1e-9
+#: Low-rank against multiplier: the potential (relative L2, in one process)
+#: and the trace coefficients (absolute) (`test_dtn_lowrank_parity.compare`).
+#: Between the two serial 2-D entries the coefficients of every row and mesh
+#: are compared with the same bound.
+GRAVITY_PARITY_PSI = 1e-14
+GRAVITY_PARITY_COEFFICIENTS = 1e-12
+#: The CG count of the iterative preset (and of CG with an LU of `A` on the
+#: low-rank path) grows by at most this from one mesh to the next; a recorded
+#: count may grow by at most the larger of 2 and 20 percent.
+GRAVITY_COUNT_GROWTH = 2
+GRAVITY_COUNT_SLACK = (2, 0.2)
+#: The 3-D gap between the two representations follows the Krylov tolerance:
+#: each hundredfold tightening lowers it by more than `GRAVITY_SWEEP_FACTOR`,
+#: and it stays below `GRAVITY_SWEEP_BOUND` times the tolerance.
+GRAVITY_SWEEP_FACTOR = 30.0
+GRAVITY_SWEEP_BOUND = 10.0
+#: The 2-rank entry against the serial one: every error, trace coefficient
+#: and mass, `|a - b| <= rtol |b| + atol` (round-off of the same solve on
+#: another partition); a boundary mean, which cancels to 1e-12, absolutely
+#: to `GRAVITY_NP2_MEAN_ATOL` (a tenth of `GRAVITY_GAUGE_MEAN`).
+GRAVITY_NP2_RTOL = 1e-10
+GRAVITY_NP2_ATOL = 1e-13
+GRAVITY_NP2_MEAN_ATOL = 1e-11
+#: The setup rows and the split by field numbers (`TestSetup`,
+#: `TestIndexSetSplit`): the net mass equals the area to 1e-12, the zero-mean
+#: Dirichlet solve has an L2 norm above 1e-3, the two splits agree to 1e-12.
+GRAVITY_NET_MASS_RTOL = 1e-12
+GRAVITY_ZERO_MEAN_NORM = 1e-3
+GRAVITY_SPLIT_RTOL = 1e-12
+#: `submesh`: same-mesh against submesh density 1e-8, iterative against direct
+#: 1e-6 (relative L2 here, largest nodal difference in the unit tests).
+GRAVITY_SUBMESH_RTOL = 1e-8
+GRAVITY_SUBMESH_ITERATIVE_RTOL = 1e-6
+
+#: The adjoint rows. The guards of `test_gravity_adjoint.
+#: assert_taylor_with_guards`: `|dJ.h| >= 1e-6 |J|`, the response of `J` to
+#: the largest step at least 1e-8 `|J|`, the rate with the gradient at least
+#: 1.90 and without it in `NO_GRADIENT_BAND`.
+GRAVITY_TAYLOR_RATE_MIN = 1.90
+GRAVITY_DERIVATIVE_FLOOR = 1e-6
+GRAVITY_RESPONSE_FLOOR = 1e-8
+#: Replay against the recording and against a fresh solve (relative).
+GRAVITY_REPLAY_RTOL = 1e-9
+#: Exact identities: `dJ/dG = 2 J / G` and its central difference; the
+#: tangent against the adjoint; two routes to one gradient; `solution`
+#: against `subfunctions[0]`; the monopole gradient against a central
+#: difference of fresh solves.
+GRAVITY_G_RTOL = 1e-9
+GRAVITY_TANGENT_RTOL = 1e-8
+GRAVITY_ROUTE_RTOL = 1e-8
+GRAVITY_ASSIGN_RTOL = 1e-14
+GRAVITY_MONOPOLE_FRESH_RTOL = 1e-6
+#: The closed-form sheet gradients: `2 pi G a / m` to 1e-3 in 2-D,
+#: `4 pi G a / (2l + 1)` to 5e-3 in 3-D; the nearest wrong closed form is at
+#: least 0.1 away.
+GRAVITY_SHEET_GRADIENT_RTOL_2D = 1e-3
+GRAVITY_SHEET_GRADIENT_RTOL_3D = 5e-3
+GRAVITY_SHEET_WRONG_MARGIN = 0.1
+#: The first-order ladder: R0 rate at least 0.9, R1 rate at least 1.90, R1
+#: above round-off.
+GRAVITY_R0_RATE_MIN = 0.9
+GRAVITY_R1_FLOOR = 1e-15
+#: The rows with a guarded Taylor test, and those with replay at a second
+#: control, per adjoint entry.
+GRAVITY_TAYLOR_ROWS = {
+    "adjoint-2d-multiplier": ("rho_dirichlet2d", "rho_lu2d", "rho_2d", "integral", "read",
+                              "assign", "G_2d", "sigma_2d", "submesh", "sheet", "wall"),
+    "adjoint-2d-lowrank": ("rho_dirichlet2d", "rho_lu2d", "rho_2d", "sigma_2d", "G_2d",
+                           "submesh", "sheet", "wall", "coefficients"),
+    "adjoint-3d-multiplier": ("rho_3d", "sigma_3d", "G_3d", "l0", "sphere_sheet"),
+    "adjoint-3d-lowrank": ("rho_3d", "sigma_3d", "G_3d", "l0", "sphere_sheet"),
+}
+GRAVITY_REPLAY_ROWS = {
+    "adjoint-2d-multiplier": ("rho_dirichlet2d", "rho_lu2d", "rho_2d", "read", "G_2d",
+                              "sigma_2d", "replay", "submesh", "wall"),
+    "adjoint-2d-lowrank": ("rho_dirichlet2d", "rho_lu2d", "rho_2d", "sigma_2d", "G_2d",
+                           "submesh", "replay", "wall", "coefficients"),
+    "adjoint-3d-multiplier": ("rho_3d", "sigma_3d", "G_3d", "l0"),
+    "adjoint-3d-lowrank": ("rho_3d", "sigma_3d", "G_3d", "l0"),
+}
+GRAVITY_ADJOINT_2D = ("adjoint-2d-multiplier", "adjoint-2d-lowrank")
+GRAVITY_ADJOINT_3D = ("adjoint-3d-multiplier", "adjoint-3d-lowrank")
+
+#: The quadrature rows: the target the rule was calibrated to reach (the
+#: largest relative change of a mode norm against a richer rule); the
+#: rank-independent degrees; a rich rule and the uniform annulus integrate
+#: to round-off; the check spans four orders over the degree sweep; the
+#: recovered rule reproduces the assembly to 1e-13; the icosahedral shell at
+#: `L = 10` takes degree 15.
+GRAVITY_QUADRATURE_TARGET = 1e-8
+GRAVITY_RANK_DEGREES = {"2d": 9, "3d": 12}
+GRAVITY_RANK_CHECK = 1e-12
+GRAVITY_UNIFORM_CHECK = 1e-11
+GRAVITY_INSTRUMENT_SPAN = 1e4
+GRAVITY_RECOVERED_RTOL = 1e-13
+GRAVITY_TRIANGLE_DEGREE = 15
+
+
+def gravity_values(entry):
+    """The path of the `name value` file of a `gravity` entry."""
+    return f"{OUT}/gravity-{entry}.dat"
+
+
+def gravity_counts(entry):
+    """The path of the CG counts of a `closed-*` entry of the `gravity` case."""
+    return f"{OUT}/gravity-{entry}-counts.dat"
+
+
+GRAVITY_EXPECTED_COUNTS = f"{EXPECTED}/gravity-counts.txt"
+
+
+def _gravity_entries():
+    """The `ENTRIES` items of the `gravity` case."""
+    out = []
+    for name, entry in GRAVITY.items():
+        outputs = [gravity_values(name)]
+        if name in GRAVITY_CLOSED:
+            outputs.append(gravity_counts(name))
+        out.append({"case": "gravity", "entry": name, "driver": "gia_gravity.py",
+                    "cores": entry["cores"], "outputs": outputs})
+    return out
+
+
 #: The files that `gia_record_expected.py` copies, by case: pairs of the
-#: driver output and the expected file, both relative to `CASE_DIR`.
+#: driver output and the expected file, both relative to `CASE_DIR`. A tuple
+#: of outputs is concatenated into the one expected file.
 RECORDED = {
     "forward": {name: (forward_log(name), forward_expected(name))
                 for name in FORWARD_RECORDED},
     "adjoint": {name: (adjoint_counts(name), adjoint_expected(name))
                 for name in ADJOINT},
+    "gravity": {"counts": (tuple(gravity_counts(name) for name in GRAVITY_COUNT_ENTRIES),
+                           GRAVITY_EXPECTED_COUNTS)},
 }
 
 #: Every step of `meta.py`: `case`, `entry`, `driver`, `cores`, `outputs`,
 #: and optionally `deps`, `hpc` and `launcher_args`.
 ENTRIES = (_forward_entries() + _limits_entries() + _operators_entries()
-           + _time_convergence_entries() + _adjoint_entries() + _parallel_entries())
+           + _time_convergence_entries() + _adjoint_entries() + _parallel_entries()
+           + _gravity_entries())
