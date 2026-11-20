@@ -527,8 +527,13 @@ def re_measure(solver):
 
 
 def real_value(field):
-    """The one number of a `Real` Function, for example `sea.shift()`."""
-    return float(field.dat.data_ro[0])
+    """The one number of a `Real` Function, for example `sea.shift()`.
+
+    Collective: `float` gathers the value from the rank that owns it, so
+    every rank must call it. On the pyop3 Firedrake only the owner holds
+    the entry in `dat.data_ro`; the other ranks hold an empty array.
+    """
+    return float(field)
 
 
 def perturb(z, amplitude, seed):
@@ -1573,8 +1578,7 @@ class TestLiveCoastlineSolve:
         """
         solver, z, sea, initial_norm = shoreline_solved
         residual = fd.assemble(solver.F)
-        row = float(residual.subfunctions[solver.field_index[SHIFT]]
-                    .dat.data_ro[0])
+        row = float(residual.subfunctions[solver.field_index[SHIFT]])
         bound = 10 * max(SNES_RTOL * initial_norm, SNES_ATOL)
         scale_factor = scalar_value(solver.scaling_factor)
         row_scale = scale_factor * B_MU * G_RE

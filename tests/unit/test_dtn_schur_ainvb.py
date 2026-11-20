@@ -2126,7 +2126,7 @@ def test_the_gradient_is_right_through_the_cached_path(meshes):
             functional = ReducedFunctional(J, m)
         finally:
             pause_annotation()
-        gradients[name] = float(functional.derivative().dat.data_ro[0])
+        gradients[name] = float(functional.derivative())
         if ainvb:
             # The stock or the cached adjoint solver, whichever this
             # Firedrake builds.

@@ -315,7 +315,7 @@ class TestRealControlsOnTheSheet:
         finally:
             pause_annotation()
         m = G if control == "G" else scale
-        gradient = float(ReducedFunctional(J, Control(m)).derivative().dat.data_ro[0])
+        gradient = float(ReducedFunctional(J, Control(m)).derivative())
         tape.clear_tape()
         values = []
         with stop_annotating():

@@ -100,13 +100,13 @@ def assembled_diagonal(W, w, F):
     """
     n = W.num_sub_spaces() - 1
     w.assign(0.0)
-    base = np.array([float(fd.assemble(F).subfunctions[1 + k].dat.data_ro[0])
+    base = np.array([float(fd.assemble(F).subfunctions[1 + k])
                      for k in range(n)])
     out = np.zeros(n)
     for k in range(n):
         w.assign(0.0)
         w.subfunctions[1 + k].assign(1.0)
-        out[k] = float(fd.assemble(F).subfunctions[1 + k].dat.data_ro[0]) - base[k]
+        out[k] = float(fd.assemble(F).subfunctions[1 + k]) - base[k]
     w.assign(0.0)
     return out
 
@@ -202,10 +202,10 @@ class TestTheDiagonalIsWhatTheFormSaysItIs:
         form, W, w, F = build(sheet_mesh)
         n = W.num_sub_spaces() - 1
         w.assign(0.0)
-        base = np.array([float(fd.assemble(F).subfunctions[1 + j].dat.data_ro[0])
+        base = np.array([float(fd.assemble(F).subfunctions[1 + j])
                          for j in range(n)])
         w.subfunctions[1].assign(1.0)
-        col = np.array([float(fd.assemble(F).subfunctions[1 + j].dat.data_ro[0])
+        col = np.array([float(fd.assemble(F).subfunctions[1 + j])
                         for j in range(n)]) - base
         w.assign(0.0)
         off = np.delete(col, 0)

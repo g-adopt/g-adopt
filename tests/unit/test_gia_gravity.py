@@ -2650,8 +2650,7 @@ class TestFluidCore:
             solver.field_index["displacement"]]
         displacement.interpolate(X / fd.sqrt(fd.dot(X, X)))
         residual = fd.assemble(core.residual(solver.coupling_context))
-        row = float(residual.subfunctions[
-            solver.field_index["core_pressure"]].dat.data_ro[0])
+        row = float(residual.subfunctions[solver.field_index["core_pressure"]])
         flux = fd.assemble(
             fd.dot(displacement, fd.FacetNormal(solver.mesh)) * core.measure())
         row_scale = (float(solver.scaling_factor)

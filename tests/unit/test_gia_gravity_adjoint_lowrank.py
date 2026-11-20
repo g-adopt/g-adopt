@@ -509,7 +509,7 @@ def gradient_against_fresh_solves(meshes, control_name, value, representation,
     Jhat, control, _, _, taped_solver = reduced_functional(
         meshes, control_name, value, representation,
         check_liveness=check_liveness, **build_kwargs)
-    gradient = float(Jhat.derivative().dat.data_ro[0])
+    gradient = float(Jhat.derivative())
     get_working_tape().clear_tape()
 
     def at(shift):
@@ -892,7 +892,7 @@ def test_tlm_matches_adjoint_and_fresh_solves(meshes, representation,
         control_mesh(meshes, control_name), 1.0)
     tape.evaluate_tlm()
     tlm = float(J.block_variable.tlm_value)
-    adjoint = float(Jhat.derivative().dat.data_ro[0])
+    adjoint = float(Jhat.derivative())
     relative = abs(tlm - adjoint) / abs(adjoint)
     print(f"    [tlm/{representation}/{control_name}] tlm {tlm:.10e} "
           f"adjoint {adjoint:.10e} rel {relative:.3e}")
@@ -937,7 +937,7 @@ def test_lowrank_and_multiplier_gradients_agree(meshes, control_name):
     for representation in REPRESENTATIONS:
         Jhat, _, _, _, _ = reduced_functional(meshes, control_name, value,
                                               representation)
-        grads[representation] = float(Jhat.derivative().dat.data_ro[0])
+        grads[representation] = float(Jhat.derivative())
         get_working_tape().clear_tape()
     relative = (abs(grads["lowrank"] - grads["multiplier"])
                 / abs(grads["multiplier"]))
@@ -963,7 +963,7 @@ def test_every_field_is_reachable_from_the_control(meshes, representation):
     assert gradient is not None, (
         "gradient is None: the control does not reach the objective at all "
         "(REVIEW-ADJOINT S6.5 D1, a silent 0.000e+00)")
-    assert abs(float(gradient.dat.data_ro[0])) > 0.0
+    assert abs(float(gradient)) > 0.0
 
 
 # ===========================================================================
@@ -1038,7 +1038,7 @@ def test_geoid_is_differentiable(meshes, representation, control_name):
     # error that reads exactly like a severed channel and is not one. The guard
     # driver itself opens with `rf(m)` for this reason and cites the same trap.
     Jhat(control)
-    gradient = float(Jhat.derivative().dat.data_ro[0])
+    gradient = float(Jhat.derivative())
     tape.clear_tape()
 
     def at(shift):
@@ -1083,7 +1083,7 @@ def appctx_survives(monkeypatch):
 def _gradient_once(meshes, representation):
     Jhat, _, _, _, _ = reduced_functional(
         meshes, "Lambda", CONTROL_VALUES["Lambda"], representation)
-    return float(Jhat.derivative().dat.data_ro[0])
+    return float(Jhat.derivative())
 
 
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
@@ -1297,7 +1297,7 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
         f"the two blocks no longer share `{shared}`; this test no longer "
         "exercises the hazard it was written for (REVIEW-ADJOINT S6.3)")
 
-    gradient = float(Jhat.derivative().dat.data_ro[0])
+    gradient = float(Jhat.derivative())
     tape.clear_tape()
 
     value = CONTROL_VALUES["Lambda"]
@@ -1376,9 +1376,9 @@ def test_control_absent_from_residual_raises_at_install(meshes, representation):
     # The documented silent zero, first: without the check this is all a batch
     # run would see.
     gradient = Jhat.derivative()
-    silent_zero = gradient is None or float(gradient.dat.data_ro[0]) == 0.0
+    silent_zero = gradient is None or float(gradient) == 0.0
     print(f"    [L28] unreachable control gives "
-          f"{None if gradient is None else float(gradient.dat.data_ro[0])!r}")
+          f"{None if gradient is None else float(gradient)!r}")
     assert silent_zero, "expected the documented silent zero; D1 has changed"
 
     # The check raises on the unreachable control, and stays quiet on the one
@@ -1453,7 +1453,7 @@ def test_fluid_core_lowrank_tlm_matches_adjoint(meshes, preset):
     control.block_variable.tlm_value = real(meshes[1], 1.0)
     tape.evaluate_tlm()
     tlm = float(J.block_variable.tlm_value)
-    adjoint = float(Jhat.derivative().dat.data_ro[0])
+    adjoint = float(Jhat.derivative())
     assert abs(tlm - adjoint) / abs(adjoint) < 1e-10
 
 
@@ -1749,7 +1749,7 @@ def test_a_capped_outer_solve_on_the_tape_is_never_silently_wrong(meshes, repres
     tight.pop("ksp_converged_maxits")
 
     # The reference gradient: a tape recorded at the new value, no cap reached.
-    reference = float(taped(new_value, tight).derivative().dat.data_ro[0])
+    reference = float(taped(new_value, tight).derivative())
     expected_value = fresh_value(new_value, capped)
 
     Jhat = taped(taped_value, capped)
@@ -1770,7 +1770,7 @@ def test_a_capped_outer_solve_on_the_tape_is_never_silently_wrong(meshes, repres
         f"{expected_value:.10e}: the replay kept a preconditioner of the "
         "taping value")
     try:
-        gradient = float(Jhat.derivative().dat.data_ro[0])
+        gradient = float(Jhat.derivative())
     except ConvergenceError:
         return
     finally:

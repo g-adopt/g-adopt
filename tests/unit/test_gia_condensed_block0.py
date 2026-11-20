@@ -658,10 +658,10 @@ class TestTheSolveMatchesTheDirectRoute:
         # the same indices of their mixed spaces.
         assert solver.real_indices == direct_solver.real_indices
         values = np.array([
-            float(solver.solution.subfunctions[i].dat.data_ro[0])
+            float(solver.solution.subfunctions[i])
             for i in solver.real_indices])
         reference = np.array([
-            float(direct_solver.solution.subfunctions[i].dat.data_ro[0])
+            float(direct_solver.solution.subfunctions[i])
             for i in direct_solver.real_indices])
         scale = max(abs(reference).max(), 1e-300)
         assert len(values) > 0
