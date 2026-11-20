@@ -39,9 +39,12 @@ def load_expected(entry):
 
 def is_counter(column):
     """Whether `column` is a cache counter of a preconditioner context."""
-    return column.endswith(tuple(f"_{name}" for name in
-                                 ("build_count", "column_builds", "assembly_count",
-                                  "elimination_count")))
+    return column.endswith(tuple(f"_{name}" for name in E.COUNTER_SUFFIXES))
+
+
+def is_count(column):
+    """Whether `column` is a count (compared by its own rules, not as a value)."""
+    return column in ("newton", "linear", "operator_version") or is_counter(column)
 
 
 def recorded_rtol(entry):
@@ -50,41 +53,54 @@ def recorded_rtol(entry):
             else E.RECORDED_RTOL_ITERATIVE)
 
 
-def compare_values(measured, expected, scale, rtol, label):
-    """Assert that two value columns agree; return nothing.
+def scale_of(table, column):
+    """The scale of `column` in each row of `table` (`gia_entries.SCALE_OF`)."""
+    rule = E.SCALE_OF.get(column)
+    if rule is None:
+        return np.zeros(len(table))
+    kind, *names = rule
+    values = [table[name].to_numpy(float) for name in names]
+    if kind == "column":
+        return np.abs(values[0])
+    if kind == "product":
+        return np.abs(values[0] * values[1])
+    if kind == "l2":
+        return np.sqrt(table["re_area"].to_numpy(float) * np.abs(values[0]))
+    raise ValueError(rule)
 
-    A NaN in the expected column must be NaN in the measured one (the entry
-    has no such quantity). An expected value below `ROUNDOFF_FRACTION *
-    scale` is round-off and is compared absolutely with that bound; every
-    other value relatively with `rtol`.
+
+def compare_values(measured, expected, column, rtol, label):
+    """Assert that one value column of two tables agrees, row by row.
+
+    `|m - e| <= rtol * (|e| + scale)`, with the scale of the column taken
+    from the expected table (`scale_of`). A NaN in the expected column must
+    be NaN in the measured one: the entry has no such quantity.
 
     Args:
-      measured, expected: arrays of one column, one value per step.
-      scale: the displacement norm `u_l2` of each step.
+      measured, expected: two tables with the same rows.
+      column: the column to compare.
       rtol: the relative tolerance.
-      label: the entry and the column, for the message.
+      label: the entries and the column, for the message.
     """
-    for k, (m, e, s) in enumerate(zip(measured, expected, scale)):
-        if math.isnan(e):
-            assert math.isnan(m), f"{label} step {k + 1}: measured {m!r}, expected NaN"
+    m = measured[column].to_numpy(float)
+    e = expected[column].to_numpy(float)
+    scale = scale_of(expected, column)
+    for k, (mk, ek, sk) in enumerate(zip(m, e, scale)):
+        if math.isnan(ek):
+            assert math.isnan(mk), f"{label} row {k}: measured {mk!r}, expected NaN"
             continue
-        floor = E.ROUNDOFF_FRACTION * s
-        if abs(e) < floor:
-            assert abs(m - e) <= floor, (
-                f"{label} step {k + 1}: measured {m!r}, expected {e!r}, "
-                f"absolute tolerance {floor!r}")
-        else:
-            assert abs(m - e) <= rtol * abs(e), (
-                f"{label} step {k + 1}: measured {m!r}, expected {e!r}, "
-                f"relative tolerance {rtol!r}")
+        allowed = rtol * (abs(ek) + sk)
+        assert abs(mk - ek) <= allowed, (
+            f"{label} row {k}: measured {mk!r}, expected {ek!r}, "
+            f"tolerance {allowed!r} (rtol {rtol!r}, scale {sk!r})")
 
 
 @pytest.mark.parametrize("entry", E.FORWARD_RECORDED)
 def test_recorded_values(entry):
     """Every column of every step agrees with the recorded values.
 
-    Values: `recorded_rtol(entry)`, with the round-off floor of
-    `compare_values`. Newton count: within 1 of the stored count. Linear
+    Values: `recorded_rtol(entry)`, against the value and the scale of the
+    column (`compare_values`). Newton count: within 1 of the stored count. Linear
     count: at most the stored count plus the larger of 2 and 20 percent.
     Cache counters and `operator_version`: equal.
     """
@@ -107,11 +123,11 @@ def test_recorded_values(entry):
         elif column == "linear":
             limit = e + np.maximum(2, 0.2 * e)
             assert np.all(m <= limit), f"{label}: measured {m!r}, at most {limit!r}"
-        elif column == "operator_version" or is_counter(column):
+        elif is_count(column):
             assert np.array_equal(m, e, equal_nan=True), (
                 f"{label}: measured {m!r}, expected {e!r}")
         else:
-            compare_values(m, e, expected["u_l2"].to_numpy(), rtol, label)
+            compare_values(measured, expected, column, rtol, label)
 
 
 @pytest.mark.parametrize("entry,column", [
@@ -137,11 +153,11 @@ def test_net_sheet_mass_is_set_by_the_frame(entry):
     `int sigma dS = sum_i lambda_i int x_i dsigma/dShift dS / g_s`
     (`gia_march._mass_terms`). The difference must be at most the part of
     the row that Newton leaves (`mass_newton`) plus 1e-10 of the absolute
-    sheet mass for the round-off of the integrals. The net mass is also
-    within the bound of `test_sea_level.py::TestLiveCoastlineSolve::
-    test_mass_is_conserved_to_order_lambda` (`mass_bound`). Entries without
-    sea level have NaN in these columns and are skipped.
+    sheet mass for the round-off of the integrals. The net mass itself is at
+    most `MASS_LEAK_RTOL` of the absolute sheet mass. Entries without sea
+    level have NaN in these columns and are skipped.
     """
+    local(entry)
     table = load_log(entry)
     if table["sheet_mass"].isna().all():
         pytest.skip(f"{entry} has no sea level")
@@ -150,35 +166,42 @@ def test_net_sheet_mass_is_set_by_the_frame(entry):
         allowed = row["mass_newton"] + 1e-10 * row["sheet_abs_mass"]
         assert gap <= allowed, (
             f"{entry} step {row['step']:.0f}: |int sigma - identity| = {gap!r}, "
-            f"allowed {allowed!r} (int sigma {row['sheet_mass']!r})")
-        assert abs(row["sheet_mass"]) <= row["mass_bound"], (
+            f"allowed {allowed!r} (int sigma {row['sheet_mass']!r}, "
+            f"identity {row['mass_identity']!r})")
+        leak = E.MASS_LEAK_RTOL * row["sheet_abs_mass"]
+        assert abs(row["sheet_mass"]) <= leak, (
             f"{entry} step {row['step']:.0f}: |int sigma| = {abs(row['sheet_mass'])!r}, "
-            f"bound {row['mass_bound']!r}")
+            f"at most {E.MASS_LEAK_RTOL!r} * int |sigma| = {leak!r}")
 
 
 @pytest.mark.parametrize("entry", list(E.FORWARD))
 def test_centre_of_mass_holds(entry):
     """`|D_i| <= DIPOLE_RTOL * sheet_moment_i` at every step, both directions.
 
+    `DIPOLE_RTOL_ITERATIVE` for an entry with the iterative preset.
+
     `D_i` is the first mass moment of the mantle and of every sheet;
     `sheet_moment_i`, the integral of `|x_i sigma|` over the sheets, is the
     moment that the displacement has to cancel, and it must be nonzero.
     """
+    local(entry)
     table = load_log(entry)
     if table["dipole_0"].isna().all():
         pytest.skip(f"{entry} has no centre-of-mass constraint")
+    rtol = (E.DIPOLE_RTOL if E.FORWARD[entry]["preset"] == "direct"
+            else E.DIPOLE_RTOL_ITERATIVE)
     for i in range(2):
         moment = table[f"sheet_moment_{i}"].to_numpy()
         dipole = table[f"dipole_{i}"].to_numpy()
         assert np.all(moment > 0), f"{entry} sheet_moment_{i}: {moment!r}"
-        assert np.all(np.abs(dipole) <= E.DIPOLE_RTOL * moment), (
-            f"{entry} dipole_{i}: measured {dipole!r}, "
-            f"bound {E.DIPOLE_RTOL!r} * {moment!r}")
+        assert np.all(np.abs(dipole) <= rtol * moment), (
+            f"{entry} dipole_{i}: measured {dipole!r}, bound {rtol!r} * {moment!r}")
 
 
 @pytest.mark.parametrize("entry", list(E.FORWARD))
 def test_core_volume_is_kept(entry):
     """`|int u . n dS_cmb| <= CMB_FLUX_RTOL * u_l2`: the fluid core keeps its volume."""
+    local(entry)
     table = load_log(entry)
     flux, scale = table["cmb_flux"].to_numpy(), table["u_l2"].to_numpy()
     assert np.all(np.abs(flux) <= E.CMB_FLUX_RTOL * scale), (
@@ -188,6 +211,155 @@ def test_core_volume_is_kept(entry):
 @pytest.mark.parametrize("entry", list(E.FORWARD))
 def test_newton_count(entry):
     """At most `MAX_NEWTON_MOVING` Newton iterations per step."""
+    local(entry)
     newton = load_log(entry)["newton"].to_numpy()
     assert np.all(newton <= E.MAX_NEWTON_MOVING), (
         f"{entry} newton: measured {newton!r}, at most {E.MAX_NEWTON_MOVING}")
+
+
+def load_values(entry):
+    """The `name value` file of an entry of `FORWARD_VALUES`, as a dictionary."""
+    path = E.CASE_DIR / E.forward_values(entry)
+    out = {}
+    for line in path.read_text().splitlines():
+        name, value = line.split()
+        out[name] = float(value)
+    return out
+
+
+def local(entry):
+    """Skip `entry` where it does not run (more than 2 ranks) and has no output."""
+    if not E.FORWARD[entry].get("local", True) and not (
+            E.CASE_DIR / E.forward_log(entry)).exists():
+        pytest.skip(f"{entry} runs on CI only")
+
+
+@pytest.mark.parametrize("entry,reference,rtol,first", E.RELATIONS,
+                         ids=[f"{r[0]}-vs-{r[1]}" for r in E.RELATIONS])
+def test_relations_between_entries(entry, reference, rtol, first):
+    """Two entries that solve the same problem agree in every value column.
+
+    The other preset, the other DtN representation, the restart from a
+    checkpoint and other rank counts must not change the answer beyond the
+    tolerance of the relation (`gia_entries.RELATIONS`). Counts and the
+    bounds derived from the solver tolerances are not compared.
+    """
+    local(entry)
+    measured = load_log(entry).reset_index(drop=True)
+    expected = load_log(reference).iloc[first:].reset_index(drop=True)
+    assert list(measured["step"]) == list(expected["step"]), (
+        f"{entry} steps {list(measured['step'])!r}, {reference} steps "
+        f"{list(expected['step'])!r}")
+    for column in expected.columns:
+        if is_count(column) or column in E.BOUND_COLUMNS:
+            continue
+        assert column in measured.columns, f"{entry} lacks the column {column!r}"
+        column_rtol = E.RELATION_RTOL_OF.get((entry, column), rtol)
+        compare_values(measured, expected, column, column_rtol,
+                       f"{entry} against {reference}: {column}")
+
+
+@pytest.mark.parametrize("entry", E.LINEAR_ENTRIES)
+def test_a_linear_residual_takes_one_newton_step(entry):
+    """With a fixed coastline or a prescribed load, Newton takes one step."""
+    newton = load_log(entry)["newton"].to_numpy()
+    assert np.all(newton == 1), f"{entry} newton: measured {newton!r}, expected 1"
+
+
+@pytest.mark.parametrize("counter", E.REBUILD_COUNTERS)
+def test_the_caches_rebuild_at_a_change_of_dt(counter):
+    """A cache builds at most once per solve, at the change of `dt`, and is reused.
+
+    In `REBUILD_ENTRY` the step operator depends on `dt` and on the BDF2
+    coefficients only. A cache that does not rebuild at a change of `dt`
+    keeps a preconditioner of another operator; one that rebuilds at every
+    step does not cache.
+    """
+    table = load_log(E.REBUILD_ENTRY)
+    counts = table[counter].to_numpy()
+    steps = table["step"].to_numpy().astype(int)
+    increase = np.diff(counts, prepend=0)
+    label = f"{E.REBUILD_ENTRY} {counter}: counts {counts!r}"
+    assert np.all((increase == 0) | (increase == 1)), f"{label}, more than one build per solve"
+    assert increase[list(steps).index(E.REBUILD_DT_STEP)] == 1, (
+        f"{label}, no build at step {E.REBUILD_DT_STEP} where dt changes")
+    assert np.any(increase == 0), f"{label}, a build at every step"
+
+
+def test_the_elimination_matches_the_unreduced_system():
+    """The Quadrature solver agrees with the unreduced mixed system.
+
+    Per step and field the largest ratio of the nodal difference to
+    `5e-7 |b| + 2e-9` is at most 1, and the displacement, the potential and
+    the history are not zero.
+    """
+    values = load_values("unreduced")
+    ratios = {name: value for name, value in values.items() if name.endswith("_ratio")}
+    assert len(ratios) >= E.UNREDUCED_STEP_COUNT * len(E.UNREDUCED_FIELDS)
+    bad = {name: value for name, value in ratios.items() if not value <= 1.0}
+    assert not bad, f"differences above the bound (ratio to bound): {bad!r}"
+    for k in range(1, E.UNREDUCED_STEP_COUNT + 1):
+        for field in E.UNREDUCED_FIELDS:
+            size = values[f"step{k}_{field}_size"]
+            assert size > 0, f"step {k} {field}: largest value {size!r}"
+
+
+def test_three_steps_agree_with_the_earlier_solver():
+    """Three steps of the Quadrature case agree with the stored earlier solver.
+
+    The fingerprints of the displacement, the potential and the history are
+    compared as in `gia_cases.fingerprint_differences`: the larger of the
+    norm difference over the reference norm and the probe difference over
+    the reference norm times the probe norm, at `SOLVED_RTOL`. Every `Real`
+    field is compared against the largest `Real` value of the step, or, if
+    all are round-off against the displacement, against 1e-12 of its size.
+    """
+    import json
+    reference = json.loads(E.REFERENCE_FILE.read_text())[E.REFERENCE_LABEL]
+    values = load_values("reference-quadrature")
+    for k, stored in enumerate(reference, start=1):
+        for field in E.REFERENCE_FIELDS:
+            norm, probe, probe_norm = stored[field]
+            new_norm = values[f"step{k}_{field}_norm"]
+            new_probe = values[f"step{k}_{field}_probe"]
+            scale = norm if norm > 0 else 1e-300
+            difference = max(abs(new_norm - norm) / scale,
+                             abs(new_probe - probe) / (scale * probe_norm))
+            assert difference <= E.SOLVED_RTOL, (
+                f"step {k} {field}: measured norm {new_norm!r} probe {new_probe!r}, "
+                f"stored {norm!r} {probe!r}; difference {difference!r}, "
+                f"tolerance {E.SOLVED_RTOL!r}")
+        reals = stored["reals"]
+        measured = {name[len(f"step{k}_real_"):]: value for name, value in values.items()
+                    if name.startswith(f"step{k}_real_")}
+        assert set(measured) == set(reals), (sorted(measured), sorted(reals))
+        size = stored["displacement"][0]
+        largest = max(abs(v) for v in reals.values())
+        bound = (E.SOLVED_RTOL * largest if largest > 1e-12 * size else 1e-12 * size)
+        for name, value in reals.items():
+            assert abs(measured[name] - value) <= bound, (
+                f"step {k} {name}: measured {measured[name]!r}, stored {value!r}, "
+                f"tolerance {bound!r}")
+
+
+def test_a_checkpoint_of_the_earlier_solver_converts():
+    """A file of the earlier solver restores this one, which then continues.
+
+    The restored state and the state after one more step agree with a run
+    from rest to `CONVERT_RTOL` per field; the restored previous step is
+    `CONVERT_PREVIOUS_DT`; a state with the wrong time order and a
+    conversion without the number of ranks of the writer are refused.
+    """
+    values = load_values("convert-quadrature-bdf2")
+    for when in ("restored", "continued"):
+        for field in E.REFERENCE_FIELDS:
+            relative = values[f"{when}_{field}_relative"]
+            assert values[f"{when}_{field}_norm"] > 0, f"{when} {field} is zero"
+            assert relative <= E.CONVERT_RTOL, (
+                f"{when} {field}: relative difference {relative!r}, "
+                f"tolerance {E.CONVERT_RTOL!r}")
+    assert values["previous_dt"] == E.CONVERT_PREVIOUS_DT, (
+        f"previous_dt {values['previous_dt']!r}, expected {E.CONVERT_PREVIOUS_DT!r}")
+    assert values["refuses_time_order"] == 1.0, "a state of the wrong time order was accepted"
+    assert values["refuses_missing_writer_ranks"] == 1.0, (
+        "a conversion without the number of writer ranks was accepted")

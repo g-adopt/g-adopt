@@ -24,17 +24,26 @@ from pathlib import Path
 from gia_entries import CASE_DIR, RECORDED
 
 
-def _git_commit(directory):
-    """The commit of the git checkout that holds `directory`, or "unknown"."""
+def _git_commit(directory, paths=(".",)):
+    """The commit of the git checkout that holds `directory`, or "unknown".
+
+    " (with local changes)" is added when a file under `paths` (relative to
+    the root of the checkout) is modified or untracked, so that a recording
+    from code that is not in the named commit says so."""
     try:
         out = subprocess.run(["git", "-C", str(directory), "rev-parse", "HEAD"],
                              capture_output=True, text=True, check=True)
         dirty = subprocess.run(["git", "-C", str(directory), "status", "--porcelain",
-                                "--untracked-files=no"],
+                                "--", *paths],
                                capture_output=True, text=True, check=True)
         return out.stdout.strip() + (" (with local changes)" if dirty.stdout.strip() else "")
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+#: The paths whose state the g-adopt commit line describes: the library and
+#: the cases, but not the expected files that the recording writes.
+SOURCE_PATHS = (":(top)gadopt", ":(top)tests/gia", ":(top,exclude)tests/gia/expected")
 
 
 def header():
@@ -42,7 +51,7 @@ def header():
     import firedrake
     from petsc4py import PETSc
     petsc = ".".join(str(v) for v in PETSc.Sys.getVersion())
-    lines = [f"g-adopt commit: {_git_commit(CASE_DIR)}",
+    lines = [f"g-adopt commit: {_git_commit(CASE_DIR, SOURCE_PATHS)}",
              f"Firedrake commit: {_git_commit(Path(firedrake.__file__).parent)}",
              f"PETSc version: {petsc}",
              f"host: {platform.node()}",

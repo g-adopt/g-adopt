@@ -27,8 +27,10 @@ from dataclasses import dataclass, replace
 import gadopt  # noqa: F401  (gadopt is imported before firedrake)
 import firedrake as fd
 from firedrake.adjoint import stop_annotating
+from mpi4py import MPI
 
 import gia_cases as C
+from gia_entries import COUNTER_SUFFIXES
 from gadopt import gia_couplings as cp
 
 #: The main configuration: the Quadrature history with BDF2, the low-rank
@@ -151,7 +153,7 @@ def advance(run, steps, *, first=0, on_step=None, ice=ice_at):
 #: The counters of the preconditioner contexts, read from each Python context
 #: in the tree of the outer PC. Each counts the builds of one cached
 #: operator; a changed count means a cache rebuilds at another step.
-COUNTERS = ("build_count", "column_builds", "assembly_count", "elimination_count")
+COUNTERS = COUNTER_SUFFIXES
 
 
 def _python_contexts(pc, path="pc"):
@@ -221,6 +223,7 @@ def diagnostics(run, k):
       mantle at the quadrature points of the history;
     - `u_norm u_probe u_probe_norm` and the same for `psi` and `history`:
       `gia_cases.probe_pairing` of the coefficient vectors;
+    - `re_area`, the length of the outer surface of the mantle;
     - `ur_mean ur_sq geoid_mean geoid_sq`: the integrals of the radial
       displacement and of the geoid height (with the rotational potential)
       and of their squares over the outer surface of the mantle;
@@ -237,6 +240,8 @@ def diagnostics(run, k):
     - core: `core_pressure` and `cmb_flux`, the integral of `u . n` over the
       core-mantle boundary, which the fluid core constrains to zero;
     - rotation: `m3`;
+    - rheology: `min_power_factor`, the smallest power-law factor
+      `eta_eff / eta` over the quadrature points (`_min_power_factor`);
     - counts: `newton linear`, the cache counters of the preconditioners
       (`preconditioner_counters`) and `operator_version`.
 
@@ -266,6 +271,7 @@ def diagnostics(run, k):
     n = fd.FacetNormal(sub)
     u_r = fd.dot(solver.field("displacement"), n)
     geoid = ctx.parent_trace(solver.geoid())
+    row["re_area"] = fd.assemble(fd.dot(n, n) * ds_re)
     row["ur_mean"] = fd.assemble(u_r * ds_re)
     row["ur_sq"] = fd.assemble(u_r ** 2 * ds_re)
     row["geoid_mean"] = fd.assemble(geoid * ds_re)
@@ -276,12 +282,31 @@ def diagnostics(run, k):
     row["cmb_flux"] = fd.assemble(fd.dot(solver.field("displacement"), n)
                                   * ctx.surface_measure(C.CURVE_RC))
     row["m3"] = _real(solver, "m3")
+    row["min_power_factor"] = _min_power_factor(solver)
     row["newton"] = solver.appctx["gia_last_solve_newton_its"]
     row["linear"] = solver.appctx["gia_last_solve_linear_its"]
     row.update(preconditioner_counters(solver))
     version = solver.appctx.get("operator_version")
     row["operator_version"] = math.nan if version is None else version
     return row
+
+
+def _min_power_factor(solver):
+    """The smallest power-law factor `f = 1 / q` over the quadrature points.
+
+    The Quadrature family solves for the fluidity `q = 1 / f` at each
+    quadrature point of the mantle (`MaxwellQuadratureUpdate.q`), at the
+    state of the last Newton update. `f` is 1 for a Newtonian rheology and
+    falls below 1 where the stress exceeds the transition stress. The
+    smallest `f` is the largest `q`, a maximum over the whole set of points,
+    which is the same on every partition. NaN for the DG family.
+    """
+    backend = getattr(solver._step, "backend", None)
+    if backend is None:
+        return math.nan
+    q = backend.material.q
+    largest = q.comm.allreduce(float(q.dat.data_ro.max(initial=-math.inf)), op=MPI.MAX)
+    return 1.0 / largest
 
 
 SEA_COLUMNS = ("sl_mean", "sl_sq", "shift", "ocean_area", "sheet_mass",
@@ -362,17 +387,32 @@ def _mass_terms(solver, sea):
 
 
 def _frame_columns(solver):
-    """The centre-of-mass columns of `diagnostics`; NaN without the coupling."""
+    """The centre-of-mass columns of `diagnostics`; NaN without the coupling.
+
+    The first mass moment
+
+        D_i = int_mantle rho_0 u_i dx + sum_sheets int x_i sigma dS
+
+    is assembled here from the density, the displacement and the sheets of
+    the coupling context, and not with `CentreOfMass.dipole`, so that a
+    sheet missing from the constraint row of the solver shows as a nonzero
+    `D_i` instead of being missing from both.
+    """
     com = _coupling(solver, cp.CentreOfMass)
     out = {}
+    ctx = solver.coupling_context
     X = fd.SpatialCoordinate(solver.mesh)
-    sheets = solver.coupling_context.sheets
+    u = solver.field("displacement")
+    sheets = ctx.sheets
     for i in range(2):
         if com is None:
             out[f"com_{i}"] = out[f"dipole_{i}"] = math.nan
         else:
             out[f"com_{i}"] = float(com.multipliers()[i])
-            out[f"dipole_{i}"] = fd.assemble(com.dipole()[i])
+            moment = ctx.approximation.density * u[i] * ctx.dx_m
+            for sheet in sheets:
+                moment += X[i] * sheet.density * sheet.measure
+            out[f"dipole_{i}"] = fd.assemble(moment)
         out[f"sheet_moment_{i}"] = sum(
             fd.assemble(abs(X[i] * sheet.density) * sheet.measure) for sheet in sheets)
     return out
