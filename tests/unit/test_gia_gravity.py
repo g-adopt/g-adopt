@@ -2297,12 +2297,16 @@ class TestFluidCore:
             `buoyancy_density` go to `FluidCore` (defaults `CURVE_RC` and
             2.0); everything else goes to `SelfGravitatingGIASolver`
             (`dtn_representation`, `internal_variable_family`,
-            `solver_parameters`, `nullspace`, ...).
+            `solver_parameters`, `nullspace`, ...). The history family is
+            the Quadrature family unless the caller names another: the
+            fluid core is shared code, and the Quadrature family is the one
+            that stays.
 
         Returns:
           `(solver, u, psi)`.
         """
         parent, sub = meshes
+        kwargs.setdefault("internal_variable_family", "Quadrature")
         settings = {"boundary": CURVE_RC, "rho_core": 2.0}
         settings.update({k: kwargs.pop(k)
                          for k in TestFluidCore.FLUID_CORE_KEYS if k in kwargs})
@@ -2323,8 +2327,11 @@ class TestFluidCore:
 
     def test_refuses_un_on_the_same_boundary(self, meshes):
         """The two treatments are alternatives, not layers: `un` pins `dot(u, n)`."""
+        # The DG family: the Quadrature family refuses every displacement
+        # condition before the fluid core sees the `un`.
         with pytest.raises(ValueError, match="both a FluidCore and"):
-            self.build_fluid(meshes, extra_bcs={CURVE_RC: {"un": 0.0}})
+            self.build_fluid(meshes, extra_bcs={CURVE_RC: {"un": 0.0}},
+                             internal_variable_family="DG")
 
     def test_refuses_a_tag_that_is_not_a_mechanics_facet(self, meshes):
         """A wrong-kind tag gives zero and a warning, so it is refused instead.
@@ -2451,9 +2458,11 @@ class TestFluidCore:
         load = B_MU * SIGMA_HAT * (
             fd.cos(2 * fd.atan2(X[1], X[0])) + fd.Constant(0.25))
         surface_bcs = {CURVE_RE: {"normal_stress": load}}
+        # The DG family: the comparison reads the DG history field.
         solver, u, _ = self.build_fluid(
             meshes, sheet=False, approximation_kwargs={"B_mu": 0.0},
-            dtn_representation="multiplier", extra_bcs=surface_bcs)
+            dtn_representation="multiplier", extra_bcs=surface_bcs,
+            internal_variable_family="DG")
         solver.solve()
 
         V = fd.VectorFunctionSpace(sub, "CG", 2)
@@ -2776,7 +2785,7 @@ class TestCentreOfMassFrame:
             approximation(g=self.gravity_of_r(rm), **(approximation_kwargs or {})),
             dt=1.0, gravity_bcs=gravity_bcs(parent, sheet=False), bcs={},
             couplings=couplings, dtn_representation=dtn_representation,
-            **solver_kwargs)
+            **{"internal_variable_family": "Quadrature", **solver_kwargs})
         return solver, u, psi
 
     @pytest.mark.parametrize("rotation", [False, True])
