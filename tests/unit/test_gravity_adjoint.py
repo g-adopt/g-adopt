@@ -638,23 +638,6 @@ def test_taylor_monopole_constraint_row_3d(mesh_3d_mm):
 # ---------------------------------------------------------------------------
 # T15 - Cross-mesh (Submesh rho) adjointability  [P2, TAYLOR, tiered]
 # ---------------------------------------------------------------------------
-@pytest.fixture(scope="session")
-def submesh_pair():
-    """UnitDiskMesh parent + Submesh(r<0.55), as in test_cross_mesh_consistency.
-    The Submesh is the object under test - it has no utility-mesh substitute
-    and ExtrudedMesh does not support it (gap G8: 2-D only)."""
-    with stop_annotating():
-        mesh = fd.UnitDiskMesh(refinement_level=2)
-        X = fd.SpatialCoordinate(mesh)
-        r = fd.sqrt(fd.dot(X, X))
-        DG0 = fd.FunctionSpace(mesh, "DG", 0)
-        indicator = fd.Function(DG0).interpolate(
-            fd.conditional(r < 0.55, 1.0, 0.0))
-        marked = fd.RelabeledMesh(mesh, [indicator], [99])
-        submesh = fd.Submesh(marked, marked.topological_dimension, 99)
-    return marked, submesh
-
-
 def _rho_sub(submesh, coeffs):
     """Zero-mean DG0 density on the Submesh: sum of cos(k phi_sub)."""
     Xs = fd.SpatialCoordinate(submesh)
