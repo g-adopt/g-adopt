@@ -1,8 +1,7 @@
 """The recorded time step of `SelfGravitatingGIASolver` on the tape.
 
-Every step kind with a block of G-ADOPT's own (the low-rank DtN path with the
-DG history, and the Quadrature history with either DtN representation)
-records the same structure: a sweep marker, the step block, a sweep marker
+Every step kind with a block of G-ADOPT's own (the Quadrature history with
+either DtN representation) records the same structure: a sweep marker, the step block, a sweep marker
 and the kernel projection (`gadopt.gia_step_adjoint`). The tests here check
 that structure, the tangent sweep of the Quadrature step block against its
 adjoint and against a finite difference, the refusal of its second-order
@@ -37,8 +36,6 @@ Case = C.Case
 
 #: The step kinds with a step block of G-ADOPT's own.
 STEP_KINDS = [
-    pytest.param(Case(representation="lowrank", model="maxwell2", core="fluid",
-                      centre=True), id="lowrank-DG"),
     pytest.param(Case(family="Quadrature", scheme="bdf2", representation="lowrank",
                       model="maxwell2", core="fluid", centre=True),
                  id="quadrature-lowrank"),
@@ -224,14 +221,11 @@ def test_the_quadrature_step_refuses_a_hessian(meshes):
 #: callbacks) in the PETSc tree; the iterative preset puts the Python
 #: preconditioners that hold the application context there.
 _COLLECTED_CASES = [
-    pytest.param(STEP_KINDS[0].values[0], "iterative", True, id="lowrank-DG-iterative"),
-    pytest.param(STEP_KINDS[0].values[0], "direct", True, id="lowrank-DG-direct"),
-    pytest.param(STEP_KINDS[0].values[0], "direct", False, id="lowrank-DG-direct-untaped"),
-    pytest.param(STEP_KINDS[1].values[0], "iterative", True, id="quadrature-lowrank-iterative"),
-    pytest.param(STEP_KINDS[1].values[0], "direct", True, id="quadrature-lowrank-direct"),
-    pytest.param(STEP_KINDS[1].values[0], "direct", False,
+    pytest.param(STEP_KINDS[0].values[0], "iterative", True, id="quadrature-lowrank-iterative"),
+    pytest.param(STEP_KINDS[0].values[0], "direct", True, id="quadrature-lowrank-direct"),
+    pytest.param(STEP_KINDS[0].values[0], "direct", False,
                  id="quadrature-lowrank-direct-untaped"),
-    pytest.param(STEP_KINDS[2].values[0], "direct", True, id="quadrature-multiplier-direct"),
+    pytest.param(STEP_KINDS[1].values[0], "direct", True, id="quadrature-multiplier-direct"),
 ]
 
 
