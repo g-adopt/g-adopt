@@ -1,14 +1,20 @@
 """Adjointability tests for gadopt.gravity_solver under Firedrake/pyadjoint.
 
-These are discrete-consistency tests of the taped forward map built by
-``GravitySolver``: Taylor tests on whole derivatives, component-level probes
-of the Real-space multiplier coupling and the ``subfunctions``/``assign``
-extraction chain, TLM-adjoint dot-product identities, replay correctness, and
-two physics-pinned gradient cross-checks. Mesh accuracy is irrelevant for the
-consistency tests, so every configuration is a brutally coarse utility mesh
-(the same annulus/cubed-sphere/Submesh constructions as
-``test_gravity_solver``); only the two closed-form gradient checks (T16/T17)
-use unit-test resolution, and T17 lives in the long-test lane.
+The 2-D tests of the taped forward map built by ``GravitySolver`` (Taylor
+tests, the Real-space multiplier coupling, the ``subfunctions``/``assign``
+extraction chain, TLM-adjoint dot products, replay, the closed-form sheet
+gradient, the monopole gradient against fresh solves, the sabotage
+controls and the truncation past the field enumeration wall) are rows of
+the ``adjoint-2d-multiplier`` entry of the ``gravity`` case in
+``tests/gia`` (driver ``gia_gravity.py``). That driver imports the
+controls, forward maps and tape probes of this module, and other unit
+modules import ``assert_taylor_with_guards``.
+
+The tests left here are the 3-D ones (``adjoint-3d-multiplier`` runs on CI
+only) and the 2-D/3-D parametrisations whose 3-D half has no local run.
+Mesh accuracy is irrelevant for these consistency tests, so every
+configuration is a coarse utility mesh (the same annulus/cubed-sphere
+constructions as ``test_gravity_solver``).
 
 Annotation state is global and must be managed explicitly. Nothing at module
 scope flips it on: ``import firedrake.adjoint`` does not annotate, and
@@ -19,8 +25,6 @@ annotation off afterwards. Every solver is constructed under
 the tape; only ``solve()`` and the objective assemble are taped.
 """
 
-from collections import Counter
-from contextlib import nullcontext
 
 import firedrake as fd
 import numpy as np
@@ -34,7 +38,6 @@ from firedrake.adjoint import (
     stop_annotating,
     taylor_test,
 )
-from pyadjoint import AdjFloat
 from pyadjoint.tape import annotate_tape
 
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
@@ -59,11 +62,6 @@ def clean_tape():
     if annotate_tape():
         pause_annotation()
     tape.clear_tape()
-
-
-@pytest.fixture(scope="session")
-def mesh_2d_lu():
-    return annulus_mesh(n_azimuthal=64, dr=0.25)
 
 
 @pytest.fixture(scope="session")
@@ -345,10 +343,6 @@ def assert_replay_b2(rf, forward, m2, *args):
 # ---------------------------------------------------------------------------
 # Tape-inspection helpers
 # ---------------------------------------------------------------------------
-def _block_counts(tape):
-    return Counter(type(b).__name__ for b in tape.get_blocks())
-
-
 def _solves_on(blocks, predicate):
     """Solve blocks whose function space satisfies `predicate`.
 
@@ -415,419 +409,24 @@ def _reaches_objective(tape, block, objective):
 # ---------------------------------------------------------------------------
 # T01 - Tape anatomy of one annotated solve  [P0, TAPE-INSPECT]
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("variant", ["clean", "dirty"])
-def test_tape_structure(mesh_2d_mm, variant):
-    """One annotated solve on CFG-2D-MM is exactly one NLVS solve block plus
-    the assign/subfunctions extraction, preceded by the enclosed-mass reset
-    and solve of the 2-D datum and by no AssembleBlock: the net-mass check
-    runs off the tape. The objective assemble that follows is not dangling.
-
-    The clean variant constructs under stop_annotating(); the dirty variant
-    constructs under annotation and must still yield one solve block with all
-    the extra construction blocks dangling.
-    """
-    tape = get_working_tape()
-
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-
-    if variant == "dirty":
-        continue_annotation()
-
-    build_ctx = nullcontext() if variant == "dirty" else stop_annotating()
-    with build_ctx:
-        psi = fd.Function(fd.FunctionSpace(mesh_2d_mm, "CG", 1))
-        solver = GravitySolver(
-            psi, m,
-            bcs={"top": {"dtn": CylindricalDtN(M=2)},
-                 "bottom": {"dtn": CylindricalDtN(M=2)}})
-
-    if variant == "clean":
-        continue_annotation()
-
-    n_before_solve = len(tape.get_blocks())
-    solver.solve()
-    n_after_solve = len(tape.get_blocks())
-    solve_blocks = tape.get_blocks()[n_before_solve:n_after_solve]
-
-    # Objective added AFTER the solve: must reach the gradient chain.
-    J = fd.assemble(solver.solution ** 2 * fd.dx)
-    pause_annotation()
-
-    solve_counts = Counter(type(b).__name__ for b in solve_blocks)
-
-    # Exactly one solve block on the MIXED space, whatever the multiplier
-    # count, and exactly one more: the one-by-one system on a Real space that
-    # defines the enclosed mass for the 2-D monopole datum. It is load-bearing
-    # - severing it is the 325% gradient error the datum exists to avoid - so
-    # it must reach J.
-    # Both are cached variational solvers, so both are `SOLVE_BLOCK_TYPE`:
-    # a `NonlinearVariationalSolveBlock` on stock Firedrake and a
-    # `CachedSolverBlock` with Firedrake PR 4638.
-    assert solve_counts[SOLVE_BLOCK_TYPE.__name__] == 2
-    assert len(_mixed_space_solves(solve_blocks)) == 1
-    mass_solves = _real_space_solves(solve_blocks)
-    assert len(mass_solves) == 1
-    assert _reaches_objective(tape, mass_solves[0], J)
-
-    # No 0-form AssembleBlock in the solve: the enclosed mass is the Real
-    # solve above, and `check_net_mass` assembles its |rho| scale under
-    # `stop_annotating` whatever the caller's annotation state.
-    solve_assembles = [
-        b for b in solve_blocks if type(b).__name__ == "AssembleBlock"]
-    assert len(solve_assembles) == 0
-
-    # The gravity solve block itself DOES reach J (control -> psi -> J is live).
-    assert _reaches_objective(tape, _mixed_space_solves(solve_blocks)[0], J)
-
-    # Two FunctionAssignBlocks: the reset of `source_mass` to zero before the
-    # enclosed-mass solve (`GravityPotential.update_total_mass`), and
-    # solution.assign(subfunctions[0]) after the solve, which is taped with
-    # SubfunctionBlock(s).
-    assert solve_counts["SubfunctionBlock"] >= 1
-    assert solve_counts["FunctionAssignBlock"] == 2
-
-    # The objective assemble is on the live chain, not dangling.
-    j_assembles = [
-        b for b in tape.get_blocks()[n_after_solve:]
-        if type(b).__name__ == "AssembleBlock"]
-    assert len(j_assembles) == 1
-    assert _reaches_objective(tape, j_assembles[0], J)
-    # J genuinely depends on the solve (sanity: value is finite and positive).
-    assert float(J) > 0.0
-
-    if variant == "dirty":
-        # Construction under annotation: none of the geometry/quadrature
-        # assembles emitted before the solve reach J - they are pure clutter.
-        pre_solve_blocks = tape.get_blocks()[:n_before_solve]
-        pre_assembles = [
-            b for b in pre_solve_blocks if type(b).__name__ == "AssembleBlock"]
-        assert len(pre_assembles) > 0
-        for b in pre_assembles:
-            assert not _reaches_objective(tape, b, J)
-
-
 # ---------------------------------------------------------------------------
 # T02 - Taylor on rho, no-multiplier paths  [P0, TAYLOR]
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("bc_variant", ["dirichlet2d", "lu2d"])
-def test_taylor_rho_no_multiplier(mesh_2d_lu, bc_variant):
-    """rho -> psi -> J is fully taped on the two no-multiplier 2-D paths:
-    a plain Dirichlet Poisson (source term alone, no DtN in the form) and a
-    single M=0 Robin term (still aij + LU). Whole derivative dJ/drho."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_lu)
-        h = rho_perturb_2d(mesh_2d_lu)
-        m2 = rho_control2_2d(mesh_2d_lu)
-
-    J, _, rf = tape_forward(forward_2d_lu, m, bc_variant)
-    assert_replay_b1(rf, m, J)
-    assert_replay_b2(rf, forward_2d_lu, m2, bc_variant)
-    assert_taylor_with_guards(rf, m, h, J)
-
-
 # ---------------------------------------------------------------------------
 # T03 - Taylor on rho, multi-mode fieldsplit path  [P0, TAYLOR]
 # ---------------------------------------------------------------------------
-def test_taylor_rho_fieldsplit_2d(mesh_2d_mm):
-    """CFG-2D-MM: 9 R multipliers (incl. interior mean), matfree Schur
-    fieldsplit, adjoint LVS built from adjoint(dFdu). The design specified
-    taylor_to_dict here for the R0/R1 ladders, but its R2/Hessian leg crashes
-    on the matfree Schur fieldsplit (PETSc error 101, the getDiagonal wall;
-    finding, gap G2), so this uses taylor_first_order_ladder instead - the same
-    eps ladder, both R0 (~1, no gradient) and R1 (>=1.9, with gradient) on
-    record, never touching the second-order adjoint. Plus the guarded dJdm=0
-    control, and an assertion that the gradient is nonzero where the control
-    bump is supported (guards a silently zero matfree transpose)."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-        m2 = rho_control2_2d(mesh_2d_mm)
-
-    J, _, rf = tape_forward(forward_2d_mm, m)
-    assert_replay_b1(rf, m, J)
-    assert_replay_b2(rf, forward_2d_mm, m2)
-
-    # First-order R0/R1 ladders on record (matfree-safe; no Hessian leg).
-    res = taylor_first_order_ladder(rf, m, h)
-    print(f"    [T03] R0 rates={res['R0_rate']}  R1 rates={res['R1_rate']}")
-    assert min(res["R0_rate"]) >= 0.9  # first order without the gradient
-    assert min(res["R1_rate"]) >= 1.90  # with the gradient
-    assert min(res["R1"]) >= 1e-15  # no machine-precision floor
-
-    # Guarded Taylor + negative control on the same tape.
-    assert_taylor_with_guards(rf, m, h, J)
-
-    # Gradient supported where the control is: nonzero somewhere.
-    g = rf.derivative()
-    assert np.max(np.abs(g.dat.data_ro)) > 0.0
-
-
 # ---------------------------------------------------------------------------
 # T04 - CENTREPIECE: float() severs the tape; taped assemble restores it
 # ---------------------------------------------------------------------------
-def test_coefficient_float_severs_tape(mesh_2d_mm):
-    """coefficients() reads float(subfunction), which is NOT annotated
-    (firedrake Function.__float__ reads dat.data_ro directly). An objective
-    built from that float is severed from the control: its adjoint gradient is
-    EXACTLY zero and replay at any perturbed control returns the same constant.
-    This is the suite's canonical negative control - it must FAIL a Taylor
-    test, and does so with an exact-zero signature."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    solver = solve_2d_mm(m)
-    # Build the broken objective while annotation is ON: the severing is caused
-    # by float() inside coefficients(), not by pausing.
-    coeffs = solver.coefficients()
-    J_b = AdjFloat(coeffs["top"]["cos2"])
-    pause_annotation()
-
-    rf_b = ReducedFunctional(J_b, Control(m))
-
-    # Exact-zero gradient: the tape is severed, so dJ/dm is identically 0.
-    g = rf_b.derivative()
-    assert np.all(g.dat.data_ro == 0.0), (
-        f"severed objective should have EXACTLY zero gradient, got max "
-        f"{np.max(np.abs(g.dat.data_ro)):.3e}")
-
-    # Replay-constant: perturbing the control cannot move the severed output.
-    J0 = float(rf_b(m))
-    for eps in [0.01 / 2 ** i for i in range(4)]:
-        with stop_annotating():
-            m_pert = m._ad_add(h._ad_mul(eps))
-        assert float(rf_b(m_pert)) == J0, (
-            "severed replay must be exactly constant in the control")
-    print(f"    [T04 broken] grad_norm={np.max(np.abs(g.dat.data_ro)):.1e} "
-          f"(exact 0); replay constant at J={J0:.6e}")
-
-
-def test_coefficient_taped_integral_taylor(mesh_2d_mm):
-    """The SAME trace coefficient rebuilt as a taped boundary integral
-    (form b, c = int(psi e_k ds)/norm) restores the tape: J = c^2 passes
-    Taylor at rate 2, and its gradient agrees to 1e-8 with the R-DIRECT form
-    (c, read off the multiplier subfunction) - the two objectives coincide on
-    the solution manifold by the constraint row, so their gradients must too."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-        m2 = rho_control2_2d(mesh_2d_mm)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    solver = solve_2d_mm(m)
-    c_int = trace_coeff_integral(solver, "top", 2)
-    c_dir = trace_coeff_rdirect(solver, "top", "cos2")
-    J_f = c_int ** 2
-    J_c = c_dir ** 2
-    pause_annotation()
-
-    rf_f = ReducedFunctional(J_f, Control(m))
-    rf_c = ReducedFunctional(J_c, Control(m))
-
-    # b1 replay for the fixed objective.
-    assert_replay_b1(rf_f, m, J_f)
-
-    # b2: replay at m2 equals a fresh direct solve at m2 (rebuild coefficient).
-    with stop_annotating():
-        solver2 = solve_2d_mm(m2)
-        c2 = float(trace_coeff_integral(solver2, "top", 2))
-        J_direct2 = c2 ** 2
-    assert abs(float(rf_f(m2)) - J_direct2) <= 1e-9 * abs(J_direct2)
-    rf_f(m)  # restore
-
-    # The two forms carry the same value on the solution manifold.
-    assert abs(float(J_f) - float(J_c)) <= 1e-8 * abs(float(J_f)), (
-        float(J_f), float(J_c))
-
-    # Guarded Taylor on the taped-integral objective.
-    assert_taylor_with_guards(rf_f, m, h, J_f)
-
-    # Cross-check: gradients of the two equivalent objectives agree.
-    g_f = rf_f.derivative()
-    g_c = rf_c.derivative()
-    rel = np.max(np.abs(g_f.dat.data_ro - g_c.dat.data_ro)) / \
-        np.max(np.abs(g_f.dat.data_ro))
-    print(f"    [T04 fixed] J_f={float(J_f):.6e} J_c={float(J_c):.6e} "
-          f"grad rel diff={rel:.3e}")
-    assert rel <= 1e-8, f"integral vs R-direct gradient rel diff {rel:.3e}"
-
-
 # ---------------------------------------------------------------------------
 # T05 - Sensitivity through an R multiplier  [P0, TAYLOR]
 # ---------------------------------------------------------------------------
-def test_taylor_through_multiplier(mesh_2d_mm):
-    """An objective read directly off a Real-space multiplier subfunction
-    (J = c^2, form c) differentiates correctly: the SubfunctionBlock on an R
-    field and the adjoint of the mixed solve with a cofunction RHS living only
-    in the R components both work. Includes the modal-orthogonality hazard
-    exhibit (a cos3 perturbation against the cos2 coefficient is blind)."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-        # Pure off-mode perturbation for the hazard exhibit (zero net mass).
-        Q = fd.FunctionSpace(mesh_2d_mm, "CG", 1)
-        _, r, phi = _polar(mesh_2d_mm)
-        bump = fd.exp(-(((r - 1.7) / 0.15) ** 2))
-        h_orth = fd.Function(Q).interpolate(fd.cos(3 * phi) * bump)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    solver = solve_2d_mm(m)
-    c_dir = trace_coeff_rdirect(solver, "top", "cos2")
-    c_int = trace_coeff_integral(solver, "top", 2)
-    J_c = c_dir ** 2
-    J_i = c_int ** 2
-    pause_annotation()
-
-    rf = ReducedFunctional(J_c, Control(m))
-    rf_i = ReducedFunctional(J_i, Control(m))
-
-    assert_replay_b1(rf, m, J_c)
-
-    # Guarded Taylor: sensitivity flows through the R multiplier.
-    assert_taylor_with_guards(rf, m, h, J_c)
-
-    # Agreement with the T04(b) taped-integral gradient (same manifold).
-    g = rf.derivative()
-    g_i = rf_i.derivative()
-    rel = np.max(np.abs(g.dat.data_ro - g_i.dat.data_ro)) / \
-        np.max(np.abs(g.dat.data_ro))
-    assert rel <= 1e-8, f"R-direct vs integral gradient rel diff {rel:.3e}"
-
-    # Hazard exhibit (NOT a pass criterion for the gradient): a pure off-mode
-    # cos3 perturbation is blind to the cos2 coefficient by modal
-    # orthogonality of the linear map, so <g, h_orth> ~ 0. This is WHY h must
-    # contain the active mode; a Taylor test along h_orth would "pass" on 0~0.
-    dJdm_active = h._ad_dot(g)
-    dJdm_orth = h_orth._ad_dot(g)
-    print(f"    [T05] rel(g vs integral)={rel:.3e}  <g,h>={dJdm_active:.4e}  "
-          f"<g,h_orth>={dJdm_orth:.4e}  ratio={abs(dJdm_orth/dJdm_active):.3e}")
-    assert abs(dJdm_orth) <= 1e-9 * abs(dJdm_active), (
-        "off-mode perturbation should be near-blind to the cos2 coefficient")
-
-
 # ---------------------------------------------------------------------------
 # T06 - subfunctions[0] + assign preserve the tape  [P1]
 # ---------------------------------------------------------------------------
-def test_solution_assign_preserves_tape(mesh_2d_mm):
-    """J on solver.solution (through SubfunctionBlock -> FunctionAssignBlock)
-    yields a gradient identical to J on mixed_solution.subfunctions[0]
-    directly, and passes Taylor. Negative control: a raw dat.data[:] copy of
-    the transfer is un-annotated, severs the tape (zero gradient), and the
-    equality assertion then fails - proving the test detects the broken
-    transfer (same class of bug as T04's float())."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-        V = fd.FunctionSpace(mesh_2d_mm, "CG", 1)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    solver = solve_2d_mm(m)
-    J_sol = fd.assemble(solver.solution ** 2 * fd.dx)
-    J_mix = fd.assemble(solver.mixed_solution.subfunctions[0] ** 2 * fd.dx)
-    # Negative control: an un-annotated raw numpy copy of the same transfer.
-    with stop_annotating():
-        sol_raw = fd.Function(V)
-        sol_raw.dat.data[:] = solver.mixed_solution.subfunctions[0].dat.data_ro
-    J_raw = fd.assemble(sol_raw ** 2 * fd.dx)
-    pause_annotation()
-
-    rf_sol = ReducedFunctional(J_sol, Control(m))
-    rf_mix = ReducedFunctional(J_mix, Control(m))
-    rf_raw = ReducedFunctional(J_raw, Control(m))
-
-    assert_replay_b1(rf_sol, m, J_sol)
-    assert_replay_b1(rf_mix, m, J_mix)
-
-    g_sol = rf_sol.derivative()
-    g_mix = rf_mix.derivative()
-    g_raw = rf_raw.derivative()
-
-    # The two annotated routes give the same value and the same gradient.
-    assert abs(float(J_sol) - float(J_mix)) <= 1e-14 * abs(float(J_mix))
-    denom = np.max(np.abs(g_mix.dat.data_ro))
-    rel = np.max(np.abs(g_sol.dat.data_ro - g_mix.dat.data_ro)) / denom
-    print(f"    [T06] grad rel(sol vs mix)={rel:.3e}  "
-          f"raw_grad_norm={np.max(np.abs(g_raw.dat.data_ro)):.1e}")
-    assert rel <= 1e-14, f"assign vs subfunctions gradient rel diff {rel:.3e}"
-
-    # Negative control: the raw-copy transfer is severed -> exact-zero gradient
-    # (even though J_raw == J_mix in value), so the equality assertion fails.
-    assert np.all(g_raw.dat.data_ro == 0.0)
-    rel_raw = np.max(np.abs(g_raw.dat.data_ro - g_mix.dat.data_ro)) / denom
-    assert rel_raw > 1e-3, "raw-copy negative control must NOT match"
-
-    # Taylor on the solver.solution route.
-    assert_taylor_with_guards(rf_sol, m, h, J_sol)
-
-
 # ---------------------------------------------------------------------------
 # T09 - TLM-adjoint dot-product identity  [P1, DOT]
 # ---------------------------------------------------------------------------
-def test_tlm_adjoint_dot_product(mesh_2d_lu, mesh_2d_mm):
-    """Transpose consistency: the adjoint is the exact transpose of the
-    tangent, <J^T g_hat, h> == <g_hat, J.h>, isolated from any finite-diff
-    truncation.
-
-    FINDING (recorded here, parallel to the Hessian-on-matfree gap): pyadjoint's
-    native tangent sweep is broken on the DtN multiplier config. The
-    NonlinearVariationalSolveBlock overrides _forward_solve / _adjoint_solve to
-    use the cached fieldsplit solvers, but the tangent path
-    (_assemble_and_solve_tlm_eq -> _assembled_solve) issues a bare
-    firedrake.solve() with NO solver parameters, which cannot solve the R-space
-    mixed system. So evaluate_tlm() raises on CFG-2D-MM.
-
-    The identity is therefore verified two ways:
-      (1) LU path (no multipliers, single field): native tape.evaluate_tlm()
-          works and reproduces the adjoint dot product - proving the native TLM
-          machinery itself is sound where solver-parameter inheritance is not an
-          issue;
-      (2) fieldsplit path (CFG-2D-MM, the DtN transpose we actually care about):
-          the forward map rho->psi is exactly linear, so the tangent along h is
-          psi(density=h) computed by an INDEPENDENT real solve; the adjoint dot
-          product must equal 2 int(psi_m psi_h) dx exactly (both at rtol 1e-11).
-    """
-    # (1) Native TLM on the no-multiplier LU path.
-    with stop_annotating():
-        m_lu = rho_control_2d(mesh_2d_lu)
-        h_lu = rho_perturb_2d(mesh_2d_lu)
-    J_lu, _, rf_lu = tape_forward(forward_2d_lu, m_lu, "lu2d")
-    dJdm_adj_lu = h_lu._ad_dot(rf_lu.derivative())
-    m_lu.block_variable.tlm_value = h_lu
-    get_working_tape().evaluate_tlm()
-    dJdm_tlm_lu = float(J_lu.block_variable.tlm_value)
-    rel_lu = abs(dJdm_tlm_lu - dJdm_adj_lu) / abs(dJdm_adj_lu)
-    print(f"    [T09 LU native TLM] adj={dJdm_adj_lu:.10e} tlm={dJdm_tlm_lu:.10e}"
-          f" rel={rel_lu:.3e}")
-    assert abs(dJdm_adj_lu) >= 1e-12 and abs(dJdm_tlm_lu) >= 1e-12
-    assert rel_lu <= 1e-8
-
-    # (2) Exact independent tangent on the fieldsplit DtN path.
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-    _, _, rf = tape_forward(forward_2d_mm, m)
-    dJdm_adj = h._ad_dot(rf.derivative())
-    with stop_annotating():
-        psi_m = solve_2d_mm(m).solution.copy(deepcopy=True)
-        psi_h = solve_2d_mm(h).solution.copy(deepcopy=True)  # linear tangent
-        dJdm_tan = 2.0 * fd.assemble(psi_m * psi_h * fd.dx)
-    rel = abs(dJdm_tan - dJdm_adj) / abs(dJdm_adj)
-    print(f"    [T09 MM exact tangent] adj={dJdm_adj:.10e} tan={dJdm_tan:.10e}"
-          f" rel={rel:.3e}")
-    assert abs(dJdm_adj) >= 1e-12 and abs(dJdm_tan) >= 1e-12
-    assert rel <= 1e-8, f"adjoint vs exact tangent rel diff {rel:.3e}"
-
-
 def real_scalar(mesh, value):
     """A scalar Real-space (R0) Function - the adjoint-differentiable scalar
     control type (see the FINDING in test_gradient_G_constant)."""
@@ -899,41 +498,6 @@ def test_gradient_G_constant(geometry, mesh_2d_mm, mesh_3d_mm):
     assert rate_sab <= 1.15, f"1%-wrong gradient not detected (rate {rate_sab})"
 
 
-def test_firedrake_constant_is_not_differentiable_canary():
-    """Regression canary for the T08 finding (gravity-free, fast).
-
-    A firedrake Constant is currently NOT a differentiable adjoint control in
-    this firedrake/pyadjoint version: its adjoint gradient is EXACTLY zero and
-    its replay does not update from a fresh object. This test PINS that broken
-    behavior on a minimal assemble tape. If it ever FAILS, firedrake has fixed
-    Constant differentiability - at which point the solver's ensure_constant
-    guidance and the T08 docstring (which steer scalar controls to a Real-space
-    Function) should be revisited. A loud failure is deliberately preferred to
-    a silent xfail that would flip to xpass unnoticed."""
-    mesh = fd.UnitSquareMesh(4, 4)
-    V = fd.FunctionSpace(mesh, "CG", 1)
-    with stop_annotating():
-        u = fd.Function(V).interpolate(fd.Constant(2.0))
-        G = fd.Constant(1.3)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    J = fd.assemble((G * u * u) ** 2 * fd.dx)
-    pause_annotation()
-
-    rf = ReducedFunctional(J, Control(G))
-    g = rf.derivative()
-
-    # (a) The adjoint gradient is exactly zero (should be 2 J / G = 41.6).
-    assert float(g) == 0.0, (
-        f"firedrake Constant is now differentiable (grad={float(g)}); revisit "
-        "ensure_constant guidance and the T08 R-space-Function workaround")
-    # (b) Replay does not update from a fresh Constant object.
-    assert float(rf(fd.Constant(1.7))) == float(J), (
-        "firedrake Constant control now updates on replay; revisit T08")
-
-
 # ---------------------------------------------------------------------------
 # T07 - Taylor on the sigma surface-sheet control  [P1, TAYLOR]
 # ---------------------------------------------------------------------------
@@ -988,219 +552,12 @@ def test_taylor_sigma(geometry, mesh_2d_mm, mesh_3d_mm):
 # ---------------------------------------------------------------------------
 # T10 - Replay correctness of ReducedFunctional  [P1]
 # ---------------------------------------------------------------------------
-def test_reduced_functional_replay(mesh_2d_mm):
-    """rf(m2) (pure tape replay at a new control) equals a fresh forward solve
-    at m2 through a newly constructed GravitySolver, and rf(m) returns the
-    original J. Documents that replay bypasses the Python-level check_net_mass:
-    a net-mass control replays without raising, though a direct solve raises."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        m2 = rho_control2_2d(mesh_2d_mm)
-
-    J, _, rf = tape_forward(forward_2d_mm, m)
-
-    # Replay at the taping point returns the original J.
-    assert abs(float(rf(m)) - float(J)) <= 1e-9 * abs(float(J))
-
-    # Replay at m2 equals a fresh direct solve at m2 (two independent solves).
-    with stop_annotating():
-        J_direct2, _ = forward_2d_mm(m2)
-    val2 = float(rf(m2))
-    rel = abs(val2 - float(J_direct2)) / abs(float(J_direct2))
-    print(f"    [T10] rf(m2)={val2:.8e} direct={float(J_direct2):.8e} rel={rel:.2e}")
-    assert rel <= 1e-9
-
-    # Documented gap G3 / pitfall P2, narrowed but NOT closed. It was: replay
-    # skipped the Python-level check_net_mass, so a net-mass iterate replayed
-    # while a direct solve raised. The monopole datum puts the enclosed mass on
-    # the tape, so for this configuration replay and a fresh solve now agree
-    # rather than one of them being tolerated - which is what is asserted here.
-    # What survives is the general property that a Python-level *refusal* is
-    # invisible to replay, and the new ValueError for a strong `psi` condition
-    # alongside nonzero mass inherits it exactly: an optimiser can walk into
-    # that region and be handed finite, wrong objectives. Recorded in
-    # NOTES/TODO-GRAVITY.md E5 rather than papered over here.
-    with stop_annotating():
-        Q = fd.FunctionSpace(mesh_2d_mm, "CG", 1)
-        _, r, _ = _polar(mesh_2d_mm)
-        m_mass = fd.Function(Q).interpolate(fd.exp(-(((r - 1.7) / 0.15) ** 2)))
-    val_mass = float(rf(m_mass))
-    with stop_annotating():
-        J_direct_mass, _ = forward_2d_mm(m_mass)
-    rel_mass = abs(val_mass - float(J_direct_mass)) / abs(float(J_direct_mass))
-    print(f"    [T10] net-mass control: replay {val_mass:.8e} "
-          f"direct {float(J_direct_mass):.8e} rel {rel_mass:.2e}")
-    assert rel_mass <= 1e-9
-
-
 # ---------------------------------------------------------------------------
 # T10b - the monopole channel, against a reference the tape cannot influence
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
-@pytest.mark.parametrize("control", ["rho", "sigma", "G"])
-def test_monopole_gradient_against_fresh_solves(representation, control):
-    """A central finite difference of *fresh* solves, not a Taylor test.
-
-    This is the one instrument that can see a severed mass channel, and the
-    reason it is here rather than a fourth Taylor test. `taylor_test` replays
-    the tape, so a frozen enclosed mass gives a map whose gradient is
-    self-consistent: both sides of the comparison omit the same channel and the
-    rate is 2.0000 while the gradient of the actual forward map is wrong by
-    325%. Rebuilding the solver per evaluation removes the tape from the
-    reference entirely.
-
-    All three right-hand-side controls, on both representations, because the
-    datum carries `rho` and `sigma` through the enclosed mass and `G` through
-    its own prefactor.
-    """
-    mesh = fd.UnitDiskMesh(refinement_level=2)
-    V = fd.FunctionSpace(mesh, "CG", 2)
-    Q = fd.FunctionSpace(mesh, "CG", 1)
-    X = fd.SpatialCoordinate(mesh)
-
-    def build(rho_value, sigma_value, g_value):
-        psi = fd.Function(V)
-        rho = fd.Function(Q).assign(rho_value)
-        sigma = fd.Function(Q).assign(sigma_value)
-        gravity = real_scalar(mesh, g_value)
-        solver = GravitySolver(
-            psi, rho,
-            bcs={1: {"dtn": CylindricalDtN(M=3), "sigma": sigma}},
-            gravitational_constant=gravity, solver_parameters="direct",
-            dtn_representation=representation)
-        return solver, psi, {"rho": rho, "sigma": sigma, "G": gravity}
-
-    with stop_annotating():
-        rho0 = fd.Function(Q).interpolate(1.0 + 0.3 * X[0])
-        sigma0 = fd.Function(Q).interpolate(0.4 + 0.2 * X[1])
-        direction = fd.Function(Q).interpolate(0.05 * (1.0 + X[1] ** 2))
-        g_direction = real_scalar(mesh, 0.1)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    solver, psi, controls = build(rho0, sigma0, 1.0)
-    solver.solve()
-    J = fd.assemble(psi ** 2 * fd.dx)
-    gradient = ReducedFunctional(J, Control(controls[control])).derivative()
-    pause_annotation()
-    step = direction if control != "G" else g_direction
-    adjoint = float(fd.assemble(fd.action(gradient, step)))
-    tape.clear_tape()
-
-    def objective_at(sign, epsilon):
-        with stop_annotating():
-            shift = sign * epsilon
-            fresh, fresh_psi, _ = build(
-                rho0 + shift * direction if control == "rho" else rho0,
-                sigma0 + shift * direction if control == "sigma" else sigma0,
-                1.0 + shift * 0.1 if control == "G" else 1.0)
-            fresh.solve()
-            return float(fd.assemble(fresh_psi ** 2 * fd.dx))
-
-    epsilon = 1e-5
-    difference = (objective_at(+1, epsilon)
-                  - objective_at(-1, epsilon)) / (2 * epsilon)
-    relative = abs(adjoint - difference) / abs(difference)
-    print(f"    [T10b] {representation}/{control}: adjoint {adjoint:.8e} "
-          f"fresh-solve FD {difference:.8e} rel {relative:.2e}")
-    assert relative < 1e-6
-
-
 # ---------------------------------------------------------------------------
 # T11 - which per-solve 0-form assembles are load-bearing  [P1]
 # ---------------------------------------------------------------------------
-class _FrozenMassSolver(GravitySolver):
-    """CFG-2D-MM solver whose enclosed mass is frozen off the tape.
-
-    The failure the monopole datum's design exists to avoid, made reachable so
-    the suite can prove it detects it. J is untouched - `source_mass` ends up
-    holding the same number either way - so only the gradient can see it, and
-    only against a reference not computed from this tape. A Taylor test passes
-    at 2.0000 here.
-
-    The leakage check is off the tape in both variants, so this one differs
-    from the stock one in exactly one thing: whether the enclosed mass is on
-    the tape.
-    """
-    def update_total_mass(self):
-        with stop_annotating():
-            super().update_total_mass()
-
-
-def _forward_2d_mm_with(solver_class, m_rho):
-    mesh = m_rho.function_space().mesh()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        solver = solver_class(
-            psi, m_rho,
-            bcs={"top": {"dtn": CylindricalDtN(M=2)},
-                 "bottom": {"dtn": CylindricalDtN(M=2)}})
-    solver.solve()
-    J = fd.assemble(solver.solution ** 2 * fd.dx)
-    return J, solver
-
-
-def _tape_and_gradient(forward, m):
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    J, _ = forward(m)
-    pause_annotation()
-    counts = _block_counts(tape)
-    counts["mass_solves"] = len(_real_space_solves(tape.get_blocks()))
-    return J, counts, ReducedFunctional(J, Control(m)).derivative()
-
-
-def test_which_net_mass_work_is_load_bearing(mesh_2d_mm):
-    """Of the two things `solve` does with the net mass, one matters.
-
-    The enclosed mass is a Real-space solve that the datum reads; the |rho|
-    scale of the net-mass check is a diagnostic. The check runs off the tape,
-    so the only AssembleBlock left is the objective's. The load-bearing one
-    is checked by *sabotage*: freeze it off the tape and the gradient must
-    move.
-
-    The control carries a monopole deliberately. `rho_control_2d` is
-    azimuthally pure, so its adjoint is pure `m = 2` and the boundary integral
-    the datum contracts against, `int lambda ds`, vanishes by orthogonality -
-    the channel is genuinely absent there and the sabotage would look harmless
-    for a reason that has nothing to do with whether it is wired up. Adding a
-    constant gives the objective something at `m = 0` to see.
-    """
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        m.assign(m + 0.5)
-
-    J_stock, c_stock, g_stock = _tape_and_gradient(forward_2d_mm, m)
-    J_frozen, c_frozen, g_frozen = _tape_and_gradient(
-        lambda rho: _forward_2d_mm_with(_FrozenMassSolver, rho), m)
-
-    def gradient_change(other):
-        return (np.max(np.abs(g_stock.dat.data_ro - other.dat.data_ro))
-                / np.max(np.abs(g_stock.dat.data_ro)))
-
-    print(f"    [T11] AssembleBlocks {c_stock['AssembleBlock']}/"
-          f"{c_frozen['AssembleBlock']} "
-          f"mass solves {c_stock['mass_solves']}/{c_frozen['mass_solves']}; "
-          f"gradient change frozen={gradient_change(g_frozen):.2e}")
-
-    # Stock: the objective's assemble and the mass solve. The |rho| scale of
-    # the leakage check is assembled off the tape.
-    assert c_stock["AssembleBlock"] == 1
-    assert c_stock["mass_solves"] == 1
-
-    # The mass solve is load-bearing: same J to the last bit, different
-    # gradient.
-    assert c_frozen["AssembleBlock"] == 1
-    assert c_frozen["mass_solves"] == 0
-    assert abs(float(J_frozen) - float(J_stock)) <= 1e-15 * abs(float(J_stock))
-    assert gradient_change(g_frozen) > 1e-6, (
-        "freezing the enclosed mass off the tape did not move the gradient - "
-        "either the monopole datum is not wired to it, or this sabotage no "
-        "longer reaches the term it targets")
-
-
 # ---------------------------------------------------------------------------
 # T12 - Sabotage: the suite detects wrong gradients  [P1, meta]
 # ---------------------------------------------------------------------------
@@ -1217,51 +574,6 @@ def _residual_ladder(rf, m, h, dJdm):
         rf(m)
     rates = [np.log(R1[i] / R1[i + 1]) / np.log(2) for i in range(len(R1) - 1)]
     return R1, min(rates)
-
-
-def test_taylor_detects_sabotaged_gradient(mesh_2d_mm):
-    """The >=1.90 Taylor criterion rejects a gradient wrong by 1%: both a
-    multiplicative (1.01 x dJdm) and an orthogonal-noise corruption collapse
-    the rate to <=1.15, with first-order residuals >=10x the clean run's. This
-    calibrates the suite's detection floor empirically (not by estimate)."""
-    with stop_annotating():
-        m = rho_control_2d(mesh_2d_mm)
-        h = rho_perturb_2d(mesh_2d_mm)
-        g_noise = rho_control2_2d(mesh_2d_mm)
-
-    _, _, rf = tape_forward(forward_2d_mm, m)
-    g = rf.derivative()
-    dJdm_true = h._ad_dot(g)
-
-    R1_clean, rate_clean = _residual_ladder(rf, m, h, dJdm_true)
-    assert rate_clean >= 1.90  # sanity: the true gradient converges at 2
-
-    # Corruption 1: multiplicative 1% error.
-    R1_mul, rate_mul = _residual_ladder(rf, m, h, 1.01 * dJdm_true)
-
-    # Corruption 2: add 1% of the gradient's l2 norm along a noise direction
-    # that is NOT blind to h (<g_noise, h>_L2 != 0), then re-derive dJdm from
-    # the corrupted gradient via the Riesz-consistent h._ad_dot. This is a
-    # genuinely different corruption from the multiplicative one.
-    overlap = fd.assemble(g_noise * h * fd.dx)
-    assert abs(overlap) > 1e-8  # noise must be visible along h
-    gnorm = np.linalg.norm(g.dat.data_ro)
-    nnorm = np.linalg.norm(g_noise.dat.data_ro)
-    g_corr = rf.derivative()  # fresh copy of the gradient
-    g_corr.dat.data[:] = (g.dat.data_ro
-                          + 0.01 * gnorm / nnorm * g_noise.dat.data_ro)
-    dJdm_noise = h._ad_dot(g_corr)
-    R1_noise, rate_noise = _residual_ladder(rf, m, h, dJdm_noise)
-
-    print(f"    [T12] rate_clean={rate_clean:.4f} rate_mul={rate_mul:.4f} "
-          f"rate_noise={rate_noise:.4f}  R1_clean[-1]={R1_clean[-1]:.3e} "
-          f"R1_mul[-1]={R1_mul[-1]:.3e} R1_noise[-1]={R1_noise[-1]:.3e}")
-
-    assert rate_mul <= 1.15, f"multiplicative sabotage not detected ({rate_mul})"
-    assert rate_noise <= 1.15, f"noise sabotage not detected ({rate_noise})"
-    # Corrupted first-order residuals dominate the clean run at the smallest eps.
-    assert R1_mul[-1] >= 10 * R1_clean[-1]
-    assert R1_noise[-1] >= 10 * R1_clean[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -1364,95 +676,9 @@ def forward_submesh(m_rho_sub, marked):
     return J, solver
 
 
-def test_taylor_rho_submesh(submesh_pair):
-    """The cross-mesh (Submesh density) path is adjointable end-to-end. Tiered:
-    (i) annotated construction+solve completes; (ii) rf.derivative() returns
-    without raising; (iii) guarded Taylor rate >= 1.90. Exterior 2-D DtN on the
-    disk boundary activates the net-mass guard, so m and h are azimuthally
-    zero-mean. If the cross-mesh residual defeats the adjoint upstream this
-    becomes a documented xfail (gap G4), not a deleted test."""
-    marked, submesh = submesh_pair
-    with stop_annotating():
-        m = _rho_sub(submesh, [(2, 1.0)])
-        h = _rho_sub(submesh, [(2, 0.8), (1, 0.2)])
-        m2 = _rho_sub(submesh, [(2, 1.0), (3, 0.5)])
-
-    # Tier (i): annotated construction + solve completes.
-    J, _, rf = tape_forward(forward_submesh, m, marked)
-    assert np.isfinite(float(J)) and float(J) > 0.0
-    assert_replay_b1(rf, m, J)
-    assert_replay_b2(rf, forward_submesh, m2, marked)
-
-    # Tier (ii): the adjoint derivative returns without raising.
-    g = rf.derivative()
-    assert np.isfinite(np.max(np.abs(g.dat.data_ro)))
-    print(f"    [T15] J={float(J):.6e} grad_max={np.max(np.abs(g.dat.data_ro)):.3e}")
-
-    # Tier (iii): guarded Taylor.
-    assert_taylor_with_guards(rf, m, h, J)
-
-
 # ---------------------------------------------------------------------------
 # T16 / T17 - Physics-pinned closed-form sheet gradients  [P2, ANALYTIC]
 # ---------------------------------------------------------------------------
-@pytest.fixture(scope="session")
-def mesh_2d_ana():
-    return annulus_mesh(n_azimuthal=192, dr=0.1)
-
-
-def solve_sheet_ana_2d(s, mesh, m_mode):
-    """CFG-2D-ANA: sheet sigma = s cos(m phi) on the outer DtN boundary, rho=0,
-    CG2, CylindricalDtN(M=4) both boundaries. G = 1."""
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2))
-        _, _, phi = _polar(mesh)
-        sigma = s * fd.cos(m_mode * phi)
-        solver = GravitySolver(
-            psi, 0.0,
-            bcs={"top": {"dtn": CylindricalDtN(M=4), "sigma": sigma},
-                 "bottom": {"dtn": CylindricalDtN(M=4)}})
-    solver.solve()
-    return solver
-
-
-def test_gradient_matches_closed_form_sheet_2d(mesh_2d_ana):
-    """Physics-pinned: for sigma = s cos(m phi) on the outer boundary a=RMAX,
-    the trace coefficient c_cos m is linear in s with the domain-side sheet
-    factor dc/ds = 2 pi G a / m (G=1). The pyadjoint gradient of J=c reproduces
-    it to 1e-3, excluding the nearest wrong closed form at O(1). A companion
-    quadratic objective J=c^2 gives a guarded Taylor rate 2 on the same tape."""
-    m_mode, a = 2, RMAX
-    with stop_annotating():
-        s = real_scalar(mesh_2d_ana, 1.0)
-        hs = real_scalar(mesh_2d_ana, 1.0)
-
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    solver = solve_sheet_ana_2d(s, mesh_2d_ana, m_mode)
-    c = trace_coeff_integral(solver, "top", m_mode)  # J_lin = c (linear in s)
-    J_quad = c ** 2
-    pause_annotation()
-
-    rf_lin = ReducedFunctional(c, Control(s))
-    rf_quad = ReducedFunctional(J_quad, Control(s))
-
-    # ANALYTIC: dc/ds = 2 pi a / m (domain-side sheet coefficient).
-    dcds = hs._ad_dot(rf_lin.derivative())
-    analytic = 2 * np.pi * a / m_mode
-    rel = abs(dcds - analytic) / abs(analytic)
-    print(f"    [T16] dc/ds={dcds:.6f} analytic=2 pi a/m={analytic:.6f} rel={rel:.3e}")
-    assert rel <= 1e-3, f"dc/ds={dcds} vs 2 pi a/m={analytic} (rel {rel:.2e})"
-
-    # Negative control: the nearest wrong closed form (a different mode's
-    # factor, 2 pi a / (m+1)) is O(1) away and must be excluded by the window.
-    wrong = 2 * np.pi * a / (m_mode + 1)
-    assert abs(dcds - wrong) / abs(analytic) > 0.1
-
-    # Companion quadratic Taylor (J = c^2) with the guarded harness.
-    assert_taylor_with_guards(rf_quad, s, hs, J_quad)
-
-
 def test_gradient_matches_closed_form_sheet_3d():
     """3-D analogue of T16 (slow lane): sigma = s Y_lm on the outer boundary,
     dc/ds = 4 pi G a / (2l+1). Unit-test resolution (the one 3-D test needing
@@ -1518,55 +744,3 @@ def forward_2d_past_wall(m_rho, M=35):
     solver.solve()
     J = fd.assemble(solver.solution ** 2 * fd.dx)
     return J, solver
-
-
-def test_taylor_rho_past_field_enumeration_wall():
-    """The gradient exists at a truncation the old solver could not solve.
-
-    This is the capability the index-set split was built for: a high-truncation
-    coupled solve that is still differentiable. The preconditioner is invisible
-    to the tape - it changes how each solve is executed, not what is recorded -
-    and the adjoint solve reconstructs its index sets from the function-space
-    layout, which is identical for the forward and transposed operators. The
-    check is that this holds where the field-number description cannot run at
-    all, so there is no cross-check against the old path available here; the
-    Taylor rate and its negative control carry the whole claim.
-
-    Expensive, and the cost is symbolic form processing rather than solving: a
-    141-term boundary mode sum takes ~40s to turn into kernels, while a repeat
-    solve of the same operator costs 0.5s. It recurs once per process no matter
-    how warm the on-disk cache is, so there is no caching fix. Do not try to
-    make it cheaper by coarsening the mesh - measured, that buys ~6% - and do
-    not lower the truncation, which is the only real lever and would take the
-    field count back below the wall, leaving the test proving nothing.
-
-    Deliberately the same form as
-    `test_gravity_solver.TestIndexSetSplit.test_solves_past_the_field_enumeration_wall`
-    (same mesh, element, truncation and hence quadrature degree), so whichever
-    runs second in a pytest process inherits the compiled kernels and skips
-    that ~40s. Changing the truncation or the quadrature degree of either test
-    alone silently costs the other one ~40s.
-    """
-    mesh = annulus_mesh(n_azimuthal=96, dr=0.5)
-    with stop_annotating():
-        m = rho_control_2d(mesh)
-        h = rho_perturb_2d(mesh)
-
-    J, solver, rf = tape_forward(forward_2d_past_wall, m)
-
-    # Measured off the space, not computed from the truncation.
-    n_fields = len(solver.mixed_space)
-    assert n_fields == 1 + solver.n_multipliers
-    assert n_fields > 128, f"only {n_fields} fields: not past the wall"
-
-    assert_replay_b1(rf, m, J)
-    res = assert_taylor_with_guards(rf, m, h, J)
-    print(f"    [T18] fields={n_fields} multipliers={solver.n_multipliers} "
-          f"rate={res['rate']:.4f} rate0={res['rate0']:.4f}")
-
-    # Belt and braces: the substantive protection against a silently zero
-    # matfree transpose is the directional-derivative floor inside
-    # assert_taylor_with_guards (|dJdm| >= 1e-6 |J|); this only catches a
-    # gradient that is identically zero rather than merely tiny.
-    g = rf.derivative()
-    assert np.max(np.abs(g.dat.data_ro)) > 0.0
