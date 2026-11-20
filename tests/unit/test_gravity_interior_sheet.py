@@ -151,6 +151,7 @@ class TestMeasures:
         assert fd.assemble(fd.Constant(1.0) * fd.ds(SHEET_ID,
                                                     domain=mesh)) == 0.0
 
+    @pytest.mark.longtest
     def test_sheet_integral_agrees_with_the_measure(self, mesh):
         """The solver's own helper, not a hand-written form beside it."""
         _, solver = solve_with_sheet(mesh, fd.Constant(1.0))
@@ -194,6 +195,7 @@ class TestRefusals:
                              "interior_sigma": fd.Constant(1.0)}})
 
 
+@pytest.mark.longtest
 class TestAgainstClosedForms:
     """V10-end-to-end: the sheet is present, and present with the right size."""
 
@@ -267,6 +269,7 @@ class TestAgainstClosedForms:
         assert norm > 1.0
 
 
+@pytest.mark.longtest
 class TestRealControlsOnTheSheet:
     """Gradients with respect to `Real` controls that scale an interior sheet.
 

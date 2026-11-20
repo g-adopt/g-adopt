@@ -24,6 +24,10 @@ import test_gia_gravity as base
 from test_gravity_adjoint import assert_taylor_with_guards
 import gia_cases
 
+# Every test in this module runs a solve or a time step, so the whole
+# module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
+pytestmark = pytest.mark.longtest
+
 
 @pytest.fixture(scope='module')
 def meshes():

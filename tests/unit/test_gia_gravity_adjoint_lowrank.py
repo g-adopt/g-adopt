@@ -572,6 +572,7 @@ def control_mesh(meshes, control_name):
 # L10 (`Lambda`) is a CANARY, never a gate: it was measured green at 1.999706
 # with a 93.6% wrong gradient. The gate for family 4 is L11.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
@@ -602,6 +603,7 @@ POWER_LAW_SNES = {"snes_type": "newtonls", "snes_rtol": 1e-10,
                   "snes_atol": 1e-14}
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("control_name", ["shear_modulus", "Lambda"])
 def test_taylor_with_a_power_law(meshes, control_name, preset):
@@ -640,6 +642,7 @@ def test_taylor_with_a_power_law(meshes, control_name, preset):
     assert abs(J_replay - float(J_direct)) / abs(float(J_direct)) <= 1e-9
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 def test_power_law_gradient_against_fresh_solves(meshes, preset):
     """Exponent 3: the adjoint against a central difference of fresh solves."""
@@ -664,6 +667,7 @@ def test_power_law_gradient_against_fresh_solves(meshes, preset):
 # L11 (`Lambda`) is THE GATE of the whole suite -- the one the design predicts
 # fails if the `d theta/dm` term is not written by hand.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
@@ -686,6 +690,7 @@ def test_gradient_against_fresh_solves(meshes, representation, control_name,
 # fired at 9.429e-02 against this 1e-9 floor on the miniature, a margin of seven
 # orders. L14 is the first test to write and the first to run.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", ["shear_modulus", "Lambda"])
 def test_replay_matches_fresh_solve(meshes, representation, control_name):
@@ -711,6 +716,7 @@ def test_replay_matches_fresh_solve(meshes, representation, control_name):
 # ===========================================================================
 # L9 - `rho_0` has two channels and a Taylor test passes on either one alone
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 def test_rho0_gradient_has_both_channels(meshes, representation):
     """L9: the buoyancy channel is a live part of what L8 measures.
@@ -762,6 +768,7 @@ def test_rho0_gradient_has_both_channels(meshes, representation):
 # off, because `dF/dm` still lacks `(d theta_psi/dm) B0 psi`. Only running the
 # gate with the term disabled shows that the term is what makes L11 pass.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", ["lowrank"])
 def test_dtheta_term_is_what_makes_L11_pass(meshes, representation):
     """L11b: disabling the `d theta/dm` term must make L11 go red.
@@ -860,6 +867,7 @@ _TLM_REPRESENTATIONS = [
 ]
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 @pytest.mark.parametrize("representation", _TLM_REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
@@ -909,6 +917,7 @@ def test_tlm_matches_adjoint_and_fresh_solves(meshes, representation,
 # callback kwargs. A loud failure is a good failure; this pins it so that it
 # cannot become a silent wrong number.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", ["lowrank"])
 def test_hessian_leg_raises_clearly(meshes, representation):
     """L18: the second-order leg fails loudly rather than returning a number."""
@@ -929,6 +938,7 @@ def test_hessian_leg_raises_clearly(meshes, representation):
 # gradient. It does NOT replace L3/L11, because two independently wrong paths
 # can agree; that is why the sabotage is a 1e-6 perturbation of `B`.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("control_name", list(CONTROL_VALUES))
 def test_lowrank_and_multiplier_gradients_agree(meshes, control_name):
     """L16: same gradient from both representations, all four families."""
@@ -949,6 +959,7 @@ def test_lowrank_and_multiplier_gradients_agree(meshes, control_name):
 # ===========================================================================
 # L20 - nothing on the taped path went through `float()`
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 def test_every_field_is_reachable_from_the_control(meshes, representation):
     """L20: displacement, internal variable and potential all reach the control.
@@ -985,6 +996,7 @@ def _geoid_objective(solver, parent):
                                                     domain=parent))
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("control_name", ["shear_modulus", "Lambda"])
 def test_geoid_is_differentiable(meshes, representation, control_name):
@@ -1086,6 +1098,7 @@ def _gradient_once(meshes, representation):
     return float(Jhat.derivative())
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 def test_gradient_is_indifferent_to_appctx_propagation(
         meshes, representation, request):
@@ -1167,6 +1180,7 @@ def test_stock_block_shape_is_unchanged():
         "`evaluate_adj_component` override cannot reach the adjoint solution")
 
 
+@pytest.mark.longtest
 def test_one_solve_adds_one_block(meshes):
     """L25 second half: `solve()` still adds exactly one solve block."""
     from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
@@ -1203,6 +1217,7 @@ def test_one_solve_adds_one_block(meshes):
 # `solve` adds a kernel projection and the assigns into `u` and `psi` after
 # the solve block, and `update_total_mass` assigns and solves before it.
 # ===========================================================================
+@pytest.mark.longtest
 def test_block_is_found_by_output_identity_not_position(meshes):
     """L26: an intervening block must not defeat the adoption."""
     from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
@@ -1245,6 +1260,7 @@ def test_block_is_found_by_output_identity_not_position(meshes):
 # time, the shared solvers carry whichever block installed last and every
 # earlier timestep is silently solved with the wrong `theta`.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", ["lowrank"])
 def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
     """L27: two solves on ONE solver, each block using its own `theta`.
@@ -1331,6 +1347,7 @@ def test_theta_is_bound_per_solve_not_per_install(meshes, representation):
 # frozen as a float while the control IS a dependency) is 1474% wrong at Taylor
 # rate 1.9993 and the check correctly stays quiet. L11 remains the gate.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", ["lowrank"])
 def test_control_absent_from_residual_raises_at_install(meshes, representation):
     """L28: an unreachable control raises rather than yielding a silent zero.
@@ -1396,6 +1413,7 @@ def test_control_absent_from_residual_raises_at_install(meshes, representation):
 # all and the two-block split must be bypassed. A rotation-on-only suite tests
 # half the code.
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", REPRESENTATIONS)
 @pytest.mark.parametrize("rotation", [False, True])
 @pytest.mark.parametrize("control_name", ["shear_modulus", "sigma", "rho_0",
@@ -1412,6 +1430,7 @@ def test_gradient_with_rotation_on_and_off(meshes, representation, rotation,
 # ===========================================================================
 # FC1-FC4 - the core-pressure field crosses each differentiated solve path
 # ===========================================================================
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 def test_fluid_core_lowrank_replay_matches_fresh_solve(meshes, preset):
     """FC1: replay includes the core-pressure row and its transpose column."""
@@ -1432,6 +1451,7 @@ def test_fluid_core_lowrank_replay_matches_fresh_solve(meshes, preset):
     assert relative <= 1e-9
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 def test_fluid_core_lowrank_adjoint_matches_fresh_solves(meshes, preset):
     """FC2: the low-rank adjoint includes the core-pressure constraint."""
@@ -1442,6 +1462,7 @@ def test_fluid_core_lowrank_adjoint_matches_fresh_solves(meshes, preset):
     assert relative < FD_GATE
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset", PRESETS)
 def test_fluid_core_lowrank_tlm_matches_adjoint(meshes, preset):
     """FC3: the tangent and adjoint include the same core-pressure blocks."""
@@ -1457,6 +1478,7 @@ def test_fluid_core_lowrank_tlm_matches_adjoint(meshes, preset):
     assert abs(tlm - adjoint) / abs(adjoint) < 1e-10
 
 
+@pytest.mark.longtest
 def test_fluid_core_multiplier_and_lowrank_match(meshes):
     """FC4: both DtN representations solve the same constrained problem."""
     answers = {}
@@ -1475,6 +1497,7 @@ def test_fluid_core_multiplier_and_lowrank_match(meshes):
         / abs(pressures["multiplier"]) < 1e-10
 
 
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_fluid_core_lowrank_parallel_forward_solve(request, meshes):
     """FC5: the parent-mesh core pressure works in a two-rank low-rank solve."""
@@ -1508,6 +1531,7 @@ def test_fluid_core_lowrank_parallel_forward_solve(request, meshes):
 # does not call that method, so each block binds the index of its own forward
 # solve around its solves (`_bound_to_block`).
 # ===========================================================================
+@pytest.mark.longtest
 def test_replay_and_adjoint_see_the_taped_solve_index(meshes, monkeypatch):
     """Each replayed and adjoint solve shows the index of its forward solve.
 
@@ -1637,6 +1661,7 @@ def _adjoint_solver(block):
     return adjoint_solver(block)
 
 
+@pytest.mark.longtest
 def test_declared_nullspaces_are_exact_on_the_lowrank_operator(meshes):
     """The forward and the adjoint operator of the low-rank solve.
 
@@ -1701,6 +1726,7 @@ def _capped_parameters(representation, cap):
         outer_accept_capped=True)
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", ["lowrank", "multiplier"])
 def test_a_capped_outer_solve_on_the_tape_is_never_silently_wrong(meshes, representation):
     """Replay at a new control value with a capped outer solve, then the gradient.

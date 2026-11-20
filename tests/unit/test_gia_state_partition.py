@@ -24,6 +24,10 @@ from test_gia_solver import (FOUR, PARALLEL_RTOL, STATE_CASES, load_meshes,
                              relative, run)
 from parallel_ranks import assert_marked_rank_count
 
+# Every test in this module runs a solve or a time step, so the whole
+# module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
+pytestmark = pytest.mark.longtest
+
 
 def _march_and_write(path, comm):
     """March the Quadrature state case two steps on `comm` and write its state.

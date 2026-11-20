@@ -29,6 +29,10 @@ import gia_cases as C
 from gadopt import gia_couplings as cp
 from test_gia_solver import STEPS, NewSolver, march
 
+# Every test in this module runs a solve or a time step, so the whole
+# module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
+pytestmark = pytest.mark.longtest
+
 Case = C.Case
 
 #: The step kinds with a step block of G-ADOPT's own.

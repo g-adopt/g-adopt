@@ -233,6 +233,7 @@ class TestSetup:
                 solver_parameters={"mat_type": "aij", "ksp_type": "preonly",
                                    "pc_type": "lu"})
 
+    @pytest.mark.longtest
     def test_net_mass_is_carried_not_refused(self):
         """Nonzero 2-D net mass solves, and the enclosed mass is measured.
 
@@ -248,6 +249,7 @@ class TestSetup:
         area = fd.assemble(1 * solver.dx)
         assert solver.total_enclosed_mass() == pytest.approx(area, rel=1e-12)
 
+    @pytest.mark.longtest
     def test_monopole_absent_in_3d(self):
         """3-D has no undetermined monopole, so none of this machinery engages."""
         mesh = shell_mesh_3d(refinement_level=1, dr=0.5)
@@ -282,6 +284,7 @@ class TestSetup:
                 bcs={"top": {"dtn": CylindricalDtN(M=1),
                              "flux": fd.Constant(0.1)}})
 
+    @pytest.mark.longtest
     def test_dirichlet_with_net_mass_refused(self):
         """Two anchors for one additive constant is an over-constraint.
 
@@ -308,6 +311,7 @@ class TestSetup:
                            "bottom": {"psi": fd.Constant(0.0)}}).solve()
         assert np.sqrt(fd.assemble(psi_zero ** 2 * fd.dx)) > 1e-3
 
+    @pytest.mark.longtest
     def test_leakage_threshold_is_scale_invariant(self):
         """Rescaling rho must not change whether the Dirichlet gauge is refused.
 
@@ -327,6 +331,7 @@ class TestSetup:
             with pytest.raises(ValueError, match="over-constrained"):
                 solver.solve()
 
+    @pytest.mark.longtest
     def test_leakage_warning_band(self):
         """Nonzero-but-implausibly-small mass warns; a deliberate mass does not."""
         mesh = annulus_mesh(n_azimuthal=32, dr=0.5)
@@ -468,6 +473,7 @@ class TestSetup:
 # ---------------------------------------------------------------------------
 # 2-D: sheets and volumetric shell against inline closed forms
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 class TestCylindrical:
     @pytest.mark.parametrize("side,m_mode", [("top", 2), ("top", 3),
                                              ("bottom", 2)])
@@ -828,6 +834,7 @@ class TestIndexSetSplit:
     only the index-set description exists.
     """
 
+    @pytest.mark.longtest
     def test_matches_the_field_number_split(self):
         """Same answers as the description it replaces, on both presets.
 
@@ -852,6 +859,7 @@ class TestIndexSetSplit:
             assert (solver_new.solver.snes.ksp.getIterationNumber()
                     == solver_old.solver.snes.ksp.getIterationNumber())
 
+    @pytest.mark.longtest
     def test_solves_past_the_field_enumeration_wall(self):
         """A truncation the field-number description cannot set up at all.
 
@@ -894,6 +902,7 @@ class TestIndexSetSplit:
                               "iterative", solver_high._multiplier_offset,
                               solver_high.n_multipliers))
 
+    @pytest.mark.longtest
     def test_parallel_matches_the_field_number_split(self):
         """Two-rank parity: the coupled DtN solve had never been regression
         tested on more than one rank, and the Real-space multiplier degrees of
@@ -971,6 +980,7 @@ class TestIndexSetSplit:
 # ---------------------------------------------------------------------------
 # 3-D: spherical sheet against the inline closed form
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 class TestSpherical:
     def test_boundary_sheet(self):
         """Sheet sigma Y_lm on the outer DtN boundary of a spherical shell.

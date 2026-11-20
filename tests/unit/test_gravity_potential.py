@@ -113,6 +113,7 @@ class TestCompleteDtNBoundaries:
         with pytest.raises(ValueError, match="complete circle or sphere"):
             part.check_dtn_boundaries_complete()
 
+    @pytest.mark.longtest
     def test_the_constructor_does_not_run_it(self):
         """`GravitySolver` keeps its policy: it warns, then builds and solves."""
         V = self.half_circle_space()
@@ -165,6 +166,7 @@ class TestConstructorArguments:
         with pytest.raises(ValueError, match="exactly one of Lambda and"):
             GravityPotential(V, V.mesh(), BCS, **given)
 
+    @pytest.mark.longtest
     def test_gravitational_constant_gives_lambda_4_pi_g(self):
         """With `G` the part is the part with `Lambda = 4 pi G`.
 

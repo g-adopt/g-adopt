@@ -280,6 +280,7 @@ def test_self_gravity_number_defaults_to_none():
     assert float(approximation.self_gravity_number) == pytest.approx(1.1116)
 
 
+@pytest.mark.longtest
 def test_gravity_accessor_splits_background_from_perturbation():
     mesh = centred_square(4)
     x, y = fd.SpatialCoordinate(mesh)

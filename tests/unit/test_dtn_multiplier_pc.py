@@ -443,6 +443,7 @@ class TestItChangesNoDefault:
                              "dtn_fieldsplit_1_pc_python_type"}
 
 
+@pytest.mark.longtest
 class TestTheSolveAgrees:
     """The integration test, and the tripwire for the sub-DM fix."""
 

@@ -201,6 +201,7 @@ def symmetry_defect(petsc_matrix):
     return difference.norm() / petsc_matrix.norm()
 
 
+@pytest.mark.longtest
 class TestNestedSolve:
     """The nested preset solves the annulus to the direct preset's answer."""
 
@@ -277,6 +278,7 @@ class TestNestedSolve:
         assert len(near_nullspace.getVecs()) == 5
 
 
+@pytest.mark.longtest
 class TestOperatorReuse:
     """The condensed operator is built once per `dt`, not once per solve."""
 
@@ -400,6 +402,7 @@ class TestOperatorReuse:
         tape.clear_tape()
 
 
+@pytest.mark.longtest
 class TestPowerLaw:
     """Newton on the nested preset, with a state-dependent Jacobian.
 
@@ -767,6 +770,7 @@ class TestPowerLaw:
 class TestKrylovSelection:
     """CG where the condensed operator is symmetric, GMRES where it is not."""
 
+    @pytest.mark.longtest
     def test_newtonian_two_elements_is_symmetric_and_gets_cg(self, meshes):
         # Two viscosities and two shear moduli give two Maxwell elements.
         solver, _, _ = build(
@@ -916,6 +920,7 @@ class TestThreeDimensions:
         return cls.solver_on(mesh, C, nested_preset(),
                              bcs={"bottom": {"un": 0.0}}, L=L)
 
+    @pytest.mark.longtest
     def test_condensed_operator_is_symmetric_and_solved_by_one_v_cycle(self):
         """One solve on 24 cells, then read the operator the split saw.
 
@@ -986,6 +991,7 @@ class TestThreeDimensions:
             approximation_kwargs=approximation_kwargs,
             solver_parameters_extra=solver_parameters_extra)
 
+    @pytest.mark.longtest
     def test_fluid_core_newtonian_matches_the_direct_route(self):
         """The control for the extruded CMB measure, with no rheology in it.
 
@@ -1059,6 +1065,7 @@ class TestThreeDimensions:
         with pytest.raises(ValueError, match="empty measure"):
             self.fluid_core_solver(mesh, C, nested_preset(), boundary=4)
 
+    @pytest.mark.longtest
     def test_fluid_core_power_law_is_nonsymmetric_and_gets_gmres(self):
         """The measurement the 2-D fluid-core test cannot make, and its answer.
 

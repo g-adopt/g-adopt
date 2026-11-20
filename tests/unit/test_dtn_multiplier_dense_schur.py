@@ -276,6 +276,7 @@ def _apply_pc(petsc_pc, ctx, rhs, transpose=False):
 # ---------------------------------------------------------------------------
 # T1  parity: the PC's S equals the independent reference S_ref
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_T1_parity_against_independent_reference(built):
     """Binding correctness test.
 
@@ -292,6 +293,7 @@ def test_T1_parity_against_independent_reference(built):
 # ---------------------------------------------------------------------------
 # T2  forward solve: apply solves S x = rhs
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_T2_forward_solve(built):
     """`apply` must solve `S x = rhs`, checked against the independent `S_ref`.
 
@@ -312,6 +314,7 @@ def test_T2_forward_solve(built):
 # ---------------------------------------------------------------------------
 # T3  transpose discriminator: applyTranspose solves S^T x = rhs, not S x = rhs
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_T3_transpose_solves_S_transpose(built):
     """`applyTranspose` must solve `S^T x = rhs`.
 
@@ -349,6 +352,7 @@ def test_T3_transpose_solves_S_transpose(built):
 # ---------------------------------------------------------------------------
 # T4  build-once: initialize runs once, no rebuild on the second solve
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_T4_build_once(built):
     """The complement is built in `initialize` and never rebuilt.
 
@@ -372,6 +376,7 @@ def test_T4_build_once(built):
         "the factors were rebuilt on the second solve"
 
 
+@pytest.mark.longtest
 def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
     """A live `dt.assign(...)` must rebuild the cached dense complement.
 
@@ -397,6 +402,7 @@ def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
     assert rel < PARITY_FLOOR, f"rebuilt S vs S_ref error {rel:.3e}"
 
 
+@pytest.mark.longtest
 @REAL_BLOCK_ON_PARENT_FACETS
 def test_T4c_fluid_core_pressure_joins_the_dense_complement(meshes):
     """The physical zero diagonal gains its inverse through the Schur term."""
@@ -549,6 +555,7 @@ def test_T6_missized_raises_named(capsys):
 # global. Module-level function, not a method: mpi-pytest cannot relaunch a test
 # that lives inside a class.
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 @pytest.mark.parametrize("fluid_core", [False, True])
 def test_T7_parallel_build_keys_on_global_size(request, meshes, fluid_core):

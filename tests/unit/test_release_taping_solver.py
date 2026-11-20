@@ -540,6 +540,7 @@ def petsc_logging():
     yield
 
 
+@pytest.mark.longtest
 @needs_cached
 @pytest.mark.parallel(nprocs=[1, 2])
 @pytest.mark.parametrize("order", ["taylor", "invert"])
@@ -611,6 +612,7 @@ def test_release_changes_no_number_and_frees_one_set(request, meshes, set_tracke
         assert all(created == 0 for created, _ in log.values()), log
 
 
+@pytest.mark.longtest
 @needs_cached
 def test_release_refuses_while_annotating_and_a_solve_after_it_raises(meshes):
     """The release refuses to run while the tape records; a solve after it raises.
@@ -648,6 +650,7 @@ def test_release_does_nothing_without_cached_blocks(monkeypatch):
     assert "no cached solver blocks" in result["reason"]
 
 
+@pytest.mark.longtest
 def test_release_does_nothing_before_a_taped_solve(meshes):
     """A solver with no coupled block on the tape keeps its taping solver."""
     if not dca.CACHED_SOLVER_BLOCKS:

@@ -86,6 +86,7 @@ def compare(mesh, results, psi_rtol=1e-14, coeff_atol=1e-12, label=""):
 # ---------------------------------------------------------------------------
 # Parity across the configurations of the shipped test suite
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_parity_annulus_two_boundaries(annulus):
     """Both boundaries, so the interior `mean` mode is exercised - the mode
     whose weight is negative and whose presence is what makes the SPD argument
@@ -98,6 +99,7 @@ def test_parity_annulus_two_boundaries(annulus):
     compare(annulus, results, label="annulus M=5")
 
 
+@pytest.mark.longtest
 def test_parity_annulus_sheet(annulus):
     """A `sigma` sheet on a DtN boundary: the right-hand side term the fast
     path re-assembles on every solve."""
@@ -125,6 +127,7 @@ def tight(representation, rtol):
     return {"ksp_rtol": rtol}
 
 
+@pytest.mark.longtest
 def test_parity_shell(shell):
     """3-D, two boundaries, the production geometry.
 
@@ -149,6 +152,7 @@ def test_parity_shell(shell):
     compare(shell, out, label="shell L=3 (rtol 1e-14)")
 
 
+@pytest.mark.longtest
 def test_shell_parity_is_tolerance_limited(shell):
     """Show the residual 3-D disagreement is the Krylov tolerance.
 
@@ -186,6 +190,7 @@ def test_shell_parity_is_tolerance_limited(shell):
         assert gap < 10 * rtol
 
 
+@pytest.mark.longtest
 def test_parity_with_strong_bc(annulus):
     """A prescribed `psi` alongside a DtN boundary.
 
@@ -204,6 +209,7 @@ def test_parity_with_strong_bc(annulus):
     compare(annulus, results, label="strong bc")
 
 
+@pytest.mark.longtest
 def test_monopole_datum_reaches_the_fast_path(annulus):
     """The 2-D monopole datum runs from `solve()` on the fast path too.
 
@@ -230,6 +236,7 @@ def test_monopole_datum_reaches_the_fast_path(annulus):
     assert abs(boundary_mean) < 1e-9 * abs(solver.total_enclosed_mass())
 
 
+@pytest.mark.longtest
 def test_accuracy_against_the_closed_form(annulus):
     """Both paths are equally right about the physics, not merely equal.
 
@@ -362,6 +369,7 @@ def multiplier_potential_iterations(solver):
     return potential.getIterationNumber()
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("refinement", [2, 3])
 def test_cg_iteration_counts(refinement):
     """CG counts on the fast path against the multiplier path's fieldsplit_0.
@@ -425,6 +433,7 @@ def test_cg_gap_does_not_grow_with_refinement():
 # ---------------------------------------------------------------------------
 # Parallel
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_parallel_parity(request, annulus):
     """Same comparison on more than one rank.
@@ -444,6 +453,7 @@ def test_parallel_parity(request, annulus):
     compare(annulus, results, label=f"parallel np={fd.COMM_WORLD.size}")
 
 
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_parallel_coefficients_are_rank_consistent(request, annulus):
     """Every rank must report the same trace spectrum.
@@ -483,6 +493,7 @@ def submesh_pair():
     return marked, fd.Submesh(marked, marked.topological_dimension, 99)
 
 
+@pytest.mark.longtest
 def test_submesh_parity_and_the_mixed_space_disappearing(submesh_pair):
     """The cross-mesh configuration, and the structural claim behind it.
 

@@ -520,6 +520,7 @@ class TestInertiaTranspose:
         with pytest.raises(ValueError, match="third coordinate"):
             Rotation.inertia_polynomial(component, X)
 
+    @pytest.mark.longtest
     def test_inertia_of_a_cos2_sheet_vanishes(self, solved):
         """`int sigma (x^2 + y^2) dS` over a circle kills a `cos 2phi` load.
 
@@ -556,6 +557,7 @@ class TestGeometryAssertions:
             SelfGravitatingGIASolver(u, psi, approximation(), dt=1.0,
                                      gravity_bcs=bcs, bcs=mechanics_bcs(sub))
 
+    @pytest.mark.longtest
     def test_dtn_boundary_measures_match_their_radii(self, solved):
         """What `check_dtn_boundaries_complete` asserts, restated so a reader can see it.
 
@@ -568,6 +570,7 @@ class TestGeometryAssertions:
             length = solver.form.boundary_area[bc_id]
             assert length == pytest.approx(2 * np.pi * radius, rel=1e-2)
 
+    @pytest.mark.longtest
     def test_cross_mesh_measure_finds_the_parent(self, solved):
         """The one check that tests the entity maps rather than the measure.
 
@@ -581,6 +584,7 @@ class TestGeometryAssertions:
         area = fd.assemble(probe * solver.gravity.dx_m)
         assert area == pytest.approx(np.pi * (RE**2 - RC**2), rel=1e-3)
 
+    @pytest.mark.longtest
     def test_intersected_parent_measure_covers_the_whole_parent(self, solved):
         """Intersecting must not restrict the Laplacian to the mantle.
 
@@ -614,6 +618,7 @@ class TestGeometryAssertions:
 class TestConstruction:
     """What the solver builds on a mixed space spanning two meshes."""
 
+    @pytest.mark.longtest
     def test_mesh_is_the_mechanics_mesh(self, solved):
         """The solver's `mesh` is the displacement's mesh, not the parent.
 
@@ -625,6 +630,7 @@ class TestConstruction:
         assert solver.mesh is u.function_space().mesh()
         assert solver.mesh is not solver.potential_mesh
 
+    @pytest.mark.longtest
     def test_one_equation_per_mechanics_field(self, solved):
         """And not one per sub-field: the multipliers are not `Equation`s.
 
@@ -716,6 +722,7 @@ class TestConstruction:
                                         "transition_stress": 1e-3},
                   solver_parameters_extra={"snes_type": "ksponly"})
 
+    @pytest.mark.longtest
     def test_power_law_is_accepted_on_the_lowrank_representation(self, meshes):
         """A power law builds and solves on the low-rank representation.
 
@@ -732,12 +739,14 @@ class TestConstruction:
         assert solver.solver.snes.getConvergedReason() > 0
         assert fd.norm(u) > 0.0
 
+    @pytest.mark.longtest
     def test_it_solves(self, solved):
         solver, u, psi = solved
         assert fd.norm(u) > 0.0
         assert fd.norm(psi) > 0.0
         assert np.isfinite(fd.norm(psi))
 
+    @pytest.mark.longtest
     def test_the_answer_is_degree_two(self, solved):
         """A `cos 2phi` load excites `cos 2phi` and nothing else.
 
@@ -753,6 +762,7 @@ class TestConstruction:
                     assert abs(value) < 1e-9 * abs(modes["cos2"]) + 1e-15
 
 
+@pytest.mark.longtest
 class TestNewtonianLimit:
     """A power-law configuration that is Newtonian must solve the Newtonian problem.
 
@@ -1275,6 +1285,7 @@ def block_asymmetry(F, z, J=None):
     return diff, size
 
 
+@pytest.mark.longtest
 class TestBlockZeroSymmetry:
     """The DG family's `(u, M, psi)` block 0 is not symmetric.
 
@@ -1323,6 +1334,7 @@ class TestBlockZeroSymmetry:
         assert diff[window].max() / size[window].max() > 1e-6
 
 
+@pytest.mark.longtest
 class TestEliminatedBlockSymmetry:
     """Block 0 with the history eliminated is symmetric; with it, it is not."""
 
@@ -1395,6 +1407,7 @@ class TestFamiliesAgree:
 
     MAXWELL2 = {"viscosity": [1.0, 3.0], "shear_modulus": [1.0, 0.5]}
 
+    @pytest.mark.longtest
     def test_dg_and_quadrature_agree_after_two_steps(self, meshes):
         """Two steps of each family agree in `u` and `psi` to the discretisation gap.
 
@@ -1421,6 +1434,7 @@ class TestFamiliesAgree:
         assert gap_u < FAMILY_GAP_U
         assert gap_psi < FAMILY_GAP_PSI
 
+    @pytest.mark.longtest
     def test_the_real_block_does_not_depend_on_the_family(self, meshes):
         """The `Real` block of the Jacobian is the same matrix in both families.
 
@@ -1488,6 +1502,7 @@ class TestBlockOneIsTheDiagonalItClaims:
     prediction and the assembled row together.
     """
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("rotation", [True, False])
     @pytest.mark.parametrize("truncation", [3, 5])
     def test_the_block_is_the_claimed_diagonal(self, meshes, rotation,
@@ -1705,6 +1720,7 @@ class TestBlockOneIsTheDiagonalItClaims:
             "size it is worth knowing")
 
 
+@pytest.mark.longtest
 class TestBlockOneInThreeDimensions:
     """The same probe on a 3-D shell, because 2-D cannot see the polar pair.
 
@@ -2168,6 +2184,7 @@ class TestPresetWiring:
                     == selfgrav_dtn_iterative_solver_parameters(
                         u_ksp_max_it=0, **kwargs)), kwargs
 
+    @pytest.mark.longtest
     def test_the_iterative_preset_solves_the_same_system(self, meshes, solved):
         """The one that is not about dictionaries: does the iterative path solve?
 
@@ -2265,6 +2282,7 @@ def source_mass_form(solver):
     return fd.Form(source), one
 
 
+@pytest.mark.longtest
 class TestV4:
     """V4 - discrete mass conservation of the divergence source.
 
@@ -2356,6 +2374,7 @@ class TestNullCoupling:
         solver, _, _ = build(meshes, approximation_kwargs={"B_mu": 1e-12})
         assert float(solver.theta_psi) == 1e-12 / LAMBDA
 
+    @pytest.mark.longtest
     @pytest.mark.skipif(
         fd.COMM_WORLD.size > 1,
         reason="the per-block instrument needs a global dense transpose")
@@ -2384,6 +2403,7 @@ class TestNullCoupling:
         # ... while the one-way leg survives, so psi is still driven by u.
         assert amax(index["potential"], index["displacement"]) > 0.0
 
+    @pytest.mark.longtest
     def test_it_reproduces_the_uncoupled_solver(self, meshes):
         """V2, run as specified rather than around the defect.
 
@@ -2435,6 +2455,7 @@ class TestNullCoupling:
         assert fd.norm(psi) > 0.0
 
 
+@pytest.mark.longtest
 class TestAcceptedStateAfterAStep:
     """The accepted state is the solved state when `solve` returns.
 
@@ -2508,6 +2529,7 @@ class TestRigidRotationNullspace:
             if i != displacement:
                 assert not isinstance(entry, fd.VectorSpaceBasis)
 
+    @pytest.mark.longtest
     def test_declaring_it_removes_it_from_the_answer(self, meshes):
         """PETSc alone does not: FGMRES is right-preconditioned.
 
@@ -2681,6 +2703,7 @@ class TestFluidCore:
         assert amax(iu, ip) == 0.0
         assert amax(iu, iu) == 0.0
 
+    @pytest.mark.longtest
     @pytest.mark.xfail(
         # Not strict: the outcome depends on round-off in a singular block-0
         # LU, so a pass is as uninformative as a failure. With the dense Schur
@@ -2788,6 +2811,7 @@ class TestFluidCore:
         assert isinstance(basis[index["displacement"]], fd.VectorSpaceBasis)
         assert not isinstance(basis[index["core_pressure"]], fd.VectorSpaceBasis)
 
+    @pytest.mark.longtest
     def test_solve_enforces_zero_integrated_cmb_displacement(self, meshes):
         solver, u, _ = self.build_fluid(meshes)
         solver.solve()
@@ -3124,6 +3148,7 @@ class TestCentreOfMassFrame:
         finally:
             ctx.sheets[:] = saved
 
+    @pytest.mark.longtest
     @pytest.mark.skipif(
         fd.COMM_WORLD.size > 1,
         reason="the per-block instrument needs global dense blocks")
@@ -3147,6 +3172,7 @@ class TestCentreOfMassFrame:
                     assert np.abs(ll.convert("dense").getDenseArray()).max() \
                         == 0.0
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("dtn_representation", ["multiplier", "lowrank"])
     def test_solve_holds_the_centre_of_mass(self, meshes, dtn_representation):
         """After a solve with a degree-1 load, `D = 0` to the solver tolerance.
@@ -3212,6 +3238,7 @@ class TestCentreOfMassFrame:
             scale = max(np.abs(b.dat.data_ro).max(), 1e-300)
             assert np.abs(a.dat.data_ro - b.dat.data_ro).max() / scale < 1e-13
 
+    @pytest.mark.longtest
     @pytest.mark.skipif(
         fd.COMM_WORLD.size > 1,
         reason="the per-block instrument needs global dense blocks")

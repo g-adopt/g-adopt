@@ -252,6 +252,7 @@ class TestTheFormOnItsOwn:
         fd.solve(F == 0, w, solver_parameters=MULTIPLIER_PARAMETERS)
         return w, form
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("m_mode", [1, 2])
     def test_interior_sheet_against_its_closed_form(self, sheet_mesh, m_mode):
         """sigma = cos(m phi) at radius a, no volume source at all.

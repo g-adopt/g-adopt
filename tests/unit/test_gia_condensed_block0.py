@@ -570,6 +570,7 @@ def test_the_quadrature_family_refuses_the_new_block_zero(meshes):
             solver_parameters=condensed_preset())
 
 
+@pytest.mark.longtest
 class TestTheSolveMatchesTheDirectRoute:
     """The governing test: one discrete system, two routes to it."""
 
@@ -687,6 +688,7 @@ class TestTheSolveMatchesTheDirectRoute:
         assert new <= old
 
 
+@pytest.mark.longtest
 class TestOneBlockZeroApplication:
     """What one application of the class does, measured on its own.
 
@@ -810,6 +812,7 @@ class TestOneBlockZeroApplication:
         assert context.assembly_count == 2
 
 
+@pytest.mark.longtest
 class TestTheAssembledBlocks:
     """The four sparse blocks are the block-0 operator, minus `M`.
 
@@ -1007,6 +1010,7 @@ class TestPowerLaw:
     being told to, and that the answer is still the direct route's.
     """
 
+    @pytest.mark.longtest
     def test_newton_matches_the_direct_route(self, meshes):
         """Two routes, one Newton path.
 
@@ -1039,6 +1043,7 @@ class TestPowerLaw:
         assert relative_difference(u, u_direct) < 1e-6
         assert relative_difference(psi, psi_direct) < 1e-6
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("rule", ["always", None])
     def test_the_rebuild_rule_governs_a_power_law(self, meshes, rule):
         """`operator_version` is `None` for a power law; `gia_rebuild` decides.
@@ -1114,6 +1119,7 @@ class TestPowerLaw:
         assert U_SPLIT + "ksp_gmres_restart" not in p
         assert U_SPLIT + "ksp_max_it" not in p
 
+    @pytest.mark.longtest
     def test_a_caller_named_krylov_type_wins(self, meshes):
         """The one way to keep a method the symmetry rule would replace."""
         key = U_SPLIT + "ksp_type"
@@ -1128,6 +1134,7 @@ class TestPowerLaw:
         solver.solve()
         assert displacement_ksp(block0_context(solver)).getType() == "fgmres"
 
+    @pytest.mark.longtest
     def test_the_displacement_split_actually_runs_the_named_method(
             self, meshes):
         """The switch is only worth something if it reaches the KSP.
@@ -1146,6 +1153,7 @@ class TestPowerLaw:
         assert displacement_ksp(block0_context(solver)).getType() == "gmres"
 
 
+@pytest.mark.longtest
 class TestOtherConfigurations:
     """The configurations the production runs actually use."""
 
@@ -1263,6 +1271,7 @@ class TestOtherConfigurations:
         assert relative_difference(u, u_direct) < 1e-8
 
 
+@pytest.mark.longtest
 class TestThreeDimensions:
     """The production geometry, on 24 cells.
 
@@ -1360,6 +1369,7 @@ class TestThreeDimensions:
 # assembled blocks are distributed, and the `(u, psi)` nest's index sets come
 # from the nest rather than from the mixed space's own field ordering.
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_two_ranks_match_the_direct_route(request, meshes):  # noqa: F811
     """The 2-rank annulus solve against LU on block 0, on the same 2 ranks.

@@ -112,6 +112,7 @@ def incumbent(descriptor, element_degree=1):
 
 
 class TestDefaultDegree:
+    @pytest.mark.longtest
     def test_follows_the_mesh_not_the_truncation(self):
         """The defect being fixed: the old default was blind to refinement.
 
@@ -138,6 +139,7 @@ class TestDefaultDegree:
         assert high - low <= 2
         assert incumbent(CylindricalDtN(M=16)) - incumbent(CylindricalDtN(M=8)) == 16
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("n_azimuthal,M", [(96, 8), (192, 32), (384, 16)])
     def test_odd_because_odd_is_free(self, n_azimuthal, M):
         """`(q + 2) // 2` points means `q` even and `q + 1` are the same rule.
@@ -150,6 +152,7 @@ class TestDefaultDegree:
         assert q % 2 == 1
         assert (q + 2) // 2 - 1 == q // 2
 
+    @pytest.mark.longtest
     def test_never_costs_more_than_the_default_it_replaces(self):
         configurations = [
             (annulus(96), CylindricalDtN(M=2), 1),
@@ -193,6 +196,7 @@ class TestDefaultDegree:
         # and the measurement, when asked for, agrees that it is inadequate
         assert solver.check_boundary_quadrature(action="warn") > 1e-8
 
+    @pytest.mark.longtest
     def test_an_extrapolating_mesh_is_flagged(self):
         """The other free warning: a mesh outside the calibration set.
 
@@ -208,6 +212,7 @@ class TestDefaultDegree:
                 psi, 0.0, bcs={"top": {"dtn": CylindricalDtN(M=64)}},
                 solver_parameters="direct")
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("warp,L", [
         (0.10, 5), (0.20, 5), (0.20, 8), (0.25, 5), (0.30, 8), (0.30, 12)])
     def test_silence_implies_adequacy(self, warp, L):
@@ -254,6 +259,7 @@ class TestDefaultDegree:
             return
         assert solver.check_boundary_quadrature(sample="all") < TARGET
 
+    @pytest.mark.longtest
     def test_distortion_alone_triggers_the_warning(self):
         """The distortion bound needs its own test, not resolution's.
 
@@ -295,6 +301,7 @@ class TestDefaultDegree:
         assert np.isclose(h_max, np.sqrt(areas).max(), rtol=1e-12)
         assert h_mean < np.sqrt(areas.mean())      # Jensen, strictly
 
+    @pytest.mark.longtest
     def test_a_well_covered_mesh_is_silent(self):
         """And the warnings must not cry wolf on ordinary configurations."""
         with warnings.catch_warnings():
@@ -303,6 +310,7 @@ class TestDefaultDegree:
             build(shell(2), SphericalDtN(L=5))
             build(shell(3), SphericalDtN(L=10))
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("mesh_factory,descriptor_factory", [
         (lambda: annulus(192), lambda: CylindricalDtN(M=16)),
         (lambda: shell(2), lambda: SphericalDtN(L=5)),
@@ -322,6 +330,7 @@ class TestDefaultDegree:
         for lower, higher in zip(degrees, degrees[1:]):
             assert higher - lower == QUADRATURE_ELEMENT_DEGREE_COST
 
+    @pytest.mark.longtest
     def test_degree_and_check_are_rank_independent(self):
         """Both new reductions have to be right, or parallel runs differ silently.
 
@@ -350,6 +359,7 @@ class TestDefaultDegree:
         solver = build(annulus(96), CylindricalDtN(M=4), quad_degree=17)
         assert solver.quad_degree == 17
 
+    @pytest.mark.longtest
     def test_triangular_facets_carry_their_own_constants(self):
         """A collapsed Gauss-Jacobi rule is not a tensor Gauss rule.
 
@@ -391,6 +401,7 @@ class TestDefaultIsAdequate:
     against the 1e-8 the constants were calibrated to.
     """
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("mesh_factory,descriptor_factory", [
         (lambda: annulus(96), lambda: CylindricalDtN(M=8)),
         (lambda: annulus(96, irregular=True), lambda: CylindricalDtN(M=16)),
@@ -409,6 +420,7 @@ class TestDefaultIsAdequate:
         assert solver.check_boundary_quadrature(sample="all") < TARGET
 
 
+@pytest.mark.longtest
 class TestCheckIsAnInstrument:
     def test_check_sees_the_variable_it_is_named_for(self):
         """The regression test for the defect this check used to have.

@@ -86,6 +86,7 @@ FORWARD_REFERENCE = C.reference_values("forward")
 SOLVED_RTOL = 1e-10
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("case", FORWARD, ids=[c.label for c in FORWARD])
 def test_three_steps_agree_with_the_reference(meshes, case):
     """Direct presets: after each step the state agrees with the stored one.
@@ -208,6 +209,7 @@ def march(meshes, case, control, steps=STEPS[:2], *, checkpoint_dir=None,
     return J
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("case", TAPED)
 def test_taylor_and_replay(meshes, case):
     sub = meshes[1]
@@ -245,6 +247,7 @@ def taylor_case(meshes, case, **march_kwargs):
     return rf, control
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("case", [
     pytest.param(Case(representation="lowrank", model="maxwell2", core="fluid",
                       rotation=True, centre=True, load="sea_moving"),
@@ -259,6 +262,7 @@ def test_taylor_with_disk_checkpointing(meshes, case, tmp_path):
     taylor_case(meshes, case, steps=STEPS, checkpoint_dir=directory)
 
 
+@pytest.mark.longtest
 def test_taylor_through_a_restore_on_the_tape(meshes):
     """A state copied and restored into a second solver mid-march, on the tape."""
     case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
@@ -266,6 +270,7 @@ def test_taylor_through_a_restore_on_the_tape(meshes):
     taylor_case(meshes, case, steps=STEPS, restore_after=2)
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("case", [
     Case(representation="lowrank", core="fluid", centre=True),
     Case(representation="multiplier", core="fluid", centre=True),
@@ -394,6 +399,7 @@ def relative(a, b):
     return np.sqrt(num / den)
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("case", STATE_CASES, ids=[c.label for c in STATE_CASES])
 def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
     """Interrupted, checkpointed, restored on a loaded mesh, continued.
@@ -443,6 +449,7 @@ def test_state_round_trip_through_a_checkpoint_file(meshes, case, tmp_path):
     assert not states_differ(values(reference), continued, restarted, rtol=rtol)
 
 
+@pytest.mark.longtest
 def test_state_round_trip_in_memory_and_reset(meshes):
     """`restore` of copied Functions, then `reset` back to rest.
 
@@ -590,6 +597,7 @@ def _old_checkpoint_converts(label):
     return new, loaded, metadata
 
 
+@pytest.mark.longtest
 def test_a_checkpoint_of_the_old_solver_converts():
     """A file of the earlier solver in the `selfgrav_common` layout, Quadrature, BDF2.
 
@@ -616,6 +624,7 @@ def test_a_checkpoint_of_the_old_solver_converts():
         state_from_checkpoint(new, loaded, metadata)
 
 
+@pytest.mark.longtest
 def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
         meshes, tmp_path):
     """A BDF2 state without `previous_dt`, and a file of another scheme, are refused."""
@@ -647,6 +656,7 @@ def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
             read_state(chk, e, idx=0)
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("label", ["DG-be-multiplier-selfgrav",
                                    "DG-bdf2-lowrank-selfgrav"])
 def test_a_dg_checkpoint_of_the_old_solver_converts(label):
@@ -658,6 +668,7 @@ def test_a_dg_checkpoint_of_the_old_solver_converts(label):
     _old_checkpoint_converts(label)
 
 
+@pytest.mark.longtest
 def test_an_exp01_checkpoint_of_the_old_solver_converts():
     """A file of the earlier solver in the Exp01 layout (own names, `real_{i}`)."""
     _old_checkpoint_converts("DG-bdf2-lowrank-exp01")
@@ -665,6 +676,7 @@ def test_an_exp01_checkpoint_of_the_old_solver_converts():
 
 # -- Interface ----------------------------------------------------------------------
 
+@pytest.mark.longtest
 def test_the_order_of_the_couplings_does_not_matter(meshes):
     """Reversed `couplings`: the same field order and the same residual, bit for bit."""
     parent, sub = meshes
@@ -838,6 +850,7 @@ def test_a_mode_that_violates_a_strong_condition_is_refused(meshes):
                   nullspace=basis, solver_parameters="direct")
 
 
+@pytest.mark.longtest
 def test_a_symmetric_configuration_passes_the_nullspace_check(meshes):
     solver, _, _ = C.build_new(meshes, Case(core="fluid", load=None),
                                nullspace="rigid_rotation")
@@ -905,6 +918,7 @@ def test_a_traction_without_a_surface_load_warns(meshes):
                   solver_parameters="direct")
 
 
+@pytest.mark.longtest
 def test_the_coefficients_are_real_functions_on_the_multiplier_path(meshes):
     """No Python float, so a functional keeps its dependency."""
     solver, _, _ = C.build_new(meshes, Case(rotation=True))
@@ -940,6 +954,7 @@ def test_the_preset_options_and_the_derivative_cap(meshes):
                     default_options=False)
 
 
+@pytest.mark.longtest
 def test_an_options_change_rebuilds_the_quadrature_solver_only(meshes):
     """F16: the backend and its private coefficients are built once."""
     case = Case(family="Quadrature", representation="lowrank", core="fluid")
@@ -979,6 +994,7 @@ def test_the_closure_constant_follows_lambda():
         bad.check([bad])
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("control_name", ["Lambda", "B_mu"])
 def test_taylor_with_a_real_control_in_the_row_scalings(meshes, control_name):
     """`Lambda` or `B_mu` as a `Real` control on the parent mesh.
@@ -1049,8 +1065,16 @@ REAL_PARAMETERS = {
 }
 
 
+#: The parameters of `REAL_PARAMETERS` whose case is a long test. The
+#: sea-level case builds the sea-level coupling as well, which costs several
+#: times the surface-load case, so PR CI runs the other parameters only.
+LONG_REAL_PARAMETERS = {"SeaLevel.g_surface"}
+
+
 @pytest.mark.parametrize("on, parameter", [
-    (on, parameter) for parameter in REAL_PARAMETERS
+    pytest.param(on, parameter, marks=(pytest.mark.longtest,)
+                 if parameter in LONG_REAL_PARAMETERS else ())
+    for parameter in REAL_PARAMETERS
     for on in ("mechanics", "parent")
     # `B_mu` is a row scaling of the parent rows, so it lives on the parent.
     if not (parameter == "approximation.B_mu" and on == "mechanics")])
@@ -1220,6 +1244,7 @@ def test_a_parent_geometric_quantity_in_a_momentum_boundary_term_is_refused(
         _normal_stress_solver(meshes, factors[quantity]())
 
 
+@pytest.mark.longtest
 def test_the_B_mu_floor_is_decided_once_at_construction(meshes):
     """The row scale of `B_mu` follows the decision taken at construction.
 

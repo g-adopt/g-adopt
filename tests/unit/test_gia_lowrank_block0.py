@@ -263,6 +263,7 @@ def test_zero_weights_are_actually_present(meshes):
 # ---------------------------------------------------------------------------
 # 2. Block 0 is no longer blind to `B`
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parametrize("truncation", [3, 6, 10])
 def test_the_outer_count_matches_the_multiplier_path(meshes, truncation):
     """The whole point: the outer FGMRES stops paying for the update.
@@ -291,6 +292,7 @@ def test_the_outer_count_matches_the_multiplier_path(meshes, truncation):
         assert abs(fd.norm(field) - reference_norm) < 1e-8 * reference_norm
 
 
+@pytest.mark.longtest
 def test_the_update_is_applied_inside_block_zero(meshes):
     """The potential block applies the update, many times per solve.
 
@@ -307,6 +309,7 @@ def test_the_update_is_applied_inside_block_zero(meshes):
     assert isinstance(potential_pc(condensed), LowRankPotentialPC)
 
 
+@pytest.mark.longtest
 def test_the_correction_inverts_the_potential_block(meshes):
     """One application of the preconditioner is `(A + theta U W U^T)^-1`.
 
@@ -344,6 +347,7 @@ def test_the_correction_inverts_the_potential_block(meshes):
     assert r.norm() / x.norm() < 1e-8
 
 
+@pytest.mark.longtest
 def test_the_multiplier_path_keeps_plain_multigrid(meshes):
     """No `dtn_operator` in the context leaves the potential split alone.
 
@@ -363,6 +367,7 @@ def test_the_multiplier_path_keeps_plain_multigrid(meshes):
 # ---------------------------------------------------------------------------
 # 3. Reuse: one build for the life of a run
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_the_columns_are_built_once_across_steps_and_a_dt_change(meshes):
     """`Z`, the capacitance and the hierarchy survive every step.
 
@@ -387,6 +392,7 @@ def test_the_columns_are_built_once_across_steps_and_a_dt_change(meshes):
     assert potential_pc(condensed).column_builds == 1
 
 
+@pytest.mark.longtest
 def test_the_columns_survive_newton_on_a_power_law(meshes):
     """Under Newton the potential split is built once; the blocks per linear solve.
 
@@ -418,6 +424,7 @@ def test_the_columns_survive_newton_on_a_power_law(meshes):
     assert potential_pc(condensed).column_builds == 1
 
 
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_two_ranks_match_the_multiplier_path(request, meshes):
     """Item 6 of the stage-1 test list: the `Allreduce` paths of the new PC.
@@ -477,6 +484,7 @@ def test_the_preset_refuses_a_wrong_outer_stopping_option(kwargs):
         preset("lowrank", **kwargs)
 
 
+@pytest.mark.longtest
 def test_a_capped_outer_solve_lets_newton_finish(meshes):
     """With `outer_accept_capped`, Newton converges through capped outer solves.
 
@@ -609,6 +617,7 @@ def test_the_class_refuses_a_preconditioning_matrix_it_cannot_read(kind):
         LowRankPotentialPC().initialize(pc)
 
 
+@pytest.mark.longtest
 def test_the_transpose_application_is_refused(meshes):
     """An adjoint solve reaches the forward `apply`; a transpose is a new path.
 
@@ -721,6 +730,7 @@ def shear_modulus_reduced_functional(meshes, representation, solver_parameters):
     return Jhat, control, direction, J, solver
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
 def test_the_gradient_is_right_through_this_preset(meshes, representation):
     """Gradient and Taylor rate, with the iterative preset in place of LU.
@@ -761,6 +771,7 @@ def test_the_gradient_is_right_through_this_preset(meshes, representation):
 # ---------------------------------------------------------------------------
 # 6. The production geometry, on 24 cells
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 class TestThreeDimensions:
     """The 24-cell extruded cubed sphere, low-rank against multiplier.
 
@@ -891,6 +902,7 @@ class TestThreeDimensions:
         assert split.getPC().getType() == "gamg"
 
 
+@pytest.mark.longtest
 def test_the_adjoint_solve_carries_both_augmentations(meshes):
     """The Jacobian and the residual of the adjoint solve agree, under Newton.
 

@@ -42,6 +42,10 @@ from gadopt.dtn_coupled_adjoint import SOLVE_BLOCK_TYPE
 from gadopt.spherical_harmonics import real_spherical_harmonic
 from test_gravity_solver import RMAX, annulus_mesh, shell_mesh_3d
 
+# Every test in this module runs a solve or a time step, so the whole
+# module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
+pytestmark = pytest.mark.longtest
+
 
 # ---------------------------------------------------------------------------
 # Fixtures: meshes (annotation-free, cached) and per-test tape hygiene
@@ -1449,7 +1453,6 @@ def test_gradient_matches_closed_form_sheet_2d(mesh_2d_ana):
     assert_taylor_with_guards(rf_quad, s, hs, J_quad)
 
 
-@pytest.mark.longtest
 def test_gradient_matches_closed_form_sheet_3d():
     """3-D analogue of T16 (slow lane): sigma = s Y_lm on the outer boundary,
     dc/ds = 4 pi G a / (2l+1). Unit-test resolution (the one 3-D test needing

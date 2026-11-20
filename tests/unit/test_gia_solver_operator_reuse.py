@@ -16,6 +16,10 @@ import pytest
 
 from gia_cases import Case, annulus_meshes, build_new
 
+# Every test in this module runs a solve or a time step, so the whole
+# module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
+pytestmark = pytest.mark.longtest
+
 
 @pytest.fixture(scope="module")
 def meshes():

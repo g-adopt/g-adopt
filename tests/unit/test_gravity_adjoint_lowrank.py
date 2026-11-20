@@ -130,6 +130,7 @@ def forward_G(G_const, geometry, rho_fixed):
 # ---------------------------------------------------------------------------
 # Taylor on rho
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parametrize("bc_variant", ["dirichlet2d", "lu2d"])
 def test_taylor_rho_no_multiplier(mesh_2d, bc_variant):
     """No DtN modes: the empty-`C` corner, and a plain Dirichlet Poisson."""
@@ -144,6 +145,7 @@ def test_taylor_rho_no_multiplier(mesh_2d, bc_variant):
     assert_taylor_with_guards(rf, m, h, J)
 
 
+@pytest.mark.longtest
 def test_taylor_rho_2d(mesh_2d):
     """The 2-D DtN configuration, with both boundaries and the interior mean
     mode, i.e. the negative low-rank weight."""
@@ -166,6 +168,7 @@ def test_taylor_rho_2d(mesh_2d):
     assert np.max(np.abs(rf.derivative().dat.data_ro)) > 0.0
 
 
+@pytest.mark.longtest
 def test_taylor_rho_3d(mesh_3d):
     with stop_annotating():
         m = rho_control_3d(mesh_3d)
@@ -181,6 +184,7 @@ def test_taylor_rho_3d(mesh_3d):
 # ---------------------------------------------------------------------------
 # Taylor on sigma and on G
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parametrize("geometry", ["2d", "3d"])
 def test_taylor_sigma(geometry, mesh_2d, mesh_3d):
     mesh = mesh_2d if geometry == "2d" else mesh_3d
@@ -207,6 +211,7 @@ def test_taylor_sigma(geometry, mesh_2d, mesh_3d):
     assert_taylor_with_guards(rf, sigma, h, J)
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("geometry", ["2d", "3d"])
 def test_gradient_G_constant(geometry, mesh_2d, mesh_3d):
     """G as a Real-space control, with the exact identity dJ/dG = 2J/G.
@@ -251,6 +256,7 @@ def test_gradient_G_constant(geometry, mesh_2d, mesh_3d):
 # ---------------------------------------------------------------------------
 # Transpose consistency and sabotage detection
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_tlm_adjoint_dot_product(mesh_2d):
     """`<J^T g, h> == <g, J h>`, isolated from finite-difference truncation.
 
@@ -287,6 +293,7 @@ def test_tlm_adjoint_dot_product(mesh_2d):
     assert relative <= 1e-8
 
 
+@pytest.mark.longtest
 def test_taylor_detects_sabotaged_gradient(mesh_2d):
     """The suite's detection floor, measured on this path rather than assumed."""
     with stop_annotating():
@@ -362,6 +369,7 @@ def forward_submesh(m_rho_sub, marked):
     return fd.assemble(solver.solution ** 2 * fd.dx), solver
 
 
+@pytest.mark.longtest
 def test_taylor_rho_submesh(submesh_pair):
     """The cross-mesh path, differentiated end to end, with no mixed space."""
     marked, submesh = submesh_pair
@@ -382,6 +390,7 @@ def test_taylor_rho_submesh(submesh_pair):
 # ---------------------------------------------------------------------------
 # The rest of the portable subset
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 def test_reduced_functional_replay(mesh_2d):
     """Replay at a new control equals a fresh solve there, and returns.
 
@@ -417,6 +426,7 @@ def test_reduced_functional_replay(mesh_2d):
     assert abs(replayed - float(fresh)) <= 1e-9 * abs(float(fresh))
 
 
+@pytest.mark.longtest
 def test_solution_assign_preserves_tape(mesh_2d):
     """`solver.solution` and `mixed_solution` give the same gradient.
 
@@ -451,6 +461,7 @@ def test_solution_assign_preserves_tape(mesh_2d):
     assert relative <= 1e-14
 
 
+@pytest.mark.longtest
 def test_taylor_monopole_constraint_row_3d(mesh_3d):
     """The degenerate `L = 0` exterior corner, which is a better test here.
 
@@ -487,6 +498,7 @@ def test_taylor_monopole_constraint_row_3d(mesh_3d):
     assert_taylor_with_guards(rf, m, h, J)
 
 
+@pytest.mark.longtest
 def test_gradient_matches_closed_form_sheet_2d():
     """Physics-pinned: `dc/ds = 2 pi G a / m` for a sheet at radius `a`.
 
@@ -529,6 +541,7 @@ def test_gradient_matches_closed_form_sheet_2d():
     assert_taylor_with_guards(ReducedFunctional(J, Control(s)), s, hs, J)
 
 
+@pytest.mark.longtest
 def test_taylor_at_a_truncation_the_multiplier_path_cannot_reach():
     """The replacement for the field-enumeration-wall test.
 
@@ -572,6 +585,7 @@ def test_taylor_at_a_truncation_the_multiplier_path_cannot_reach():
     assert np.max(np.abs(rf.derivative().dat.data_ro)) > 0.0
 
 
+@pytest.mark.longtest
 def test_coefficient_taped_integral_taylor(mesh_2d):
     """`coefficients()` is differentiable, and agrees with the integral form.
 

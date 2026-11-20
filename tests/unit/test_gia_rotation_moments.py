@@ -540,6 +540,7 @@ def test_resolving_twice_gives_the_same_C_minus_A(ks_rotation):
 # -- Case 10: the parallel maximum over the mesh radius ----------------------
 
 
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_the_radius_check_agrees_across_ranks(request, meshes):  # noqa: F811
     """On 2 ranks the radius check reduces, so both ranks reach the same answer.

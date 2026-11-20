@@ -62,6 +62,7 @@ def shell_solver(mesh, L=3):
 # ---------------------------------------------------------------------------
 # The build reproduces the reference
 # ---------------------------------------------------------------------------
+@pytest.mark.longtest
 @pytest.mark.parametrize("geometry", ["2d", "3d"])
 def test_trace_build_matches_the_reference(geometry, annulus, shell):
     """Bit-identical to `assemble(e_k * v * ds)`, on both boundaries.
@@ -181,6 +182,7 @@ def shell_source(mesh):
         real_spherical_harmonic(2, 1, X) * fd.exp(-(((r - 1.7) / 0.2) ** 2)))
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("geometry", ["2d", "3d"])
 def test_recovered_coefficients_match_the_solver(geometry, annulus, shell):
     """`u_k . psi / (scale_k * A_h)` reproduces `solver.coefficients()`.

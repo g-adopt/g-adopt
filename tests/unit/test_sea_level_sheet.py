@@ -508,6 +508,7 @@ def solve_state(meshes, representation, which):
     return _SOLVED[key]
 
 
+@pytest.mark.longtest
 class TestSolves:
 
     @pytest.mark.parametrize("which", ["shoreline", "marine"])
@@ -645,6 +646,7 @@ def taped_solve(meshes, which, representation, eps):
     return Jhat, control, direction, J
 
 
+@pytest.mark.longtest
 class TestTaylor:
     """Taylor tests with the ice thickness as control.
 
@@ -687,6 +689,7 @@ class TestTaylor:
         assert min(result["R2"]["Rate"]) > 2.9
 
 
+@pytest.mark.longtest
 class TestSheetHessianAgainstWidth:
     """The second-order Taylor test of a functional of the sheet alone.
 

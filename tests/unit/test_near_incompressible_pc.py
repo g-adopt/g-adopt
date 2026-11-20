@@ -57,6 +57,7 @@ def _gram(basis):
     return G
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("dim", [2, 3])
 def test_solenoidal_modes_are_divergence_free_on_affine_mesh(dim):
     # On an affine simplex mesh a low-degree polynomial is reproduced exactly in
@@ -67,6 +68,7 @@ def test_solenoidal_modes_are_divergence_free_on_affine_mesh(dim):
     assert all(_rel_div(m) < 1e-11 for m in modes)
 
 
+@pytest.mark.longtest
 def test_divfree_filter_drops_nonsolenoidal_modes_on_curved_mesh():
     # A curved cubed sphere reproduces only degree-1 fields exactly; the degree-2
     # ones pick up a few percent of divergence and must be filtered out.
@@ -165,6 +167,7 @@ def _elasticity_iterations(mesh, ratio, pc_python, max_degree=None):
     return solver.snes.ksp.getIterationNumber()
 
 
+@pytest.mark.longtest
 def test_pc_reduces_iterations_versus_rigid_modes():
     # The value proposition: on a nearly-incompressible operator the enriched
     # near-nullspace converges in strictly fewer CG iterations than rigid modes
@@ -182,6 +185,7 @@ def test_pc_reduces_iterations_versus_rigid_modes():
     assert incomp <= 0.8 * rigid
 
 
+@pytest.mark.longtest
 def test_pc_default_does_not_saturate_gamg():
     # The default mode count must leave GAMG a full-rank tentative prolongator;
     # a regression that raised the default degree showed up as DIVERGED_NANORINF
@@ -214,6 +218,7 @@ def _elasticity_iterations_mg(hier_mesh, ratio, mg_params):
     return solver.snes.ksp.getIterationNumber()
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("coarse", ["gamg", "lu"])
 def test_mg_patch_parameters_converge(coarse):
     # The A2 recipe: geometric MG with vertex-star patch smoothers over a

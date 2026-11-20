@@ -316,6 +316,7 @@ def identity_residual(pc, seed):
 # ===========================================================================
 # A. The exact arm: the algebra, pinned to round-off
 # ===========================================================================
+@pytest.mark.longtest
 def test_the_cached_complement_matches_an_independent_elimination(direct):
     """`S` is `A11 - A10 A00^{-1} A01` and nothing else.
 
@@ -339,6 +340,7 @@ def test_the_cached_complement_matches_an_independent_elimination(direct):
     assert relative < PARITY_FLOOR, f"S vs S_ref relative error {relative:.3e}"
 
 
+@pytest.mark.longtest
 def test_the_cached_columns_solve_the_block_zero_system(direct):
     """Column `k` of `Z` satisfies `A00 z_k = A01 e_k`, for every `k`.
 
@@ -393,6 +395,7 @@ def test_the_cached_columns_solve_the_block_zero_system(direct):
         f"||A00 z_k - A01 e_k|| / max_k ||A01 e_k|| = {max(errors)/scale:.3e}")
 
 
+@pytest.mark.longtest
 def test_the_forward_apply_inverts_the_operator(direct):
     """`P^{-1} A x = x`: with an exact `M0` and an exact `S`, `full` is exact.
 
@@ -413,6 +416,7 @@ def test_the_forward_apply_inverts_the_operator(direct):
         f"||P^-1 A x - x|| / ||x|| = {relative:.3e}")
 
 
+@pytest.mark.longtest
 def test_a_rebuilt_cache_still_inverts_the_operator(meshes):
     """The SECOND build is as good as the first: `P^{-1} A = I` after `dt`.
 
@@ -463,6 +467,7 @@ def test_a_rebuilt_cache_still_inverts_the_operator(meshes):
         f"after the rebuild, ||P^-1 A x - x|| / ||x|| = {relative:.3e}")
 
 
+@pytest.mark.longtest
 def test_a_capped_block_zero_solve_leaves_the_next_step_solvable(meshes):
     """A block-0 solve that stops at its iteration cap must not fail the PC.
 
@@ -522,6 +527,7 @@ def test_a_capped_block_zero_solve_leaves_the_next_step_solvable(meshes):
         f"converged reason is {cache.ksp0.getConvergedReason()}")
 
 
+@pytest.mark.longtest
 def test_the_transpose_apply_inverts_the_transposed_operator(direct):
     """`P^{-T} A^T x = x`, the transpose of the same statement.
 
@@ -555,6 +561,7 @@ def test_the_transpose_apply_inverts_the_transposed_operator(direct):
         f"||P^-T A^T x - x|| / ||x|| = {relative:.3e}")
 
 
+@pytest.mark.longtest
 def test_the_transpose_apply_is_not_the_forward_apply(direct):
     """The vacuity guard for the test above: `P^{-T}` differs from `P^{-1}`.
 
@@ -593,6 +600,7 @@ def test_the_transpose_apply_is_not_the_forward_apply(direct):
         "the transpose is not being taken")
 
 
+@pytest.mark.longtest
 def test_the_forward_and_transpose_applies_are_adjoint(direct):
     """`<P^{-1} a, b> = <a, P^{-T} b>` for random `a` and `b`.
 
@@ -631,6 +639,7 @@ def test_the_forward_and_transpose_applies_are_adjoint(direct):
         f"<P^-1 a, b> = {left:.12e} but <a, P^-T b> = {right:.12e}")
 
 
+@pytest.mark.longtest
 def test_the_outer_krylov_converges_in_one_iteration(direct):
     """On the exact arm the preconditioned operator is the identity.
 
@@ -841,6 +850,7 @@ def two_arms(meshes):
     return out
 
 
+@pytest.mark.longtest
 def test_the_apply_costs_one_block_zero_solve(two_arms):
     """`block-0 solves = n + outer iterations`, and not `n + 2 x outer`.
 
@@ -874,6 +884,7 @@ def test_the_apply_costs_one_block_zero_solve(two_arms):
         f"iterations and n = {cached['n']}")
 
 
+@pytest.mark.longtest
 class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
     """The solver's own call, which is where a wrong rule would cost solves.
 
@@ -953,6 +964,7 @@ def test_the_tolerance_ladder_of_the_phase_3_spike_is_untouched():
                 condensed, block0_rtol)
 
 
+@pytest.mark.longtest
 def test_the_outer_count_matches_the_full_factorisation_arm(two_arms):
     """The cached path keeps `full`'s convergence, not `lower`'s.
 
@@ -1009,6 +1021,7 @@ def marched(meshes):
     }
 
 
+@pytest.mark.longtest
 def test_the_cache_is_built_once_at_a_fixed_operator(marched):
     """Three solves at one `dt` leave the build counter at one.
 
@@ -1026,6 +1039,7 @@ def test_the_cache_is_built_once_at_a_fixed_operator(marched):
         "installed no cache)")
 
 
+@pytest.mark.longtest
 def test_a_time_step_change_rebuilds_the_cache(marched):
     """`dt.assign` moves `operator_version`, so the cache must be rebuilt.
 
@@ -1042,6 +1056,7 @@ def test_a_time_step_change_rebuilds_the_cache(marched):
         "option installed no cache)")
 
 
+@pytest.mark.longtest
 def test_the_inner_fieldsplit_is_set_up_from_update(marched):
     """`update` must call `self.pc.setUp()` before anything else.
 
@@ -1076,6 +1091,7 @@ def test_the_inner_fieldsplit_is_set_up_from_update(marched):
         "with the blocks of the first Jacobian")
 
 
+@pytest.mark.longtest
 def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
     """With `exponent = 3` the cache is rebuilt once per solve, never per step.
 
@@ -1164,6 +1180,7 @@ def rebuild_rule_arms(meshes):
     return out
 
 
+@pytest.mark.longtest
 def test_always_rebuilds_more_often_than_per_solve(rebuild_rule_arms):
     """`always` builds the complement more than once in one nonlinear solve.
 
@@ -1193,6 +1210,7 @@ def test_always_rebuilds_more_often_than_per_solve(rebuild_rule_arms):
         f"{per_solve['builds']}: the option is inert on this class")
 
 
+@pytest.mark.longtest
 def test_both_rebuild_rules_reach_the_same_state(rebuild_rule_arms):
     """The rule is a cost decision, so the two arms converge to one state.
 
@@ -1494,6 +1512,7 @@ def lagged_arms(meshes):
     }
 
 
+@pytest.mark.longtest
 def test_lagged_reaches_the_cached_apply(lagged_arms):
     """`lagged, every 2` builds half as often as `per_solve` over four solves.
 
@@ -1507,6 +1526,7 @@ def test_lagged_reaches_the_cached_apply(lagged_arms):
     assert lagged_arms["lagged"]["builds"] == 2
 
 
+@pytest.mark.longtest
 def test_the_default_is_a_lag_of_five_solves(lagged_arms):
     """With no option the complement is built once over four solves.
 
@@ -1520,6 +1540,7 @@ def test_the_default_is_a_lag_of_five_solves(lagged_arms):
     assert lagged_arms["default"]["builds"] == 1
 
 
+@pytest.mark.longtest
 def test_block0_and_block1_rebuild_at_the_same_solves(lagged_arms):
     """One rule: the block-0 blocks are reassembled exactly when the complement is.
 
@@ -1538,6 +1559,7 @@ def test_block0_and_block1_rebuild_at_the_same_solves(lagged_arms):
             f"was built {arm['builds']} times")
 
 
+@pytest.mark.longtest
 def test_lagged_reaches_the_same_state(lagged_arms):
     """The lag changes the preconditioner only, so the states agree.
 
@@ -1556,6 +1578,7 @@ def test_lagged_reaches_the_same_state(lagged_arms):
         f"per_solve and lagged reached states {relative:.3e} apart relative")
 
 
+@pytest.mark.longtest
 def test_a_time_step_change_rebuilds_a_lagged_cache(meshes):
     """The same claim as the stub test above, through the real solver.
 
@@ -1583,6 +1606,7 @@ def test_a_time_step_change_rebuilds_a_lagged_cache(meshes):
         "complement of the old time step")
 
 
+@pytest.mark.longtest
 def test_the_solver_publishes_the_counts_of_the_last_solve(marched):
     """After each solve the context carries that solve's own counts.
 
@@ -1795,6 +1819,7 @@ def test_a_wrong_lag_setting_is_refused_by_name(capsys, options, match):
             del petsc_options[key]
 
 
+@pytest.mark.longtest
 def test_a_partial_factorisation_is_refused():
     """`fact_type lower` together with the option is refused, by name.
 
@@ -1820,6 +1845,7 @@ def test_a_partial_factorisation_is_refused():
         f"\n{message[-3000:]}")
 
 
+@pytest.mark.longtest
 def test_a_configured_block_one_krylov_is_refused():
     """A block-1 KSP that will never be solved is refused, by name.
 
@@ -1839,6 +1865,7 @@ def test_a_configured_block_one_krylov_is_refused():
         f"\n{message[-3000:]}")
 
 
+@pytest.mark.longtest
 def test_the_transpose_is_refused_when_block_zero_has_no_transpose():
     """On the production route the transpose apply is refused, by name.
 
@@ -1929,6 +1956,7 @@ def test_the_preset_default_is_the_dictionary_ainvb_true_writes():
 # ===========================================================================
 # Module-level function, not a method: mpi-pytest cannot relaunch a test that
 # lives inside a class.
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_two_ranks_build_the_same_complement(request, meshes):
     """The build is collective and `S` is redundant, so both ranks agree.
@@ -1971,6 +1999,7 @@ def test_two_ranks_build_the_same_complement(request, meshes):
 # ===========================================================================
 # E. Three dimensions, 24 cells
 # ===========================================================================
+@pytest.mark.longtest
 class TestThreeDimensions:
     """The 24-cell extruded cubed sphere, cached path against the reference arm.
 
@@ -2074,6 +2103,7 @@ class TestThreeDimensions:
 # ===========================================================================
 # F. The adjoint
 # ===========================================================================
+@pytest.mark.longtest
 def test_the_gradient_is_right_through_the_cached_path(meshes):
     """The cache builds on `adjoint(J)` and the gradient is unchanged.
 

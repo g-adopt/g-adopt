@@ -87,6 +87,10 @@ from test_gravity_adjoint import (
     taylor_first_order_ladder,
 )
 
+# Every test in this module runs a solve or a time step, so the whole
+# module is a `longtest`, and PR CI (`-m 'not longtest'`) leaves it out.
+pytestmark = pytest.mark.longtest
+
 #: The module fixture of `test_gia_gravity` (parent annulus, mantle
 #: submesh), bound to a name of this module so that pytest finds it.
 meshes = test_gia_gravity.meshes

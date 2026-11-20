@@ -287,6 +287,7 @@ def test_history_terms_reject_a_wrong_element_count():
 # Symmetry of the condensed operator
 
 
+@pytest.mark.longtest
 def test_condensed_operator_symmetric_because_of_boundary_term():
     """With the boundary term the condensed operator is symmetric; without it, not.
 
@@ -371,6 +372,7 @@ def coupled_solve(mesh, n_elements, bcs, params, steps=1, exponent=1, extra=None
     return solver, z
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("n_elements", [1, 2, 3])
 @pytest.mark.parametrize("bc_builder", [weak_bcs, strong_bcs], ids=["weak", "strong"])
 def test_static_condensation_preset_matches_direct_solve(n_elements, bc_builder):
@@ -397,6 +399,7 @@ def test_static_condensation_preset_matches_direct_solve(n_elements, bc_builder)
         assert error < 1e-8
 
 
+@pytest.mark.longtest
 def test_single_element_legacy_layout_matches_combined():
     """A `(d, d)` field for one Maxwell element gives the combined field's answer."""
     mesh = square_mesh()
@@ -411,6 +414,7 @@ def test_single_element_legacy_layout_matches_combined():
     assert fd.assemble(fd.inner(m_legacy - m_combined, m_legacy - m_combined) * fd.dx) < 1e-24
 
 
+@pytest.mark.longtest
 def test_power_law_newton_with_static_condensation():
     """A power-law rheology runs Newton on GMRES and matches the direct solve.
 
@@ -442,6 +446,7 @@ def test_power_law_newton_with_static_condensation():
         assert fd.errornorm(reference, z.subfunctions[field]) / fd.norm(reference) < 1e-8
 
 
+@pytest.mark.longtest
 def test_power_law_condensed_operator_is_not_symmetric():
     """Two elements with the total-stress factor: the exact tangent is not symmetric.
 
@@ -574,6 +579,7 @@ def test_condensed_krylov_selection(n_elements, exponent, mesh_builder,
     assert forced.solver_parameters["condensed_field"]["ksp_type"] == "fgmres"
 
 
+@pytest.mark.longtest
 def test_one_element_power_law_is_asymmetric_on_hexahedra():
     """Why the narrow CG case exists, and why the solver does not use it.
 
@@ -630,6 +636,7 @@ def test_one_element_power_law_is_asymmetric_on_hexahedra():
     assert defects["hexahedra"] > 1e-4
 
 
+@pytest.mark.longtest
 def test_constant_exponent_one_keeps_operator_reuse():
     """`exponent=Constant(1)` is Newtonian: one linear solve and one assembly per march."""
     mesh = square_mesh()
@@ -645,6 +652,7 @@ def test_constant_exponent_one_keeps_operator_reuse():
     assert solver.solver.snes.ksp.pc.getPythonContext().assembly_count == 1
 
 
+@pytest.mark.longtest
 def test_condensed_operator_reuse_and_rebuild():
     """The condensed operator is built once per change of the Jacobian."""
     mesh = square_mesh()
@@ -695,6 +703,7 @@ def test_condensed_operator_reuse_and_rebuild():
     assert fd.errornorm(u, u_fresh) / fd.norm(u) < 1e-8
 
 
+@pytest.mark.longtest
 def test_singular_condensed_operator_solved_with_cg_and_nullspace():
     """A translation mode reaches the condensed operator and CG handles it.
 
@@ -758,6 +767,7 @@ def test_singular_condensed_operator_solved_with_cg_and_nullspace():
     )
 
 
+@pytest.mark.longtest
 def test_extruded_hex_with_weak_boundary_matches_direct():
     """Static condensation on an extruded hex mesh with the boundary term.
 
@@ -798,6 +808,7 @@ def test_extruded_hex_with_weak_boundary_matches_direct():
         assert fd.errornorm(reference, z.subfunctions[field]) / fd.norm(reference) < 1e-8
 
 
+@pytest.mark.longtest
 def test_full_storage_and_scaling_factor_under_the_preset():
     """Full `(d, d)` storage and a residual scaling factor give the same answer."""
     mesh = square_mesh()
@@ -881,6 +892,7 @@ def substituted_solve(mesh, n_elements, internal_variables, steps=2):
     return solver, u
 
 
+@pytest.mark.longtest
 def test_substituted_solver_layouts_agree():
     """A list of `(d, d)` fields and one `(n, d, d)` field give the same march."""
     mesh = square_mesh()
@@ -897,6 +909,7 @@ def test_substituted_solver_layouts_agree():
     assert len(solver.internal_variables_update) == 2
 
 
+@pytest.mark.longtest
 def test_substituted_solver_single_element_layouts_agree():
     mesh = square_mesh()
     single = fd.Function(fd.TensorFunctionSpace(mesh, "DG", 1))
@@ -931,6 +944,7 @@ def substituted_coupled_gap(n):
     return fd.errornorm(u, z.subfunctions[0]) / fd.norm(u)
 
 
+@pytest.mark.longtest
 def test_substituted_and_coupled_solvers_converge_to_each_other():
     """The gap between the two formulations shrinks under refinement.
 

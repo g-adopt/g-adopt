@@ -179,6 +179,7 @@ def _shifted(control, direction):
     return shifted
 
 
+@pytest.mark.longtest
 def test_small_replay_matches_recording_and_fresh_run():
     """Replay at the recorded control, and at another one, equals the forward."""
     Z, nullspace, control, direction = _small_case()
@@ -202,6 +203,7 @@ def test_small_replay_matches_recording_and_fresh_run():
     assert abs(replay_shifted - fresh) <= 1e-13 * abs(fresh)
 
 
+@pytest.mark.longtest
 def test_small_derivatives_to_second_order():
     """Adjoint, tangent linear model and Hessian of the recorded projection."""
     Z, nullspace, control, direction = _small_case()
@@ -233,6 +235,7 @@ def test_small_derivatives_to_second_order():
     assert abs(tlm - adjoint) <= 1e-12 * abs(adjoint)
 
 
+@pytest.mark.longtest
 @pytest.mark.parallel(nprocs=2)
 def test_small_parallel_replay_and_gradient(request):
     """The same block on two ranks: the basis products are global."""
@@ -364,6 +367,7 @@ def _control_and_direction(sub):
     return viscosity, direction
 
 
+@pytest.mark.longtest
 @pytest.mark.parametrize("preset,seed", [
     ("direct", 0.0), ("direct", 1.0), ("iterative", 0.0)],
     ids=["direct-from_rest", "direct-rotated_start", "iterative-from_rest"])
@@ -438,6 +442,7 @@ def _random_fill(target, rng, kernel=None, index=None, amplitude=0.0):
             f.dat.data[:] += amplitude * kernel
 
 
+@pytest.mark.longtest
 def test_gia_block_adjoint_on_kernel_seed(meshes):  # noqa: F811
     """The block adjoint on the coupled space removes the kernel and is P^T.
 

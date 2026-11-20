@@ -228,6 +228,7 @@ class TestAdjointSolverOptions:
         assert adjoint["near_nullspace"] is solver.near_nullspace
         assert adjoint["options_prefix"] == solver.name
 
+    @pytest.mark.longtest
     def test_the_taped_solve_builds_the_derivative_solvers_with_these_options(self, mesh):
         """The options reach the adjoint solver that Firedrake really builds.
 
@@ -335,6 +336,7 @@ class TestAssembledPCFactoring:
         V = fd.VectorFunctionSpace(mesh, "CG", 2)
         assert len(near_nullspace_basis(V, modes)._petsc_vecs) == expected
 
+    @pytest.mark.longtest
     def test_spd_and_modes_are_now_independently_reachable(self, mesh):
         """The live defect in the old factoring: modes cost you the SPD flag.
 

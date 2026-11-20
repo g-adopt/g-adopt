@@ -1109,6 +1109,7 @@ class TestConsumers:
 # The monopole datum is not lagged by the ocean load
 # ---------------------------------------------------------------------------
 
+@pytest.mark.longtest
 class TestRepeatedSolve:
     """A second solve with nothing changed gives the first solve's answer.
 
@@ -1214,6 +1215,7 @@ class TestSheetSigns:
         # (`CouplingContext.surface_measure`). The DEEP datum costs 3e-13.
         assert np.abs(row_sea - row_plain).max() <= 1e-10 * scale
 
+    @pytest.mark.longtest
     def test_the_mechanics_row_matches_a_normal_stress(self, meshes):
         _, sub = meshes
         solver, _, sea = build(meshes, surface_fields(sub, "ocean"))
@@ -1298,6 +1300,7 @@ def _pair_indices(solver, pair):
     return tuple(solver.field_index[_PAIR_FIELDS[name]] for name in pair)
 
 
+@pytest.mark.longtest
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
 @test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
@@ -1328,6 +1331,7 @@ class TestTransposes:
         assert np.abs(ij - ji.T).max() <= 1e-14 * scale
 
 
+@pytest.mark.longtest
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
 @test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
@@ -1414,6 +1418,7 @@ class TestResidualIsTheVariationOfTheEnergy:
 # Solves
 # ---------------------------------------------------------------------------
 
+@pytest.mark.longtest
 class TestEustaticLimit:
 
     def test_the_shift_is_the_eustatic_value(self, meshes, representation):
@@ -1489,6 +1494,7 @@ def shoreline_solved(meshes, representation):
     return solve_shoreline(meshes, representation)
 
 
+@pytest.mark.longtest
 class TestLiveCoastlineSolve:
 
     def test_it_converges(self, shoreline_solved):
@@ -1605,6 +1611,7 @@ class TestLiveCoastlineSolve:
             assert abs(D[i]) <= 1e-8 * moment
 
 
+@pytest.mark.longtest
 class TestRepresentationParity:
     """The shoreline state is the same on the multiplier and the low-rank path.
 
@@ -1724,6 +1731,7 @@ class TestRepresentationParity:
             assert abs(exterior[key]) <= 1e-4 * scale
 
 
+@pytest.mark.longtest
 class TestSignAgainstPhysics:
 
     def test_water_piles_up_towards_added_ice_on_a_stiff_earth(
@@ -1760,6 +1768,7 @@ class TestSignAgainstPhysics:
 # Preconditioner and rotation
 # ---------------------------------------------------------------------------
 
+@pytest.mark.longtest
 class TestNestedCondensation:
 
     def test_internal_variable_scpc_builds_and_solves(self, meshes):
@@ -1953,6 +1962,7 @@ class TestLiveCoastlineRebuildRules:
         assert solver_converged(solver)
         return solver, z, sea
 
+    @pytest.mark.longtest
     def test_the_jacobian_is_declared_state_dependent(self, live_exact):
         """The predicate is true with a live coastline on a Newtonian Earth.
 
@@ -1969,6 +1979,7 @@ class TestLiveCoastlineRebuildRules:
         # The rheology is Newtonian, so the coastline is the whole of the reason.
         assert not solver.rheology_nonlinear
 
+    @pytest.mark.longtest
     def test_block_zero_symmetry_is_unchanged(self, meshes, live_exact):
         """A live coastline does not make the condensed block-0 operator nonsymmetric.
 
@@ -2017,6 +2028,7 @@ class TestLiveCoastlineRebuildRules:
         truncated.solve()
         assert solver_converged(truncated)
 
+    @pytest.mark.longtest
     def test_the_condensed_block_reassembles_at_every_newton_iteration(
             self, live_exact):
         """Under `always`, `assembly_count` equals the Newton iteration count.
@@ -2039,6 +2051,7 @@ class TestLiveCoastlineRebuildRules:
         assert iterations > 1, "the live-coastline solve must take Newton steps"
         assert block0.assembly_count == iterations
 
+    @pytest.mark.longtest
     def test_a_fixed_coastline_assembles_once_over_two_solves(self, meshes):
         """With `fixed_ocean` the count stays at 1 across two solves at one `dt`.
 
@@ -2090,6 +2103,7 @@ class TestLiveCoastlineRebuildRules:
         assert "sea-level sheet" in message
         assert "exponent" not in message
 
+    @pytest.mark.longtest
     def test_the_reuse_tolerance_holds_the_low_rank_columns(
             self, meshes, live_exact):
         """`lowrank_reuse_rtol = 1e-3` builds `Z` once and changes no answer.
@@ -2128,6 +2142,7 @@ class TestLiveCoastlineRebuildRules:
         assert potential.column_builds == 1
         assert solved_fields_agree(solver, exact_solver, rel=1e-6) == []
 
+    @pytest.mark.longtest
     @pytest.mark.parametrize("rule,builds", [
         ("lagged", 1), ("per_solve", 1), ("always", 3)])
     def test_the_gia_rebuild_rule(self, meshes, rule, builds):
@@ -2266,6 +2281,7 @@ def run_taylor(meshes, rotation, representation, fixed_ocean=False):
     assert_taylor_with_guards(Jhat, control, h, J, min_rate=1.90)
 
 
+@pytest.mark.longtest
 class TestTaylor:
 
     def test_live_coastline_taylor_rate_with_ice_thickness_control(
@@ -2273,6 +2289,7 @@ class TestTaylor:
         run_taylor(meshes, rotation=False, representation=representation)
 
 
+@pytest.mark.longtest
 class TestRotation:
     """Rotation on. Acceptance (`NOTES/DECISIONS.md`): it solves and the Taylor test passes."""
 
@@ -2434,6 +2451,7 @@ class TestFixedOcean:
     DtN representations.
     """
 
+    @pytest.mark.longtest
     def test_a_saturated_coastline_gives_the_live_solution(
             self, meshes, representation):
         """On a coastline that cannot move, the fixed and the live solves agree.
@@ -2476,6 +2494,7 @@ class TestFixedOcean:
         assert solved_fields_agree(states[True], states[False],
                                    rel=1e-8) == []
 
+    @pytest.mark.longtest
     def test_ice_over_the_ocean_changes_nothing(self, meshes, representation):
         """Ice that grows over the reference ocean does not load the fixed solve.
 
@@ -2513,6 +2532,7 @@ class TestFixedOcean:
         assert solved_fields_agree(states[GROUNDED], states[0.0],
                                    rel=1e-8) == []
 
+    @pytest.mark.longtest
     def test_newton_converges_in_one_iteration(self, meshes, representation):
         """The fixed-coastline residual is linear: one Newton step from zero.
 
@@ -2534,6 +2554,7 @@ class TestFixedOcean:
         assert solver.solver.snes.getIterationNumber() <= 1
         assert abs(real_value(sea.shift())) > 0.0
 
+    @pytest.mark.longtest
     def test_the_jacobian_is_not_state_dependent_and_ksponly_is_accepted(
             self, meshes, representation):
         """With a fixed coastline and a Newtonian Earth, `ksponly` solves the step.
@@ -2559,6 +2580,7 @@ class TestFixedOcean:
         assert solved_fields_agree(states["ksponly"], states["newtonls"],
                                    rel=1e-8) == []
 
+    @pytest.mark.longtest
     def test_the_shift_is_the_eustatic_value(self, meshes, representation):
         """`Shift = -rho_i int (1 - C0) dI dS / (rho_w int C0 dS)` on a rigid Earth.
 
@@ -2640,6 +2662,7 @@ class TestFixedOcean:
             checked += 1
         assert checked == len(z.subfunctions)
 
+    @pytest.mark.longtest
     def test_the_taylor_rate_with_ice_thickness_control(
             self, meshes, representation):
         """The guarded Taylor test of `run_taylor` on a fixed coastline."""
