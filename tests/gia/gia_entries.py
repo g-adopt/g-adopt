@@ -549,6 +549,120 @@ def _operators_entries():
              "outputs": [operators_values(name)]} for name in OPERATORS]
 
 
+# -- time_convergence ---------------------------------------------------------------
+
+#: The entries of the `time_convergence` case (`gia_time_convergence.py`), one
+#: process each. An entry names how its configuration differs from `SEA` of
+#: `gia_march.py` (`changes`: `Case` fields; `parameters`: replaced parameters
+#: of `gia_cases.build_new`). Each entry marches a reference and every
+#: scheme and level of `TC_SCHEMES` and `TC_LEVELS` from rest to
+#: `TC_END_TIME` under the same ice load, constant in time, and writes the
+#: errors against the reference as `name value` lines to
+#: `out/time_convergence-<entry>.dat` (names from `tc_key`). No value is
+#: recorded: the expected values are the theoretical orders of the schemes.
+#:
+#: `power` uses the transition stress 1e-3 of the forward entry
+#: `power-direct`. The smallest power-law factor `eta_eff / eta` at the end
+#: time is then 0.893, against 0.987 with the default 3e-3, under which the
+#: march is nearly the Newtonian one of `maxwell` and the entry would not
+#: test the order of the scheme on a nonlinear rheology. Both values
+#: converge at 8 steps (step 0.08) with at most 5 Newton iterations per step.
+TIME_CONVERGENCE = {
+    "maxwell": dict(changes={}),
+    "power": dict(changes={"model": "power"},
+                  parameters={"approximation.transition_stress": 1e-3}),
+}
+
+#: The end time of every march, in units of the Maxwell time of the
+#: approximation. The ice load is applied at `t = 0` and kept, so the
+#: viscous relaxation is far from complete at this time and the history
+#: still changes at the end.
+TC_END_TIME = 0.64
+
+#: The step count of the reference march (BDF2, equal steps). Its error is
+#: `(64 / 256)^2 = 1/16` of the error of BDF2 at the finest level, 64 steps.
+#: An error measured against it is `e(n) - e(256)`, so for an exact second
+#: order the order measured between 32 and 64 steps is
+#: `log2((64 - 1) / (16 - 1)) = 2.07` and not 2. Against backward Euler the
+#: reference is exact to the measured digits.
+TC_REFERENCE_STEPS = 256
+
+#: The step counts of the levels; each level halves the mean step.
+TC_LEVELS = (8, 16, 32, 64)
+
+#: The schemes, by name: the `time_scheme` of the solver and the pattern of
+#: the steps. `equal` steps are `TC_END_TIME / n`. `alternating` steps are
+#: `TC_ALTERNATION` times the mean step `TC_END_TIME / n`, in turn, so that
+#: the step ratio `h_new / h_old` is 1.5 and 2/3 in turn and the variable-step
+#: BDF2 coefficients differ from the equal-step ones at every step after the
+#: first. Both factors average to 1, so `n` even steps end at `TC_END_TIME`.
+TC_SCHEMES = {
+    "backward_euler": ("backward_euler", "equal"),
+    "bdf2": ("bdf2", "equal"),
+    "bdf2_alternating": ("bdf2", "alternating"),
+}
+TC_ALTERNATION = (0.8, 1.2)
+
+#: The quantities whose errors are measured: the displacement and the
+#: potential (`errornorm` against the reference divided by the norm of the
+#: reference), and the eustatic shift of the sea level (the difference
+#: divided by the reference shift).
+TC_QUANTITIES = ("u", "psi", "shift")
+
+#: Backward Euler is first order: the order measured between 32 and 64 steps
+#: is in this band for the displacement and the potential. Measured on
+#: `maxwell` at the feasibility check: 1.01 and 0.98.
+TC_BE_ORDER_BAND = (0.9, 1.15)
+TC_BE_ORDER_QUANTITIES = ("u", "psi")
+TC_BE_ORDER_LEVELS = (32, 64)
+
+#: BDF2 is second order on equal and on variable steps: the orders measured
+#: between 16 and 32 and between 32 and 64 steps are at least this value
+#: for every quantity of `TC_QUANTITIES`. Measured on `maxwell` with equal
+#: steps: 1.99, 2.06 (displacement), 1.91, 2.03 (potential), 2.64, 2.39
+#: (shift); with alternating steps: 1.98, 2.06; 1.90, 1.98; 1.82, 1.92.
+#: The order between 8 and 16 steps is not asserted: there the step is too
+#: long for the asymptotic order (1.28 for the shift with alternating
+#: steps on `maxwell`). Constant-step coefficients on the alternating steps give an
+#: inconsistent approximation of the time derivative, which this bound
+#: fails.
+TC_BDF2_ORDER_MIN = 1.8
+TC_BDF2_ORDER_PAIRS = ((16, 32), (32, 64))
+
+#: Both schemes converge to the same solution: the error of backward Euler
+#: against the BDF2 reference at 64 steps is below this value for every
+#: quantity of `TC_QUANTITIES`. Measured: 1.8e-4 to 3.8e-4 for the
+#: displacement and the potential, 1e-4 for the shift.
+TC_BE_LIMIT_ERROR = 1e-3
+TC_BE_LIMIT_STEPS = 64
+
+
+def tc_key(scheme, steps, quantity):
+    """The name in the `.dat` file of one number of one scheme and level.
+
+    Args:
+      scheme: a name of `TC_SCHEMES`, or `"reference"`.
+      steps: the step count of the march.
+      quantity: `"u"`, `"psi"` or `"shift"` for an error; `"time"` for the
+        end time reached; `"newton_max"` for the largest Newton count of a
+        step; the reference also writes `"u_norm"`, `"psi_norm"`,
+        `"shift_value"` and `"min_power_factor"`.
+    """
+    return f"{scheme}_{steps}_{quantity}"
+
+
+def time_convergence_values(entry):
+    """The path of the `name value` file of a `time_convergence` entry."""
+    return f"{OUT}/time_convergence-{entry}.dat"
+
+
+def _time_convergence_entries():
+    """The `ENTRIES` items of the `time_convergence` case."""
+    return [{"case": "time_convergence", "entry": name,
+             "driver": "gia_time_convergence.py", "cores": 1,
+             "outputs": [time_convergence_values(name)]} for name in TIME_CONVERGENCE]
+
+
 #: The files that `gia_record_expected.py` copies, by case: pairs of the
 #: driver output and the expected file, both relative to `CASE_DIR`.
 RECORDED = {
@@ -558,4 +672,5 @@ RECORDED = {
 
 #: Every step of `meta.py`: `case`, `entry`, `driver`, `cores`, `outputs`,
 #: and optionally `deps`, `hpc` and `launcher_args`.
-ENTRIES = _forward_entries() + _limits_entries() + _operators_entries()
+ENTRIES = (_forward_entries() + _limits_entries() + _operators_entries()
+           + _time_convergence_entries())
