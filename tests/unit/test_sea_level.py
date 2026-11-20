@@ -68,6 +68,18 @@ representations, because the two spaces differ in their multiplier fields. The
 other structural tests (sheet, transposes, the energy) read `Real` rows of the
 multiplier space and stay on that path.
 
+## Properties checked by the GIA cases
+
+The eustatic limit, the fixed-coastline limits (eustatic shift, saturated
+coastline, ice over the ocean) and the repeated solve are rows of the `sea`
+entry of the `limits` case in `tests/gia` (driver `gia_limits.py`). The
+transposes of the sheet blocks, the mechanics row against a normal stress
+and the nonzero shift-rotation block are rows of the `sea-transposes` entry
+of the `operators` case (`gia_operators.py`). The rotating solve on both
+representations is the `sea-multiplier` and `sea-iterative` entries of the
+`forward` case. These drivers import the builders and constants of this
+module.
+
 ## What these tests are not
 
 They are 2-D structural and consistency checks. Nothing here is a benchmark:
@@ -1111,69 +1123,6 @@ class TestConsumers:
 # The monopole datum is not lagged by the ocean load
 # ---------------------------------------------------------------------------
 
-@pytest.mark.longtest
-class TestRepeatedSolve:
-    """A second solve with nothing changed gives the first solve's answer.
-
-    `update_total_mass` runs at the start of `solve`. With the sea-level sheet
-    in the datum, the first solve after an ice change reads the net mass of
-    the unbalanced ice change, and `Shift` and the geoid are wrong on that
-    solve only. The correctness review measured this on the configuration
-    below (`review-implementation-review-correctness-r3.md`):
-
-        solve 0: datum 1.29e-2   Shift -7.054760e-03
-        solve 1: datum 2.36e-14  Shift -8.495220e-03
-        solve 2: datum 2.73e-14  Shift -8.495220e-03
-
-    so the defect is 1.44e-3 in `Shift`, 17 percent of its value. The geoid
-    moved by the same amount in its ocean mean.
-    """
-
-    def test_a_second_solve_gives_the_same_shift_and_geoid(
-            self, meshes, representation):
-        """`Shift` and `psi` agree between two successive solves to 1e-8 relative.
-
-        Configuration of the correctness probe: `"caps"` state with
-        `d_ice = 1e-2`, `ELASTIC_EARTH`, full `Lambda`, direct preset, `TIGHT`.
-
-        Tolerance 1e-8 relative. The Newton tolerance is `snes_rtol = 1e-10`
-        and the outer Krylov solve runs to 1e-12, so a converged solve is
-        repeatable far below 1e-8. The datum of the second solve differs from
-        the first by the converged net mass of the core sheet (about 1e-14,
-        against a sheet scale of 1e-2), which moves `Shift` by about 1e-15.
-        The defect is 1.7e-1 relative, seven orders above the tolerance.
-
-        The geoid is `psi / g_surface` with rotation off, so the whole
-        potential field is compared. The datum sets the degree-0 part of
-        `psi`, which is where a lagged datum shows.
-        """
-        _, sub = meshes
-        d_ice = 1e-2
-        solver, z, sea = build(meshes, surface_fields(sub, "caps",
-                                                      d_ice=d_ice),
-                               earth=ELASTIC_EARTH,
-                               representation=representation,
-                               **solve_settings(representation))
-        solver.solve()
-        assert solver_converged(solver)
-        shift_first = real_value(sea.shift())
-        psi_first = z.subfunctions[solver.potential_index].dat.data_ro.copy()
-
-        solver.solve()
-        # A second solve that starts converged can stop at iteration 0, which
-        # PETSc reports as a positive reason as well.
-        assert solver_converged(solver)
-        shift_second = real_value(sea.shift())
-        psi_second = z.subfunctions[solver.potential_index].dat.data_ro
-
-        # Guard: a nonzero Shift, so a relative comparison has meaning.
-        assert abs(shift_first) > 1e-3
-        assert abs(shift_second - shift_first) <= 1e-8 * abs(shift_first)
-        psi_scale = np.abs(psi_first).max()
-        assert psi_scale > 0.0
-        assert np.abs(psi_second - psi_first).max() <= 1e-8 * psi_scale
-
-
 # ---------------------------------------------------------------------------
 # Signs against the existing terms
 # ---------------------------------------------------------------------------
@@ -1216,31 +1165,6 @@ class TestSheetSigns:
         # The two spellings agreed to the last bit for the fluid core
         # (`CouplingContext.surface_measure`). The DEEP datum costs 3e-13.
         assert np.abs(row_sea - row_plain).max() <= 1e-10 * scale
-
-    @pytest.mark.longtest
-    def test_the_mechanics_row_matches_a_normal_stress(self, meshes):
-        _, sub = meshes
-        solver, _, sea = build(meshes, surface_fields(sub, "ocean"))
-        sea.shift().assign(self.S)
-        row_sea = fd.assemble(sea.residual(sea.context)).subfunctions[
-            solver.field_index["displacement"]].dat.data_ro
-
-        # A traction with no mass is what this comparison wants, so the
-        # solver's warning about a `normal_stress` in `bcs` is expected.
-        with pytest.warns(UserWarning, match="normal_stress"):
-            plain, _, _ = build(
-                meshes, sea_level=False,
-                surface_bcs={CURVE_RE: {"normal_stress": B_MU * G_RE * RHO_W
-                                        * self.S}})
-        row_plain = fd.assemble(plain.F).subfunctions[
-            plain.field_index["displacement"]].dat.data_ro
-        scale = np.abs(row_plain).max()
-        assert scale > 0.0
-        # 1e-6 relative: `Equation` integrates the normal stress at degree 6
-        # and the sea-level measure uses the boundary degree 10. Measured for a
-        # `cos 2 phi` sheet the two rows differ by 4.0e-9 relative. A sign
-        # error is a relative difference of 2.
-        assert np.abs(row_sea - row_plain).max() <= 1e-6 * scale
 
 
 # ---------------------------------------------------------------------------
@@ -1306,37 +1230,6 @@ def _pair_indices(solver, pair):
 @pytest.mark.skipif(fd.COMM_WORLD.size > 1,
                     reason="the per-block instrument needs global dense blocks")
 @test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
-class TestTransposes:
-    """Every coupling block the sheet creates is the transpose of its partner.
-
-    1e-14 relative to the larger block, as the frame and fluid-core saddle
-    tests use: both blocks are variations of one energy and differ by
-    round-off only.
-    """
-
-    @pytest.mark.parametrize("state", ["cap", "shoreline"])
-    @pytest.mark.parametrize("pair", [
-        ("u", "psi"), ("u", "Shift"), ("psi", "Shift"),
-        ("u", "lambda_x"), ("u", "lambda_y"),
-        ("psi", "lambda_x"), ("psi", "lambda_y"),
-        ("Shift", "lambda_x"), ("Shift", "lambda_y"),
-    ])
-    def test_the_pair_transposes(self, meshes, state, pair):
-        A, solver = jacobian(meshes, state)
-        i, j = _pair_indices(solver, pair)
-        ij = dense_block(A, i, j)
-        ji = dense_block(A, j, i)
-        assert ij is not None and ji is not None, (
-            f"block {pair} or its transpose is structurally absent")
-        scale = max(np.abs(ij).max(), np.abs(ji).max())
-        assert scale > 0.0
-        assert np.abs(ij - ji.T).max() <= 1e-14 * scale
-
-
-@pytest.mark.longtest
-@pytest.mark.skipif(fd.COMM_WORLD.size > 1,
-                    reason="the per-block instrument needs global dense blocks")
-@test_gia_gravity.REAL_BLOCK_ON_PARENT_FACETS
 class TestRotationTransposes:
     """The rotation row against the sheet, on the live-coastline shoreline state.
 
@@ -1364,24 +1257,6 @@ class TestRotationTransposes:
         scale = max(np.abs(ij).max(), np.abs(ji).max())
         assert scale > 0.0
         assert np.abs(ij - ji.T).max() <= 1e-14 * scale
-
-    def test_the_shift_rotation_block_is_nonzero(self, meshes):
-        """`(Shift, m3)` and `(m3, Shift)` both carry the sheet.
-
-        Without the sheet in `inertia_form` the `(m3, Shift)` entry is zero,
-        and without `psi_rot` in `sea_level()` the `(Shift, m3)` entry is zero.
-        The transpose test above only needs one of them to be nonzero, so this
-        test asserts both. The size of either entry is about
-        `c B_mu Omega_sq rho_w int B C p_3 dS`, of order 1e-3 before the
-        residual scaling. The threshold is 1e-10 of the `(Shift, Shift)`
-        diagonal, far below that and far above round-off.
-        """
-        A, solver = jacobian(meshes, "shoreline", rotation=True)
-        i_s, i_r = _pair_indices(solver, ("Shift", "rot"))
-        shift_shift = abs(dense_block(A, i_s, i_s)[0, 0])
-        assert shift_shift > 0.0
-        assert abs(dense_block(A, i_s, i_r)[0, 0]) > 1e-10 * shift_shift
-        assert abs(dense_block(A, i_r, i_s)[0, 0]) > 1e-10 * shift_shift
 
 
 class TestResidualIsTheVariationOfTheEnergy:
@@ -1419,41 +1294,6 @@ class TestResidualIsTheVariationOfTheEnergy:
 # ---------------------------------------------------------------------------
 # Solves
 # ---------------------------------------------------------------------------
-
-@pytest.mark.longtest
-class TestEustaticLimit:
-
-    def test_the_shift_is_the_eustatic_value(self, meshes, representation):
-        """`Shift = -(rho_i/rho_w) int dI dS / L_ocean` on a stiff, non-gravitating Earth.
-
-        `C = 1` everywhere (deep ocean), grounded ice melts on the two
-        opposite caps (`"caps"`, no degree-1 content), `Lambda = 1e-6` and a
-        stiff elastic Earth. `L_ocean` is the length of Re outside the caps,
-        which is half of `2 pi Re` here: the ocean is where water can stand,
-        and under the grounded ice `B = 0`.
-
-        Tolerance 1e-4 relative. Measured with the same load applied as a
-        normal stress and a sheet on the current solver: the ocean mean of
-        `du_r` is 6e-10 at shear modulus 1e6, and the geoid change scales with
-        `Lambda` to about 7e-11, against a eustatic value of 9e-4. The
-        remaining error is below 1e-6. A missing `rho_i/rho_w` is 7 percent,
-        and dividing by `2 pi Re` instead of the ocean length is a factor 2.
-        """
-        _, sub = meshes
-        d_ice = -1e-2
-        solver, z, sea = build(
-            meshes, surface_fields(sub, "caps", d_ice=d_ice), lam=1e-6,
-            stiff=True, representation=representation,
-            **solve_settings(representation))
-        solver.solve()
-        assert solver_converged(solver)
-        dss = re_measure(solver)
-        caps = indicator(sub, "caps")
-        eustatic = (-(RHO_I / RHO_W) * fd.assemble(d_ice * caps * dss)
-                    / fd.assemble((1 - caps) * dss))
-        assert eustatic > 0.0  # melting raises the sea
-        assert real_value(sea.shift()) == pytest.approx(eustatic, rel=1e-4)
-
 
 #: The solved shoreline states, one per representation, so that
 #: `TestRepresentationParity` reads the same solves as `TestLiveCoastlineSolve`
@@ -2225,15 +2065,6 @@ class TestTaylor:
 class TestRotation:
     """Rotation on. Acceptance (`NOTES/DECISIONS.md`): it solves and the Taylor test passes."""
 
-    def test_the_rotating_case_solves(self, meshes, representation):
-        _, sub = meshes
-        solver, z, sea = build(meshes, surface_fields(sub, "shoreline"),
-                               rotation=True, representation=representation,
-                               **solve_settings(representation))
-        solver.solve()
-        assert solver_converged(solver)
-        assert np.isfinite(real_value(sea.shift()))
-
     def test_the_rotating_case_passes_the_taylor_test(
             self, meshes, representation):
         run_taylor(meshes, rotation=True, representation=representation)
@@ -2384,87 +2215,6 @@ class TestFixedOcean:
     """
 
     @pytest.mark.longtest
-    def test_a_saturated_coastline_gives_the_live_solution(
-            self, meshes, representation):
-        """On a coastline that cannot move, the fixed and the live solves agree.
-
-        The state is one land sector (`"cap"`) with a grounded ice change of
-        1e-2 in a deep ocean, the default Earth and the full `Lambda`. The
-        sheet is saturated, so both sheets are `rho_w Delta` in the ocean and
-        `rho_i dI` on the land, and the load has degree-1 content, so the frame
-        rows are active. The design names the `"cap"` state of this module, but
-        that state puts its ice on the ocean floor (`SL_init = DEEP` under the
-        ice), which a fixed coastline removes. The land sector here is the
-        state that the design means: a saturated coastline.
-
-        Tolerance 1e-8 relative per sub-field, with the rigid rotation of the
-        mantle removed from the displacement difference
-        (`solved_fields_agree`). Before that removal the displacement
-        difference was 4.65e-9 (multiplier) and 9.67e-9 (low-rank). It did not
-        follow the outer Krylov tolerance, and a fit of one rigid rotation
-        removed it. After the removal the measured relative differences
-        (phoenix, 2026-09-18) are:
-
-            multiplier: displacement 1.8e-14, potential 1.0e-14, Shift 5.4e-16
-            low-rank:   displacement 2.5e-12, potential 2.1e-12, Shift 2.8e-13
-
-        So the tolerance has a margin above 1000 on both representations.
-        """
-        _, sub = meshes
-        fields = coastline_fields(sub, "cap", d_ice=1e-2)
-        states = {}
-        for fixed_ocean in (False, True):
-            solver, z, sea = build(
-                meshes, fields, representation=representation,
-                sea_level_overrides=dict(fixed_ocean=fixed_ocean),
-                **solve_settings(representation))
-            solver.solve()
-            assert solver_converged(solver)
-            states[fixed_ocean] = solver
-        # Guard: a nonzero Shift, so the comparison has a scale.
-        assert abs(real_value(states[False].real_field(SHIFT))) > 1e-4
-        assert solved_fields_agree(states[True], states[False],
-                                   rel=1e-8) == []
-
-    @pytest.mark.longtest
-    def test_ice_over_the_ocean_changes_nothing(self, meshes, representation):
-        """Ice that grows over the reference ocean does not load the fixed solve.
-
-        Two fixed solves of the land sector state with a grounded ice change
-        of 1e-2 on the land: one without ocean ice, one with `GROUNDED` ice
-        grown over the whole ocean. The factor `1 - C0` is `exp(-537)` in the
-        deep ocean (it evaluates to exactly 0.0 on these DG0 fields), so both
-        solves assemble the same system. The tolerance is 1e-8 relative in
-        `solved_fields_agree`, and the measured difference is 0.0.
-
-        Guard: the ice grown over the ocean is 3e4 times the mass of the land
-        ice change, so a sheet that kept it would move `Shift` by orders of
-        magnitude. Under a live coastline that ice rests on the sea floor
-        (`GROUNDED > (rho_w / rho_i) DEEP`) and would load the Earth.
-        """
-        _, sub = meshes
-        states = {}
-        for ocean_ice in (0.0, GROUNDED):
-            fields = coastline_fields(sub, "cap", d_ice=1e-2,
-                                      ocean_ice=ocean_ice)
-            solver, z, sea = build(meshes, fields,
-                                   representation=representation,
-                                   sea_level_overrides=fixed(),
-                                   **solve_settings(representation))
-            solver.solve()
-            assert solver_converged(solver)
-            states[ocean_ice] = solver
-
-        solver = states[GROUNDED]
-        dss = re_measure(solver)
-        land = indicator(sub, "cap")
-        ocean_ice_mass = fd.assemble(RHO_I * GROUNDED * (1 - land) * dss)
-        land_ice_mass = fd.assemble(RHO_I * 1e-2 * land * dss)
-        assert ocean_ice_mass > 100 * land_ice_mass
-        assert solved_fields_agree(states[GROUNDED], states[0.0],
-                                   rel=1e-8) == []
-
-    @pytest.mark.longtest
     def test_newton_converges_in_one_iteration(self, meshes, representation):
         """The fixed-coastline residual is linear: one Newton step from zero.
 
@@ -2511,56 +2261,6 @@ class TestFixedOcean:
             states[snes_type] = solver
         assert solved_fields_agree(states["ksponly"], states["newtonls"],
                                    rel=1e-8) == []
-
-    @pytest.mark.longtest
-    def test_the_shift_is_the_eustatic_value(self, meshes, representation):
-        """`Shift = -rho_i int (1 - C0) dI dS / (rho_w int C0 dS)` on a rigid Earth.
-
-        Mass conservation `int sigma dS = 0` with
-        `sigma = rho_w C0 Shift + rho_i (1 - C0) dI` gives the minus sign: ice
-        that grows lowers the sea (`NOTES/DECISIONS.md`, 2026-09-18).
-
-        The state has two opposite land sectors (`"caps"`) with an ice growth
-        of 1e-2, and `GROUNDED` ice grown over the whole ocean, which the
-        formula and the fixed sheet both remove. The load has no degree-1
-        content, so the frame does not translate the Earth under the ocean.
-        `Lambda = 1e-6`, and shear and bulk moduli of 1e8 with the viscosity
-        of `stiff`. `C0` is built with the solver's own width, so the
-        formula reads the same `C0` as the sheet.
-
-        Tolerance 1e-6 relative. `Shift` differs from the formula by the
-        ocean mean of `du_r - dN`. Measured on the multiplier path
-        (`NOTES/team/s3-w2-fixed-ocean/logs/probe_eustatic.log`): the ocean
-        mean of the uplift is -2.6e-6 of the eustatic value at the moduli
-        1e6 of `stiff`, which fails this tolerance, and -2.6e-8 at 1e8. The
-        geoid change is 5.9e-8 at `Lambda = 1e-6`. The relative error at 1e8
-        is 8.5e-8. Without the minus sign the test fails by a factor of -1.
-        Without `1 - C0` the ocean ice changes the value by four orders of
-        magnitude.
-        """
-        _, sub = meshes
-        d_ice = 1e-2
-        fields = coastline_fields(sub, "caps", d_ice=d_ice,
-                                  ocean_ice=GROUNDED)
-        solver, z, sea = build(meshes, fields, lam=1e-6, stiff=True,
-                               earth=dict(shear_modulus=1e8,
-                                          bulk_modulus=1e8),
-                               representation=representation,
-                               sea_level_overrides=fixed(),
-                               **solve_settings(representation))
-        solver.solve()
-        assert solver_converged(solver)
-        dss = re_measure(solver)
-        C0 = sheet().ocean_fraction(fields["SL_init"], EPS, RHO_W, RHO_I)
-        dI = fields["I"] - fields["I_init"]
-        eustatic = (-RHO_I * fd.assemble((1 - C0) * dI * dss)
-                    / (RHO_W * fd.assemble(C0 * dss)))
-        assert eustatic < 0.0  # ice that grows lowers the sea
-        shift = real_value(sea.shift())
-        print(f"fixed-ocean eustatic, {representation}: Shift {shift:.12e}, "
-              f"formula {eustatic:.12e}, relative "
-              f"{abs(shift - eustatic) / abs(eustatic):.3e}")
-        assert shift == pytest.approx(eustatic, rel=1e-6)
 
     def test_written_residual_equals_the_derivative_of_the_energy(
             self, meshes, representation):
