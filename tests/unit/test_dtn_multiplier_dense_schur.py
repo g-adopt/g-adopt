@@ -10,13 +10,13 @@ multiplier DtN representation, `TRUNCATION = 3`, `N_AZIMUTHAL = 32`.
 **A 2-D annulus establishes that the construction works, never that it helps.**
 Performance is a separate Gadi step; nothing here measures wall clock or sweeps.
 
-The binding correctness test is T1: the `S` the PC assembles must equal an
-INDEPENDENT reference `S_ref` built entirely from the assembled coupled Jacobian
-and nothing from the code under test. The reference follows the
-`gate_lowrank_operator.py` method -- assemble the coupled Jacobian, read its
-dense blocks, and eliminate -- but forms the multiplier Schur complement
-directly as `S_ref = D - C @ inv(A00) @ B`, where block 0 is every non-`Real`
-field and block 1 is the `Real` multipliers.
+The binding correctness checks (the `S` the PC assembles against an
+independent elimination of the coupled Jacobian, the forward and transpose
+solves, the fluid-core pressure in the dense complement) are rows of the
+`schur` and `schur-np2` entries of the `operators` case in `tests/gia`
+(driver `gia_operators.py`), which imports the builders and constants of
+this module. The tests left here check that the factors are built once and
+rebuilt at a change of the time step.
 
 Every test states below how it can fail and its numerical floor.
 
@@ -43,9 +43,6 @@ from gadopt.gia_presets import selfgrav_dtn_schur_solver_parameters
 from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.preconditioners import _DenseLU
 from gadopt.stokes_integrators import newton_stokes_solver_parameters
-# The xfail marker of the tests that assemble a `Real` block on the parent's
-# interior facets (the sibling test module, on the test path).
-from test_gia_gravity import REAL_BLOCK_ON_PARENT_FACETS  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Geometry and constants: the coarse 2-D annulus of the adjoint suite
@@ -95,8 +92,9 @@ def _dense_schur_params():
     """The 2-D `direct` Schur preset, with block 1 on the dense-Schur PC.
 
     Block 0 is `preonly` + assembled LU, so its inverse is exact and the Schur
-    complement the PC builds is exact and linear -- which is what lets T1 assert
-    parity to roundoff rather than to a preconditioner tolerance.
+    complement the PC builds is exact and linear -- which is what lets the
+    `schur` entry of the `operators` case assert parity to roundoff rather
+    than to a preconditioner tolerance.
     """
     params = dict(newton_stokes_solver_parameters)
     params.update(selfgrav_dtn_schur_solver_parameters)
@@ -242,7 +240,7 @@ def built(meshes):
     """Solve once with the dense-Schur PC; return the PC's `S` and the reference.
 
     Module-scoped: the solve and the reference assembly are the expensive part,
-    so T1-T4 share this one build.
+    so the tests below share this one build.
     """
     solver, _, _ = _build_solver(meshes)
     solver.solve()
@@ -270,82 +268,6 @@ def _apply_pc(petsc_pc, ctx, rhs, transpose=False):
     x.destroy()
     y.destroy()
     return out
-
-
-# ---------------------------------------------------------------------------
-# T1  parity: the PC's S equals the independent reference S_ref
-# ---------------------------------------------------------------------------
-@pytest.mark.longtest
-def test_T1_parity_against_independent_reference(built):
-    """Binding correctness test.
-
-    FAILS IF the PC forms the wrong complement -- a wrong block partition, a
-    stale block-0 inverse, a missing MatMult column. FLOOR: both sides do an
-    exact 13x13 elimination, so the relative difference is round-off times the
-    condition number, ~1e-13; the gate is 1e-10.
-    """
-    S_pc, S_ref = built["S_pc"], built["S_ref"]
-    rel = np.linalg.norm(S_pc - S_ref) / np.linalg.norm(S_ref)
-    assert rel < PARITY_FLOOR, f"S vs S_ref relative error {rel:.3e}"
-
-
-# ---------------------------------------------------------------------------
-# T2  forward solve: apply solves S x = rhs
-# ---------------------------------------------------------------------------
-@pytest.mark.longtest
-def test_T2_forward_solve(built):
-    """`apply` must solve `S x = rhs`, checked against the independent `S_ref`.
-
-    FAILS IF the stored factors invert the wrong matrix or the gather/scatter
-    drops entries. FLOOR: 13x13 LU solve, ~1e-13 relative; gate 1e-10.
-    """
-    ctx, ksp_real, S_ref = built["ctx"], built["ksp_real"], built["S_ref"]
-    rng = np.random.default_rng(7)
-    rhs = rng.standard_normal(ctx._n)
-    x = _apply_pc(ksp_real.getPC(), ctx, rhs)
-    residual = np.linalg.norm(S_ref @ x - rhs) / np.linalg.norm(rhs)
-    assert residual < PARITY_FLOOR, f"||S x - rhs|| / ||rhs|| = {residual:.3e}"
-    # And the solution itself matches the reference inverse.
-    ref = np.linalg.solve(S_ref, rhs)
-    assert np.linalg.norm(x - ref) / np.linalg.norm(ref) < PARITY_FLOOR
-
-
-# ---------------------------------------------------------------------------
-# T3  transpose discriminator: applyTranspose solves S^T x = rhs, not S x = rhs
-# ---------------------------------------------------------------------------
-@pytest.mark.longtest
-def test_T3_transpose_solves_S_transpose(built):
-    """`applyTranspose` must solve `S^T x = rhs`.
-
-    Because `S` is asymmetric by construction, solving `S^T` gives a DIFFERENT
-    answer from solving `S` on a generic rhs. This test therefore does two
-    things: it checks `applyTranspose` against `inv(S_ref.T)` to roundoff, and
-    it asserts the transpose answer differs from the forward answer by a WIDE
-    margin -- which is exactly what the old `applyTranspose = apply` base-class
-    behaviour got wrong, so this test FAILS against that behaviour.
-
-    FLOOR: the match to `inv(S_ref.T)` is ~1e-13 (gate 1e-10). The
-    forward-vs-transpose margin is set by the operator's asymmetry, not by
-    round-off, and the assertion floor is 1e-3 -- ten orders above round-off.
-    """
-    ctx, ksp_real, S_ref = built["ctx"], built["ksp_real"], built["S_ref"]
-    rng = np.random.default_rng(11)
-    rhs = rng.standard_normal(ctx._n)
-
-    xt = _apply_pc(ksp_real.getPC(), ctx, rhs, transpose=True)
-    ref_t = np.linalg.solve(S_ref.T, rhs)
-    match = np.linalg.norm(xt - ref_t) / np.linalg.norm(ref_t)
-    assert match < PARITY_FLOOR, \
-        f"applyTranspose vs inv(S_ref.T) rhs = {match:.3e}"
-
-    # The discriminator. If applyTranspose secretly solved S (the old
-    # behaviour), it would equal the forward answer and this margin would be 0.
-    xf = _apply_pc(ksp_real.getPC(), ctx, rhs, transpose=False)
-    margin = np.linalg.norm(xt - xf) / np.linalg.norm(xf)
-    asym = np.abs(ctx._S - ctx._S.T).max() / np.abs(ctx._S).max()
-    assert margin > 1e-3, (
-        f"S^T and S solves differ by only {margin:.3e} (asymmetry {asym:.3e}); "
-        "the transpose is not being taken")
 
 
 # ---------------------------------------------------------------------------
@@ -399,28 +321,6 @@ def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
     assert not np.allclose(ctx2._S, old_S), "the dt change left S unchanged"
     rel = np.linalg.norm(ctx2._S - S_ref) / np.linalg.norm(S_ref)
     assert rel < PARITY_FLOOR, f"rebuilt S vs S_ref error {rel:.3e}"
-
-
-@pytest.mark.longtest
-@REAL_BLOCK_ON_PARENT_FACETS
-def test_T4c_fluid_core_pressure_joins_the_dense_complement(meshes):
-    """The physical zero diagonal gains its inverse through the Schur term."""
-    solver, u, _ = _build_solver(meshes, fluid_core=True)
-    solver.solve()
-    _, ctx = _dense_ctx(solver)
-    reference = _reference_S(solver)
-    relative = np.linalg.norm(ctx._S - reference) / np.linalg.norm(reference)
-
-    assert "core_pressure" in solver.field_index
-    assert ctx._n == len(solver.real_indices)
-    assert relative < PARITY_FLOOR
-    assert np.linalg.matrix_rank(ctx._S) == ctx._n
-
-    # The core keeps its volume: the net normal displacement through the CMB
-    # is zero, which is the row of the core pressure.
-    core = next(c for c in solver.couplings if isinstance(c, FluidCore))
-    flux = fd.assemble(fd.dot(u, fd.FacetNormal(solver.mesh)) * core.measure())
-    assert abs(flux) < 1e-12
 
 
 # ---------------------------------------------------------------------------
