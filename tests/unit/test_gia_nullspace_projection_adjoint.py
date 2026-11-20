@@ -11,11 +11,12 @@ would see a value that the replay does not reproduce.
 
 What each test checks:
 
-- `test_small_replay_matches_recording_and_fresh_run`: on a small mixed
-  problem without a solver, where the projection removes a large component
-  that depends on the control, replay at the recorded control and at a shifted
-  control equals a fresh forward run. Fails if the projection is not recorded
-  or if the block's replay is wrong.
+- The replay of a small mixed problem without a solver, where the projection
+  removes a large component that depends on the control, at the recorded
+  control and at a shifted control against a fresh forward run: the
+  `projection-np2` entry of the `parallel` case in `tests/gia`
+  (`gia_parallel.py`, which imports `_small_case`, `_small_taped`,
+  `_small_forward` and `_shifted` from here).
 - `test_small_derivatives_to_second_order`: on the same problem, the Taylor
   remainders converge at rates 1, 2 and 3 (gradient and Hessian action), and
   the tangent linear model equals the adjoint directional derivative. Fails if
@@ -176,30 +177,6 @@ def _shifted(control, direction):
         shifted = control.copy(deepcopy=True)
         shifted += direction
     return shifted
-
-
-@pytest.mark.longtest
-def test_small_replay_matches_recording_and_fresh_run():
-    """Replay at the recorded control, and at another one, equals the forward."""
-    Z, nullspace, control, direction = _small_case()
-    J, rf = _small_taped(Z, nullspace, control)
-    blocks = [b for b in get_working_tape().get_blocks()
-              if isinstance(b, KernelProjectionBlock)]
-    assert len(blocks) == 1
-    replay = float(rf(control))
-    assert replay == float(J), (replay, float(J))
-
-    shifted = _shifted(control, direction)
-    with stop_annotating():
-        fresh = float(_small_forward(Z, nullspace, shifted))
-        unprojected = float(_small_forward(Z, nullspace, shifted, project=False))
-    replay_shifted = float(rf(shifted))
-    print(f"    [small] J {float(J):.12e}  replay {replay:.12e}  "
-          f"shifted fresh {fresh:.12e}  replay {replay_shifted:.12e}  "
-          f"unprojected {unprojected:.12e}")
-    # The case has to depend on the projection, or the test proves nothing.
-    assert abs(unprojected - fresh) > 1e-2 * abs(fresh)
-    assert abs(replay_shifted - fresh) <= 1e-13 * abs(fresh)
 
 
 @pytest.mark.longtest
