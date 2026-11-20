@@ -31,12 +31,17 @@ RESTART_STEP = 4
 #: - `default_options`: True adds the tight tolerances of
 #:   `gia_cases.build_new` (Newton `snes_rtol` 1e-11, `snes_atol` 1e-13);
 #:   False keeps the tolerances of the preset. The entries with a fixed
-#:   coastline or the prescribed load use the preset tolerances: with the
+#:   coastline or the prescribed load use the preset tolerances. With the
 #:   tight ones the `LOAD` march stops at step 2 with
-#:   `DIVERGED_LINEAR_SOLVE` (the second Newton step starts from a KSP
-#:   right-hand side of 2.3e-17 and does not reduce it by 1e-11 in 10000
-#:   iterations), and `sea-fixed` takes 2 Newton steps per step;
+#:   `DIVERGED_LINEAR_SOLVE`: after the first Newton step the residual is
+#:   4.3e-11, and all of it lies along the declared rigid rotation, which
+#:   the curved facets annihilate only to 8e-6 relative. The projected
+#:   linear solve cannot remove that part (its right-hand side is 2.2e-17),
+#:   so Newton cannot reach `snes_atol` 1e-13. Without the declared
+#:   nullspace the same step converges in one Newton step to 2.4e-17.
+#:   `sea-fixed` takes 2 Newton steps per step with the tight options;
 #: - `cores`: the number of MPI ranks;
+#: - `parameters`: replaced parameters of `gia_cases.build_new`;
 #: - `save_state`: write the state after `RESTART_STEP` steps;
 #: - `restart_from`: read the state that this entry wrote and march the
 #:   steps after `RESTART_STEP`;
@@ -53,7 +58,8 @@ FORWARD = {
                                 changes={"load": "sea_fixed"}),
     "load-direct": dict(base="LOAD", preset="direct", default_options=False),
     "load-iterative": dict(base="LOAD", preset="iterative", default_options=False),
-    "power-direct": dict(base="SEA", preset="direct", changes={"model": "power"}),
+    "power-direct": dict(base="SEA", preset="direct", changes={"model": "power"},
+                         parameters={"approximation.transition_stress": 1e-3}),
     "sea-direct-np2": dict(base="SEA", preset="direct", cores=2, save_state=True),
     "sea-iterative-np3": dict(base="SEA", preset="iterative", default_options=False,
                               cores=3, local=False),
@@ -169,6 +175,15 @@ MASS_LEAK_RTOL = 2e-2
 #: The largest Newton count of a step with a moving coastline. The scenario
 #: was measured at 3 to 5 iterations per step.
 MAX_NEWTON_MOVING = 5
+
+#: The power-law entry must be nonlinear in its rheology: the smallest
+#: power-law factor `eta_eff / eta` of its last step is below this value.
+#: With the transition stress 1e-3 (a third of the default of
+#: `gia_cases.approximation`) the factor falls from 0.955 at step 1 to 0.766
+#: at step 8, with at most 5 Newton iterations per step. With the default
+#: 3e-3 it stays above 0.967, which is nearly the Newtonian march.
+POWER_ENTRY = "power-direct"
+POWER_FACTOR_BELOW = 0.9
 
 #: Each coupling must do something: at the last step the named column is
 #: above this fraction of `u_l2`, so a stored value of a quantity that sits

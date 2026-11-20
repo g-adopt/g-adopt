@@ -53,7 +53,8 @@ def run_march(name):
     entry = FORWARD[name]
     case = configuration(entry)
     options = dict(preset=entry["preset"],
-                   default_options=entry.get("default_options", True))
+                   default_options=entry.get("default_options", True),
+                   parameters=entry.get("parameters"))
     steps = M.FORWARD_STEPS
     if "restart_from" in entry:
         path = CASE_DIR / forward_state(entry["restart_from"])

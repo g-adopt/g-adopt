@@ -164,6 +164,20 @@ def test_each_coupling_acts(entry, column):
         f"{entry} {column}: measured {last[column]!r}, must exceed {floor!r}")
 
 
+def test_the_power_law_is_nonlinear():
+    """The power-law entry departs from the Newtonian viscosity.
+
+    A power-law march whose stress stays far below the transition stress
+    solves the Newtonian problem, and its recorded values would not show a
+    wrong power-law factor or a wrong Jacobian of it.
+    """
+    last = load_log(E.POWER_ENTRY).iloc[-1]
+    factor = last["min_power_factor"]
+    assert factor < E.POWER_FACTOR_BELOW, (
+        f"{E.POWER_ENTRY}: smallest power-law factor {factor!r}, "
+        f"must be below {E.POWER_FACTOR_BELOW!r}")
+
+
 @pytest.mark.parametrize("entry", list(E.FORWARD))
 def test_net_sheet_mass_is_set_by_the_frame(entry):
     """The net sheet mass equals the value the converged `Shift` row implies.

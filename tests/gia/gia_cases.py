@@ -138,8 +138,17 @@ class Case:
         return replace(self, **kwargs)
 
 
-def approximation(case, control=None, B_mu=B_MU):
-    """A fresh approximation of `case.model`; `control` scales the viscosity."""
+def approximation(case, control=None, B_mu=B_MU, transition_stress=.003):
+    """A fresh approximation of `case.model`.
+
+    Args:
+      case: the configuration; `case.model` selects the rheology.
+      control: `None`, or a field that scales every viscosity by `exp(control)`.
+      B_mu: the self-gravity coupling number.
+      transition_stress: the stress above which the power law (`"power"` and
+        `"backstress"`) departs from the Newtonian viscosity. A lower value
+        makes the same load more strongly nonlinear.
+    """
     factor = 1.0 if control is None else fd.exp(control)
     common = dict(bulk_modulus=1.0, density=1.0, g=1.0, B_mu=B_mu,
                   self_gravity_number=LAMBDA)
@@ -152,11 +161,11 @@ def approximation(case, control=None, B_mu=B_MU):
     if case.model == "power":
         return gadopt.CompressibleInternalVariableApproximation(
             shear_modulus=[.4, .6], viscosity=[.12 * factor, .6 * factor],
-            exponent=3, transition_stress=.003, **common)
+            exponent=3, transition_stress=transition_stress, **common)
     if case.model == "backstress":
         return gadopt.BackstressApproximation(
             shear_modulus=1., viscosity=.3 * factor, backstress_modulus=.8,
-            recovery_time=.4, exponent=3, transition_stress=.003, **common)
+            recovery_time=.4, exponent=3, transition_stress=transition_stress, **common)
     raise ValueError(case.model)
 
 
@@ -230,7 +239,8 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
       default_options: `False` leaves out the tight default tolerances.
       parameters: values that replace coupling parameters, keyed
         `"Coupling.argument"`, for example `{"FluidCore.g": g}`, and
-        `"approximation.B_mu"` for the self-gravity coupling number.
+        `"approximation.B_mu"` for the self-gravity coupling number and
+        `"approximation.transition_stress"` for the power law.
       extra_bcs: displacement conditions added to the ones the case gives,
         `{boundary: {name: value}}`, merged per boundary, for example
         `{CURVE_RE: {"normal_stress": sigma}}`.
@@ -273,7 +283,9 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
     options = (dict(snes_rtol=1e-11, snes_atol=1e-13, ksp_rtol=1e-11)
                if default_options else {})
     options.update(extra or {})
-    material = approximation(case, control, B_mu=value("approximation.B_mu", B_MU))
+    material = approximation(
+        case, control, B_mu=value("approximation.B_mu", B_MU),
+        transition_stress=value("approximation.transition_stress", .003))
     # Every replacement must have reached a coupling of the case.
     assert not parameters, f"parameters of couplings the case lacks: {sorted(parameters)}"
     solver = NewSolver(
