@@ -357,6 +357,17 @@ class DirectConstitutiveBackend:
         and the solver are built at the first solve of each kind and
         reassembled in place afterwards.
 
+        The residual check measures the equations that the solve keeps. With
+        a declared nullspace, PETSc removes the transpose nullspace of the
+        operator from the right-hand side before the Krylov solve (the left
+        kernel of the derivative operator: the forward transpose nullspace
+        for the tangent, the forward nullspace for the adjoint). A declared
+        mode such as the rigid rotation is only an approximate kernel of the
+        discrete operator (about 1e-5 relative on curved facets), so `b - A x`
+        keeps a part along that space that no solve can reduce. The check
+        removes the same space from the residual and from the right-hand side
+        before it takes the ratio.
+
         Args:
           kind: "adjoint" or "tangent".
           rhs: The right-hand side, a Cofunction; its rows of the strong
@@ -364,7 +375,8 @@ class DirectConstitutiveBackend:
           solution: The Function to write the solution into.
 
         Raises:
-          RuntimeError: If the true relative residual is above 1e-8.
+          RuntimeError: If the true relative residual, with the transpose
+            nullspace of the operator removed, is above 1e-8.
         """
         owner = self.owner
         owner.appctx["operator_version"] = None
@@ -404,12 +416,22 @@ class DirectConstitutiveBackend:
         for bc in owner.strong_bcs:
             bc.zero(rhs)
         solver.solve(solution, rhs)
+        # The space that the KSP removed from the right-hand side: the
+        # transpose nullspace of its operator (`KSPSolve` reads it with
+        # `MatGetTransposeNullSpace`, which is also the call here). Without a
+        # declared space the wrapper holds a NULL handle.
+        removed = solver.ksp.getOperators()[0].getTransposeNullSpace()
         with solution.dat.vec_ro as x, rhs.dat.vec_ro as b:
             r = b.duplicate()
             matrix.petscmat.mult(x, r)
             r.aypx(-1, b)
-            relative = r.norm()/max(b.norm(), 1e-30)
+            kept = b.copy()
+            if removed.handle:
+                removed.remove(r)
+                removed.remove(kept)
+            relative = r.norm()/max(kept.norm(), 1e-30)
             r.destroy()
+            kept.destroy()
         if relative > 1e-8:
             raise RuntimeError(f"Direct {kind} solve true relative residual {relative}")
 

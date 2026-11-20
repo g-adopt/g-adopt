@@ -72,19 +72,6 @@ _LOAD_REPLAY = (
     "derivatives agree (adjoint against the fresh difference {dJ}, Taylor rate "
     "{rate}).")
 
-#: The multiplier DtN entry: the library refuses two of the four linear
-#: adjoint solves (`gia_adjoint.adjoint_derivative`), so `dJ` is NaN.
-_MULTIPLIER_REFUSED = (
-    "sea-multiplier-viscosity: `DirectConstitutiveBackend._linear_solve` refuses "
-    "the adjoint solves of steps 3 and 2 at true relative residuals 1.150e-8 and "
-    "1.148e-8 (its bound is 1e-8; steps 4 and 1: 1.7e-14, 8.6e-9), although the "
-    "KSP converged them to 1.8e-14. The check uses the right-hand side without "
-    "the projection of the declared rigid rotation, which the curved facets "
-    "annihilate only to 8e-6. With the check recorded instead of raised "
-    "(scratch run, logs-impl/adjoint-scratch-multiplier-check.txt) dJ equals the "
-    "low-rank value to 1e-16, the fresh difference to 3.2e-9, and the Taylor "
-    "rate is 1.9998. Library defect, not fixed in this step.")
-
 #: The disk schedule: the tangent sweep runs after a replay under
 #: `SingleDiskStorageSchedule` and reads saved values that the schedule does
 #: not restore for a tangent sweep.
@@ -108,11 +95,6 @@ KNOWN_FAILURES = {
         entry="load-direct-B_mu", dJ="7.2e-8", rate="2.0005"),
     ("other", "load-direct-B_mu"): _LOAD_REPLAY.format(
         entry="load-direct-B_mu", dJ="7.2e-8", rate="2.0005"),
-    ("fresh_difference", "sea-multiplier-viscosity"): _MULTIPLIER_REFUSED,
-    ("floor", "sea-multiplier-viscosity"): _MULTIPLIER_REFUSED,
-    ("taylor", "sea-multiplier-viscosity"): _MULTIPLIER_REFUSED,
-    ("tangent_pairing", "sea-multiplier-viscosity"): _MULTIPLIER_REFUSED,
-    ("relation_dJ", "sea-multiplier-viscosity"): _MULTIPLIER_REFUSED,
     ("tangent_pairing", "sea-direct-viscosity-disk"): _DISK_TANGENT,
     ("tangent_replay", "sea-direct-viscosity-disk"): _DISK_TANGENT,
 }

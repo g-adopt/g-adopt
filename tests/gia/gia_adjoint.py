@@ -441,16 +441,11 @@ def adjoint_derivative(rf, direction):
     """The directional derivative from the adjoint, or NaN if the library refuses it.
 
     `DirectConstitutiveBackend._linear_solve` raises a `RuntimeError` when
-    the true relative residual of a linear adjoint solve is above 1e-8. It
-    computes that residual with the right-hand side as given, without the
-    projection of the declared rigid rotation, so the part of the
-    right-hand side along the mode, which the curved facets annihilate only
-    to about 8e-6, stays in it. On the multiplier DtN path with `SEA` this
-    refuses solves that the KSP converged to 1e-14 (true residual 1.15e-8).
-    The refusal is caught here so that the entry still writes its other
-    values; the residual is written, and the tests of the rows that need
-    the derivative are strict expected failures for that entry. Any other
-    error propagates.
+    the true relative residual of a linear adjoint solve, with the transpose
+    nullspace of its operator removed, is above 1e-8. The refusal is caught
+    here so that an entry still writes its other values if it happens; the
+    residual is written, and the rows that need the derivative then fail.
+    Any other error propagates.
 
     Returns:
       `(dJ, residual)`: `(<dJ/dm, h>, 0)`, or `(NaN, the refused residual)`.
