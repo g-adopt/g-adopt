@@ -737,7 +737,7 @@ def test_the_gradient_is_right_through_this_preset(meshes, representation):
     iterative = preset(representation, outer_rtol=1e-11)
     Jhat, control, direction, _, taped = shear_modulus_reduced_functional(
         meshes, representation, iterative)
-    gradient = float(Jhat.derivative().dat.data_ro[0])
+    gradient = float(Jhat.derivative())
     get_working_tape().clear_tape()
 
     def at(value):
@@ -912,8 +912,10 @@ def test_the_adjoint_solve_carries_both_augmentations(meshes):
     from gadopt.dtn_coupled_adjoint import adjoint_solver as find_adjoint_solver
     adjoint_solver = find_adjoint_solver(solver.adjoint_block)
     context = adjoint_solver._ctx
-    assert context._post_function_callback == solver.augment_residual
-    assert context._post_jacobian_callback == solver.augment_jacobian
+    # The callbacks hold the solver weakly (`gadopt.utility.weak_callback`);
+    # `target()` is the bound method they call.
+    assert context._post_function_callback.target() == solver.augment_residual
+    assert context._post_jacobian_callback.target() == solver.augment_jacobian
     assert "dtn_operator" in context.appctx
     assert adjoint_solver.snes.getType() == "ksponly"
 

@@ -144,6 +144,8 @@ from firedrake import (DirichletBC, Function, FunctionSpace,
 from mpi4py import MPI
 from pyadjoint.tape import annotate_tape, get_working_tape, stop_annotating
 from ufl.algorithms import expand_derivatives, extract_coefficients
+from ufl.corealg.traversal import traverse_unique_terminals
+from ufl.geometry import GeometricQuantity
 from ufl.domain import extract_domains
 from ufl.sobolevspace import H1
 
@@ -163,7 +165,8 @@ from .stokes_integrators import (InternalVariableMechanics, StokesSolverBase,
                                  _basis_provider,
                                  _displacement_basis,
                                  newton_stokes_solver_parameters)
-from .utility import derivative_solve_keywords, is_cartesian, log, upward_normal
+from .utility import (derivative_solve_keywords, is_cartesian, log, upward_normal,
+                      weak_callback)
 
 __all__ = ["SelfGravitatingGIASolver"]
 
@@ -221,8 +224,10 @@ class _LowRankStep(_StockStep):
             nullspace=owner.nullspace,
             transpose_nullspace=owner.transpose_nullspace,
             appctx=owner.appctx, options_prefix=owner.name,
-            post_function_callback=owner.augment_residual,
-            post_jacobian_callback=owner.augment_jacobian)
+            # Weak references: a strong one from the callbacks would close a
+            # reference cycle through C (`gadopt.utility.weak_callback`).
+            post_function_callback=weak_callback(owner.augment_residual),
+            post_jacobian_callback=weak_callback(owner.augment_jacobian))
         self.solver.gia_solver = owner
 
     def solve(self):
@@ -316,9 +321,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
       dtn_alpha: the Robin shift of the DtN form, `None` for its default.
       gravity_bcs: the potential's conditions (`"dtn"`, `"psi"`, `"flux"`).
       bcs: the displacement conditions (`"u"`, `"un"`, `"normal_stress"`,
-        ...), as for the other G-ADOPT momentum solvers. A Function in a
-        weak condition or a `normal_stress` must be a Function of the
-        mechanics mesh; one of the parent is refused
+        ...), as for the other G-ADOPT momentum solvers. A Function or a
+        geometric quantity (`SpatialCoordinate`, `FacetNormal`, ...) in a
+        weak condition or a `normal_stress` must be one of the mechanics
+        mesh; one of the parent is refused
         (`_refuse_parent_coefficients_on_mechanics_facets`).
       couplings: a list of `gadopt.gia_couplings.Coupling` objects.
       dtn_representation: `"lowrank"` (default; the DtN modes are a rank-n
@@ -499,6 +505,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             self.family, self, internal_variable_degree, order)
         self.cross_mesh = self.mesh is not self.potential_mesh
         self._check_row_scaling_meshes()
+        #: Whether the row scale of `B_mu` is the constant floor
+        #: `NULL_COUPLING_ROW_SCALE`. Decided once, here, from the value of
+        #: `B_mu` at construction, because the forms are built with it
+        #: (`row_scale_B_mu`). Every later reading of the row scale, live or
+        #: saved on the tape, goes through `row_scale_B_mu_value`, which
+        #: follows this decision.
+        self.B_mu_floored = scalar_value(approximation.B_mu) == 0.0
         self.set_space()
         self.set_boundary_conditions()
         self.set_couplings()
@@ -582,16 +595,51 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
     @property
     def row_scale_B_mu(self):
-        """`B_mu`, floored to one where it is exactly zero.
+        """`B_mu` as a row scale, UFL: the constant floor if `B_mu` was zero at construction.
 
         `theta_psi` and the rotation and frame rows scale whole rows by
         `B_mu`; at `B_mu = 0` that would delete those rows instead of
-        decoupling them (`gadopt.gia_presets.NULL_COUPLING_ROW_SCALE`).
+        decoupling them (`gadopt.gia_presets.NULL_COUPLING_ROW_SCALE`). The
+        choice between the floor and `B_mu` itself is `B_mu_floored`, made
+        once at construction, so that the forms and every number computed
+        from the row scale later agree.
         """
-        B_mu = self.approximation.B_mu
-        if scalar_value(B_mu) == 0.0:
+        if self.B_mu_floored:
             return NULL_COUPLING_ROW_SCALE
-        return B_mu
+        return self.approximation.B_mu
+
+    def row_scale_B_mu_value(self, B_mu_value: float) -> float:
+        """The value of the row scale at the value `B_mu_value` of `B_mu`.
+
+        The one place that applies the floor to a number. The PETSc callbacks
+        of the low-rank DtN term call it with the live value of `B_mu`
+        (`theta_psi_value`), and the step blocks with the value saved on the
+        tape (`gadopt.gia_step_adjoint.GIAStepBlockMixin`). It follows the
+        decision of the forms (`B_mu_floored`): with the floor, the row
+        scale is the constant whatever `B_mu` is now, and its derivative
+        with respect to `B_mu` is zero, as it is in the forms.
+
+        Args:
+          B_mu_value: A value of `B_mu`, live or saved on the tape.
+
+        Returns:
+          The row scale as a float.
+
+        Raises:
+          ValueError: If `B_mu` was nonzero at construction and is zero
+            now. The forms scale the potential, rotation and frame rows by
+            `B_mu`, so these rows would be deleted and the solve would fail.
+        """
+        if self.B_mu_floored:
+            return NULL_COUPLING_ROW_SCALE
+        if B_mu_value == 0.0:
+            raise ValueError(
+                "B_mu is zero, but it was nonzero when the solver was built. "
+                "The residual scales the potential, rotation and frame rows "
+                "by B_mu, so these rows would be deleted. Build the solver "
+                "with B_mu = 0 to switch the body forces off; it then uses "
+                "the constant row scale NULL_COUPLING_ROW_SCALE.")
+        return B_mu_value
 
     @property
     def _row_scale_B_mu(self):
@@ -605,9 +653,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
     @property
     def theta_psi_value(self) -> float:
-        """`theta_psi` as a number, from its factors."""
-        return (scalar_value(self.scaling_factor) * scalar_value(self.row_scale_B_mu)
-                / scalar_value(self.Lambda))
+        """`theta_psi` as a number, from the live values of its factors."""
+        row_scale = self.row_scale_B_mu_value(scalar_value(self.approximation.B_mu))
+        return scalar_value(self.scaling_factor) * row_scale / scalar_value(self.Lambda)
 
     def set_couplings(self) -> None:
         """Bind the couplings, check them, and run the potential and sheet stages."""
@@ -732,7 +780,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                     "Function(FunctionSpace(psi_mesh, 'R', 0)).")
 
     def _refuse_parent_coefficients_on_mechanics_facets(self, mechanics_form) -> None:
-        """Refuse a Function of the parent in a facet term of the momentum equation.
+        """Refuse a terminal of the parent mesh in a facet term of the momentum equation.
+
+        Two kinds of terminal of the parent are refused: a Function of the
+        parent, and a geometric quantity of the parent (`SpatialCoordinate`,
+        `FacetNormal`, `CellVolume`, `JacobianDeterminant` and the others).
+        The rest of this docstring is about the Functions; the geometric
+        quantities follow after it.
 
         The momentum equation pairs its exterior facets with the parent's
         cells (`Equation` with `intersect_measures`), because it cannot know
@@ -767,10 +821,21 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         or a `normal_stress`, which are the terms that put it on such a
         facet.
 
-        This check reads the coefficients of the form and changes nothing.
-        It can go once Firedrake assembles the adjoint of a parent
-        coefficient on such a facet from the mechanics side only, as it does
-        in the tangent.
+        A geometric quantity of the parent on such a facet can give a wrong
+        residual, not only a wrong adjoint: Firedrake does not evaluate it
+        at the points of the integrated facet. Measured on the 2-D annulus
+        at the core-mantle boundary, `JacobianDeterminant(parent)`
+        integrates to 0.789 and `CellVolume(parent)` to 0.788 of the same
+        quantity of the mechanics mesh. UFL refuses `FacetNormal(parent)` on
+        this measure with an error that does not name the cause. Which
+        quantity is wrong on which facet depends on the mesh, and the same
+        quantity of the mechanics mesh is always exact, so the check refuses
+        every geometric quantity of the parent and names the replacement.
+
+        This check reads the terminals of the form and changes nothing. The
+        refusal of parent Functions can go once Firedrake assembles the
+        adjoint of a parent coefficient on such a facet from the mechanics
+        side only, as it does in the tangent.
 
         Args:
           mechanics_form: the residual of the momentum (and DG history)
@@ -782,6 +847,21 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         if not self.cross_mesh:
             return
         for integral in mechanics_form.integrals_by_type("exterior_facet"):
+            for terminal in traverse_unique_terminals(integral.integrand()):
+                if (isinstance(terminal, GeometricQuantity)
+                        and terminal.ufl_domain() is self.potential_mesh):
+                    name = type(terminal).__name__
+                    raise ValueError(
+                        f"The geometric quantity {name}(potential mesh) appears "
+                        "in a boundary term of the momentum equation (a weak "
+                        "displacement condition or a normal_stress in bcs). "
+                        "These terms are integrated over the facets of the "
+                        "mechanics mesh, where Firedrake does not evaluate a "
+                        "geometric quantity of the potential's (parent) mesh "
+                        "at the points of the integrated facet, so the "
+                        "residual can be wrong; use "
+                        f"{name}(u_mesh), the same quantity of the mechanics "
+                        "mesh, for example SpatialCoordinate(u_mesh).")
             for coefficient in extract_coefficients(integral.integrand()):
                 if not isinstance(coefficient, Function):
                     continue
@@ -1480,16 +1560,23 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """A rank-local snapshot of every Jacobian coefficient but the solution.
 
         A Function on the `Real` space enters by its values, every other
-        Function and every `Constant` by its `dat_version`. The time integrator assigns its `Real` coefficients (`alpha`, `dt`) before
+        Function and every `Constant` by its `dat_version`. The time
+        integrator assigns its `Real` coefficients (`alpha`, `dt`) before
         every solve, also when the value does not change, and every `assign`
         moves `dat_version`. Keyed on the version, the cached preconditioner
         pieces (dense Schur, the cached block-1 apply, the condensed block)
         would be rebuilt at every step at a fixed time step. A `Real`
-        Function holds a few numbers that are the same on every rank, so a
-        comparison by value costs nothing. A field Function keeps the
-        version, because a comparison of its values would cost a copy of the
-        field per solve. The rebuild once per tape sweep does not depend on
-        this snapshot (`_RebuildRule` reads the sweep marker).
+        Function holds a few numbers, so a comparison by value costs
+        nothing. A field Function keeps the version, because a comparison of
+        its values would cost a copy of the field per solve. The rebuild
+        once per tape sweep does not depend on this snapshot (`_RebuildRule`
+        reads the sweep marker).
+
+        The snapshot can differ between ranks. On the pyop3 Firedrake one
+        rank owns the entries of a `Real` Function, and `dat.data_ro` is
+        empty on the other ranks. The ranks agree on the decision because
+        `_refresh_operator_version` combines the comparison over the
+        communicator (`allreduce` with `MPI.LOR`).
         """
         snapshot = []
         for coefficient in self._jacobian_coefficients:
@@ -1527,6 +1614,12 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         if changed:
             self._jacobian_fingerprint = fingerprint
             self.invalidate_jacobian()
+        # Publish the version also when nothing changed. A replay or a
+        # derivative sweep publishes a key of the tape in its place for the
+        # duration of one step solve (`gadopt.gia_step_adjoint.
+        # tape_operator_version`); a sweep that stopped with an error can
+        # leave that key behind.
+        self.appctx["operator_version"] = self._operator_version
 
     # -- The step -------------------------------------------------------------------
 
@@ -1538,6 +1631,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         accept, and the copy into `u` and `psi`.
         """
         from .gia_step_adjoint import TapeSweepMarkerBlock
+        # Refuse a `B_mu` that reached zero after a construction with a
+        # nonzero value, before anything is solved or recorded
+        # (`row_scale_B_mu_value`).
+        self.row_scale_B_mu_value(scalar_value(self.approximation.B_mu))
         self.time_integrator.prepare()
         self.update_total_mass()
         # Counted before the solve, so every preconditioner setup inside it
@@ -1545,12 +1642,19 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.appctx["gia_solve_index"] = self.appctx.get("gia_solve_index", 0) + 1
         markers = annotate_tape()
         if markers:
-            get_working_tape().add_block(TapeSweepMarkerBlock(
-                self, self.appctx["gia_solve_index"], before=True))
+            tape = get_working_tape()
+            before = TapeSweepMarkerBlock(self, self.appctx["gia_solve_index"], before=True)
+            tape.add_block(before)
         self._step.solve()
         if markers:
-            get_working_tape().add_block(TapeSweepMarkerBlock(
-                self, self.appctx["gia_solve_index"], before=False))
+            after = TapeSweepMarkerBlock(self, self.appctx["gia_solve_index"], before=False)
+            if type(self._step) is _StockStep:
+                # Firedrake's solve block of this step binds nothing to its
+                # replay; the two markers publish its operator version
+                # around it (`TapeSweepMarkerBlock`). It is the last block
+                # the step recorded.
+                before.step_block = after.step_block = tape.get_blocks()[-1]
+            tape.add_block(after)
         snes = self.solver.snes
         self.appctx["gia_last_solve_linear_its"] = int(snes.getLinearSolveIterations())
         self.appctx["gia_last_solve_newton_its"] = max(1, int(snes.getIterationNumber()))

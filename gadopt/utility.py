@@ -12,6 +12,7 @@ from firedrake.ufl_expr import extract_unique_domain
 import pyop3 as op3
 import ufl
 import time
+import weakref
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from firedrake.utils import get_device_type as fd_get_device_type
@@ -867,6 +868,56 @@ def derivative_solve_keywords(solver, adj_kwargs: dict,
     namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
     setattr(solver, _DERIVATIVE_KEYWORDS_WRITTEN, True)
     return {}
+
+
+def weak_callback(method):
+    """A PETSc callback that calls the bound `method` through a weak reference.
+
+    A Firedrake solver keeps its callbacks (`pre_jacobian_callback`,
+    `post_function_callback` and the others) in its `_SNESContext`. A Python
+    preconditioner context, `firedrake.AssembledPC` for example, also holds
+    that `_SNESContext`, and PETSc holds the Python context from C. A bound
+    method holds its object strongly. If that object also holds the solver,
+    the references form a cycle that goes through C. Python's garbage
+    collector cannot see a reference held by C, so the solver, its PETSc
+    objects and every matrix factorisation in them stay alive to the end of
+    the process.
+
+    The callback that this function returns holds only a `weakref.WeakMethod`
+    to `method`. The cycle then has no strong link back to the object, and
+    the object is collected when nothing else holds it. The owner of the
+    callbacks (the user's solver object, or a tape block that holds it) must
+    hold the object while the PETSc solver is in use.
+
+    Args:
+      method: A bound method.
+
+    Returns:
+      A function with the same arguments and return value as `method`. Its
+      attribute `target` is the `weakref.WeakMethod` of `method`.
+
+    Raises:
+      ReferenceError: When the returned function is called after the object
+        of `method` was collected.
+    """
+    reference = weakref.WeakMethod(method)
+    name = method.__qualname__
+
+    def callback(*args, **kwargs):
+        bound = reference()
+        if bound is None:
+            raise ReferenceError(
+                f"The callback {name} was called after its object was "
+                "garbage-collected. Keep the solver that owns it alive while "
+                "its PETSc solvers are in use.")
+        return bound(*args, **kwargs)
+
+    callback.__qualname__ = f"weak_callback({name})"
+    #: The `weakref.WeakMethod`; calling it gives the bound method, or None
+    #: once its object is gone. A test can check which method a solver
+    #: carries as its callback with `callback.target() == obj.method`.
+    callback.target = reference
+    return callback
 
 
 def interior_facet_integrand(expr):

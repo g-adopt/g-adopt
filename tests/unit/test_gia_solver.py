@@ -1193,6 +1193,63 @@ def test_a_parent_field_in_a_momentum_boundary_term_is_refused(meshes, family, d
     assert abs(forward_pairing - adjoint_pairing) <= 1e-12 * abs(forward_pairing)
 
 
+@pytest.mark.parametrize("quantity", ["SpatialCoordinate", "FacetNormal",
+                                      "CellVolume", "JacobianDeterminant"])
+def test_a_parent_geometric_quantity_in_a_momentum_boundary_term_is_refused(
+        meshes, quantity):
+    """A geometric quantity of the parent in a `normal_stress` is refused.
+
+    The momentum equation pairs its boundary terms with the parent's cells,
+    where Firedrake does not evaluate a geometric quantity of the parent at
+    the points of the integrated facet: at the core-mantle boundary of this
+    annulus, `CellVolume(parent)` and `JacobianDeterminant(parent)`
+    integrate to 0.79 of the same quantity of the mechanics mesh, so the
+    residual itself is wrong. Which quantity is wrong on which facet
+    depends on the mesh, so the solver refuses every such quantity on every
+    boundary at construction, and names it and the replacement. The
+    `normal_stress` of `_normal_stress_solver` stands on the surface.
+    """
+    parent, sub = meshes
+    factors = {
+        "SpatialCoordinate": lambda: fd.SpatialCoordinate(parent)[0],
+        "FacetNormal": lambda: fd.FacetNormal(parent)[0],
+        "CellVolume": lambda: fd.CellVolume(parent),
+        "JacobianDeterminant": lambda: abs(fd.JacobianDeterminant(parent)),
+    }
+    with pytest.raises(ValueError, match=f"{quantity}\\(potential mesh\\).*{quantity}\\(u_mesh\\)"):
+        _normal_stress_solver(meshes, factors[quantity]())
+
+
+def test_the_B_mu_floor_is_decided_once_at_construction(meshes):
+    """The row scale of `B_mu` follows the decision taken at construction.
+
+    A solver built with `B_mu = 0` scales its rows with the constant
+    `NULL_COUPLING_ROW_SCALE`; the low-rank prefactor keeps that constant
+    when `B_mu` later becomes nonzero, as the forms do. A solver built with
+    a nonzero `B_mu` refuses a solve once `B_mu` is zero, because its forms
+    would then delete the potential rows.
+    """
+    from gadopt.gia_presets import NULL_COUPLING_ROW_SCALE
+    parent = meshes[0]
+    case = Case(representation="lowrank", core="fluid", centre=True)
+
+    B_mu = fd.Function(fd.FunctionSpace(parent, "R", 0)).assign(0.0)
+    solver, _, _ = C.build_new(meshes, case, parameters={"approximation.B_mu": B_mu},
+                               nullspace="rigid_rotation")
+    assert solver.B_mu_floored
+    B_mu.assign(2.0)
+    expected = cp.scalar_value(solver.scaling_factor) * NULL_COUPLING_ROW_SCALE / C.LAMBDA
+    assert solver.theta_psi_value == pytest.approx(expected, rel=1e-15)
+
+    B_mu = fd.Function(fd.FunctionSpace(parent, "R", 0)).assign(C.B_MU)
+    solver, _, _ = C.build_new(meshes, case, parameters={"approximation.B_mu": B_mu},
+                               nullspace="rigid_rotation")
+    assert not solver.B_mu_floored
+    B_mu.assign(0.0)
+    with pytest.raises(ValueError, match="B_mu is zero, but it was nonzero"):
+        solver.solve()
+
+
 def test_a_real_scaling_factor_lives_on_the_parent_without_weak_conditions(meshes):
     """A `Real` `scaling_factor`: on the parent only, and not with a weak condition.
 

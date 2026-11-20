@@ -109,7 +109,7 @@ from firedrake.adjoint_utils.blocks import NonlinearVariationalSolveBlock
 from pyadjoint.tape import annotate_tape
 
 from .gia_step_adjoint import GIAStepBlockMixin, TapeSweepMarkerBlock
-from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords
+from .utility import CACHED_SOLVER_BLOCKS, derivative_solve_keywords, weak_callback
 
 # Firedrake PR 4638 ("NLVS: cache more adjoint solvers/forms and fix Hessian")
 # replaces the stock solve block of an annotated variational solve with a
@@ -195,8 +195,11 @@ def derivative_solver_kwargs(gia_solver, suffix: str, *, transpose: bool) -> dic
         nullspace=nullspace,
         transpose_nullspace=transpose_nullspace,
         near_nullspace=gia_solver.near_nullspace,
-        post_function_callback=gia_solver.augment_residual,
-        post_jacobian_callback=gia_solver.augment_jacobian,
+        # Weak references: a strong one from the callbacks would close a
+        # reference cycle through C (`gadopt.utility.weak_callback`). The
+        # tape block that owns the derivative solver holds the GIA solver.
+        post_function_callback=weak_callback(gia_solver.augment_residual),
+        post_jacobian_callback=weak_callback(gia_solver.augment_jacobian),
     )
 
 

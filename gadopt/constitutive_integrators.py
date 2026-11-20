@@ -21,6 +21,7 @@ from ufl.algorithms.analysis import extract_coefficients
 
 from .internal_variable_equation import assign_history_slices, history_slices
 from .gia_step_adjoint import GIAStepBlockMixin
+from .utility import weak_callback
 
 #: The index of the displacement in the mixed space of both GIA solvers that
 #: own a quadrature step; the field order of either solver starts with it.
@@ -295,13 +296,20 @@ class DirectConstitutiveBackend:
         dropped and built again at the next derivative sweep.
         """
         owner = self.owner
+        # The callbacks hold the backend and the owner through weak
+        # references. A strong reference would close a reference cycle
+        # through C (the `_SNESContext` that keeps the callbacks is held by
+        # the Python preconditioner contexts, which PETSc holds), and the
+        # solver would never be collected (`gadopt.utility.weak_callback`).
+        refresh = weak_callback(self.refresh_from_vector)
         self.solver = fd.NonlinearVariationalSolver(
             self.problem, solver_parameters=owner.solver_parameters,
             options_prefix=owner.name, appctx=owner.appctx, nullspace=owner.nullspace,
             transpose_nullspace=owner.transpose_nullspace, near_nullspace=owner.near_nullspace,
-            pre_function_callback=self.refresh_from_vector, pre_jacobian_callback=self.refresh_from_vector,
-            **(dict(post_function_callback=owner.augment_residual,
-                    post_jacobian_callback=owner.augment_jacobian) if self.lowrank else {}))
+            pre_function_callback=refresh, pre_jacobian_callback=refresh,
+            **(dict(post_function_callback=weak_callback(owner.augment_residual),
+                    post_jacobian_callback=weak_callback(owner.augment_jacobian))
+               if self.lowrank else {}))
         #: `{"adjoint": (matrix, solver), "tangent": (matrix, solver)}`, the
         #: linear derivative solves, built at their first use.
         self.derivative_solvers = {}
@@ -375,10 +383,16 @@ class DirectConstitutiveBackend:
             nullspace, transpose_nullspace = owner.nullspace, owner.transpose_nullspace
             if kind == "adjoint":
                 nullspace, transpose_nullspace = transpose_nullspace or nullspace, nullspace
+            # A prefix of its own for each derivative solve, so that a
+            # command-line option reaches one of them and not the forward
+            # solve or the other derivative solve. The low-rank adopted
+            # blocks use `<name>_lowrank_adj` and `<name>_lowrank_tlm` in the
+            # same way (`gadopt.dtn_coupled_adjoint.derivative_solver_kwargs`).
+            suffix = "adj" if kind == "adjoint" else "tlm"
             solver = fd.LinearSolver(
                 matrix, solver_parameters=options, nullspace=nullspace,
                 transpose_nullspace=transpose_nullspace, near_nullspace=owner.near_nullspace,
-                appctx=owner.appctx)
+                appctx=owner.appctx, options_prefix=f"{owner.name}_quadrature_{suffix}")
             self.derivative_solvers[kind] = (matrix, solver)
         else:
             matrix, solver = self.derivative_solvers[kind]

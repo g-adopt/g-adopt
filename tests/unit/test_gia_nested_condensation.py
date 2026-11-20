@@ -341,6 +341,64 @@ class TestOperatorReuse:
         assert condensation_context(replay).assembly_count == count + 1
         tape.clear_tape()
 
+    @pytest.mark.parametrize("representation", ["multiplier", "lowrank"])
+    def test_a_capped_replay_follows_a_coefficient_changed_between_steps(
+            self, meshes, representation):
+        """A replay rebuilds the cached operators where the forward run rebuilt.
+
+        The viscosity is a `Real` Function assigned on the tape between the
+        two steps. The forward run sees the change in `operator_version` and
+        rebuilds its cached preconditioner pieces at the second step. A
+        replay does not move the version, so it binds a key of the step's
+        saved coefficients in its place (`gadopt.gia_step_adjoint.
+        tape_operator_version`). The outer solve is capped at two iterations
+        and its result accepted (`ksponly`, `outer_accept_capped`), so the
+        answer depends on the preconditioner: a replay that kept the pieces
+        of the first step returns another state. The replayed functional
+        must equal the forward one.
+
+        The multiplier case is the nested route, whose condensed operator
+        is `InternalVariableSCPC`; its step block is Firedrake's own, and
+        the sweep markers bind the key around it. The low-rank case is the
+        default block-0 route (`CondensedBlockPC`) under the adopted step
+        block, which binds the key itself.
+        """
+        from firedrake.adjoint import (Control, ReducedFunctional,
+                                       continue_annotation, get_working_tape,
+                                       pause_annotation, stop_annotating)
+
+        capped = dict(snes_type="ksponly", outer_max_it=2, outer_accept_capped=True)
+        if representation == "multiplier":
+            parameters = nested_preset(**capped)
+        else:
+            parameters = selfgrav_dtn_iterative_solver_parameters(
+                condensed=False, dtn_representation="lowrank", **capped)
+        tape = get_working_tape()
+        tape.clear_tape()
+        sub = meshes[1]
+        with stop_annotating():
+            R = fd.FunctionSpace(sub, "R", 0)
+            control = fd.Function(R).assign(1.0)
+            viscosity = fd.Function(R).assign(1.0)
+            solver, u, _ = build(meshes, approximation_kwargs=dict(viscosity=viscosity),
+                                 solver_parameters=parameters,
+                                 dtn_representation=representation)
+        continue_annotation()
+        try:
+            viscosity.assign(control)
+            solver.solve()
+            viscosity.assign(3.0 * control)
+            solver.solve()
+            J = fd.assemble(fd.inner(u, u) * fd.dx(domain=sub))
+            rf = ReducedFunctional(J, Control(control))
+        finally:
+            pause_annotation()
+        # Without the key the replay differs by 2e-8 (multiplier) and 3e-3
+        # (low-rank) relative.
+        replayed = float(rf(control))
+        assert abs(replayed - float(J)) <= 1e-10 * abs(float(J)), (replayed, float(J))
+        tape.clear_tape()
+
 
 class TestPowerLaw:
     """Newton on the nested preset, with a state-dependent Jacobian.

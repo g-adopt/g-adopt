@@ -27,7 +27,8 @@ and what no UFL form can carry:
   1. The binding of the shared solver state to the block for each of its
      solves (`_bound_to_block`): the prefactor `theta_psi` of the low-rank
      DtN term, and the markers the rebuild rule of the preconditioners reads
-     (`gia_solve_index`, `gia_dt`, `gia_time_alpha`, `gia_tape_sweep`). A
+     (`gia_solve_index`, `gia_dt`, `gia_time_alpha`, `operator_version`,
+     `gia_tape_sweep`). A
      replay, an adjoint sweep and a tangent sweep do not run
      `SelfGravitatingGIASolver.solve`, so without this binding their solves
      read the values of the last forward step.
@@ -43,21 +44,77 @@ sweep alike (`gadopt.nullspaces`).
 
 The multiplier DtN path with the DG history (`_StockStep` of the GIA solver)
 puts Firedrake's solve block on the tape unchanged; its residual is a plain
-UFL form and it has no low-rank term, so it needs no adoption.
+UFL form and it has no low-rank term, so it needs no adoption. The two sweep
+markers around it publish its operator version for its replay
+(`TapeSweepMarkerBlock`, `tape_operator_version`).
 """
 
 from contextlib import contextmanager
 
 import numpy as np
-from firedrake import Cofunction
+from firedrake import Cofunction, Function
 from pyadjoint import Block
 
 from .utility import scalar_value
 
-__all__ = ["GIAStepBlockMixin", "TapeSweepMarkerBlock"]
+__all__ = ["GIAStepBlockMixin", "TapeSweepMarkerBlock", "tape_operator_version"]
 
 #: The value of a missing key, distinct from every value a context can hold.
 _MISSING = object()
+
+
+def tape_operator_version(gia_solver, block):
+    """The `operator_version` of the solve of `block`, from its saved values, or None.
+
+    The forward run publishes an integer `operator_version` and moves it
+    when a coefficient of the Jacobian changes between two solves
+    (`SelfGravitatingGIASolver._refresh_operator_version`). The caches of
+    the preconditioners rebuild when it moves (`gadopt.preconditioners.
+    _RebuildRule`, `gadopt.InternalVariableSCPC`). A replay or a derivative
+    sweep does not run that method, so the version stays at its last forward
+    value, and a cache built for one step would be kept for the next step
+    even where the forward run rebuilt. The key returned here takes the
+    place of the version for the solve of one step block. It changes
+    between two step blocks where the forward version changed:
+
+    - a `Real` Function enters by its value saved on the tape for this
+      block, which is the replayed value in a replay at a new control;
+    - any other Function enters by the identity of its block variable. A
+      recorded assignment between two steps makes a new block variable, as
+      the forward run moves `dat_version`.
+
+    The values are read with the halo entries, so every rank holds the same
+    key, and the rebuild, which is collective, is decided in the same way on
+    every rank. Block variables live as long as the tape, so two identities
+    compared within one sweep cannot be equal by reuse. The first solve of
+    each sweep rebuilds through `gia_tape_sweep` anyway.
+
+    Args:
+      gia_solver: The `SelfGravitatingGIASolver` that recorded the block.
+      block: Its step block on the tape: a block of `GIAStepBlockMixin`, or
+        Firedrake's solve block of the multiplier DtN path with the DG
+        history.
+
+    Returns:
+      A tuple to publish as `operator_version`; None when the forward run
+      publishes None (a Jacobian that moves inside one solve, where every
+      cache already rebuilds by the solve index or at every update).
+    """
+    if gia_solver.appctx.get("operator_version") is None:
+        return None
+    jacobian = gia_solver._jacobian_coefficients
+    entries = []
+    for dep in block.get_dependencies():
+        output = dep.output
+        if output is gia_solver.solution or not any(output is c for c in jacobian):
+            continue
+        if (isinstance(output, Function)
+                and output.function_space().ufl_element().family() == "Real"):
+            values = np.asarray(dep.saved_output.dat.data_ro_with_halos).ravel()
+            entries.append(("values", tuple(values.tolist())))
+        else:
+            entries.append(("variable", id(dep)))
+    return ("tape", tuple(entries))
 
 
 class TapeSweepMarkerBlock(Block):
@@ -95,6 +152,20 @@ class TapeSweepMarkerBlock(Block):
         belongs to.
       before: `True` for the block in front of the step block, `False` for
         the one behind it.
+
+    **The operator version of a stock step.** Firedrake's own solve block
+    of the multiplier DtN path with the DG history binds nothing to its
+    solves (it does not inherit `GIAStepBlockMixin`). For that step,
+    `SelfGravitatingGIASolver.solve` gives both markers the solve block as
+    `step_block`. The marker that a sweep reaches first then publishes the
+    block's `tape_operator_version` as `operator_version` in the solver's
+    application context, and the marker it reaches second publishes the
+    forward version again. So the caches of the replay solver (the condensed
+    operator of `InternalVariableSCPC`, the `Real`-block complement) rebuild
+    at the steps where the forward run rebuilt. A sweep that stops with an
+    error between the two markers leaves the key in the context; the next
+    forward solve publishes its integer version again
+    (`SelfGravitatingGIASolver._refresh_operator_version`).
     """
 
     def __init__(self, gia_solver, solve_index, before):
@@ -102,6 +173,9 @@ class TapeSweepMarkerBlock(Block):
         self.gia_solver = gia_solver
         self.solve_index = solve_index
         self.before = before
+        #: The stock solve block between this marker and its partner, or
+        #: None (a step block of `GIAStepBlockMixin` binds its own values).
+        self.step_block = None
 
     def __str__(self):
         return f"TapeSweepMarkerBlock({'before' if self.before else 'after'})"
@@ -120,24 +194,53 @@ class TapeSweepMarkerBlock(Block):
             solver.appctx["gia_tape_sweep"] = solver.appctx.get("gia_tape_sweep", 0) + 1
         solver._tape_sweep_visit = (direction, self.solve_index)
 
+    def _publish_version(self, entering):
+        """Publish the stock step block's version on entry, the forward one on exit.
+
+        Does nothing without a `step_block`. On entry the key of the step
+        block (`tape_operator_version`) is published if there is one. On exit
+        the forward value is published again if the context holds a key.
+
+        Args:
+          entering: True for the marker a sweep reaches before the step
+            block, False for the one it reaches after it.
+        """
+        if self.step_block is None:
+            return
+        solver = self.gia_solver
+        if entering:
+            version = tape_operator_version(solver, self.step_block)
+            if version is not None:
+                solver.appctx["operator_version"] = version
+        elif isinstance(solver.appctx.get("operator_version"), tuple):
+            solver.appctx["operator_version"] = solver._operator_version
+
+    def _sweep_visit(self, direction):
+        """One visit of a sweep in `direction`: count the sweep, bind or unbind.
+
+        A sweep in tape order (+1) reaches the `before` marker first; a sweep
+        in reverse order (-1) reaches the `after` marker first. The marker
+        reached first counts the sweep and binds; the other one unbinds.
+        """
+        first = self.before == (direction > 0)
+        if first:
+            self._visit(direction)
+        self._publish_version(entering=first)
+
     # pyadjoint calls these four for every block of a sweep. The stock
     # versions return early for a block without outputs, so they are
     # replaced, not extended.
     def recompute(self, markings=False):
-        if self.before:
-            self._visit(+1)
+        self._sweep_visit(+1)
 
     def evaluate_tlm(self, markings=False):
-        if self.before:
-            self._visit(+1)
+        self._sweep_visit(+1)
 
     def evaluate_adj(self, markings=False):
-        if not self.before:
-            self._visit(-1)
+        self._sweep_visit(-1)
 
     def evaluate_hessian(self, markings=False):
-        if not self.before:
-            self._visit(-1)
+        self._sweep_visit(-1)
 
 
 class GIAStepBlockMixin:
@@ -159,8 +262,9 @@ class GIAStepBlockMixin:
 
         theta_psi = c B_mu / Lambda
 
-    (`c` the scaling factor, `B_mu` floored to `NULL_COUPLING_ROW_SCALE` at
-    zero). The callbacks read `theta_psi` off the shared `dtn_operator`. The
+    (`c` the scaling factor, `B_mu` replaced by the constant
+    `NULL_COUPLING_ROW_SCALE` if it was zero at construction,
+    `SelfGravitatingGIASolver.row_scale_B_mu_value`). The callbacks read `theta_psi` off the shared `dtn_operator`. The
     forms do not carry this term, so the derivative
 
         d theta_psi / dm = (B_mu / Lambda) dc/dm + (c / Lambda) dB_mu/dm
@@ -238,19 +342,26 @@ class GIAStepBlockMixin:
     def _theta_factors(self):
         """The saved values `(c, B_mu, Lambda)` of `theta_psi`, and their objects.
 
+        The value of `B_mu` goes through the solver's one rule for the floor
+        (`SelfGravitatingGIASolver.row_scale_B_mu_value`), which the forms
+        and the live callbacks follow too. With the floor the row scale is a
+        constant, so the prefactor does not depend on `B_mu`, and its object
+        is given as None.
+
         Returns:
-          `(objects, values)`: the objects `(scaling_factor, B_mu, Lambda)`,
-          and their values at this point of the tape, with `B_mu` floored to
-          `NULL_COUPLING_ROW_SCALE` at zero. The floor is a constant, so at a
-          zero `B_mu` the prefactor does not depend on `B_mu`, and its object
-          is given as None.
+          `(objects, values)`: the objects `(scaling_factor, B_mu, Lambda)`
+          and their values at this point of the tape, with the row scale in
+          place of `B_mu`.
+
+        Raises:
+          ValueError: If the saved `B_mu` is zero and the solver was built
+            with a nonzero one (`row_scale_B_mu_value`).
         """
-        from .gia_presets import NULL_COUPLING_ROW_SCALE
         solver = self.gia_solver
         objects = [solver.scaling_factor, solver.approximation.B_mu, solver.Lambda]
         values = [self._saved_scalar(obj) for obj in objects]
-        if values[1] == 0.0:
-            values[1] = NULL_COUPLING_ROW_SCALE
+        values[1] = solver.row_scale_B_mu_value(values[1])
+        if solver.B_mu_floored:
             objects[1] = None
         return objects, values
 
@@ -358,7 +469,7 @@ class GIAStepBlockMixin:
     def _bound_to_block(self):
         """Bind what the shared solvers read to this block, for one solve.
 
-        Five values are bound; all but the sweep counter are restored on exit.
+        Six values are bound; all but the sweep counter are restored on exit.
 
         - `theta_psi` on the shared `dtn_operator` (low-rank path only), from
           this block's saved values. The augmentation callbacks read it at
@@ -376,6 +487,13 @@ class GIAStepBlockMixin:
           rebuilds when the effective step `dt / alpha` differs from the one
           of the last build (`gadopt.preconditioners._published_dt`). The
           live objects hold the values of the last forward assignment.
+        - `operator_version`, when the forward run publishes an integer
+          version: a key of the Jacobian coefficients at this block's point
+          on the tape (`tape_operator_version`). The forward run moves the
+          version when a Jacobian coefficient changes between two steps (a
+          viscosity assigned between steps), and every cache keyed on it
+          rebuilds there. The key moves at the same steps of a replay or a
+          derivative sweep.
         - `gia_tape_sweep`, the counter of `TapeSweepMarkerBlock`, copied from
           the solver's own context into every context the preconditioners
           read. Where a cached solver got a copy of the dict, the copy would
@@ -384,8 +502,11 @@ class GIAStepBlockMixin:
 
         A block put on the tape without a solve index leaves the index
         alone; a dependency that is absent (a float time step) is left alone.
-        Each context is restored to its own previous value, so the forward
-        solver's state is unchanged after a replay that shares its dict.
+        Every value is computed before the first write, and every write is
+        inside the `try`, so each context and the prefactor are restored to
+        their previous values also when the computation of a value or the
+        solve raises. The forward solver's state is therefore unchanged after
+        a replay that shares its dict.
 
         Yields:
           None.
@@ -400,17 +521,23 @@ class GIAStepBlockMixin:
         alpha = self._saved_alpha()
         if alpha is not None:
             bound["gia_time_alpha"] = alpha
-        saved = [{key: ctx.get(key, _MISSING) for key in bound} for ctx in contexts]
+        version = tape_operator_version(self.gia_solver, self)
+        if version is not None:
+            bound["operator_version"] = version
         sweep = self.gia_solver.appctx.get("gia_tape_sweep")
-        for ctx in contexts:
-            ctx.update(bound)
-            if sweep is not None:
-                ctx["gia_tape_sweep"] = sweep
         op = self.gia_solver.dtn_operator if self._lowrank else None
-        if op is not None:
-            saved_theta = op.theta
-            op.theta = self._bound_theta()
+        theta = self._bound_theta() if op is not None else None
+        # The previous values, read before any write, so that the `finally`
+        # below can restore all of them whatever point the writes reached.
+        saved = [{key: ctx.get(key, _MISSING) for key in bound} for ctx in contexts]
+        saved_theta = op.theta if op is not None else None
         try:
+            for ctx in contexts:
+                ctx.update(bound)
+                if sweep is not None:
+                    ctx["gia_tape_sweep"] = sweep
+            if op is not None:
+                op.theta = theta
             yield
         finally:
             if op is not None:

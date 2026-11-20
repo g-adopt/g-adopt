@@ -915,10 +915,12 @@ class _RebuildRule:
             self._sweep = sweep
             return True
         if version is not None:
-            # The version moves when the forward run assigns a new dt, but
-            # not in a replay or an adjoint sweep, which do not touch the
-            # live coefficients; there the time step of the solve block
-            # (`_published_dt`, `gia_dt`) is what moves.
+            # The forward run moves the version when a Jacobian coefficient
+            # changes. A replay or an adjoint sweep does not touch the live
+            # coefficients; there the step block publishes a key of its
+            # saved coefficients in place of the version
+            # (`gadopt.gia_step_adjoint.tape_operator_version`), and its
+            # time step (`_published_dt`, `gia_dt`).
             if (version != self._operator_version
                     or _published_dt(pc) != self._dt):
                 self._operator_version = version
@@ -3451,9 +3453,14 @@ class InternalVariableSCPC(fd.SCPC):
     the key the class behaves as `SCPC` does. `assembly_count` records how
     many times the condensed operator has been assembled.
 
-    Two more markers also force a reassembly, because the version does not
-    move in a replay or a derivative sweep of the tape, which do not run the
-    solver's `solve`: the tape sweep counter `gia_tape_sweep`
+    A replay or a derivative sweep of the tape does not run the solver's
+    `solve`, so the solver does not move the version there. For the solve
+    of each step block, the step block (or the sweep markers around
+    Firedrake's own solve block) publishes a key of the block's saved
+    coefficients in place of the version
+    (`gadopt.gia_step_adjoint.tape_operator_version`), which moves where the
+    forward version moved. Two more markers also force a reassembly: the
+    tape sweep counter `gia_tape_sweep`
     (`gadopt.gia_step_adjoint.TapeSweepMarkerBlock`), which moves when a
     replay at a new control value or a derivative sweep starts, and the
     effective history step `dt / alpha` (`_context_dt`), which a step block
