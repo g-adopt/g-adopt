@@ -31,10 +31,11 @@ RESTART_STEP = 4
 #: - `default_options`: True adds the tight tolerances of
 #:   `gia_cases.build_new` (Newton `snes_rtol` 1e-11, `snes_atol` 1e-13);
 #:   False keeps the tolerances of the preset. The entries with a fixed
-#:   coastline or the prescribed load are linear, and the direct preset
-#:   solves them in one Newton step to round-off (`ksp_rtol` 1e-11); with
-#:   the tight `snes_atol` Newton continues below round-off, and the `LOAD`
-#:   march stops with `DIVERGED_LINEAR_SOLVE` at step 2;
+#:   coastline or the prescribed load use the preset tolerances: with the
+#:   tight ones the `LOAD` march stops at step 2 with
+#:   `DIVERGED_LINEAR_SOLVE` (the second Newton step starts from a KSP
+#:   right-hand side of 2.3e-17 and does not reduce it by 1e-11 in 10000
+#:   iterations), and `sea-fixed` takes 2 Newton steps per step;
 #: - `cores`: the number of MPI ranks;
 #: - `save_state`: write the state after `RESTART_STEP` steps;
 #: - `restart_from`: read the state that this entry wrote and march the
@@ -83,8 +84,7 @@ FORWARD_RECORDED = ["sea-direct", "sea-iterative", "sea-multiplier", "sea-fixed"
 #: The relations between entries: `(entry, reference, rtol, first row)`.
 #: Every value column of `entry` agrees with the same column of `reference`
 #: from `first row` on (0-based), with the rule of `SCALE_OF`. The restart
-#: entries hold the rows after `RESTART_STEP`. `RELATION_RTOL_OF` gives
-#: other tolerances for single columns.
+#: entries hold the rows after `RESTART_STEP`.
 RELATIONS = [
     ("sea-iterative", "sea-direct", 1e-5, 0),
     ("sea-multiplier", "sea-direct", 1e-8, 0),
@@ -97,15 +97,7 @@ RELATIONS = [
     ("sea-iterative-np3", "sea-direct", 1e-5, 0),
 ]
 
-#: The centre-of-mass multipliers of the multiplier representation agree
-#: with those of the low-rank one to 1e-6 only: they are the response to the
-#: degree-1 part of the solution, which the two representations reach
-#: through different algebra (an explicit multiplier per DtN mode, or the
-#: rank-`n` update).
-RELATION_RTOL_OF = {("sea-multiplier", "com_0"): 1e-6,
-                    ("sea-multiplier", "com_1"): 1e-6}
-
-#: Entries whose solve is direct (tight tolerances); the others are iterative.
+#: Entries with the direct preset; the others are iterative.
 FORWARD_DIRECT = [name for name, e in FORWARD.items() if e["preset"] == "direct"]
 
 #: Relative tolerance of a recorded column: the direct entries solve to
@@ -115,7 +107,9 @@ RECORDED_RTOL_DIRECT = 1e-8
 RECORDED_RTOL_ITERATIVE = 1e-5
 
 #: The size that each value column is compared against, in addition to its
-#: own value: `|measured - expected| <= rtol * (|expected| + scale)`. A
+#: own value: `|measured - expected| <= rtol |expected| + scale_rtol scale`,
+#: with `scale_rtol = SCALE_RTOL_DIRECT` when both sides come from the direct
+#: preset and `scale_rtol = rtol` otherwise. A
 #: quantity that is small against the size it could have (the mean radial
 #: displacement of a nearly incompressible mantle, the core pressure under a
 #: load with no degree-0 part, the residual first moment) is then compared
@@ -126,6 +120,12 @@ RECORDED_RTOL_ITERATIVE = 1e-5
 #: `("l2", c)` is `sqrt(re_area * c)`, the Cauchy-Schwarz bound of the
 #: integral of a field whose square integrates to `c`. A column that is not
 #: listed is compared relative to its own value only.
+#: The direct entries reproduce the small columns (`core_pressure`, `m3`,
+#: `ur_mean` at 1e-8 to 1e-10 of their scale) to at most 3e-15 of the scale
+#: between rank counts, restarts and DtN representations; 1e-12 leaves room
+#: for another BLAS and factorisation order and still fails a sign flip.
+SCALE_RTOL_DIRECT = 1e-12
+
 SCALE_OF = {
     "u_probe": ("product", "u_norm", "u_probe_norm"),
     "psi_probe": ("product", "psi_norm", "psi_probe_norm"),
@@ -153,7 +153,12 @@ COUNTER_SUFFIXES = ("build_count", "column_builds", "assembly_count",
 #: Columns that are bounds derived from the solver tolerances, not results.
 #: They are compared with the recorded values of the same entry, but not
 #: between entries with other presets.
-BOUND_COLUMNS = ("mass_newton", "mass_bound")
+BOUND_COLUMNS = ("mass_bound",)
+
+#: Columns made of final residual norms, which are round-off and do not
+#: reproduce between runs; they are checked against bounds only, never
+#: compared with a recorded value or another entry.
+RESIDUAL_COLUMNS = ("mass_newton", "newton_reduction")
 
 #: The net sheet mass may be at most this fraction of the absolute sheet
 #: mass. The identity of the `Shift` row sets it to the order of the
@@ -173,21 +178,29 @@ COUPLING_COLUMNS = {"sea-direct": ("shift", "com_0"),
                     "load-direct": ("core_pressure", "m3")}
 
 #: The entries with a fixed coastline or a prescribed load: their residual
-#: is linear in the solution, so Newton takes exactly one step.
+#: is linear in the solution, so one Newton step solves them to the
+#: tolerance of the linear solve. The reduction of the residual norm in that
+#: step (`newton_reduction`) is at most `LINEAR_REDUCTION[preset]`: ten times
+#: the largest value measured.
 LINEAR_ENTRIES = ["sea-fixed", "sea-fixed-iterative", "load-direct", "load-iterative"]
+#: Measured largest reductions: 1.4e-7 (direct, `load-direct`) and 1.5e-7
+#: (iterative, `load-iterative`). The direct entries stop on the absolute
+#: Newton tolerance (`CONVERGED_FNORM_ABS`), the iterative ones on the
+#: relative one (`CONVERGED_FNORM_RELATIVE`).
+LINEAR_REDUCTION = {"direct": 1.4e-6, "iterative": 1.5e-6}
 
-#: The rebuild rule of the cached operators, checked in `sea-fixed-iterative`.
-#: Its solver publishes no operator version (the Quadrature step marks its
-#: Jacobian as dependent on the solution), so the caches follow the lagged
-#: branch of `gadopt.preconditioners._RebuildRule`: a rebuild when the time
-#: step differs from the one of the last build, when the last solve took
-#: too many outer iterations per Newton step, or after `every` solves. The
-#: test asserts the part of this that follows from the rule alone: at most
-#: one build per solve, a build at the 1-based step `REBUILD_DT_STEP` where
-#: `dt` changes, and at least one step that reuses the cache. The full
-#: sequence (measured 1, 2, 2, 2, 3, 4, 4, 4) is a recorded value.
-REBUILD_ENTRY = "sea-fixed-iterative"
-REBUILD_DT_STEP = 5
+#: The rebuild rule of the cached operators, checked in the iterative
+#: entries with a linear residual. Their solver publishes no operator version
+#: (the Quadrature step marks its Jacobian as dependent on the solution), so
+#: the caches follow the lagged branch of `gadopt.preconditioners.
+#: _RebuildRule`, which rebuilds when the effective history step `h / alpha`
+#: differs from the one of the last build. That step changes at step 1 (the
+#: first build), step 2 (the first BDF2 step after the backward-Euler start),
+#: step 5 (the new `dt`, with the BDF2 coefficients of unequal steps) and
+#: step 6 (the coefficients of equal steps again), so each counter increases
+#: by 1 at exactly those 1-based steps.
+REBUILD_ENTRIES = ("sea-fixed-iterative", "load-iterative")
+REBUILD_STEPS = (1, 2, 5, 6)
 REBUILD_COUNTERS = ("pc_DtNTwoBlockSchurPC_ainvb_build_count",
                     "pc_inner_split0_ReducedGIABlockPC_assembly_count")
 
@@ -208,6 +221,8 @@ CMB_FLUX_RTOL = 1e-9
 #: `5e-7 |b| + 2e-9` of `test_direct_matches_coupled_quadrature` is at most 1
 #: for every field and step; the fields compared must not be zero.
 UNREDUCED_FIELDS = ("displacement", "potential", "history")
+UNREDUCED_REALS = ("core_pressure", "m3", "centre_of_mass_0", "centre_of_mass_1",
+                   "sea_level_shift")
 UNREDUCED_STEP_COUNT = 4
 
 #: `reference-quadrature`: the stored states of the earlier solver, the label

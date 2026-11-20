@@ -13,7 +13,7 @@ The reference is built on the DG history family of the solver, with the
 history space replaced by the Quadrature element of the same degree
 (`quadrature_history_space`). It is serial only (`jacobian_matrix`).
 
-The case `forward` (entry `unreduced`, `gia_forward_unreduced.py`) and the
+The case `forward` (entry `unreduced`, `gia_forward.run_unreduced`) and the
 unit test `tests/unit/test_gia_direct_bdf2.py` use this module.
 """
 from unittest import mock

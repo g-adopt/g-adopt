@@ -47,6 +47,22 @@ def is_count(column):
     return column in ("newton", "linear", "operator_version") or is_counter(column)
 
 
+def is_direct(entry):
+    """Whether `entry` uses the direct preset."""
+    return E.FORWARD[entry]["preset"] == "direct"
+
+
+def scale_rtol(rtol, *entries):
+    """The tolerance on the scale of a column for a comparison of `entries`.
+
+    `SCALE_RTOL_DIRECT` (or `rtol`, if smaller) when every entry uses the
+    direct preset, whose small columns are deterministic; `rtol` otherwise.
+    """
+    if all(is_direct(entry) for entry in entries):
+        return min(rtol, E.SCALE_RTOL_DIRECT)
+    return rtol
+
+
 def recorded_rtol(entry):
     """The relative tolerance of the recorded values of `entry`."""
     return (E.RECORDED_RTOL_DIRECT if entry in E.FORWARD_DIRECT
@@ -69,17 +85,18 @@ def scale_of(table, column):
     raise ValueError(rule)
 
 
-def compare_values(measured, expected, column, rtol, label):
+def compare_values(measured, expected, column, rtol, scale_rtol, label):
     """Assert that one value column of two tables agrees, row by row.
 
-    `|m - e| <= rtol * (|e| + scale)`, with the scale of the column taken
-    from the expected table (`scale_of`). A NaN in the expected column must
-    be NaN in the measured one: the entry has no such quantity.
+    `|m - e| <= rtol |e| + scale_rtol scale`, with the scale of the column
+    taken from the expected table (`scale_of`). A NaN in the expected column
+    must be NaN in the measured one: the entry has no such quantity.
 
     Args:
       measured, expected: two tables with the same rows.
       column: the column to compare.
-      rtol: the relative tolerance.
+      rtol: the tolerance relative to the expected value.
+      scale_rtol: the tolerance relative to the scale of the column.
       label: the entries and the column, for the message.
     """
     m = measured[column].to_numpy(float)
@@ -89,18 +106,18 @@ def compare_values(measured, expected, column, rtol, label):
         if math.isnan(ek):
             assert math.isnan(mk), f"{label} row {k}: measured {mk!r}, expected NaN"
             continue
-        allowed = rtol * (abs(ek) + sk)
+        allowed = rtol * abs(ek) + scale_rtol * sk
         assert abs(mk - ek) <= allowed, (
-            f"{label} row {k}: measured {mk!r}, expected {ek!r}, "
-            f"tolerance {allowed!r} (rtol {rtol!r}, scale {sk!r})")
+            f"{label} row {k}: measured {mk!r}, expected {ek!r}, tolerance "
+            f"{allowed!r} (rtol {rtol!r}, scale {sk!r}, scale_rtol {scale_rtol!r})")
 
 
 @pytest.mark.parametrize("entry", E.FORWARD_RECORDED)
 def test_recorded_values(entry):
     """Every column of every step agrees with the recorded values.
 
-    Values: `recorded_rtol(entry)`, against the value and the scale of the
-    column (`compare_values`). Newton count: within 1 of the stored count. Linear
+    Values: `recorded_rtol(entry)` against the value, and `scale_rtol`
+    against the scale of the column (`compare_values`). Newton count: within 1 of the stored count. Linear
     count: at most the stored count plus the larger of 2 and 20 percent.
     Cache counters and `operator_version`: equal.
     """
@@ -123,11 +140,13 @@ def test_recorded_values(entry):
         elif column == "linear":
             limit = e + np.maximum(2, 0.2 * e)
             assert np.all(m <= limit), f"{label}: measured {m!r}, at most {limit!r}"
+        elif column in E.RESIDUAL_COLUMNS:
+            continue
         elif is_count(column):
             assert np.array_equal(m, e, equal_nan=True), (
                 f"{label}: measured {m!r}, expected {e!r}")
         else:
-            compare_values(measured, expected, column, rtol, label)
+            compare_values(measured, expected, column, rtol, scale_rtol(rtol, entry), label)
 
 
 @pytest.mark.parametrize("entry,column", [
@@ -251,39 +270,47 @@ def test_relations_between_entries(entry, reference, rtol, first):
         f"{entry} steps {list(measured['step'])!r}, {reference} steps "
         f"{list(expected['step'])!r}")
     for column in expected.columns:
-        if is_count(column) or column in E.BOUND_COLUMNS:
+        if is_count(column) or column in (*E.BOUND_COLUMNS, *E.RESIDUAL_COLUMNS):
             continue
         assert column in measured.columns, f"{entry} lacks the column {column!r}"
-        column_rtol = E.RELATION_RTOL_OF.get((entry, column), rtol)
-        compare_values(measured, expected, column, column_rtol,
+        compare_values(measured, expected, column, rtol, scale_rtol(rtol, entry, reference),
                        f"{entry} against {reference}: {column}")
 
 
 @pytest.mark.parametrize("entry", E.LINEAR_ENTRIES)
 def test_a_linear_residual_takes_one_newton_step(entry):
-    """With a fixed coastline or a prescribed load, Newton takes one step."""
-    newton = load_log(entry)["newton"].to_numpy()
+    """With a fixed coastline or a prescribed load, one Newton step solves.
+
+    Newton takes one step, and that step reduces the residual norm by at
+    least the factor `LINEAR_REDUCTION` of the preset.
+    """
+    table = load_log(entry)
+    newton = table["newton"].to_numpy()
     assert np.all(newton == 1), f"{entry} newton: measured {newton!r}, expected 1"
+    reduction = table["newton_reduction"].to_numpy()
+    limit = E.LINEAR_REDUCTION[E.FORWARD[entry]["preset"]]
+    assert np.all(reduction <= limit), (
+        f"{entry} newton_reduction: measured {reduction!r}, at most {limit!r}")
 
 
 @pytest.mark.parametrize("counter", E.REBUILD_COUNTERS)
-def test_the_caches_rebuild_at_a_change_of_dt(counter):
-    """A cache builds at most once per solve, at the change of `dt`, and is reused.
+@pytest.mark.parametrize("entry", E.REBUILD_ENTRIES)
+def test_the_caches_rebuild_where_the_step_changes(entry, counter):
+    """Each cache counter increases by 1 exactly at `REBUILD_STEPS`.
 
-    In `REBUILD_ENTRY` the step operator depends on `dt` and on the BDF2
-    coefficients only. A cache that does not rebuild at a change of `dt`
-    keeps a preconditioner of another operator; one that rebuilds at every
-    step does not cache.
+    The step operator of these entries depends only on the effective
+    history step `h / alpha`, which changes at `REBUILD_STEPS`. A cache that
+    does not rebuild there keeps a preconditioner of another operator; one
+    that rebuilds elsewhere does not cache.
     """
-    table = load_log(E.REBUILD_ENTRY)
+    table = load_log(entry)
     counts = table[counter].to_numpy()
     steps = table["step"].to_numpy().astype(int)
     increase = np.diff(counts, prepend=0)
-    label = f"{E.REBUILD_ENTRY} {counter}: counts {counts!r}"
-    assert np.all((increase == 0) | (increase == 1)), f"{label}, more than one build per solve"
-    assert increase[list(steps).index(E.REBUILD_DT_STEP)] == 1, (
-        f"{label}, no build at step {E.REBUILD_DT_STEP} where dt changes")
-    assert np.any(increase == 0), f"{label}, a build at every step"
+    expected = np.array([1 if s in E.REBUILD_STEPS else 0 for s in steps])
+    assert np.array_equal(increase, expected), (
+        f"{entry} {counter}: counts {counts!r}, increase per step {increase!r}, "
+        f"expected {expected!r}")
 
 
 def test_the_elimination_matches_the_unreduced_system():
@@ -295,7 +322,9 @@ def test_the_elimination_matches_the_unreduced_system():
     """
     values = load_values("unreduced")
     ratios = {name: value for name, value in values.items() if name.endswith("_ratio")}
-    assert len(ratios) >= E.UNREDUCED_STEP_COUNT * len(E.UNREDUCED_FIELDS)
+    for k in range(1, E.UNREDUCED_STEP_COUNT + 1):
+        for field in (*E.UNREDUCED_FIELDS, *E.UNREDUCED_REALS):
+            assert f"step{k}_{field}_ratio" in ratios, f"step {k}: no ratio of {field}"
     bad = {name: value for name, value in ratios.items() if not value <= 1.0}
     assert not bad, f"differences above the bound (ratio to bound): {bad!r}"
     for k in range(1, E.UNREDUCED_STEP_COUNT + 1):

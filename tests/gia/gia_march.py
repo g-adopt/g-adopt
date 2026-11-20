@@ -242,7 +242,8 @@ def diagnostics(run, k):
     - rotation: `m3`;
     - rheology: `min_power_factor`, the smallest power-law factor
       `eta_eff / eta` over the quadrature points (`_min_power_factor`);
-    - counts: `newton linear`, the cache counters of the preconditioners
+    - counts: `newton linear`, `newton_reduction` (the final over the first
+      residual norm of the solve), the cache counters of the preconditioners
       (`preconditioner_counters`) and `operator_version`.
 
     Args:
@@ -284,6 +285,9 @@ def diagnostics(run, k):
     row["m3"] = _real(solver, "m3")
     row["min_power_factor"] = _min_power_factor(solver)
     row["newton"] = solver.appctx["gia_last_solve_newton_its"]
+    history = residual_history(solver)
+    row["newton_reduction"] = (float(history[-1] / history[0]) if len(history) > 1
+                               else math.nan)
     row["linear"] = solver.appctx["gia_last_solve_linear_its"]
     row.update(preconditioner_counters(solver))
     version = solver.appctx.get("operator_version")
@@ -375,13 +379,11 @@ def _mass_terms(solver, sea):
                    for i, lam_i in enumerate(lam)) / g_s
     frame = sum(abs(lam_i) * fd.assemble(abs(X[i] * dsigma_dshift) * dss)
                 for i, lam_i in enumerate(lam)) / g_s
-    snes = solver.solver.snes
-    history, _ = snes.getConvergenceHistory()
-    first = float(history[0]) if len(history) else math.nan
-    rtol, atol = snes.getTolerances()[:2]
+    history = residual_history(solver)
+    last = float(history[-1]) if len(history) else math.nan
     row_scale = (scalar_value(solver.scaling_factor)
                  * scalar_value(solver.approximation.B_mu) * g_s)
-    newton = 10 * max(rtol * first, atol) / row_scale
+    newton = 10 * last / row_scale
     return {"mass_identity": identity, "mass_newton": newton,
             "mass_bound": 2.0 * frame + newton}
 
@@ -416,6 +418,12 @@ def _frame_columns(solver):
         out[f"sheet_moment_{i}"] = sum(
             fd.assemble(abs(X[i] * sheet.density) * sheet.measure) for sheet in sheets)
     return out
+
+
+def residual_history(solver):
+    """The residual norms of the last solve, from the SNES convergence history."""
+    history, _ = solver.solver.snes.getConvergenceHistory()
+    return history
 
 
 def enable_residual_history(solver):
