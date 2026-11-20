@@ -1,20 +1,13 @@
-"""Mass conservation verification for the Richards equation solver.
+"""Test mass conservation in the Richards equation solver.
 
-The stage-value formulation discretises the nonlinear mass term Dt(theta(h))
-as the exact per-stage finite difference, so theta(h) should be conserved to
-solver tolerance. We check that along two axes:
+A constant inflow of 1e-6 m/s enters the top of a unit square, with zero
+flux on the remaining boundaries. Specific storage is zero, so the change
+in total moisture content should equal the prescribed inflow.
 
-(1) Function space, at fixed BackwardEuler: DQ0/DQ1/DQ2 sit at solver
-    tolerance, while CG1/CG2 pick up an O(1e-4) consistency error from the
-    lack of element-wise conservation.
-
-(2) Time-stepping scheme, at fixed DQ1: BackwardEuler, ImplicitMidpoint and
-    GaussLegendre(2) should all conserve mass to solver tolerance.
-
-The domain is a unit square with no-flux boundaries on left, right and bottom
-and a prescribed inflow flux of 1e-6 m/s on top. The soil follows a Haverkamp
-model with moderate nonlinearity, and specific storage is zero so theta(h) is
-the only conserved quantity.
+The tests compare CG and DQ function spaces with backward Euler, and
+several time integration schemes with DQ1. Mass conservation is assessed
+by comparing the change in moisture content against the boundary flux
+at each time step.
 """
 
 import pytest
@@ -74,10 +67,7 @@ def compute_mass_balance(grid_points, time_step, t_final,
         richards_solver.solve()
 
         theta.interpolate(moisture_content(h))
-        # Mass entering over the step is the flux integrated over the inflow
-        # boundary, times dt. The top edge has measure 1 on a unit square, so
-        # this equals dt * inflow_rate here, but integrate it properly so the
-        # check stays correct if the domain ever changes.
+        # Integrate prescribed inflow over the top boundary
         inflow = float(dt) * assemble(Constant(inflow_rate) * ds(boundary_ids.top, domain=mesh))
         current_mass = assemble(theta * dx)
 

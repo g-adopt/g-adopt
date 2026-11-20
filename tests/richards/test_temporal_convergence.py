@@ -1,21 +1,18 @@
-"""Temporal convergence verification via a manufactured solution.
+"""Test temporal convergence using a manufactured solution.
 
-Checks that each time-stepping scheme delivers its formal order: BackwardEuler
-(1), ImplicitMidpoint (2) and GaussLegendre(2) (4).
+We prescribe a spatially uniform pressure head h(x, y, t) = h0(t) on a
+unit square. The divergence of the flux is zero, reducing the Richards
+equation to dtheta/dt = S. For the exponential soil model, the required
+source term is
 
-We pick a spatially uniform solution h(x, y, t) = h0(t) on the unit square,
-with ExponentialCurve soil and Dirichlet h = h0(t) on all four sides. Spatial
-uniformity makes diffusion and gravity contribute zero, so the PDE reduces
-pointwise to dtheta/dt = S, satisfied by construction with
+    S(t) = (theta_s - theta_r) * alpha * exp(alpha * h0(t)) * h0'(t).
 
-  S(t) = (theta_s - theta_r) * alpha * exp(alpha * h0(t)) * h0'(t).
+The boundary conditions and source term depend on the time Constant
+passed to Irksome, so they are evaluated at the appropriate Runge-Kutta
+stage times.
 
-The BC and source are time-dependent UFL expressions referencing the same
-Constant that Irksome advances through stages, so the stage substitution
-t -> t + c_i*dt is honest for multi-stage tableaux (without it the observed
-order collapses to 1). CG is used so the strong Dirichlet BC handles gravity
-boundary fluxes cleanly. The error at t_final reduces to |h_num - h0(t_final)|
-since h_num is spatially uniform, isolating the temporal truncation.
+The test checks the temporal convergence orders of backward Euler (1),
+implicit midpoint (2) and two-stage Gauss-Legendre (4).
 """
 
 import numpy as np
@@ -37,10 +34,8 @@ def _run_one(scheme, scheme_kwargs, dt_value, t_final, mesh_n=4):
         theta_r=0.05, theta_s=0.40, Ks=1e-2, alpha=1.0, Ss=0.0,
     )
 
-    # Shared time Constant: Irksome's stepper will advance it through
-    # stages once we pass it via timestepper_kwargs={'t': ...}, and the
-    # BC + source expressions below reference it, so stage substitution
-    # is consistent.
+    # Use the same time Constant for the boundary conditions,
+    # source term and Runge-Kutta stage times.
     mc = MeshConstant(mesh)
     t = mc.Constant(0.0)
 
@@ -122,11 +117,8 @@ def test_temporal_convergence(scheme, scheme_kwargs, expected_order, label):
         f"{label}: observed rates {rates}, expected order {expected_order}"
     )
 
-    # Assert the coarsest pair's rate against ~85% of the formal order.
-    # The coarsest pair is furthest from the solver-tolerance floor and
-    # would expose any silent collapse to order 1. Finer-pair rates are
-    # printed above for diagnostic purposes only -- taking max/min over
-    # them lets a single bad rate hide behind a good one.
+    # Check the coarsest-step convergence rate to avoid solver-tolerance
+    # effects at finer time steps.
     floor = 0.85 * expected_order
     assert rates[0] >= floor, (
         f"{label}: coarsest-pair rate {rates[0]:.2f} below expected "

@@ -1,16 +1,19 @@
-"""Vauclin 2D water table recharge benchmark.
+"""Vauclin et al. (1979) two-dimensional water-table recharge benchmark.
 
-This test reproduces the benchmark presented in:
+The domain is 3 m x 2 m, with an initial water table at approximately
+z = 0.65 m. The left and bottom boundaries have zero flux, while the right
+boundary maintains the initial pressure head. Water is injected through
+the top boundary over the first 0.5 m, with a nominal rate of 14.8 cm/h.
+The infiltration flux is smoothed in space and ramped up in time.
+
+Soil properties and benchmark parameters are provided by gwassess.
+The default simulation duration is 8 hours.
+
+Reference:
     Vauclin, M., Khanji, D., & Vachaud, G. (1979). Experimental and numerical study
     of a transient, two-dimensional unsaturated-saturated water table recharge problem.
     Water Resources Research, 15(5), 1089-1101.
     https://doi.org/10.1029/WR015i005p01089
-
-The simulation is performed in a domain of 3 x 2 metres, with initial condition
-such that the region z <= 0.65 m is fully saturated (h = z - 0.65). Boundary
-conditions: bottom and left are no-flux, right has fixed water table height
-(h = z - 0.65 m), top has water injection at 14.8 cm/hour for x <= 0.5 m.
-The simulation runs for 8 hours.
 """
 from gadopt import *
 from mpi4py import MPI
@@ -83,9 +86,8 @@ def model(level=0, do_write=False, t_final=None):
     q = Function(W, name="VolumetricFlux")
     K = Function(V, name="RelativeConductivity").interpolate(hydraulic_conductivity(h))
 
-    # Time-dependent top boundary flux. Share Irksome's t Constant with the
-    # BC expression so stage substitution t -> t + c_i*dt is honest for the
-    # multi-stage DIRK22 integrator.
+    # Time-dependent top boundary flux, evaluated at each
+    # DIRK22 stage.
     mc = MeshConstant(mesh)
     time_var = mc.Constant(0.0)
     infiltration_rate = vauclin_solution.INFILTRATION_RATE
