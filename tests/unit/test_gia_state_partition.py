@@ -81,7 +81,7 @@ def _restart_gap(path, name, comm):
 
 #: The Quadrature case of `STATE_CASES`: BDF2, low-rank DtN, two Maxwell
 #: elements, fluid core, centre of mass.
-QUADRATURE_STATE_CASE = STATE_CASES[2]
+QUADRATURE_STATE_CASE = STATE_CASES[0]
 
 
 @pytest.mark.parallel(nprocs=2)
