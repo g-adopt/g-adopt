@@ -138,20 +138,23 @@ class Case:
         return replace(self, **kwargs)
 
 
-def approximation(case, control=None, B_mu=B_MU, transition_stress=.003):
+def approximation(case, control=None, B_mu=B_MU, transition_stress=.003,
+                  self_gravity_number=LAMBDA):
     """A fresh approximation of `case.model`.
 
     Args:
       case: the configuration; `case.model` selects the rheology.
       control: `None`, or a field that scales every viscosity by `exp(control)`.
       B_mu: the self-gravity coupling number.
+      self_gravity_number: the number `Lambda` of the potential equation; a
+        `Real` Function makes it a control.
       transition_stress: the stress above which the power law (`"power"` and
         `"backstress"`) departs from the Newtonian viscosity. A lower value
         makes the same load more strongly nonlinear.
     """
     factor = 1.0 if control is None else fd.exp(control)
     common = dict(bulk_modulus=1.0, density=1.0, g=1.0, B_mu=B_mu,
-                  self_gravity_number=LAMBDA)
+                  self_gravity_number=self_gravity_number)
     if case.model == "maxwell":
         return gadopt.CompressibleInternalVariableApproximation(
             shear_modulus=1.0, viscosity=1.0 * factor, **common)
@@ -239,7 +242,8 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
       default_options: `False` leaves out the tight default tolerances.
       parameters: values that replace coupling parameters, keyed
         `"Coupling.argument"`, for example `{"FluidCore.g": g}`, and
-        `"approximation.B_mu"` for the self-gravity coupling number and
+        `"approximation.B_mu"` for the self-gravity coupling number,
+        `"approximation.self_gravity_number"` for `Lambda` and
         `"approximation.transition_stress"` for the power law.
       extra_bcs: displacement conditions added to the ones the case gives,
         `{boundary: {name: value}}`, merged per boundary, for example
@@ -285,7 +289,8 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
     options.update(extra or {})
     material = approximation(
         case, control, B_mu=value("approximation.B_mu", B_MU),
-        transition_stress=value("approximation.transition_stress", .003))
+        transition_stress=value("approximation.transition_stress", .003),
+        self_gravity_number=value("approximation.self_gravity_number", LAMBDA))
     # Every replacement must have reached a coupling of the case.
     assert not parameters, f"parameters of couplings the case lacks: {sorted(parameters)}"
     solver = NewSolver(

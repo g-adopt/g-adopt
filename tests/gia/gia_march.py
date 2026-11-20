@@ -100,7 +100,7 @@ class Run:
     time: float = 0.0
 
 
-def build(meshes, case, *, preset="direct", default_options=True, **kwargs):
+def build(meshes, case, *, preset="direct", default_options=True, sea=None, **kwargs):
     """Build the solver of `case` on `meshes`, untaped.
 
     Args:
@@ -111,6 +111,9 @@ def build(meshes, case, *, preset="direct", default_options=True, **kwargs):
       default_options: `True` adds the tight tolerances of `build_new`, so
         that the direct presets solve to round-off; `False` keeps the
         tolerances of the preset.
+      sea: the `gia_cases.SeaFields` of a sea-level case, or `None` for new
+        ones. A caller passes its own to make one of the prescribed fields
+        (the initial sea level, the ice) a control of a taped march.
       kwargs: further arguments of `gia_cases.build_new`.
 
     Returns:
@@ -118,7 +121,10 @@ def build(meshes, case, *, preset="direct", default_options=True, **kwargs):
     """
     sub = meshes[1]
     dt = C.dt_function(sub)
-    sea = C.SeaFields(sub) if case.load in ("sea_fixed", "sea_moving") else None
+    if case.load in ("sea_fixed", "sea_moving"):
+        sea = sea or C.SeaFields(sub)
+    else:
+        sea = None
     with stop_annotating():
         solver, u, psi = C.build_new(
             meshes, case, dt=dt, sea=sea, nullspace=NULLSPACE,
@@ -185,8 +191,18 @@ def preconditioner_counters(solver):
     counter, for example `pc_DtNTwoBlockSchurPC_ainvb_build_count`. A
     `_SchurAinvBCache` hangs on its PC as `ainvb` and is read there.
     """
+    return pc_counters(solver.solver.snes.ksp.pc)
+
+
+def pc_counters(pc):
+    """`{name: count}` of every cache counter in the tree below the PETSc PC `pc`.
+
+    The names are those of `preconditioner_counters`. Used directly for a
+    PC that is not the one of the forward solve, for example the one of the
+    linear adjoint solve of the Quadrature step.
+    """
     out = {}
-    for path, context in _python_contexts(solver.solver.snes.ksp.pc):
+    for path, context in _python_contexts(pc):
         owners = [(type(context).__name__, context)]
         if getattr(context, "ainvb", None) is not None:
             owners.append((type(context).__name__ + "_ainvb", context.ainvb))
