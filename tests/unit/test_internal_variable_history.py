@@ -601,7 +601,7 @@ def test_one_element_power_law_is_asymmetric_on_hexahedra():
     spheres the self-gravity solver runs on, the same quantity is 5.9e-3 with a
     flat base and 7.0e-3 with a degree-2 one, and on the coupled self-gravity
     system 1.4e-2 with a rigid core and 9.4e-2 with a fluid core
-    (`tests/unit/test_gia_nested_condensation.py::TestThreeDimensions`). So the
+    (the 24-cell extruded cubed sphere, DG history family). So the
     tetrahedral row is the only symmetric power-law configuration anywhere in
     this project, and no 3-D production mesh is on it. If that ever changes -
     a tetrahedral 3-D GIA mesh, say - this test is where the case to reopen
