@@ -433,7 +433,7 @@ def test_state_round_trip_in_memory_and_reset(meshes):
     The continued runs agree bit for bit in serial and to `PARALLEL_RTOL` on
     more than one rank (`SelfGravitatingGIASolver.restore`).
     """
-    case = STATE_CASES[2]
+    case = STATE_CASES[0]
     sea = None
     a, u, psi = C.build_new(meshes, case, dt=C.dt_function(meshes[1]),
                             nullspace="rigid_rotation")
