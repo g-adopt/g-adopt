@@ -651,8 +651,8 @@ class TestTaylor:
     """Taylor tests with the ice thickness as control.
 
     First order (the adjoint) on both representations. Second order (the
-    Hessian) on the multiplier path: the low-rank path has no Hessian
-    (`test_gia_gravity_adjoint_lowrank.test_hessian_leg_raises_clearly`).
+    Hessian) on the multiplier path: the low-rank path has no Hessian, and
+    its tape block raises when one is asked for.
     """
 
     @pytest.mark.parametrize("which", ["shoreline", "marine"])

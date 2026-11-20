@@ -185,8 +185,7 @@ PHASE = 0.5
 MELT = 0.1
 
 #: Tight solver tolerances for tests that read a converged state. `ksp_rtol`
-#: is the outer FGMRES of the direct preset, as in
-#: `test_gia_gravity_adjoint.py`. `snes_atol` is set explicitly so that the
+#: is the outer FGMRES of the direct preset. `snes_atol` is set explicitly so that the
 #: mass-conservation threshold below is computed from known numbers.
 SNES_RTOL = 1e-10
 SNES_ATOL = 1e-15

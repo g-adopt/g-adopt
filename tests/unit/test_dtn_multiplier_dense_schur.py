@@ -2,8 +2,8 @@
 
 `gadopt.DtNMultiplierDenseSchurPC` forms the multiplier Schur complement `S`
 once at setup, factors it, and applies the factors from then on. This file is
-the shipped-code gate for it, on the same 2-D coupled annulus the adjoint suite
-uses (`test_gia_gravity_adjoint_lowrank`): parent annulus + mantle submesh,
+the shipped-code gate for it, on the 2-D coupled annulus of
+`test_gia_gravity.py`: parent annulus + mantle submesh,
 `gadopt.gia_solver.SelfGravitatingGIASolver` with a DG history and the
 multiplier DtN representation, `TRUNCATION = 3`, `N_AZIMUTHAL = 32`.
 
