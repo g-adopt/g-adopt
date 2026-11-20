@@ -50,6 +50,29 @@ python -m pytest tests/gia
 A driver can also run by hand from this directory, for example
 `python gia_forward.py --entry sea-direct`.
 
+## The weekly entry
+
+The entry `sphere-submesh` (`gia_sphere_submesh.py`) runs the `SEA`
+configuration on a tetrahedral sphere with a mantle submesh, on 48 cores.
+gmsh writes the mesh in the job. The entry has `"hpc": True`, so it is a
+step of `doit run_case_hpc` and not of `doit run_case`. The weekly long-test
+workflow runs it on Gadi. `test_gia_hpc.py` reads its outputs. That file is
+marked `longtest`, and its tests skip where the outputs do not exist.
+`doit check_hpc` runs only `test_gia_hpc.py` (`pytest_hpc` in `meta.py`).
+
+To run the entry and its tests on Gadi, from the repository root:
+
+```
+doit run run_case_hpc:tests/gia:weekly-sphere-submesh
+python3 -m pytest tests/gia/test_gia_hpc.py
+```
+
+The recorded values of this entry come from a Gadi run, not from the
+development machine. After a review of the run, record them from this
+directory with `python3 gia_record_expected.py --case weekly`. Until
+`expected/sphere-submesh.txt` exists, the recorded-value test skips and
+prints the measured table.
+
 ## Recorded values
 
 Some assertions compare with values recorded from this code in

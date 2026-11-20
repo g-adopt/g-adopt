@@ -3,9 +3,13 @@
 The entries, their drivers, core counts and outputs are listed in
 `gia_entries.py`, which the test files also read, so that a name exists in
 one place only. Each entry becomes the step `<case>-<entry>`, and the steps
-compile and run in parallel under `doit run_case`.
+compile and run in parallel under `doit run_case`. The weekly entry has
+`"hpc": True`: it becomes a step of `doit run_case_hpc`, which submits it
+through `gadopt_hpcrun`.
 """
-from .gia_entries import ENTRIES
+import shlex
+
+from .gia_entries import CASE_DIR, ENTRIES, WEEKLY_TEST
 
 steps = {}
 for e in ENTRIES:
@@ -19,4 +23,9 @@ for e in ENTRIES:
         step["launcher_args"] = e["launcher_args"]
     steps[f"{e['case']}-{e['entry']}"] = step
 
+# `doit check` runs every test file of this directory after the PR steps.
 pytest = "local"
+# `doit check_hpc` runs this command, from the repository root, after the
+# HPC steps. Only `test_gia_hpc.py` reads their outputs. "local" would also
+# run the test files of the PR steps, whose outputs exist only on PR CI.
+pytest_hpc = f"python3 -m pytest {shlex.quote(str(CASE_DIR / WEEKLY_TEST))}"

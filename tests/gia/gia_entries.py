@@ -164,9 +164,15 @@ SCALE_OF = {
     "mass_identity": ("column", "sheet_abs_mass"),
     "com_0": ("column", "u_l2"),
     "com_1": ("column", "u_l2"),
+    # The third direction and the polar-wander pair exist only on the 3-D
+    # meshes (the sphere entries).
+    "com_2": ("column", "u_l2"),
     "dipole_0": ("column", "sheet_moment_0"),
     "dipole_1": ("column", "sheet_moment_1"),
+    "dipole_2": ("column", "sheet_moment_2"),
     "core_pressure": ("column", "u_l2"),
+    "m1": ("column", "u_l2"),
+    "m2": ("column", "u_l2"),
     "m3": ("column", "u_l2"),
     "cmb_flux": ("column", "u_l2"),
 }
@@ -1293,6 +1299,78 @@ def _gravity_entries():
     return out
 
 
+# -- weekly -------------------------------------------------------------------------
+
+#: The weekly HPC entry (`gia_sphere_submesh.py`): the configuration `SEA` of
+#: `gia_march.py` on a coarse tetrahedral sphere with a mantle `Submesh`,
+#: which gmsh writes in the job. It has every coupling that the 2-D `SEA`
+#: has, and the two polar-wander rows `m1`, `m2` that exist only in 3-D. The
+#: ice cap and the reference sea level are centred on a direction off every
+#: coordinate axis (`gia_sphere_submesh.LOAD_AXIS`), so the load has a first
+#: moment in all three directions (the three centre-of-mass rows) and a second
+#: moment with `x z`, `y z` and zonal parts (`m1`, `m2`, `m3`).
+#:
+#: The entry runs only under `doit run_case_hpc` (the weekly long-test run on
+#: Gadi), because PR CI and the development machine run no 3-D solve of this
+#: size. `test_gia_hpc.py` reads its outputs; it is marked `longtest`, so PR
+#: CI does not collect its assertions, and every test skips where the table
+#: does not exist.
+WEEKLY_CASE = "weekly"
+WEEKLY_ENTRY = "sphere-submesh"
+#: One Gadi `normal` node (48 cores). The mesh has of the order of 10 000
+#: mantle cells (an estimate from the cell size; the mesh record of the run
+#: gives the count), so each rank owns a few hundred of them
+#: (`balanced_partition` gives every rank the same count).
+WEEKLY_CORES = 48
+#: The first five steps of `gia_march.FORWARD_STEPS`: four of 0.08 and one
+#: of 0.13, so the march includes the change of the step length (the BDF2
+#: coefficients of unequal steps and the rebuild of the cached operators).
+WEEKLY_STEP_COUNT = 5
+#: The per-step table, in the format of the forward logs.
+WEEKLY_LOG = f"{OUT}/sphere-submesh.log"
+#: The record of the mesh of the run: the gmsh version, the seed, the MD5 of
+#: the `.msh` file, the cell counts and the mantle cells per rank. It is not
+#: compared; a failed recorded-value test prints it, so that a change of the
+#: mesh (another gmsh) can be told apart from a change of the solver.
+WEEKLY_MESH_RECORD = f"{OUT}/sphere-submesh-mesh.dat"
+#: The gmsh file that the job writes and reads.
+WEEKLY_MESH_FILE = f"{OUT}/sphere-submesh.msh"
+#: The PBS standard output and error of the job, at the root of the case
+#: directory: PBS writes them when the job ends, and `out/` need not exist
+#: when the job is submitted. Both end in `.log`, which git ignores.
+WEEKLY_PBS_OUT = "sphere-submesh-pbs.log"
+WEEKLY_PBS_ERR = "sphere-submesh-pbs-err.log"
+#: The PBS job name; PBSPro caps it at 15 characters.
+WEEKLY_JOB_NAME = "gia_sphere_sub"
+#: The wall-time limit of the job. The run is not measured yet; the 3-D
+#: forward entry of PR CI on a smaller mesh suggests minutes, and the limit
+#: leaves room for the compilation of the forms on a cold cache.
+WEEKLY_WALLTIME = "01:00:00"
+#: The recorded table. It is recorded on Gadi, after Sia approves the run;
+#: until it exists, `test_gia_hpc.py::test_recorded_values` skips.
+WEEKLY_EXPECTED = f"{EXPECTED}/sphere-submesh.txt"
+#: The relative tolerance of the recorded values: the iterative preset, as
+#: for the iterative forward entries.
+WEEKLY_RTOL = RECORDED_RTOL_ITERATIVE
+#: The columns that must be above `COUPLING_FLOOR * u_l2` at the last step:
+#: the sea-level shift, the three centre-of-mass multipliers and the three
+#: rotation unknowns. The core pressure is not listed: the sea level keeps
+#: the mass of ice and ocean together, so the load has no degree-0 part, and
+#: in the 2-D `SEA` the core pressure stays at round-off for that reason.
+WEEKLY_COUPLING_COLUMNS = ("shift", "com_0", "com_1", "com_2", "m1", "m2", "m3")
+#: The only test file that `doit check_hpc` runs (`meta.pytest_hpc`).
+WEEKLY_TEST = "test_gia_hpc.py"
+
+
+def _weekly_entries():
+    """The `ENTRIES` items of the weekly HPC case."""
+    launcher_args = (f"-N {WEEKLY_JOB_NAME} -t {WEEKLY_WALLTIME} "
+                     f"-o {WEEKLY_PBS_OUT} -e {WEEKLY_PBS_ERR}")
+    return [{"case": WEEKLY_CASE, "entry": WEEKLY_ENTRY, "driver": "gia_sphere_submesh.py",
+             "cores": WEEKLY_CORES, "hpc": True, "launcher_args": launcher_args,
+             "outputs": [WEEKLY_LOG, WEEKLY_MESH_RECORD, WEEKLY_PBS_OUT, WEEKLY_PBS_ERR]}]
+
+
 #: The files that `gia_record_expected.py` copies, by case: pairs of the
 #: driver output and the expected file, both relative to `CASE_DIR`. A tuple
 #: of outputs is concatenated into the one expected file.
@@ -1303,10 +1381,12 @@ RECORDED = {
                 for name in ADJOINT},
     "gravity": {"counts": (tuple(gravity_counts(name) for name in GRAVITY_COUNT_ENTRIES),
                            GRAVITY_EXPECTED_COUNTS)},
+    # Recorded on Gadi: `python gia_record_expected.py --case weekly`.
+    WEEKLY_CASE: {WEEKLY_ENTRY: (WEEKLY_LOG, WEEKLY_EXPECTED)},
 }
 
 #: Every step of `meta.py`: `case`, `entry`, `driver`, `cores`, `outputs`,
 #: and optionally `deps`, `hpc` and `launcher_args`.
 ENTRIES = (_forward_entries() + _limits_entries() + _operators_entries()
            + _time_convergence_entries() + _adjoint_entries() + _parallel_entries()
-           + _gravity_entries())
+           + _gravity_entries() + _weekly_entries())
