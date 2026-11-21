@@ -25,14 +25,14 @@ export SRUN_CPUS_PER_TASK=1
 CODE_DIR=$1; RUN_DIR=$2; CHECKPOINT=$3; OUTPUT=$4; shift 4
 # ---- environment of this job (the same block in every job of the campaign) ----
 
-# env-hessian.sh reads MY_GADOPT, so the code copy of this job must be set first. It
-# loads the hessian-fix container, puts the overlay before MY_GADOPT on PYTHONPATH,
+# env-hessian-v2.sh reads MY_GADOPT, so the code copy of this job must be set first. It
+# loads the hessian-fix container, puts the UFL overlay before MY_GADOPT on PYTHONPATH,
 # sets per-job kernel caches in /tmp and pins every threaded library to one thread.
 export MY_GADOPT="$CODE_DIR"
-source /software/projects/pawsey0821/sghelichkhani/env-hessian.sh
+source /software/projects/pawsey0821/sghelichkhani/env-hessian-v2.sh
 
 # Remove the per-job kernel caches when the job ends, also after a failure.
-trap 'rm -rf "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
+trap 'rm -rf "$PYOP3_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
 
 echo "### job $SLURM_JOB_ID on $(hostname), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "### code $CODE_DIR"
@@ -40,11 +40,12 @@ cat "$CODE_DIR/CODE_STATE" 2>/dev/null || echo "(no CODE_STATE in $CODE_DIR)"
 echo "### provenance"
 python3 - <<'PY'
 import importlib.metadata as md
-import gadopt, firedrake, pyadjoint
+import gadopt, firedrake, pyadjoint, ufl
 from petsc4py import PETSc
 print("gadopt    ", gadopt.__file__)
 print("firedrake ", firedrake.__file__)
 print("pyadjoint ", pyadjoint.__file__)
+print("ufl       ", ufl.__file__)
 print("PETSc     ", ".".join(map(str, PETSc.Sys.getVersion())), PETSc.Sys.getVersionInfo())
 for name in ("firedrake", "petsc4py", "pyadjoint-ad"):
     try:

@@ -39,7 +39,7 @@ The run outputs are not in git.
 | reference states | `/scratch/pawsey0821/sghelichkhani/hessian/prior-campaign/reference/` |
 | run outputs on Setonix | `/scratch/pawsey0821/sghelichkhani/hessian/prior-campaign/<step>/` |
 | run outputs on reunion | `~/runs/prior-campaign/<step>/` |
-| environment file | `/software/projects/pawsey0821/sghelichkhani/env-hessian.sh` |
+| environment file | `/software/projects/pawsey0821/sghelichkhani/env-hessian-v2.sh` (the container of 2026-11-20); `env-hessian.sh` holds the environment of the runs before 2026-11-21 |
 
 Setonix accepts the ssh key of phoenix only. Every command from reunion goes through
 phoenix: `ssh phoenix 'ssh setonix "<command>"'`.

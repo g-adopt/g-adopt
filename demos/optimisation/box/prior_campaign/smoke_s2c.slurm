@@ -33,8 +33,8 @@ CODE_DIR=$1; RUN_DIR=$2; CHECKPOINT=$3; S2_RECORD=$4; ROWS=$5; MODE=$6; NEED=$7
 shift 7
 # ---- environment of this job (the same block in every job of the campaign) ----
 export MY_GADOPT="$CODE_DIR"
-source /software/projects/pawsey0821/sghelichkhani/env-hessian.sh
-trap 'rm -rf "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
+source /software/projects/pawsey0821/sghelichkhani/env-hessian-v2.sh
+trap 'rm -rf "$PYOP3_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
 echo "### job $SLURM_JOB_ID on $(hostname), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "### code $CODE_DIR"
 cat "$CODE_DIR/CODE_STATE" 2>/dev/null || echo "(no CODE_STATE in $CODE_DIR)"

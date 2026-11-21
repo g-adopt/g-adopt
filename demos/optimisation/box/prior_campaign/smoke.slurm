@@ -38,8 +38,8 @@ for SIDE in A B; do
         echo "##### side $SIDE"
         # ---- environment of this job (the same block in every job of the campaign) ----
         export MY_GADOPT="$CODE_DIR"
-        source /software/projects/pawsey0821/sghelichkhani/env-hessian.sh
-        trap 'rm -rf "$PYOP2_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
+        source /software/projects/pawsey0821/sghelichkhani/env-hessian-v2.sh
+        trap 'rm -rf "$PYOP3_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
         echo "### job $SLURM_JOB_ID on $(hostname), $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "### code $CODE_DIR"
         cat "$CODE_DIR/CODE_STATE" 2>/dev/null || echo "(no CODE_STATE in $CODE_DIR)"
@@ -58,7 +58,7 @@ done
 echo "##### comparison, A is the reference"
 (
     export MY_GADOPT="$CODE_B"
-    source /software/projects/pawsey0821/sghelichkhani/env-hessian.sh
+    source /software/projects/pawsey0821/sghelichkhani/env-hessian-v2.sh
     # A mismatch in any compared field gives exit status 1, which fails the job
     # through ``set -e``, so that a change of path cannot pass unnoticed.
     python3 "$CODE_B/demos/optimisation/box/prior_campaign/compare_records.py" \
