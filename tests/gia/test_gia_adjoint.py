@@ -57,28 +57,6 @@ def relative(measured, expected):
 
 ENTRIES = list(E.ADJOINT)
 
-#: The `LOAD` entries: the step solve leaves a large part of the solution
-#: along the declared rigid rotation (about 15 percent of its norm), and that
-#: part depends on the initial guess, because the right-preconditioned outer
-#: FGMRES does not remove the nullspace from its search directions. The
-#: rotation is a kernel of the discrete operator only to 8e-6, so its part
-#: changes the other components of the solution at that level, and the
-#: recorded projection after the step does not undo that. The forward march
-#: starts each step from the previous state, the replay from zero
-#: (`ConstitutiveStepBlock.prepare_recompute_component`), and the projected
-#: states differ by 1.4e-7 to 1.7e-7 relative in the max norm. Newton
-#: converges in one step on the tight options, so this is not a tolerance.
-_LOAD_REPLAY = (
-    "{entry}: the replay repeats the recording to 1.81e-8 and the fresh march at "
-    "the other control to 1.82e-8 (bands 1e-9 and 1e-8). The unprojected step "
-    "solution has a part along the declared rigid rotation that depends on the "
-    "initial guess (at step 2, -5.1e-3 from the previous state and -4.6e-4 from "
-    "zero, of a norm of 3.3e-2), and the rotation is a kernel only to 8e-6, so "
-    "a replay from zero and a march from the previous "
-    "state reach projected states 1.4e-7 apart. The fresh march repeats the "
-    "recording exactly, and the derivatives agree (adjoint against the fresh "
-    "difference {dJ}, Taylor rate {rate}).")
-
 #: The tests that do not apply to an entry, by test. pyadjoint evaluates a
 #: tangent sweep with `Tape.evaluate_tlm`, which walks the blocks of the tape
 #: and reads the values saved on them; the checkpoint manager of a
@@ -97,17 +75,10 @@ NOT_APPLICABLE = {
 
 #: The assertions that fail with the measured numbers, by `(test, entry)`,
 #: with the numbers. They are strict xfails, so a change that makes one pass
-#: shows in the report.
-KNOWN_FAILURES = {
-    ("replay", "load-direct-Lambda"): _LOAD_REPLAY.format(
-        entry="load-direct-Lambda", dJ="8.0e-9", rate="2.0003"),
-    ("other", "load-direct-Lambda"): _LOAD_REPLAY.format(
-        entry="load-direct-Lambda", dJ="8.0e-9", rate="2.0003"),
-    ("replay", "load-direct-B_mu"): _LOAD_REPLAY.format(
-        entry="load-direct-B_mu", dJ="7.2e-8", rate="2.0005"),
-    ("other", "load-direct-B_mu"): _LOAD_REPLAY.format(
-        entry="load-direct-B_mu", dJ="7.2e-8", rate="2.0005"),
-}
+#: shows in the report. None at present. A `LOAD` march that starts each
+#: step from the previous solution replays only to 1.8e-8, so the `LOAD`
+#: entries start each step from zero (`gia_entries.ADJOINT`, `zero_start`).
+KNOWN_FAILURES = {}
 
 
 def entry_params(test):

@@ -239,6 +239,24 @@ def phase_counts(forward, log, steps):
 
 # -- The march -----------------------------------------------------------------------
 
+def zero_start(solver):
+    """Make zero the starting point of the next step solve, as a user does: `u` and `psi`.
+
+    The step solve starts from `u` and `psi` (`gadopt.gia_solver`, "The
+    contract of `u`, `psi` and the history"), and the two assignments are
+    on the tape. The replay of the Quadrature step starts from zero, so a
+    forward march that starts from zero replays to round-off. The `Real`
+    fields of the couplings keep their previous values as their start;
+    on `load-direct-B_mu` the replay then repeats the recording to 1.1e-14
+    (bit for bit when they are set to zero as well).
+
+    Args:
+      solver: the `SelfGravitatingGIASolver`.
+    """
+    solver.u.assign(0)
+    solver.psi.assign(0)
+
+
 class Scenario:
     """The configuration of one entry and the march of the adjoint scenario.
 
@@ -256,6 +274,8 @@ class Scenario:
         self.default_options = spec.get("default_options", True)
         self.parameters = dict(spec.get("parameters", {}))
         self.kind = spec["control"]
+        #: Start every step from zero (`gia_entries.ADJOINT`, `zero_start`).
+        self.zero_start = spec.get("zero_start", False)
         with stop_annotating():
             # The fixed ice shape of the entries whose control is not the ice.
             self.ice_shape = fd.Function(fd.FunctionSpace(meshes[1], "CG", 2)).interpolate(
@@ -325,6 +345,8 @@ class Scenario:
             run.dt.assign(h * control if self.kind == "dt" else h)
             if sea is not None:
                 sea.I.assign((1 + .2 * k) * ice_shape)
+            if self.zero_start:
+                zero_start(run.solver)
             run.solver.solve()
             if blocks is not None:
                 blocks.append(len(tape.get_blocks()) - n0)

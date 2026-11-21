@@ -1,10 +1,10 @@
-# g-adopt commit: abeddc8112e6ccbd8d3be1f50f6d84a9d97798bc (with local changes)
+# g-adopt commit: e16d3a3a5d78ad6463d9784ef85f8085f4c6ab52 (with local changes)
 # Firedrake commit: 22168dc98214e053f086f4b9688f5ee8b0297142
 # PETSc version: 3.26.0
 # host: phoenix
-# date: 2026-11-21T07:23:54
-# command: python gia_record_expected.py --case adjoint
-blocks_step_1 16
-blocks_step_2 16
-blocks_step_3 16
-blocks_step_4 16
+# date: 2026-11-21T22:54:59
+# command: python gia_record_expected.py --case adjoint --entry load-direct-B_mu
+blocks_step_1 22
+blocks_step_2 22
+blocks_step_3 22
+blocks_step_4 22

@@ -770,7 +770,15 @@ def _time_convergence_entries():
 #:   measures its derivatives with the direct preset on `SEA`, and its
 #:   counters with the iterative preset on `SEA` with a fixed coastline,
 #:   whose caches follow the lagged rule of `gadopt.preconditioners.
-#:   _RebuildRule` (rebuild when the effective step `dt / alpha` changes).
+#:   _RebuildRule` (rebuild when the effective step `dt / alpha` changes);
+#: - `zero_start`: True assigns zero to `u` and `psi` before each `solve`,
+#:   on the tape, as a user does whose replay must equal the forward run to
+#:   round-off (`gia_adjoint.zero_start`). The replay of the
+#:   Quadrature step starts from zero; a march that starts each step from
+#:   the previous solution replays the `LOAD` entries only to 1.8e-8,
+#:   because the part of the solution along the declared rigid rotation
+#:   depends on the start (module docstring of `gadopt.gia_solver`, "The
+#:   initial guess and the replay").
 #:
 #: Each entry writes the values of `ADJOINT_VALUES` to
 #: `out/adjoint-<entry>.dat` and the counts (`adjoint_count_names`) to
@@ -785,8 +793,10 @@ ADJOINT = {
     "sea-direct-dt": dict(base="SEA", preset="direct", control="dt",
                           counter_preset="iterative",
                           counter_changes={"load": "sea_fixed"}),
-    "load-direct-Lambda": dict(base="LOAD", preset="direct", control="Lambda"),
-    "load-direct-B_mu": dict(base="LOAD", preset="direct", control="B_mu"),
+    "load-direct-Lambda": dict(base="LOAD", preset="direct", control="Lambda",
+                               zero_start=True),
+    "load-direct-B_mu": dict(base="LOAD", preset="direct", control="B_mu",
+                             zero_start=True),
     "power-direct-sl_init": dict(base="SEA", preset="direct", control="sl_init",
                                  changes={"model": "power"},
                                  parameters={"approximation.transition_stress": 1e-3}),

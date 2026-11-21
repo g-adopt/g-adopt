@@ -110,12 +110,71 @@ displacement on the Quadrature family (`ReducedGIABlockPC`).
 
 ## The contract of `u`, `psi` and the history
 
-The solver reads `u` and `psi` once, at construction, as the initial state.
-After every `solve` it writes the solved displacement and potential into
-them with recorded `assign`s, after the recorded kernel projection, so the
-recorded and the replayed values agree. To change the state between steps,
-use `restore`. `solver.internal_variables` is the accepted history level of
-the time integrator, the one history Function of the run.
+`u` and `psi` are the solution Functions of the user, as the solution of
+`EnergySolver` or of the Stokes solver is. Each `solve` starts its Newton
+solve from their present values: it copies them into the internal mixed
+solution with recorded `assign`s before the step solve, and after the step
+and the recorded kernel projection it writes the solved displacement and
+potential back into them with recorded `assign`s. A user who writes
+`u.assign(0); psi.assign(0)` before `solve()` gets a zero start in the
+forward run, and the two `assign`s are on the tape. A taped replay follows
+that start on the DG family only ("The initial guess and the replay").
+
+Three parts of the step are not in `u` and `psi`, because the coupled system
+has more unknowns and more memory than the two fields:
+
+- The `Real` fields of the couplings (core pressure, rotation, centre of
+  mass, `Shift`, DtN multipliers) and the DG history field start from their
+  values in the internal mixed solution, the result of the last solve or of
+  `restore`. `real_field(name)` is a view of one of them; a recorded
+  `assign` to it sets its starting value.
+- The material memory, the analogue of the `solution_old` of `EnergySolver`,
+  is the history of the time integrator: `solver.internal_variables` is its
+  accepted level, the one history Function of the run, and the BDF2 solver
+  keeps one level more. The step reads these levels, not `u`, and accepts
+  the new level after the solve.
+- The 2-D monopole datum counts the fluid-core sheet one solve late
+  (`update_total_mass`). It reads the displacement of the last solve, held
+  in the internal mixed solution, and runs before `u` and `psi` are copied
+  in. So a value written into `u` before a solve sets the start of the
+  Newton solve only, and changes no equation of the step.
+
+To change the state between steps (a restart, a reset), use `restore` or
+`reset`; they write the internal mixed solution, the history and `u` and
+`psi`.
+
+## The initial guess and the replay
+
+The forward run and a taped replay start each step solve from different
+points on the Quadrature family: the forward run from `u`, `psi` and the
+`Real` fields, the replay from zero (`gadopt.constitutive_integrators.
+ConstitutiveStepBlock`). With a declared rigid rotation this matters at the
+level of the approximate kernel: the right-preconditioned outer FGMRES does
+not remove the rotation from its search directions, so the part of the step
+solution along the rotation depends on the start, and since the rotation is
+a kernel of the discrete operator only to about 1e-5, that part moves the
+other components. A replay of a march that starts each step from the
+previous solution then differs from the forward run by about 1e-7 relative
+on the annulus. A run whose replay must equal its forward run to round-off
+(an adjoint or an inversion) assigns zero to `u` and `psi` before each
+`solve`, on the tape. The `Real` fields then still start from their last
+solved values, which leaves a difference at round-off (1e-14 relative on
+the annulus); a `Real` field can be set to zero as well through its view,
+`real_field(name).assign(0)`. Firedrake's solve block of the DG family
+starts its replay from the recorded start, so there the replay follows the
+forward run either way.
+
+A zero start costs nothing on a step whose residual is linear in the
+solution (a prescribed load, a fixed coastline): with the prescribed load
+on the annulus the step takes one Newton iteration and the same Krylov
+iterations from either start, with the direct and the iterative preset.
+With a moving coastline the residual is nonlinear, and a zero start costs
+more iterations but converges: on an 8-step march of the annulus with the
+direct preset, both starts converge in every step, with 28 Newton and 172
+Krylov iterations in total from the previous solution and 33 and 202 from
+zero, and the final `u` and `psi` agree to 1e-10 relative. A march whose
+load grows too fast for Newton (the ice grown by 20 percent in each of 8
+steps) fails in the same step from either start.
 
 ## State
 
@@ -302,8 +361,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
     Args:
       u: the displacement, a vector Function on the mechanics mesh (usually
-        a `Submesh` of the potential's mesh). Read once as the initial
-        state; overwritten with the solution after every `solve`.
+        a `Submesh` of the potential's mesh). Its value is the starting point
+        of every step solve, and the solution is written into it after every
+        `solve` (see the module docstring, "The contract of `u`, `psi` and
+        the history").
       psi: the potential, a scalar Function on the parent mesh. Same rules.
       approximation: a `BaseGIAApproximation` with an internal-variable
         rheology, `B_mu`, `density`, `g` and `self_gravity_number`.
@@ -575,6 +636,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.solution_space = self.solution.function_space()
         self.solution.subfunctions[0].assign(self.u)
         self.solution.subfunctions[self.field_index["potential"]].assign(self.psi)
+        self._record_handed_over_versions()
         self.solution_split = split(self.solution)
         self.tests = TestFunctions(self.solution_space)
         self.k = upward_normal(self.mesh)
@@ -1834,9 +1896,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     def solve(self) -> None:
         """One time step.
 
-        In order: the time coefficients, the 2-D enclosed mass, the step as
-        one recorded block, the recorded kernel projection, the history
-        accept, and the copy into `u` and `psi`.
+        In order: the time coefficients, the 2-D enclosed mass, the copy of
+        `u` and `psi` into the mixed solution (the start of the Newton
+        solve), the step as one recorded block, the recorded kernel
+        projection, the history accept, and the copy into `u` and `psi`.
         """
         from .gia_step_adjoint import TapeSweepMarkerBlock
         # Refuse a `B_mu` that reached zero after a construction with a
@@ -1844,7 +1907,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         # (`row_scale_B_mu_value`).
         self.row_scale_B_mu_value(scalar_value(self.approximation.B_mu))
         self.time_integrator.prepare()
+        # The datum reads the displacement of the last solve from the mixed
+        # solution, so it runs before `u` and `psi` are copied in.
         self.update_total_mass()
+        self._copy_in()
         # Counted before the solve, so every preconditioner setup inside it
         # sees one index (`gadopt.preconditioners._RebuildRule`).
         self.appctx["gia_solve_index"] = self.appctx.get("gia_solve_index", 0) + 1
@@ -1912,10 +1978,62 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.gravity.check_net_mass(
             extra_scales=[(sh.density, sh.measure) for sh in sheets])
 
+    def _copy_in(self) -> None:
+        """Copy `u` and `psi` into the mixed solution, recorded: the start of the step.
+
+        `u` and `psi` are on two meshes (the mantle submesh and the parent),
+        and Firedrake solves the coupled system for one mixed Function, so
+        the step cannot solve for `u` and `psi` in place as `EnergySolver`
+        solves for its solution. The recorded copy makes the present values
+        of the two Functions the starting point of the forward step on both
+        families. It is the starting point of a taped replay on the DG
+        family only, where the step is Firedrake's solve block, which
+        depends on the mixed solution and starts its replay from the
+        recorded value. The Quadrature step block
+        (`gadopt.constitutive_integrators.ConstitutiveStepBlock`) does not
+        depend on the mixed solution and starts its replay from zero, so
+        there the two recorded `assign`s are on the tape but no block reads
+        them (module docstring, "The initial guess and the replay").
+
+        The copy is skipped when neither Function was written since the
+        solver last wrote them (`_copy_out`, `restore`, `reset`, the
+        construction): the mixed solution then already holds their values,
+        bit for bit. Skipping keeps two assignments of the whole mixed
+        solution per step off the tape of a march that does not touch `u`
+        and `psi` between steps. The ranks combine the test, because the
+        assignments are collective.
+
+        The test reads the `dat_version` of each Function. Every write
+        through Firedrake moves it: `assign`, `interpolate`, `project`, a
+        write to one component (`u.sub(i).assign`), a write through
+        `.dat.data`, `data_wo` or `data_with_halos`, a write through
+        `vec_wo` or `vec_rw`, and `DirichletBC.apply`. A read does not move
+        it (`data_ro`, `vec_ro`, `assemble`, `norm`, output to a `VTKFile`
+        or a `CheckpointFile`), so a march that writes output between steps
+        keeps the skip. The test misses one kind of write: a write through
+        a NumPy view taken before the solver last wrote the Function
+        (`view = u.dat.data` before `solve()`, `view[:] = ...` after it).
+        The solver then ignores that start without a message. Such a write
+        also bypasses the tape, so a taped run must not use it anyway.
+        """
+        versions = (self.u.dat.dat_version, self.psi.dat.dat_version)
+        written = self.mesh.comm.allreduce(
+            versions != self._handed_over_versions, op=MPI.LOR)
+        if not written:
+            return
+        self.solution.subfunctions[0].assign(self.u)
+        self.solution.subfunctions[self.potential_index].assign(self.psi)
+        self._record_handed_over_versions()
+
+    def _record_handed_over_versions(self) -> None:
+        """Remember the `dat_version` of `u` and `psi` after the solver wrote or read them."""
+        self._handed_over_versions = (self.u.dat.dat_version, self.psi.dat.dat_version)
+
     def _copy_out(self) -> None:
         """Write the displacement and the potential into `u` and `psi`, recorded."""
         self.u.assign(self.solution.subfunctions[0])
         self.psi.assign(self.solution.subfunctions[self.potential_index])
+        self._record_handed_over_versions()
 
     def solved_history(self) -> Function:
         """The history of the state the last step solved, before it is accepted."""
