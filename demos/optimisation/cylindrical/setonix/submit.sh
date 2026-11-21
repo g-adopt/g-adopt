@@ -1,29 +1,39 @@
 #!/bin/bash
-# Submit the cylindrical optimiser comparison on Setonix, in three phases.
+# Submit the cylindrical optimiser comparison on Setonix.
 #
 # Usage (on a Setonix login node):
-#     submit.sh gates  <code dir>
-#     submit.sh timing <code dir>
-#     submit.sh runs   <code dir>
+#     submit.sh gates       <code dir>
+#     submit.sh timing      <code dir>
+#     submit.sh runs        <code dir>
+#     submit.sh radius      <code dir>   (conditional, see below)
+#     submit.sh metric      <code dir>   (conditional, see below)
 #
 # The plan, the costs and the decision rule are in NOTES/team/cylindrical-newton/PLAN.md
 # of the reunion worktree. Every phase waits for a person to read the results of the
 # phase before; no Slurm dependency links two phases.
 #
-# Phase "gates": the short checks of checks.py in the container, serial, on the
-#   5-step trajectory of 1.2e-5 that reunion also ran, and the scaling measurement
-#   at 20 steps on 8, 16 and 32 ranks. A few hours and a few tens of SU in all.
-# Phase "timing": the 125-step reference state and the 125-step timing on the rank
-#   count of the runs. It gives the cost of one forward call, the cost of one
-#   Hessian-vector product, the memory per rank, and the curvature <h, H h> of the
-#   full objective at the first guess.
-# Phase "runs": the comparison itself, every run on the same reference state, the
-#   same rank count and the same work budget.
+# Phase "gates": the checks of checks.py in the container, serial, on the 5-step
+#   trajectory of 1.2e-5 that reunion also ran; a 16-rank smoke of each of the three
+#   run arms on that trajectory (2 iterations); and the scaling measurement at 20
+#   steps on 8, 16 and 32 ranks.
+# Phase "timing": the 125-step reference state, and the 125-step timing on 8 and on
+#   16 ranks. It gives the cost of one forward call and of one Hessian-vector
+#   product, the memory per rank, and <h, H h> and <h, A h> at the first guess.
+# Phase "runs": the three runs of configuration P (production objective of
+#   inverse.py), on one reference state, one rank count and one work budget:
+#     P-ROL-L2    rol-lbfgs, L2 inner product: g-adopt today, as inverse.inverse()
+#     P-Newton    tao-bnls-riesz, zero shift, inner product A
+#     P-ROL-A     rol-lbfgs, inner product A: separates the inner product from the
+#                 algorithm
+# Conditional phases, never submitted by "runs":
+#   "radius"  P-Newton at initial radius 0.87, only if the rule of PLAN.md section 5
+#             gives "undecided";
+#   "metric"  P-Newton with the metric shift, only if the zero-shift run stalls
+#             after a negative-curvature solve.
 #
 # The resources of the runs are environment variables with the values of the plan,
 # so that the timing phase can change them without an edit:
-#   RANKS (16), PARTITION (highmem), MEM (100G), WALL (96:00:00), BUDGET (200),
-#   CONFIGS ("N P").
+#   RANKS (16), PARTITION (highmem), MEM (120G), WALL (96:00:00), BUDGET (200).
 set -euo pipefail
 PHASE=$1
 CODE=$2
@@ -34,33 +44,64 @@ DT=1.2e-5
 REF=$BASE/reference/s${STEPS}-dt${DT}
 RANKS=${RANKS:-16}
 PARTITION=${PARTITION:-highmem}
-MEM=${MEM:-100G}
+MEM=${MEM:-120G}
 WALL=${WALL:-96:00:00}
 BUDGET=${BUDGET:-200}
+RUNS=$BASE/runs-P-b$BUDGET-n$RANKS
 mkdir -p "$BASE"
 cd "$BASE"
+
+# Shared by every run of configuration P: the trajectory, the production objective
+# (the default weights of compare.py are those of inverse.inverse()), the bounds
+# [0, 1], the work budget, and the control saved after every iteration.
+COMMON=(--rundir "$REF" --timesteps $STEPS --delta-t $DT --work-budget "$BUDGET"
+        --max-it 1000 --save-control)
+
+submit_run() {
+    # $1 job name, then compare.py arguments. Prints the job id.
+    local name=$1; shift
+    mkdir -p "$RUNS"
+    sbatch --parsable --job-name="$name" --partition="$PARTITION" --ntasks="$RANKS" \
+        --mem="$MEM" --time="$WALL" "$JOB" "$CODE" "$RUNS" compare.py "${COMMON[@]}" "$@"
+}
 
 case $PHASE in
 gates)
     G=$BASE/gates
     mkdir -p "$G"
-    # The three checks on the 5-step trajectory. The first writes the reference.
-    common=(--rundir "$G/run-t5" --timesteps 5 --delta-t 1.2e-5)
-    # objective and hvp hold three tapes at once: 36 GB peak on reunion at 5 steps.
+    # The checks on the 5-step trajectory. The first writes the reference state.
+    # objective and hvp hold three tapes at once: 36 and 44 GB peak on reunion.
+    t5=(--rundir "$G/run-t5" --timesteps 5 --delta-t 1.2e-5)
     big=(--partition=highmem --mem=64G --time=04:00:00)
-    j1=$(sbatch --parsable --job-name=cyl-objective "${big[@]}" "$JOB" "$CODE" "$G" checks.py \
-        objective "${common[@]}" --make-reference --json "$G/objective-t5.json")
-    j2=$(sbatch --parsable --job-name=cyl-hvp "${big[@]}" --dependency=afterok:$j1 "$JOB" "$CODE" \
-        "$G" checks.py hvp "${common[@]}" --fd --json "$G/hvp-t5.json")
-    j3=$(sbatch --parsable --job-name=cyl-spd "${big[@]}" --dependency=afterok:$j1 "$JOB" "$CODE" \
-        "$G" checks.py spd "${common[@]}" --json "$G/spd-t5.json")
-    j4=$(sbatch --parsable --job-name=cyl-rolparams --time=00:10:00 "$JOB" "$CODE" \
-        "$G" checks.py rol-params --json "$G/rol-params.json")
+    j1=$(sbatch --parsable --job-name=cyl-objective "${big[@]}" "$JOB" "$CODE" "$G" \
+        checks.py objective "${t5[@]}" --make-reference --json "$G/objective-t5.json")
+    j2=$(sbatch --parsable --job-name=cyl-hvp "${big[@]}" --dependency=afterok:$j1 \
+        "$JOB" "$CODE" "$G" checks.py hvp "${t5[@]}" --fd --json "$G/hvp-t5.json")
+    j3=$(sbatch --parsable --job-name=cyl-spd "${big[@]}" --dependency=afterok:$j1 \
+        "$JOB" "$CODE" "$G" checks.py spd "${t5[@]}" --json "$G/spd-t5.json")
+    j4=$(sbatch --parsable --job-name=cyl-rolparams --time=00:10:00 --mem=8G "$JOB" \
+        "$CODE" "$G" checks.py rol-params --json "$G/rol-params.json")
     echo "checks: objective $j1, hvp $j2, spd $j3, rol-params $j4"
+    # The three run arms on 16 ranks, 2 iterations, on the same 5-step state. The
+    # driver has run on 1 and 4 ranks before, never on 16.
+    smoke=(--partition=highmem --ntasks=16 --mem=64G --time=02:00:00
+           --dependency=afterok:$j1)
+    s=$G/smoke-n16
+    a=$(sbatch --parsable --job-name=cyl-smoke-rol-l2 "${smoke[@]}" "$JOB" "$CODE" "$s" \
+        compare.py "${t5[@]}" --max-it 2 --save-control --optimiser rol-lbfgs \
+        --riesz L2 --output "$s/rol-lbfgs-L2.json")
+    b=$(sbatch --parsable --job-name=cyl-smoke-newton "${smoke[@]}" "$JOB" "$CODE" "$s" \
+        compare.py "${t5[@]}" --max-it 2 --save-control --optimiser tao-bnls-riesz \
+        --bnk-shift zero --riesz regularisation --output "$s/tao-zero.json")
+    c=$(sbatch --parsable --job-name=cyl-smoke-rol-a "${smoke[@]}" "$JOB" "$CODE" "$s" \
+        compare.py "${t5[@]}" --max-it 2 --save-control --optimiser rol-lbfgs \
+        --riesz regularisation --output "$s/rol-lbfgs-A.json")
+    echo "16-rank smokes: ROL-L2 $a, Newton $b, ROL-A $c (after $j1)"
     # Scaling at 20 steps: the reference in serial, then the timing on 8, 16 and 32
     # ranks. Memory per rank is set generously, so that no rank count is refused.
-    r20=$(sbatch --parsable --job-name=cyl-ref20 "$JOB" "$CODE" "$G" compare.py \
-        --make-reference-only --rundir "$G/run-t20" --timesteps 20 --delta-t 1.2e-5)
+    r20=$(sbatch --parsable --job-name=cyl-ref20 --mem=32G "$JOB" "$CODE" "$G" \
+        compare.py --make-reference-only --rundir "$G/run-t20" --timesteps 20 \
+        --delta-t 1.2e-5)
     for n in 8 16 32; do
         j=$(sbatch --parsable --job-name=cyl-scale$n --dependency=afterok:$r20 \
             --partition=highmem --ntasks=$n --mem=$((n * 6))G --time=04:00:00 \
@@ -71,59 +112,40 @@ gates)
     ;;
 timing)
     mkdir -p "$REF"
-    r=$(sbatch --parsable --job-name=cyl-ref125 --partition="$PARTITION" \
-        --ntasks="$RANKS" --mem="$MEM" --time=06:00:00 "$JOB" "$CODE" "$REF" \
-        compare.py --make-reference-only --rundir "$REF" --timesteps $STEPS \
-        --delta-t $DT)
-    t=$(sbatch --parsable --job-name=cyl-timing125 --dependency=afterok:$r \
-        --partition="$PARTITION" --ntasks="$RANKS" --mem="$MEM" --time=12:00:00 \
-        "$JOB" "$CODE" "$REF" checks.py timing --rundir "$REF" --timesteps $STEPS \
-        --delta-t $DT --json "$REF/timing-n$RANKS.json")
-    echo "reference $r, timing $t ($RANKS ranks, $PARTITION, $MEM)"
-    ;;
-runs)
-    # CONFIGS: "N" (misfit-only objective, the metric of inverse.py as inner
-    # product; negative curvature along the smooth direction), "P" (the production
-    # objective of inverse.py, regularisation included), or "N P".
-    for config in ${CONFIGS:-N P}; do
-        case $config in
-        N) objective=(--alpha-d 0 --alpha-s 0) ;;
-        P) objective=() ;;
-        *) echo "unknown configuration $config (N or P)" >&2; exit 2 ;;
-        esac
-        R=$BASE/runs-$config-b$BUDGET-n$RANKS
-        mkdir -p "$R"
-        # Shared by every run of a configuration: the trajectory, the objective, the
-        # metric of inverse.py as the inner product (unless --riesz L2 is added
-        # below), the bounds [0, 1] and the work budget.
-        common=(--rundir "$REF" --timesteps $STEPS --delta-t $DT --work-budget "$BUDGET"
-                --max-it 1000 --save-control "${objective[@]}")
-        submit_run() {
-            # $1 job name, then compare.py arguments.
-            local name=$1; shift
-            sbatch --parsable --job-name="$name" --partition="$PARTITION" \
-                --ntasks="$RANKS" --mem="$MEM" --time="$WALL" "$JOB" "$CODE" "$R" \
-                compare.py "${common[@]}" "$@"
-        }
-        j=$(submit_run cyl$config-rol --optimiser rol-lbfgs --riesz regularisation \
-            --output "$R/rol-lbfgs.json")
-        echo "$config rol-lbfgs, metric:          $j"
-        j=$(submit_run cyl$config-zero --optimiser tao-bnls-riesz --bnk-shift zero \
-            --riesz regularisation --output "$R/tao-zero.json")
-        echo "$config tao-bnls-riesz, zero shift: $j"
-        j=$(submit_run cyl$config-metric --optimiser tao-bnls-riesz --bnk-shift metric \
-            --riesz regularisation --output "$R/tao-metric.json")
-        echo "$config tao-bnls-riesz, metric:     $j"
-        if [ "$config" = P ]; then
-            # g-adopt today, exactly: ROL under the L2 inner product, production J.
-            j=$(submit_run cyl$config-rol-l2 --optimiser rol-lbfgs --riesz L2 \
-                --output "$R/rol-lbfgs-L2.json")
-            echo "$config rol-lbfgs, L2:              $j"
-        fi
+    r=$(sbatch --parsable --job-name=cyl-ref125 --partition=highmem --ntasks=16 \
+        --mem=120G --time=06:00:00 "$JOB" "$CODE" "$REF" compare.py \
+        --make-reference-only --rundir "$REF" --timesteps $STEPS --delta-t $DT)
+    for n in 8 16; do
+        t=$(sbatch --parsable --job-name=cyl-timing125-n$n --dependency=afterok:$r \
+            --partition=highmem --ntasks=$n --mem=120G --time=16:00:00 "$JOB" "$CODE" \
+            "$REF" checks.py timing --rundir "$REF" --timesteps $STEPS --delta-t $DT \
+            --json "$REF/timing-n$n.json")
+        echo "timing $n ranks: $t (after reference $r)"
     done
     ;;
+runs)
+    j=$(submit_run cyl-P-rol-l2 --optimiser rol-lbfgs --riesz L2 \
+        --output "$RUNS/rol-lbfgs-L2.json")
+    echo "P-ROL-L2: $j"
+    j=$(submit_run cyl-P-newton --optimiser tao-bnls-riesz --bnk-shift zero \
+        --riesz regularisation --output "$RUNS/tao-zero.json")
+    echo "P-Newton: $j"
+    j=$(submit_run cyl-P-rol-a --optimiser rol-lbfgs --riesz regularisation \
+        --output "$RUNS/rol-lbfgs-A.json")
+    echo "P-ROL-A:  $j"
+    ;;
+radius)
+    j=$(submit_run cyl-P-newton-r087 --optimiser tao-bnls-riesz --bnk-shift zero \
+        --riesz regularisation --initial-radius 0.87 --output "$RUNS/tao-zero-r0.87.json")
+    echo "P-Newton, radius 0.87: $j"
+    ;;
+metric)
+    j=$(submit_run cyl-P-newton-metric --optimiser tao-bnls-riesz --bnk-shift metric \
+        --riesz regularisation --output "$RUNS/tao-metric.json")
+    echo "P-Newton, metric shift: $j"
+    ;;
 *)
-    echo "unknown phase $PHASE (gates, timing or runs)" >&2
+    echo "unknown phase $PHASE (gates, timing, runs, radius or metric)" >&2
     exit 2
     ;;
 esac

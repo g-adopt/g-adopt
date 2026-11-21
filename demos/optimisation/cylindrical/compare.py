@@ -118,10 +118,22 @@ class CylindricalRecorder(Recorder):
     ``mark_iteration`` copies these keys from the most recent gradient row into the
     iteration row, beside the keys that the box recorder copies. Nothing here writes
     into a vector that an optimiser uses.
+
+    With ``control_path`` set, ``mark_iteration`` also writes the control of the
+    most recent gradient, which is the accepted iterate for both optimisers, to that
+    HDF5 file after every iteration. A run that the wall limit kills then keeps the
+    control of its last recorded iteration. The file is written under a temporary
+    name and renamed, so a kill during the write leaves the previous control intact.
+
+    Attributes:
+        control_path: path of the HDF5 file, or None for no per-iteration file. Set
+            on the class by ``install_recorder``, because the box runners build the
+            recorder with arguments of their own.
     """
 
     EXTRA_KEYS = ("temperature_term", "velocity_term", "damping_term",
                   "smoothing_term")
+    control_path = None
 
     def _derivative_cb(self, J, dJ, values):
         out = super()._derivative_cb(J, dJ, values)
@@ -130,6 +142,11 @@ class CylindricalRecorder(Recorder):
         row["temperature_term"] = (alpha_T if alpha_T > 0 else 0.0) * row["final_misfit"]
         row["misfit_term"] = row["J"] - row["prior_term"]
         row["velocity_term"] = row["misfit_term"] - row["temperature_term"]
+        if self.control_path is not None:
+            # A copy of the control that this gradient belongs to. ``values`` is the
+            # list of control values that pyadjoint passes to the callback.
+            m = values[0] if isinstance(values, (list, tuple)) else values
+            self._last_control = m.copy(deepcopy=True)
         return out
 
     def mark_iteration(self, k, **extra):
@@ -138,16 +155,41 @@ class CylindricalRecorder(Recorder):
                 if key in self.gradients[-1] and key not in extra:
                     extra[key] = self.gradients[-1][key]
         super().mark_iteration(k, **extra)
+        if self.control_path is not None and getattr(self, "_last_control", None) is not None:
+            self._write_control(k)
+
+    def _write_control(self, k):
+        """Write the control of the most recent gradient; collective over the ranks."""
+        import os
+        from firedrake import CheckpointFile
+        tmp = f"{self.control_path}.tmp"
+        control = self._last_control
+        control.rename("Control")
+        with CheckpointFile(tmp, "w") as f:
+            f.save_mesh(self.problem.mesh)
+            f.save_function(control, name="Control")
+            # The iteration that this control belongs to, as an attribute of the
+            # file, so that the file says which row of the JSON record it matches.
+            f.set_attr("/", "iteration", int(k))
+        comm = self.problem.mesh.comm
+        comm.Barrier()
+        if comm.rank == 0:
+            os.replace(tmp, self.control_path)
+        comm.Barrier()
 
 
-def install_recorder():
+def install_recorder(control_path=None):
     """Make ``run_rol`` and ``run_tao`` build ``CylindricalRecorder``.
+
+    Args:
+        control_path: HDF5 file for the control of every iteration, or None.
 
     Both runners create their recorder as ``Recorder(problem, ...)`` from the module
     namespace of ``optimisers``, so replacing that name is enough. The box files stay
     unchanged; a ``recorder_class`` argument on the two runners would make this
     unnecessary.
     """
+    CylindricalRecorder.control_path = None if control_path is None else str(control_path)
     optimisers.Recorder = CylindricalRecorder
     install_step_norm_getter()
 
@@ -224,7 +266,7 @@ def parse_args(argv=None):
                         help="extra PETSc option for TAO, repeatable")
     parser.add_argument("--output", default=None, help="JSON record")
     parser.add_argument("--save-control", action="store_true",
-                        help="write the final control to <output stem>.h5")
+                        help="write the control of every iteration to <output stem>.control.h5 and the final control to <output stem>.h5")
     return parser.parse_args(argv)
 
 
@@ -346,7 +388,7 @@ def main(argv=None):
         log(f"reference state written in {Path(args.rundir).resolve()}")
         return
 
-    install_recorder()
+    install_recorder(output.with_suffix(".control.h5") if args.save_control else None)
     problem = build_problem(
         args.rundir, timesteps=args.timesteps, delta_t=args.delta_t,
         alpha_T=args.alpha_T, alpha_u=args.alpha_u, alpha_d=args.alpha_d,
