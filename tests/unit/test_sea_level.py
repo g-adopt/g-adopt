@@ -1245,10 +1245,14 @@ class TestSignAgainstPhysics:
         solver, z, sea = build(meshes, fields, stiff=True,
                                representation=representation,
                                **solve_settings(representation),
-                               # The DG family: on the Quadrature family the
-                               # low-rank iterative preset does not converge on
-                               # this stiff Earth (outer cap of 200 at the
-                               # first Newton step).
+                               # The DG family, with no declared nullspace.
+                               # On this stiff Earth the Jacobian annihilates
+                               # the rigid rotation to round-off; on the
+                               # Quadrature family the low-rank iterative
+                               # preset then stops at its outer cap of 200 at
+                               # the first Newton step. With the rotation
+                               # declared it converges on either family
+                               # (the sign row of `tests/gia/gia_limits.py`).
                                internal_variable_family="DG")
         solver.solve()
         assert solver_converged(solver)

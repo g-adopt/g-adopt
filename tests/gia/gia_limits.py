@@ -151,9 +151,16 @@ def eustatic_rows(meshes, representation):
     d_ice = -1e-2
     out = {}
     for label, overrides in (("eustatic", None), ("eustatic_softplus", SH.width())):
-        # A stiff Earth leaves the rigid rotation in the Jacobian's kernel to
-        # round-off, so it is declared; otherwise the outer Krylov solve can
-        # stall on the low-rank path (see `sign_and_repeat_rows`).
+        # The rigid rotation is declared on this stiff Earth. The Jacobian
+        # annihilates it to round-off here, and the declaration removes that
+        # near-kernel from the linear solves, as in the sign row of
+        # `sign_and_repeat_rows`, where it is measured. In these rows no run
+        # on a workstation stalled without it, but on the CI runner the
+        # low-rank solve of the same kind in `fixed_coastline_rows` stopped
+        # at its 200-iteration limit without the declaration. The rotation
+        # does not change `u . n` on Re to first order, so the shift does not
+        # depend on it: with and without the declaration it agrees to 5e-16
+        # relative.
         solver, _, sea = sea_build(meshes, S.surface_fields(sub, "caps", d_ice=d_ice),
                                    representation, lam=1e-6, stiff=True,
                                    nullspace="rigid_rotation",
@@ -214,8 +221,11 @@ def fixed_coastline_rows(meshes, representation):
 
     d_ice = 1e-2
     fields = S.coastline_fields(sub, "caps", d_ice=d_ice, ocean_ice=S.GROUNDED)
-    # Rigid Earth: the rigid rotation is declared for the reason given in
-    # `eustatic_rows`.
+    # Rigid Earth (moduli 1e8): the rigid rotation is declared as in
+    # `eustatic_rows`. Without the declaration the outer Krylov solve of the
+    # low-rank row stopped at its 200-iteration limit on the CI runner (it
+    # converged on a workstation); the shift is the same to 5e-16 relative
+    # with and without it.
     solver, _, sea = sea_build(meshes, fields, rep, lam=1e-6, stiff=True,
                                earth=dict(shear_modulus=1e8, bulk_modulus=1e8),
                                nullspace="rigid_rotation",

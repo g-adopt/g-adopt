@@ -130,6 +130,13 @@ def decode_into(target: Function, value, parent, name: str) -> None:
 #: The HDF5 group of the configuration record of a state.
 _GROUP = "/gadopt_gia_state"
 
+#: The keys of the configuration record, in the order of `configuration`.
+#: `write_state` stores each as an attribute of `_GROUP`, and
+#: `stored_configuration` reads back these keys and no other attribute of
+#: that group, so a caller can compare its result with `configuration`.
+CONFIGURATION_KEYS = ("time_scheme", "internal_variable_family", "history_degree",
+                      "dtn_representation", "fields")
+
 
 @contextmanager
 def _h5(checkpoint):
@@ -166,6 +173,10 @@ def has_state(checkpoint, prefix: str = "") -> bool:
     Args:
       checkpoint: a path to the file, or a `CheckpointFile` open for reading.
       prefix: the prefix given to `write_state`.
+
+    Returns:
+      `True` when the file has the configuration record of `write_state`
+      under `prefix`, `False` otherwise.
     """
     with _h5(checkpoint) as f:
         return (_GROUP + prefix) in f
@@ -174,9 +185,11 @@ def has_state(checkpoint, prefix: str = "") -> bool:
 def stored_configuration(checkpoint, prefix: str = "") -> dict | None:
     """The configuration that `write_state` recorded, read before a solver exists.
 
-    The keys are the ones of the configuration of a solver: `time_scheme`,
-    `internal_variable_family`, `history_degree`, `dtn_representation` and
-    `fields`. A driver compares them with its own options before it builds
+    The keys are the ones of the configuration of a solver
+    (`CONFIGURATION_KEYS`): `time_scheme`, `internal_variable_family`,
+    `history_degree`, `dtn_representation` and `fields`. Any other
+    attribute of the record group is left out, so the result compares equal
+    to `configuration(solver)` for a matching solver. A driver compares them with its own options before it builds
     the solver, so that it can stop with a message that names its option;
     `read_state` checks the same keys against the solver.
 
@@ -185,15 +198,17 @@ def stored_configuration(checkpoint, prefix: str = "") -> dict | None:
       prefix: the prefix given to `write_state`.
 
     Returns:
-      `{key: value}` for the recorded keys (strings, and an integer degree),
-      or `None` when the file holds no state of `write_state` under
-      `prefix`.
+      `{key: value}` for the keys of `CONFIGURATION_KEYS` that the record
+      holds (strings, and an integer degree), or `None` when the file holds
+      no state of `write_state` under `prefix`. A key that the record lacks
+      is absent from the result; `read_state` refuses such a file.
     """
     with _h5(checkpoint) as f:
         group = _GROUP + prefix
         if group not in f:
             return None
-        return {key: _decoded(value) for key, value in f[group].attrs.items()}
+        attrs = f[group].attrs
+        return {key: _decoded(attrs[key]) for key in CONFIGURATION_KEYS if key in attrs}
 
 
 def configuration(solver) -> dict:

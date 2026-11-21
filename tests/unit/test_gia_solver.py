@@ -35,8 +35,8 @@ import gadopt
 import gia_cases as C
 from gadopt import gia_couplings as cp
 from gadopt.gia_solver import SelfGravitatingGIASolver as NewSolver
-from gadopt.gia_state import (configuration, has_state, read_state, state_from_checkpoint,
-                              stored_configuration, write_state)
+from gadopt.gia_state import (CONFIGURATION_KEYS, configuration, has_state, read_state,
+                              state_from_checkpoint, stored_configuration, write_state)
 from gadopt.viscoelastic_checkpointing import written_rank_count
 from test_gravity_adjoint import assert_taylor_with_guards
 
@@ -288,9 +288,10 @@ def test_state_round_trip_in_memory_and_reset(meshes):
 
 #: Checkpoint files that the earlier solver (`gadopt.gia_gravity` at commit
 #: 2f4b1397) wrote after two steps on the mesh of `gia_cases.MESH_FILE`,
-#: in the layouts of the drivers that ran it. Written once, in serial, by a
-#: script that ran the earlier solver and the drivers' field lists
-#: (`time_history_fields`, `time_history_metadata`), then copied with gzip
+#: in the layouts of the drivers that ran it. Written once, in serial, by
+#: `tests/unit/data/record_gia_references/record_checkpoints.py` from a
+#: checkout of that commit, with the field lists of the drivers of that
+#: time (the helpers it imports exist only there), then copied with gzip
 #: compression in the HDF5 1.10 file format, which HDF5 reads transparently.
 #: The mesh in every file is the curved parent, under its default name.
 OLD_CHECKPOINTS = C.REFERENCE_DIR
@@ -412,8 +413,9 @@ def test_a_file_tells_whether_it_holds_a_state_before_a_solver_reads_it(meshes, 
     No time step: the state of a solver at construction is written. A file
     with the mesh only holds no state; a file of `write_state` holds one
     under its prefix and none under another, its stored configuration is
-    the one of the writing solver, and `read_state` refuses a solver of
-    another time scheme.
+    the one of the writing solver (also when the record group holds an
+    attribute that is not a configuration key), and `read_state` refuses a
+    solver of another time scheme.
     """
     from pathlib import Path
     case = Case(family="Quadrature", core="fluid")
@@ -425,6 +427,10 @@ def test_a_file_tells_whether_it_holds_a_state_before_a_solver_reads_it(meshes, 
     with fd.CheckpointFile(written, "w") as chk:
         chk.save_mesh(meshes[0])
         write_state(chk, a, idx=0)
+        # An attribute of the record group that is not a configuration key:
+        # `stored_configuration` leaves it out.
+        chk.set_attr("/gadopt_gia_state", "written_by", "a later writer")
+    assert set(configuration(a)) == set(CONFIGURATION_KEYS)
     assert not has_state(empty)
     assert stored_configuration(empty) is None
     assert has_state(written) and has_state(Path(written))
