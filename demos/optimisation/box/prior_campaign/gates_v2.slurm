@@ -12,7 +12,10 @@
 #   3. the Hessian Taylor harness tests/hessian/cartesian_hvp_taylor.py with the
 #      settings of gate 2 of NOTES/SETONIX-2026-11-18.md (Tobs, smooth-stable
 #      direction, seed 42, 5 time steps, 6 levels);
-#   4. gate 1 of the same notes: rol-lbfgs under L2 and tao-bnls-riesz under the
+#   4. check_box_hessian.py: the Taylor test and the central difference of the
+#      Hessian-vector product on the tape of problem.py itself, which the harness
+#      does not use;
+#   5. gate 1 of the same notes: rol-lbfgs under L2 and tao-bnls-riesz under the
 #      regularisation metric on the tiny case, window 5, 4 iterations.
 # The job goes on after a failed part, so that one log holds every result, and exits
 # with the number of failed parts.
@@ -67,6 +70,8 @@ part wrapper-dirichlet srun -n 1 -c 1 python3 "$JOBS/check_wrapper.py" tiny-stat
 # The harness reads tests/adjoint/adjoint-demo-checkpoint-state.h5 of the code copy.
 part harness srun -n 1 -c 1 python3 "$CODE_DIR/tests/hessian/cartesian_hvp_taylor.py" Tobs \
     --perturbation smooth-stable --seed 42 --timesteps 5 --levels 6
+
+part box-hessian srun -n 1 -c 1 python3 "$JOBS/check_box_hessian.py" tiny-state.h5
 
 # Gate 1: the same commands as /scratch/pawsey0821/sghelichkhani/hessian/gate.slurm,
 # with the tiny reference state of part 1.

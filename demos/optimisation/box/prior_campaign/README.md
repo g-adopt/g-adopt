@@ -27,7 +27,8 @@ The run outputs are not in git.
 | `check_s2c.py` | Checks the shift mode, that the Hessian operator applied BNK's shift, and the curvature record of every negative-curvature solve. |
 | `submit_s2d.sh` | Submits step S2d, the wall treatment under the zero shift: an optional smoke job, five 64-cell runs and the 150-cell run Z150. Takes the step directory. Runs on a Setonix login node. |
 | `submit_v2.sh` | Submits step V2, the move to the container of 2026-11-20. Phase `gates` submits the short checks of the container, phase `runs` calls `submit_s2d.sh` without a smoke job. Runs on a Setonix login node. |
-| `gates_v2.slurm` | Runs the tiny-case gates of a container: `check_wrapper.py` in three wall settings, the Hessian Taylor harness and gate 1. |
+| `gates_v2.slurm` | Runs the tiny-case gates of a container: `check_wrapper.py` in three wall settings, the Hessian Taylor harness, `check_box_hessian.py` and gate 1. |
+| `check_box_hessian.py` | Checks the Hessian-vector product of the tape of `problem.py` on the tiny case: second-order Taylor remainders and a central difference of the gradient. Runs in about a minute. |
 | `summarise_shift.py` | Prints the S2b tables: work to reach values of `J`, `initial_misfit` there, negative-curvature solves, `ritz_min` and the shift per solve. |
 | `fetch.sh` | Copies the records of one step from Setonix to reunion. Runs on reunion. |
 | `compare_records.py` | Compares two JSON records row by row. |
