@@ -379,12 +379,14 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
     #: The fraction of the residual scale above which the part of the
     #: Newton residual along the declared transpose nullspace gives a
-    #: warning at the end of `solve` (`complete_residual`). On the 2-D
-    #: annulus with a declared rigid rotation the largest measured fraction
-    #: over eight steps is 1.6e-8 with a prescribed load and 4.1e-10 with a
-    #: sea-level load, so 1e-4 leaves more than three orders of magnitude
-    #: for other meshes and loads and still catches a load whose net torque
-    #: is a real part of the residual.
+    #: warning at the end of `solve` (`complete_residual`,
+    #: `_report_removed_residual`). On the 2-D annulus with a declared rigid
+    #: rotation the largest measured fraction over eight steps is 1.6e-8
+    #: with a prescribed load and 4.1e-10 with a sea-level load, and about
+    #: 1e-9 for a solve that starts from a restored converged state, so
+    #: 1e-4 leaves more than three orders of magnitude for other meshes and
+    #: loads and still catches a load whose net torque is a real part of
+    #: the residual.
     REMOVED_RESIDUAL_WARN_FRACTION = 1e-4
 
     def __init__(
@@ -961,19 +963,23 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         #: `None` without a declared nullspace.
         self.residual_kernel = None
         #: The largest norm of the full residual (before the removal) that
-        #: `complete_residual` has seen since construction. It is the scale
-        #: against which the removed part is measured: the first residual
-        #: of a march is the size of the forcing.
+        #: `complete_residual` has seen since construction, the last
+        #: `reset` or the last `restore`. It is the first estimate of the
+        #: scale against which the removed part is measured: the first
+        #: residual of a march from rest is the size of the forcing.
+        #: `reset` and `restore` set it to zero, so that a residual of an
+        #: earlier state does not hide a removed part of the new one.
         self._residual_scale = 0.0
-        #: The largest removed fraction since the start of the present
-        #: `solve` (`_record_removed_residual`); replays and derivative
-        #: sweeps add to it too, and `solve` resets it.
-        self._removed_fraction = 0.0
-        #: The largest `|<F, e>| / scale` over the Newton evaluations of the
-        #: last `solve`, with `|<F, e>|` the norm of the part of the residual
-        #: `F` along the declared transpose nullspace and `scale` the
-        #: largest full residual norm seen so far. `None` without a declared
-        #: nullspace or before the first `solve`.
+        #: The largest norm of the removed part `|<F, e>|` since the start
+        #: of the present `solve` (`_record_removed_residual`); replays and
+        #: derivative sweeps add to it too, and `solve` resets it.
+        self._removed_largest = 0.0
+        #: The largest removed part of the last `solve`, as a fraction of the
+        #: residual scale of that solve (`_report_removed_residual`), with
+        #: the removed part the norm of the part of the residual `F` along
+        #: the declared transpose nullspace. Set also when the step solve
+        #: raises. `None` without a declared nullspace or before the first
+        #: `solve`.
         self.removed_residual_fraction = None
         # The near-nullspace of the outer operator is not used: GAMG runs on
         # the condensed displacement operator inside block 0, and gets its
@@ -1639,13 +1645,12 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         gets the same numbers, so the warning in `solve` is decided the
         same way on every rank.
 
-        The reference is the largest full residual norm seen since
-        construction, not the norm of the present `F`. Near convergence `F`
-        is almost all along `e` (the part Newton cannot reduce), so a ratio
-        to the present norm goes to one in every converged solve and says
-        nothing. The largest norm is the size of the forcing, which is the
-        scale against which a removed part is either round-off or a real
-        residual.
+        The removed part is not compared with the norm of the present `F`.
+        Near convergence `F` is almost all along `e` (the part Newton
+        cannot reduce), so a ratio to the present norm goes to one in every
+        converged solve and says nothing. Here the largest full residual
+        norm is recorded (`_residual_scale`); `_report_removed_residual`
+        sets the scale of the solve from it.
 
         Args:
           F: the assembled residual, before the removal.
@@ -1654,31 +1659,99 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         removed = float(np.sqrt(np.sum(np.abs(coefficients)**2)))
         norm = F.norm()
         self._residual_scale = max(self._residual_scale, norm)
+        self._removed_largest = max(self._removed_largest, removed)
         fraction = removed / self._residual_scale if self._residual_scale > 0 else 0.0
-        self._removed_fraction = max(self._removed_fraction, fraction)
         log(f"{self.name}: residual part along the declared nullspace "
             f"{removed:.3e}, |F| {norm:.3e}, of the residual scale "
             f"{fraction:.3e}", level=DEBUG)
 
-    def _report_removed_residual(self) -> None:
+    def _report_removed_residual(self, error: Exception | None = None) -> None:
         """Publish the largest removed fraction of the step and warn if it is large.
 
-        Called by `solve` after the step solve. The warning is given once
-        per solve and on the first rank only, since the numbers are the
-        same on every rank.
+        Called by `solve` after the step solve, also when it raises. The
+        fraction is the largest removed part of the solve over the residual
+        scale. The scale is the largest full residual norm since
+        construction, `reset` or `restore` (`_residual_scale`). When the
+        removed part is above `REMOVED_RESIDUAL_WARN_FRACTION` of that
+        norm, the scale is also given a lower bound that does not depend on
+        the residuals seen before: `|J x|`, the Jacobian of the step applied
+        to the present solution (`_operator_scale`). This second reference
+        matters for a solver that starts from a converged state, after
+        `restore` or for a step with no new forcing: its first residual is
+        at round-off and mostly along `e`, so against the residual norms
+        alone the removed part is of order one of the scale. At a
+        converged state `J x` balances the forcing, so `|J x|` is the size
+        of the forcing in the units of the residual (measured on the
+        elastic Earth of the `limits` case: `|J x|` equals the first
+        residual norm of the march to 1e-12 relative, and the fraction of a
+        restored solve goes from 0.1 and 1.0 to about 1e-9). The product
+        costs one application of the outer operator. It is computed only
+        above the threshold, which the solves of a normal march do not
+        reach, so a normal march does not pay for it.
+
+        The fraction, the norms and `|J x|` come from collective reductions
+        and are the same on every rank, so every rank takes the same branch
+        and gives the same warning. A warning on one rank only would hang a
+        parallel run with warnings turned into errors: that rank raises and
+        the others go on to the next collective call.
+
+        Args:
+          error: the exception of a step solve that raised, or `None`. With
+            an exception the message is added to it as a note in place of a
+            warning, so that a warning turned into an error does not replace
+            the exception of the solver.
         """
         if self.residual_kernel is None:
             return
-        fraction = self._removed_fraction
+        threshold = self.REMOVED_RESIDUAL_WARN_FRACTION
+        scale = self._residual_scale
+        fraction = self._removed_largest / scale if scale > 0 else 0.0
+        if fraction > threshold:
+            forcing = self._operator_scale()
+            if forcing is not None and np.isfinite(forcing):
+                scale = max(scale, forcing)
+                fraction = self._removed_largest / scale if scale > 0 else 0.0
         self.removed_residual_fraction = fraction
-        if fraction > self.REMOVED_RESIDUAL_WARN_FRACTION and self.mesh.comm.rank == 0:
-            warn(f"{self.name}: the Newton residual of this step had a part "
-                 f"along the declared nullspace of {fraction:.3e} of the "
-                 f"residual scale, above {self.REMOVED_RESIDUAL_WARN_FRACTION:g}. "
-                 "complete_residual removes that part from the norm that SNES "
-                 "tests, so the step can report convergence with it unsolved. "
-                 "The declared rotation may not be a good kernel of this "
-                 "operator, or the load has a net torque.")
+        if fraction > threshold:
+            message = (
+                f"{self.name}: the Newton residual of this step had a part "
+                f"along the declared nullspace of {fraction:.3e} of the "
+                f"residual scale, above {threshold:g}. complete_residual "
+                "removes that part from the norm that SNES tests, so the step "
+                "can report convergence with it unsolved. The declared rotation "
+                "may not be a good kernel of this operator, or the load has a "
+                "net torque.")
+            if error is None:
+                warn(message)
+            else:
+                error.add_note(message)
+
+    def _operator_scale(self) -> float | None:
+        """`|J x|`: the Jacobian of the step applied to the present solution.
+
+        A reference for the size of the forcing that does not depend on the
+        residuals of earlier solves (`_report_removed_residual`). `J` is the
+        Jacobian that SNES holds: the one of the last Newton step, which on
+        the low-rank path includes `theta_psi B` (`augment_jacobian`). For
+        an operator that is linear in the solution, `J x = F(x) + f`, so at
+        a converged state it is the forcing `f` up to the residual.
+
+        Returns:
+          The 2-norm of `J x`, or `None` when SNES holds no assembled
+          Jacobian yet (an assembled matrix type before the first Newton
+          step; the matrix-free type can always apply).
+        """
+        jacobian = self.solver.snes.getJacobian()[0]
+        if jacobian is None or not jacobian.assembled:
+            return None
+        # A PETSc product only; the tape is not involved, and the
+        # matrix-free action assembles into its own work vectors.
+        with stop_annotating(), self.solution.dat.vec_ro as x:
+            product = x.duplicate()
+            jacobian.mult(x, product)
+            norm = product.norm()
+            product.destroy()
+        return norm
 
     def augment_jacobian(self, X, Jmat) -> None:
         """`post_jacobian_callback`: give the matrix-free action the same `B`."""
@@ -1777,9 +1850,15 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             before = TapeSweepMarkerBlock(self, self.appctx["gia_solve_index"], before=True)
             tape.add_block(before)
         # The removed part is measured over the Newton evaluations of this
-        # step only (`complete_residual`).
-        self._removed_fraction = 0.0
-        self._step.solve()
+        # step only (`complete_residual`). It is published also when the
+        # step solve raises, so `removed_residual_fraction` never keeps the
+        # value of the solve before.
+        self._removed_largest = 0.0
+        try:
+            self._step.solve()
+        except Exception as error:
+            self._report_removed_residual(error)
+            raise
         self._report_removed_residual()
         if markers:
             after = TapeSweepMarkerBlock(self, self.appctx["gia_solve_index"], before=False)
@@ -1792,7 +1871,15 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                 # block after it would give the markers a key that never
                 # changes.
                 step_block = tape.get_blocks()[-1]
-                assert any(v.output is self.solution for v in step_block.get_outputs())
+                if not any(v.output is self.solution for v in step_block.get_outputs()):
+                    raise RuntimeError(
+                        f"{self.name}: the last block on the tape after the step "
+                        "solve should be Firedrake's solve block of this step, "
+                        "with the mixed solution as an output; found "
+                        f"{type(step_block).__name__} with outputs "
+                        f"{[type(v.output).__name__ for v in step_block.get_outputs()]}. "
+                        "The tape sweep markers cannot publish the operator "
+                        "version for its replay.")
                 before.step_block = after.step_block = step_block
             tape.add_block(after)
         snes = self.solver.snes
@@ -1980,6 +2067,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.time_integrator.prepared_dt = None
         if self.family == "DG":
             self.solution.subfunctions[1].assign(self.internal_variables)
+        # The residual scale of the removed-part measurement belongs to the
+        # state the solver had before (`_residual_scale`).
+        self._residual_scale = 0.0
         self._copy_out()
 
     def reset(self) -> None:
@@ -1990,4 +2080,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                 f.assign(0.0)
         self.time_integrator.restart()
         self.time_integrator.prepared_dt = None
+        # The next residual is the forcing from rest; the scale of the
+        # removed-part measurement starts again from it (`_residual_scale`).
+        self._residual_scale = 0.0
         self._copy_out()

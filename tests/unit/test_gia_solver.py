@@ -729,7 +729,8 @@ def test_the_residual_loses_only_its_part_along_the_declared_rotation(meshes):
 
     # The assembled residual alone: its part along `e` is small, and the
     # published fraction is that part over the residual norm (the residual
-    # scale of a fresh solver is the norm of its first residual).
+    # scale of a fresh solver is the norm of its first residual; `|J x|`
+    # enters only above the warning threshold).
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         completed, along = complete(raw)
@@ -742,7 +743,9 @@ def test_the_residual_loses_only_its_part_along_the_declared_rotation(meshes):
     # A residual with a large known part along `e`.
     F = raw.copy()
     F.axpy(10.0 * raw.norm(), e)
-    solver._removed_fraction = 0.0
+    # Above the threshold the scale also has the lower bound `|J x|` at this
+    # state; it is below `|F|` here, so the fraction stays `|<F, e>| / |F|`.
+    solver._removed_largest = 0.0
     with pytest.warns(UserWarning, match="declared nullspace"):
         completed, along = complete(F)
         solver._report_removed_residual()
@@ -753,6 +756,50 @@ def test_the_residual_loses_only_its_part_along_the_declared_rotation(meshes):
     assert difference.norm() <= 1e-14 * F.norm()
     np.testing.assert_allclose(solver.removed_residual_fraction,
                                abs(along) / F.norm(), rtol=1e-10)
+
+
+def test_a_solver_restored_to_a_converged_state_does_not_warn(meshes):
+    """A new solver restored to a converged state gives no removed-part warning.
+
+    The elastic sea-level Earth of the `repeat` row of the `limits` case,
+    multiplier path, declared rigid rotation. A first solver solves the
+    step twice (the second solve takes the state from the Newton tolerance
+    to round-off, as in the `repeat` row); a second solver is built,
+    restored to that converged state and solves the same step again. Its
+    residuals are at round-off and mostly along the
+    declared rotation, so against the residual norms of this solver alone
+    the removed part would be of order one of the scale. The scale of
+    `_report_removed_residual` has the lower bound `|J x|`, the size of the
+    forcing, so the solve gives no warning (warnings as errors) and the
+    published fraction is at round-off (measured 1.1e-9). The first check
+    shows that the restored solve is the round-off case: its largest
+    residual norm is below 1e-6 of the forcing.
+    `test_the_residual_loses_only_its_part_along_the_declared_rotation`
+    keeps the warning for a large removed part.
+    """
+    from gia_models import sea_level as S
+    _, sub = meshes
+    fields = S.surface_fields(sub, "caps", d_ice=1e-2)
+
+    def build():
+        solver, _, _ = S.build(meshes, fields, representation="multiplier",
+                               **S.solve_settings("multiplier"),
+                               internal_variable_family="Quadrature", quad_degree=C.QUAD,
+                               earth=S.ELASTIC_EARTH, nullspace="rigid_rotation")
+        return solver
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        first = build()
+        first.solve()
+        first.solve()
+        forcing = first._residual_scale
+        restored = build()
+        restored.restore({k: (f.copy(deepcopy=True) if k != "previous_dt" else f)
+                          for k, f in first.state().items()})
+        restored.solve()
+    assert restored._residual_scale < 1e-6 * forcing
+    assert restored.removed_residual_fraction < 1e-6
 
 
 def test_backstress_refuses_a_displacement_condition(meshes):
