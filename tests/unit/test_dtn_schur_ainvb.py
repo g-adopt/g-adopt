@@ -1356,6 +1356,7 @@ def test_the_solver_publishes_the_counts_of_the_last_solve(marched):
 REFUSAL_SCRIPT = """
 import sys
 sys.path.insert(0, {tests!r})
+sys.path.insert(0, {gia!r})
 import gadopt  # noqa
 import firedrake as fd
 import test_dtn_multiplier_dense_schur as td
@@ -1417,7 +1418,12 @@ def refusal_stderr(check):
       AssertionError: if the child did not raise at all, or died from a
         signal, or timed out.
     """
-    script = REFUSAL_SCRIPT.format(tests=str(Path(__file__).resolve().parent))
+    # The child does not load `tests/unit/conftest.py`, so it gets both the
+    # directory of the unit tests and `tests/gia` (the `gia_models` helpers
+    # that the two imported test modules use) on its path explicitly.
+    here = Path(__file__).resolve().parent
+    script = REFUSAL_SCRIPT.format(tests=str(here),
+                                   gia=str(here.parent / "gia"))
     finished = subprocess.run(
         [sys.executable, "-c", script, check], capture_output=True, text=True,
         cwd=str(Path(__file__).resolve().parents[2]), timeout=900)

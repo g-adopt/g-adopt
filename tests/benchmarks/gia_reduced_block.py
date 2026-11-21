@@ -12,7 +12,10 @@ from time import perf_counter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'unit'))
-# The imports below need the two paths above, so they follow them.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'gia'))
+# The imports below need the three paths above, so they follow them. The unit
+# test modules import their GIA helpers (`gia_cases`, `gia_reference_mixed`,
+# `gia_models`) from `tests/gia`.
 import gadopt  # noqa: E402  (imported before firedrake, as G-ADOPT requires)
 import firedrake as fd  # noqa: E402
 import test_gia_direct_bdf2 as test  # noqa: E402
