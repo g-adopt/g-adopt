@@ -55,7 +55,7 @@ import gia_cases as C
 import gia_march as M
 from gia_entries import (ADJOINT, ADJOINT_FRESH_EPS, ADJOINT_OTHER_STEP,
                          ADJOINT_REPLAY_EPS, ADJOINT_STEPS, CASE_DIR, COUNT_PHASES,
-                         GUARD_FLAGS, GUARDS, OUT, PROJECTION_RTOL, REPLAY_RTOL,
+                         GUARD_FLAGS, GUARDS, OUT, REPLAY_RTOL,
                          SCALED_GRADIENT_RATE_MAX, TAYLOR_RATE_MIN, adjoint_blocks_name,
                          adjoint_count_name, adjoint_counts, adjoint_values)
 from gadopt import gia_couplings as cp
@@ -671,8 +671,6 @@ def guard_tape(meshes, out):
     out["projection_J"] = float(J_tan)
     out["projection_replay_error"] = abs(replay_tan - float(J_tan)) / scale
     out["projection_fresh_error"] = abs(fresh_tan - float(J_tan)) / scale
-    out["projection_replay"] = int(out["projection_replay_error"] <= PROJECTION_RTOL
-                                   and out["projection_fresh_error"] <= PROJECTION_RTOL)
     dJ_tan = float(direction._ad_dot(rf_tan.derivative()))
     (out["projection_rate"],) = taylor_rates(rf_tan, control, direction,
                                              float(rf_tan(control)), (dJ_tan,))

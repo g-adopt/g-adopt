@@ -1711,6 +1711,12 @@ class TestFluidCore(FluidCoreBuilder):
         coefficient, kept only for baselines. With `rho_core=3`, `rho_mantle=1`
         the isolated block's core:contrast ratio is exactly `3 : (3-1)` = 1.5;
         every geometric and `B_mu`/`g_0` factor cancels in the ratio.
+
+        Keep this test. It is the only check that fails when the spring
+        carries the contrast `rho_core - rho_mantle` in place of `rho_core`
+        (mutation M10 of `tests/gia`): no row of the `tests/gia` cases has an
+        independent check of the spring, and `forward` `load-direct` sees it
+        only as a change of a recorded value.
         """
         _, sub = meshes
 

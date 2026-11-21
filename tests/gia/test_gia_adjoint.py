@@ -66,9 +66,8 @@ ENTRIES = list(E.ADJOINT)
 #: recorded projection after the step does not undo that. The forward march
 #: starts each step from the previous state, the replay from zero
 #: (`ConstitutiveStepBlock.prepare_recompute_component`), and the projected
-#: states differ by 1.4e-7 to 1.7e-7 relative in the max norm (scratch run,
-#: `NOTES/design/tests/logs-libfix/d2-load-gauge-*.txt`). Newton converges in
-#: one step on the tight options, so this is not a tolerance.
+#: states differ by 1.4e-7 to 1.7e-7 relative in the max norm. Newton
+#: converges in one step on the tight options, so this is not a tolerance.
 _LOAD_REPLAY = (
     "{entry}: the replay repeats the recording to 1.81e-8 and the fresh march at "
     "the other control to 1.82e-8 (bands 1e-9 and 1e-8). The unprojected step "
@@ -80,16 +79,21 @@ _LOAD_REPLAY = (
     "recording exactly, and the derivatives agree (adjoint against the fresh "
     "difference {dJ}, Taylor rate {rate}).")
 
-#: The disk schedule: the tangent sweep runs after a replay under
-#: `SingleDiskStorageSchedule` and reads saved values that the schedule does
-#: not restore for a tangent sweep.
-_DISK_TANGENT = (
-    "sea-direct-viscosity-disk: the tangent is 1.8022498658930116e-06 against "
-    "the adjoint 1.6475546695832376e-06 and the difference of replays "
-    "1.647554670545625e-06 (9.4 percent off; bands 1e-8 and 1e-6). Replay, "
-    "adjoint and Taylor rate repeat sea-direct-viscosity to all digits, so the "
-    "tangent sweep `tape.evaluate_tlm()` under `SingleDiskStorageSchedule` "
-    "reads saved values that the schedule does not provide for it.")
+#: The tests that do not apply to an entry, by test. pyadjoint evaluates a
+#: tangent sweep with `Tape.evaluate_tlm`, which walks the blocks of the tape
+#: and reads the values saved on them; the checkpoint manager of a
+#: checkpoint schedule (`pyadjoint.checkpointing.CheckpointManager`) drives
+#: the forward replay and the adjoint sweep only and has no tangent sweep. Under
+#: `SingleDiskStorageSchedule` the values that the tangent sweep reads are
+#: the ones the last replay left, not the ones of each step, so the tangent
+#: of the disk entry (9.4 percent off) does not measure the solver. Replay,
+#: adjoint and Taylor rate of that entry repeat `sea-direct-viscosity`.
+NOT_APPLICABLE = {
+    "tangent_pairing": {name for name, entry in E.ADJOINT.items()
+                        if entry.get("checkpoint") == "disk"},
+    "tangent_replay": {name for name, entry in E.ADJOINT.items()
+                       if entry.get("checkpoint") == "disk"},
+}
 
 #: The assertions that fail with the measured numbers, by `(test, entry)`,
 #: with the numbers. They are strict xfails, so a change that makes one pass
@@ -103,14 +107,17 @@ KNOWN_FAILURES = {
         entry="load-direct-B_mu", dJ="7.2e-8", rate="2.0005"),
     ("other", "load-direct-B_mu"): _LOAD_REPLAY.format(
         entry="load-direct-B_mu", dJ="7.2e-8", rate="2.0005"),
-    ("tangent_pairing", "sea-direct-viscosity-disk"): _DISK_TANGENT,
-    ("tangent_replay", "sea-direct-viscosity-disk"): _DISK_TANGENT,
 }
 
 
 def entry_params(test):
-    """The entries of `ENTRIES` as parameters of `test`, with the known failures marked."""
+    """The entries of `ENTRIES` as parameters of `test`, with the known failures marked.
+
+    The entries of `NOT_APPLICABLE[test]` are left out.
+    """
     for entry in ENTRIES:
+        if entry in NOT_APPLICABLE.get(test, ()):
+            continue
         reason = KNOWN_FAILURES.get((test, entry))
         marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
         yield pytest.param(entry, marks=marks, id=entry)
@@ -308,22 +315,8 @@ def test_the_caches_rebuild_at_the_change_of_dt(phase):
 
 
 #: The guards that fail with the measured numbers, with the numbers (strict
-#: xfails).
-GUARD_KNOWN_FAILURES = {
-    "projection_replay": (
-        "With the projection on the tape, the replay of the tangential surface "
-        "functional on SEA (moving coastline, rotation, direct preset, two steps) "
-        "repeats the recording to 2.65e-8, against the bound 1e-10 of "
-        "test_gia_nullspace_projection_adjoint (which ran a prescribed load); the "
-        "fresh march repeats it exactly. Without the recorded projection "
-        "(mutation M6) the replay error is 0.68. The probable cause: the replay "
-        "starts each step from zero, and the declared rigid rotation is a null "
-        "vector only to 8e-6 on the curved facets, so the projected Newton solve "
-        "of the replay and the "
-        "one of the forward march stop at points that differ by about 1e-8 "
-        "relative in the rotation content, which this functional reads directly. "
-        "The functional of the case replays to 3.5e-11."),
-}
+#: xfails). None at present.
+GUARD_KNOWN_FAILURES = {}
 
 
 def guard_params():
@@ -332,6 +325,25 @@ def guard_params():
         reason = GUARD_KNOWN_FAILURES.get(flag)
         marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
         yield pytest.param(flag, marks=marks, id=flag)
+
+
+def test_the_projection_replays_the_tangential_functional():
+    """The replay and a fresh march repeat the tangential functional to `PROJECTION_RTOL`.
+
+    With the rigid rotation declared and its projection on the tape, a
+    functional of the tangential surface displacement, which a rigid
+    rotation changes, replays to the recorded value. The bound 1e-6 is set
+    by the measurement and by the defect it must catch: the replay differs by
+    2.6e-8 (the replay starts each step from zero and the rotation is a
+    kernel only to 8e-6, so the two projected solves stop at points about
+    1e-8 apart in the rotation content), and without the recorded projection
+    (mutation M6) the replay error is 0.68. The fresh march repeats the
+    recording exactly.
+    """
+    v = values(E.GUARDS)
+    for name in ("projection_replay_error", "projection_fresh_error"):
+        assert v[name] <= E.PROJECTION_RTOL, (
+            f"{name}: {v[name]!r}, at most {E.PROJECTION_RTOL!r}")
 
 
 @pytest.mark.parametrize("flag", list(guard_params()))

@@ -83,11 +83,11 @@ def test_the_rotation_pair_transposes(pair):
 def test_the_shift_rotation_block_is_nonzero():
     """`(Shift, m3)` and `(m3, Shift)` both carry the sheet.
 
-    `test_sea_level.py::TestRotationTransposes::
-    test_the_shift_rotation_block_is_nonzero`: both entries above 1e-10 of
-    the `(Shift, Shift)` diagonal. Without the sheet in `inertia_form`
-    (M8) the entry `(m3, Shift)` is zero; without `psi_rot` in the sea level
-    the entry `(Shift, m3)` is zero.
+    Both entries are above `SHIFT_ROTATION_FLOOR` (1e-4) of the
+    `(Shift, Shift)` diagonal; the measured ratio is 4.8e-3. Without the
+    sheet in `inertia_form` (M8) the entry `(m3, Shift)` falls to 7e-8 of
+    the diagonal; without `psi_rot` in the sea level the entry
+    `(Shift, m3)` is zero.
     """
     v = values("sea-transposes")
     diagonal = abs(v["shift_shift_entry"])

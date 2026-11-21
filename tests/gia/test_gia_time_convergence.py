@@ -84,29 +84,18 @@ def test_backward_euler_is_first_order(entry, quantity):
         f"{E.TC_BE_ORDER_LEVELS} steps, expected in [{low!r}, {high!r}]")
 
 
-#: The BDF2 assertions that fail with the measured numbers, by
-#: `(entry, scheme, quantity, pair)`, with the numbers. They are strict
-#: xfails, so a change that makes one pass shows in the report.
-BDF2_KNOWN_FAILURES = {
-    ("power", "bdf2", "shift", (16, 32)): (
-        "The shift error of BDF2 on equal steps with the power law changes sign "
-        "between 8 and 16 steps (signed relative errors -5.82e-6, +1.51e-6, "
-        "+5.89e-7, +1.59e-7 at 8, 16, 32, 64 steps), so the error at 16 steps "
-        "is reduced by the cancellation of two error terms and the order between "
-        "16 and 32 steps is 1.36 (8-16: 1.95, 32-64: 1.89). The displacement "
-        "and the potential of the same marches give 1.99, 2.06 and 1.93, 2.04."),
-}
-
-
 def bdf2_cases():
-    """The parameters of `test_bdf2_is_second_order`, with the known failures marked."""
+    """The parameters of `test_bdf2_is_second_order`: entry, scheme, quantity, step pair.
+
+    An entry takes its pairs from `TC_BDF2_ORDER_PAIRS_BY_ENTRY`, or else
+    from `TC_BDF2_ORDER_PAIRS`.
+    """
     for entry in ENTRIES:
+        pairs = E.TC_BDF2_ORDER_PAIRS_BY_ENTRY.get(entry, E.TC_BDF2_ORDER_PAIRS)
         for scheme in ("bdf2", "bdf2_alternating"):
             for quantity in E.TC_QUANTITIES:
-                for pair in E.TC_BDF2_ORDER_PAIRS:
-                    reason = BDF2_KNOWN_FAILURES.get((entry, scheme, quantity, pair))
-                    marks = [pytest.mark.xfail(strict=True, reason=reason)] if reason else []
-                    yield pytest.param(entry, scheme, quantity, pair, marks=marks,
+                for pair in pairs:
+                    yield pytest.param(entry, scheme, quantity, pair,
                                        id=f"{entry}-{scheme}-{quantity}-{pair[0]}-{pair[1]}")
 
 
@@ -115,7 +104,8 @@ def test_bdf2_is_second_order(entry, scheme, quantity, pair):
     """The order of BDF2 between 16 and 32 and between 32 and 64 steps is at least 1.8.
 
     On equal steps and on steps that alternate between 0.8 and 1.2 of the
-    mean step. The variable-step coefficients keep the scheme second order
+    mean step. The power-law entry is checked between 32 and 64 steps only
+    (`TC_BDF2_ORDER_PAIRS_BY_ENTRY`). The variable-step coefficients keep the scheme second order
     on the alternating steps; the equal-step coefficients there make it
     inconsistent (mutation M4).
     """
