@@ -84,6 +84,24 @@ CASES = [("lowrank", "maxwell2", "Quadrature")]
 #: The stored fingerprints of the earlier solver, by case label.
 REFERENCE = C.reference_values("gate")["3d"]
 
+#: The blocks with a bound of their own. The earlier solver integrated three
+#: coupling integrals on a measure without a degree, so at the degree UFL
+#: estimated: the mantle term of the rotation rows (`Rotation.inertia_form`),
+#: the mantle term of the centre-of-mass rows (`CentreOfMass.dipole_form`)
+#: and the displacement source of the potential row
+#: (`GravityPotential.volume_source`). This solver integrates all three at
+#: the explicit mechanics quadrature degree, the degree of their transposes
+#: in the momentum row. On this coarse sphere the two rules differ by more
+#: than on the annulus. Measured largest differences over the residual and
+#: the two Jacobian actions: potential 6.98e-5, `m1` and `m2` 1.99e-6, `m3`
+#: 1.04e-5, `centre_of_mass_i` 2.55e-7. The potential row moves only through
+#: the displacement source: with that source put back on UFL's estimate the
+#: block agrees to 1e-12, and the `(u, psi)` pair of the Jacobian is then a
+#: transpose only to 4.1e-4 (3.0e-16 with the explicit degree). The
+#: displacement block still agrees to 1e-12.
+FIELD_BOUNDS = {"potential": 1e-4, "m1": 2.5e-6, "m2": 2.5e-6, "m3": 1.5e-5,
+                **{f"centre_of_mass_{i}": 3e-7 for i in range(3)}}
+
 
 @pytest.mark.parametrize("representation, model, family", CASES,
                          ids=["-".join(c) for c in CASES])
@@ -101,7 +119,8 @@ def test_3d_residual_and_jacobian_action_match_the_reference(
     residual, actions = C.residual_and_actions(new, directions)
     reference = REFERENCE["-".join((representation, model, family))]
     for vector, ref in zip([residual, *actions], reference):
-        C.assert_fingerprints_agree(C.fingerprint(vector, new.field_index), ref)
+        C.assert_fingerprints_agree(C.fingerprint(vector, new.field_index), ref,
+                                    field_rtol=FIELD_BOUNDS)
 
 
 def test_a_fluid_core_tag_with_no_facets_is_still_refused(mesh):

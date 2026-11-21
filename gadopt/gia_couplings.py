@@ -150,11 +150,15 @@ class CouplingContext:
       mesh: the mechanics mesh.
       potential_mesh: the parent mesh of the potential and the `Real` fields.
       cross_mesh: whether the two meshes differ.
-      dx_m: the mantle volume measure, intersected with the parent.
+      dx_m: the mantle volume measure, intersected with the parent, at
+        `mechanics_quad_degree`. Every volume integral of a coupling uses
+        it, so no coupling integral depends on UFL's degree estimate (see
+        the constructor).
       boundary_quad_degree: the quadrature degree of every facet integral of
         the couplings, the degree of the DtN boundary form.
       mechanics_quad_degree: the quadrature degree of the momentum
-        equation, which its weak boundary terms also use.
+        equation (`eq.dx`), which its weak boundary terms and every volume
+        integral of the couplings also use.
       scaling_factor: `c`, the factor of the whole momentum residual.
       row_scale_B_mu: `B_mu`, or the constant `NULL_COUPLING_ROW_SCALE`
         (one) when `B_mu` is zero at the construction of the solver
@@ -171,7 +175,7 @@ class CouplingContext:
     def __init__(self, *, solution, fields, tests, approximation, mesh,
                  potential_mesh, dx_m, boundary_quad_degree, scaling_factor,
                  row_scale_B_mu, Lambda, four_pi_G, bcs, field_names,
-                 mechanics_quad_degree=None):
+                 mechanics_quad_degree):
         self.solution = solution
         self.space = solution.function_space()
         self.fields = fields
@@ -180,7 +184,23 @@ class CouplingContext:
         self.mesh = mesh
         self.potential_mesh = potential_mesh
         self.cross_mesh = mesh is not potential_mesh
-        self.dx_m = dx_m
+        # Every volume integral of the couplings is integrated at the degree
+        # of the momentum equation, set here once. A measure without a degree
+        # is not enough for two reasons. First, UFL estimates the degree from
+        # the integrand and adds the degree of the integral scaling (`detJ`
+        # of the curved coordinate element), so the estimate depends on the
+        # mesh and on the expression. Second, Firedrake compiles each block of
+        # a mixed form apart, and UFL estimates one degree for the sum of the
+        # integrals of a block that share a measure, so one integral gets one
+        # degree in the momentum block and another in a `Real` row. A coupling
+        # row `int f(u) nu dx` and its column `int f(w) lam dx` in the
+        # momentum row (the inertia rows against the rotational body force,
+        # the centre-of-mass rows against their column) are then transposes
+        # of each other only to the difference of the two quadrature errors.
+        # With one explicit degree for both, which is also the degree of
+        # `eq.dx` in `gadopt.momentum_equation.rotational_potential_term`,
+        # the blocks are transposes to round-off.
+        self.dx_m = dx_m(degree=mechanics_quad_degree)
         self.boundary_quad_degree = boundary_quad_degree
         self.mechanics_quad_degree = mechanics_quad_degree
         self.scaling_factor = scaling_factor
@@ -756,8 +776,10 @@ class Rotation(Coupling):
             requires, so it is kept apart from `scale`.
 
         Returns:
-          The form of `dI_i3`: the mantle term on `dx_m` and one term per
-          sheet on its facet measure.
+          The form of `dI_i3`: the mantle term on `dx_m` (at the mechanics
+          quadrature degree, the degree of its transpose, the rotational
+          body force of the momentum row) and one term per sheet on its
+          facet measure.
         """
         weight = Constant(1.0) if test is None else test
         scale = Constant(1.0) if scale is None else scale
@@ -786,7 +808,9 @@ class Rotation(Coupling):
         F = Form([])
         # `nu_i` is a `Real` test function, whose basis function is the
         # constant 1, so `K_i m_i` is divided by the volume of the measure it
-        # is integrated on: the row means `K_i m_i - s_i dI_i3 = 0`.
+        # is integrated on: the row means `K_i m_i - s_i dI_i3 = 0`. The
+        # volume and the closure term use the same measure (`dx_m` at the
+        # mechanics degree), so the two cancel to round-off.
         volume = assemble(Constant(1.0) * ctx.dx_m)
         for i, name in enumerate(self.slots(ctx)):
             if name is None:
@@ -873,7 +897,9 @@ class CentreOfMass(Coupling):
             # The constraint row: the whole moment, every sheet included.
             F += self.dipole_form(ctx, i, weight=nu_i, scale=beta)
             # The column: the variation of D_i in the direction of the test
-            # functions. The mantle term is linear in u.
+            # functions. The mantle term is linear in u. It and the mantle
+            # term of the constraint row share `ctx.dx_m` and its explicit
+            # degree, so the pair is transposed to round-off.
             F += beta * lam_i * ctx.approximation.density * w[i] * ctx.dx_m
             for sheet in ctx.sheets:
                 if sheet.test_variation is None:

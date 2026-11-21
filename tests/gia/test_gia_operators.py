@@ -57,18 +57,7 @@ def test_the_sheet_blocks_transpose(state, pair):
 
 
 @pytest.mark.parametrize("pair", [
-    pytest.param(("u", "rot"), marks=pytest.mark.xfail(
-        strict=True,
-        reason="On the Quadrature family the pair (u, m3) transposes only to "
-               "6.4e-10 to 6.9e-10 of its scale (measured on the cap, shoreline "
-               "and ocean states and without sea level; absolute difference "
-               "1.62e-10 in every case): the rotational body force "
-               "(gadopt.momentum_equation.rotational_potential_term) is "
-               "integrated with the mechanics measure at quad_degree 4, the "
-               "mantle term of Rotation.inertia_form with dx_m at the estimated "
-               "degree; the two integrals of rho grad(p_3) . u differ by 2.5e-9 "
-               "relative.")),
-    ("psi", "rot"), ("Shift", "rot")], ids=lambda p: "-".join(p))
+    ("u", "rot"), ("psi", "rot"), ("Shift", "rot")], ids=lambda p: "-".join(p))
 def test_the_rotation_pair_transposes(pair):
     """The rotation row against the sheet, on the live-coastline state.
 
@@ -117,17 +106,6 @@ def test_the_mechanics_row_matches_a_normal_stress():
 # -- frame --------------------------------------------------------------------------
 
 FRAME_2D = [f"frame_{rep}_{'rot' if rot else 'norot'}" for rep, rot in E.FRAME_CONFIGURATIONS]
-SPHERE_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="On the 24-column sphere with the Quadrature family the pair (u, "
-           "lambda_i) transposes only to 5.3e-9 to 5.4e-9 of its scale (pairings "
-           "19.116666312 against 19.116666858 for lambda_x). The CentreOfMass "
-           "residual alone is symmetric to 2e-16; in the whole residual the "
-           "column term beta lambda rho w_i dx_m of the displacement row is "
-           "integrated at the mechanics quad_degree 4, the constraint row at "
-           "the estimated degree (the difference is beta times the degree-4 "
-           "error of int rho u_i dx, 4.3e-7). On the 2-D annulus, where dx_m is "
-           "an intersected measure, the pair agrees to 1e-16.")
 
 
 @pytest.mark.parametrize("multiplier", ["lambda_x", "lambda_y"])
@@ -144,8 +122,7 @@ def test_the_frame_blocks_form_a_saddle_pair(prefix, multiplier):
                        for k, x in v.items()}, "pair")
 
 
-@pytest.mark.parametrize("multiplier", [
-    pytest.param(m, marks=SPHERE_XFAIL) for m in ("lambda_x", "lambda_y", "lambda_z")])
+@pytest.mark.parametrize("multiplier", ["lambda_x", "lambda_y", "lambda_z"])
 def test_the_sphere_frame_blocks_form_a_saddle_pair(multiplier):
     """The three multipliers of the 24-column sphere, assembly only.
 
@@ -156,6 +133,19 @@ def test_the_sphere_frame_blocks_form_a_saddle_pair(multiplier):
     v = values("frame")
     assert_transposes({k.replace(f"frame_sphere_u_{multiplier}", "pair"): x
                        for k, x in v.items()}, "pair")
+
+
+def test_the_sphere_potential_pair_transposes():
+    """`(u, psi)` is the transpose of `(psi, u)` on the 24-column sphere, assembly only.
+
+    The self-gravity body force of the momentum row and the displacement
+    source of the potential row are both integrated at the mechanics
+    quadrature degree. With the source on a measure without a degree, at
+    UFL's estimate, the two pairings differ by 2.4e-4 of their value on
+    this sphere (6.2e-6 of the Cauchy-Schwarz scale); on the annulus the two rules agree, so the `u-psi` pairs of
+    `test_the_sheet_blocks_transpose` do not see that defect.
+    """
+    assert_transposes(values("frame"), "frame_sphere_u_psi")
 
 
 @pytest.mark.parametrize("prefix", FRAME_2D + ["frame_sphere"])

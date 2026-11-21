@@ -101,6 +101,12 @@ class GravityPotential:
         net mass.
       source_quad_degree: the quadrature degree of the volume density's
         integrals, `None` for UFL's estimate.
+      displacement_quad_degree: the quadrature degree of the displacement
+        source `Lambda int rho_0 u . grad(v) dx_m`, `None` for a part that
+        is never given a displacement. A caller that gives one passes the
+        degree of its momentum equation, so that the source and its
+        transpose, the self-gravity body force of the momentum row, are
+        integrated with one rule.
       quad_degree: the boundary quadrature degree of the DtN form, `None`
         for its calibrated default.
       alpha: the Robin shift of the DtN form, `None` for its default.
@@ -110,8 +116,8 @@ class GravityPotential:
 
     def __init__(self, potential_space, density_mesh, gravity_bcs, *,
                  Lambda=None, gravitational_constant=None, volume_density=None,
-                 source_quad_degree=None, quad_degree=None, alpha=None,
-                 representation="lowrank"):
+                 source_quad_degree=None, displacement_quad_degree=None,
+                 quad_degree=None, alpha=None, representation="lowrank"):
         if representation not in ("multiplier", "lowrank"):
             raise ValueError(
                 f"dtn_representation must be 'multiplier' or 'lowrank', got "
@@ -136,7 +142,7 @@ class GravityPotential:
         self.Lambda = Lambda if Lambda is not None else self.four_pi_G
         self.volume_density = (None if volume_density is None
                                else ensure_constant(volume_density))
-        self.set_measures(source_quad_degree)
+        self.set_measures(source_quad_degree, displacement_quad_degree)
         # Four 0-form assembles in a cross-mesh system, none otherwise. They
         # are numbers that no functional depends on, so they are not recorded.
         with stop_annotating():
@@ -157,7 +163,8 @@ class GravityPotential:
 
     # -- Measures and geometry ------------------------------------------------
 
-    def set_measures(self, source_quad_degree=None) -> None:
+    def set_measures(self, source_quad_degree=None,
+                     displacement_quad_degree=None) -> None:
         """The volume measures of the potential and of the density.
 
         `dx_g` is the potential's, over the whole parent; `dx_m` the
@@ -169,7 +176,9 @@ class GravityPotential:
         submesh; `check_cross_mesh_measures` asserts that. `dx_parent` is the plain
         parent measure of the enclosed-mass system, whose arguments are
         `Real` fields of the parent alone. `dx_density` is `dx_m` at the
-        quadrature degree of the volume density.
+        quadrature degree of the volume density. `dx_displacement` is `dx_m`
+        at the quadrature degree of the displacement source, or `None` when
+        no degree is given; `volume_source` refuses a displacement then.
         """
         parent, sub = self.potential_mesh, self.density_mesh
         self.dx_parent = Measure("dx", domain=parent)
@@ -183,6 +192,8 @@ class GravityPotential:
             self.dx_m = Measure("dx", domain=sub)
         self.dx_density = (self.dx_m if source_quad_degree is None
                            else self.dx_m(degree=source_quad_degree))
+        self.dx_displacement = (None if displacement_quad_degree is None
+                                else self.dx_m(degree=displacement_quad_degree))
 
     def check_cross_mesh_measures(self) -> None:
         """Refuse intersected measures that do not measure what they claim.
@@ -263,16 +274,33 @@ class GravityPotential:
     def volume_source(self, v, u=None, *, density=None):
         """The volume terms linear in the test function, right-hand-side convention.
 
-        `Lambda int rho_0 u . grad(v) dx_m` when the displacement `u` is given
-        (with `density` the reference density `rho_0`), plus
+        `Lambda int rho_0 u . grad(v) dx_displacement` when the displacement
+        `u` is given (with `density` the reference density `rho_0`), plus
         `4 pi G int rho v dx_density` when the part has a volume density.
+
+        The displacement source is the transpose of the self-gravity body
+        force of the momentum row (`gadopt.momentum_equation.
+        self_gravity_term`), up to the row scalings. The two are transposes
+        to round-off only if both are integrated with one rule, so the
+        source takes the explicit degree `displacement_quad_degree` and is
+        refused without one: UFL's estimate depends on the integrand and on
+        the block of the mixed form it ends up in.
 
         Returns:
           A `Form`, empty when there is neither.
+
+        Raises:
+          ValueError: If `u` is given and the part was built without a
+            `displacement_quad_degree`.
         """
         L = Form([])
         if u is not None:
-            L += self.Lambda * density * dot(u, grad(v)) * self.dx_m
+            if self.dx_displacement is None:
+                raise ValueError(
+                    "A displacement source needs the quadrature degree of the "
+                    "momentum equation; build the GravityPotential with "
+                    "displacement_quad_degree.")
+            L += self.Lambda * density * dot(u, grad(v)) * self.dx_displacement
         if self.volume_density is not None:
             L += self.four_pi_G * self.volume_density * v * self.dx_density
         return L

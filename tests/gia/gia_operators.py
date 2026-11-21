@@ -373,7 +373,7 @@ def run_frame(meshes):
       rotation off and on): the frame configuration with a degree-1 sheet.
     - `test_extruded_sphere_assembles_the_saddle_pair`: the three
       multipliers of the 24-column sphere (assembly only) and its
-      translation moment.
+      translation moment, and the pair `(u, psi)` of the sphere.
     - `TestInertiaTranspose::test_inertia_of_a_cos2_sheet_vanishes`: the
       sheet half of `dI_33` of the `cos 2 phi` load, read at `u = 0` so that
       the whole value is the load's sheet (the original read it at the
@@ -394,6 +394,13 @@ def run_frame(meshes):
     set_state(solver)
     out.update(frame_rows("frame_sphere", solver, ["lambda_x", "lambda_y", "lambda_z"]))
     out.update(sphere_translation_moment(solver))
+    # The pair (u, psi) of the sphere: the self-gravity body force of the
+    # momentum row against the displacement source of the potential row.
+    # Both are integrated at the mechanics quadrature degree; with the
+    # source at UFL's estimate the two pairings differ by 2.4e-4 of their
+    # value here (6.2e-6 of the Cauchy-Schwarz scale), while on the annulus
+    # the two rules agree.
+    out.update(pair_values("frame_sphere_u_psi", pairings(solver, ["u", "psi"]), "u", "psi"))
 
     with stop_annotating():
         solver, _, _ = G.FluidCoreBuilder.build_fluid(meshes, rotation=True, **QUADRATURE)

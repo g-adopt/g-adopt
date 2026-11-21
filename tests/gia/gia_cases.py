@@ -549,10 +549,20 @@ def fingerprint_differences(new, reference):
     return out
 
 
-def assert_fingerprints_agree(new, reference, rtol=FIELD_RTOL):
-    """Assert two fingerprints agree to round-off, block by block."""
+def assert_fingerprints_agree(new, reference, rtol=FIELD_RTOL, field_rtol=None):
+    """Assert two fingerprints agree to round-off, block by block.
+
+    Args:
+      new, reference: fingerprints from `fingerprint` or `reference_values`.
+      rtol: the bound of every block that `field_rtol` does not name.
+      field_rtol: `{field: bound}` for the blocks with a bound of their own,
+        or `None`. A caller that gives one states the cause and the measured
+        difference of each named block where it defines the dictionary.
+    """
+    field_rtol = field_rtol or {}
     bad = {name: value for name, value in
-           fingerprint_differences(new, reference).items() if value > rtol}
+           fingerprint_differences(new, reference).items()
+           if value > field_rtol.get(name, rtol)}
     assert not bad, f"field blocks differ from the reference: {bad}"
 
 

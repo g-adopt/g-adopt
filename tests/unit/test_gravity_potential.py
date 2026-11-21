@@ -51,8 +51,8 @@ def parent_measure_restricted_to_the_submesh(monkeypatch):
     """
     original = GravityPotential.set_measures
 
-    def restricted(self, source_quad_degree=None):
-        original(self, source_quad_degree)
+    def restricted(self, source_quad_degree=None, displacement_quad_degree=None):
+        original(self, source_quad_degree, displacement_quad_degree)
         if self.cross_mesh:
             self.dx_g = fd.Measure(
                 "dx", domain=self.potential_mesh, subdomain_id=99,
@@ -251,3 +251,35 @@ class TestOperatorAndSource:
         scale = np.max(np.abs(residual))
         assert scale > 0.0
         assert np.max(np.abs(residual - split)) <= 1e-14 * scale
+
+
+class TestDisplacementSourceDegree:
+    """The displacement source is integrated at the explicit degree its caller gives."""
+
+    def test_a_displacement_source_without_a_degree_is_refused(self):
+        """Without `displacement_quad_degree` the source would take UFL's estimate.
+
+        The coupled GIA solver integrates the transpose of the source, the
+        self-gravity body force of the momentum row, at its mechanics
+        degree, and the two blocks are transposes only with one rule.
+        """
+        marked, sub = disk_pair()
+        V = fd.FunctionSpace(marked, "CG", 1)
+        part = GravityPotential(V, sub, {1: {"dtn": CylindricalDtN(M=2)}},
+                                gravitational_constant=1.0)
+        u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 1))
+        with pytest.raises(ValueError, match="displacement_quad_degree"):
+            part.volume_source(fd.TestFunction(V), u, density=1.0)
+
+    def test_the_source_carries_the_given_degree(self):
+        """Every integral of the source has the given quadrature degree."""
+        marked, sub = disk_pair()
+        V = fd.FunctionSpace(marked, "CG", 1)
+        part = GravityPotential(V, sub, {1: {"dtn": CylindricalDtN(M=2)}},
+                                gravitational_constant=1.0,
+                                displacement_quad_degree=3)
+        u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 1))
+        form = part.volume_source(fd.TestFunction(V), u, density=1.0)
+        degrees = {integral.metadata().get("quadrature_degree")
+                   for integral in form.integrals()}
+        assert degrees == {3}

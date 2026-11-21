@@ -56,6 +56,18 @@ CASES = [c.but(load_mean=0.5) if c.load == "surface" else c for c in CASES]
 #: Round-off bound on the relative difference of one field block.
 RTOL = C.FIELD_RTOL
 
+#: The blocks with a bound of their own. The earlier solver integrated the
+#: mantle term of the rotation row (`Rotation.inertia_form`) on a measure
+#: without a degree, so at the degree UFL estimated for that row; this
+#: solver integrates every volume integral of the couplings at the explicit
+#: mechanics quadrature degree (`CouplingContext.dx_m`), the degree of the
+#: rotational body force that is its transpose in the momentum row. The
+#: `m3` block of the three cases with rotation moves by the difference of
+#: the two quadrature rules: measured 1.64e-7, 1.54e-7 and 5.03e-8
+#: (residual) and 3.85e-8 to 4.88e-8 (Jacobian actions). Every other block
+#: of every case still agrees to 1e-12.
+FIELD_BOUNDS = {"m3": 2e-7}
+
 #: The stored fingerprints of the earlier solver, by case label.
 REFERENCE = C.reference_values("gate")["2d"]
 
@@ -108,7 +120,7 @@ def test_residual_and_jacobian_action_match_the_reference(meshes, case):
     # The state is nonzero, so the residual is not trivially equal.
     assert fingerprints[0]["displacement"][0] > 0
     for new, ref in zip(fingerprints, reference):
-        C.assert_fingerprints_agree(new, ref, rtol=RTOL)
+        C.assert_fingerprints_agree(new, ref, rtol=RTOL, field_rtol=FIELD_BOUNDS)
 
 
 def _add(term):
@@ -143,9 +155,9 @@ def test_the_gate_sees_a_changed_row(meshes, row):
     """Negative controls: one small extra term in one row is seen in that block.
 
     The block of the changed row differs from the stored values far above
-    round-off in the residual and in the Jacobian actions, and every other
-    block still agrees, so the comparison maps the blocks by name and does
-    not hide a small block.
+    its bound in the residual and in the Jacobian actions, and every other
+    block still agrees to its bound (`FIELD_BOUNDS`, else `RTOL`), so the
+    comparison maps the blocks by name and does not hide a small block.
     """
     case = Case(family="Quadrature", scheme="bdf2", model="maxwell2", core="fluid",
                 rotation=True, centre=True, load="sea_fixed")
@@ -153,6 +165,7 @@ def test_the_gate_sees_a_changed_row(meshes, row):
     for new, ref in zip(fingerprints, REFERENCE[case.label]):
         differences = C.fingerprint_differences(new, ref)
         print(row, f"{differences[row]:.1e}")
-        assert differences[row] > 1e2 * RTOL, (row, differences[row])
-        others = {name: value for name, value in differences.items() if name != row}
-        assert max(others.values()) <= RTOL, others
+        assert differences[row] > 1e2 * FIELD_BOUNDS.get(row, RTOL), (row, differences[row])
+        others = {name: value for name, value in differences.items()
+                  if name != row and value > FIELD_BOUNDS.get(name, RTOL)}
+        assert not others, others

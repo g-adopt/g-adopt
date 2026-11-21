@@ -500,8 +500,12 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                     "condition.")
         self.couplings = ordered(couplings)
 
+        # The displacement source of the potential row is integrated at the
+        # degree of the momentum equation, the degree of its transpose, the
+        # self-gravity body force (`GravityPotential.volume_source`).
         self.gravity = GravityPotential(
             psi.function_space(), self.mesh, gravity_bcs, Lambda=self.Lambda,
+            displacement_quad_degree=quad_degree,
             quad_degree=dtn_quad_degree, alpha=dtn_alpha,
             representation=dtn_representation)
         # This solver refuses a DtN boundary that is not a complete circle or
