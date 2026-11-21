@@ -279,31 +279,55 @@ def at_work(rows, level):
     return best
 
 
-def stalls(record, run_length=3, fraction=0.1):
-    """Runs of consecutive RTOL solves whose step is short against the trust radius.
+def stalls(record, run_length=3, fraction=0.1, reasons=None):
+    """Runs of consecutive Krylov solves whose step is short against the trust radius.
 
-    The stall that BNK's identity shift causes shows as Krylov solves that converge
-    on their relative tolerance (``CONVERGED_RTOL``) with a step norm far below the
-    trust radius: the shifted model is minimised well inside the trust region, by a
-    short scaled-gradient step. This counts runs of at least ``run_length``
-    consecutive solves with that reason and ``step_norm < fraction * trust_radius``.
+    A stall shows as consecutive Krylov solves that each give a step far below the
+    trust radius, so the iterate barely moves. It has two known forms, and the test
+    must catch both:
+
+    - BNK's identity shift at 64 cells: the solves converge on their relative
+      tolerance (``CONVERGED_RTOL``), because the shifted model is minimised well
+      inside the trust region by a short scaled-gradient step;
+    - D150 at 150 cells: the solves stop at the Krylov cap (``DIVERGED_MAX_IT``) with
+      steps of 0.0013 to 0.002 of the radius, because the large shift also slows
+      the Krylov method down.
+
+    The converged reason is therefore not part of the default test. A solve counts
+    as short if ``step_norm < fraction * trust_radius``, whatever its reason. Both
+    are nodal Euclidean norms, as STCG measures them.
+
+    Args:
+        record: a JSON record of ``inverse.py`` with Krylov solve records.
+        run_length: the smallest number of consecutive short solves that counts.
+        fraction: a step below this fraction of the trust radius is short.
+        reasons: ``None`` to accept every converged reason, or a collection of
+            reason names (for example ``{"CONVERGED_RTOL"}``) to restrict the
+            test to those reasons.
 
     Returns:
-        list of ``(first iteration, last iteration)`` of each such run.
+        list of ``(first iteration, last iteration, reasons)`` of each such run,
+        with ``reasons`` a sorted list of the converged reasons in that run.
     """
     out, current = [], []
+
+    def close():
+        # Keep the current run if it is long enough, then start a new one.
+        if len(current) >= run_length:
+            out.append((current[0][0], current[-1][0], sorted({r for _, r in current})))
+        current.clear()
+
     for row in record["iterations"]:
         for s in row.get("krylov_solves", []):
-            short = (s.get("reason_name") == "CONVERGED_RTOL" and s.get("step_norm") is not None
-                     and s.get("trust_radius") and s["step_norm"] < fraction * s["trust_radius"])
+            reason = s.get("reason_name")
+            short = (s.get("step_norm") is not None and s.get("trust_radius")
+                     and s["step_norm"] < fraction * s["trust_radius"]
+                     and (reasons is None or reason in reasons))
             if short:
-                current.append(row["iteration"])
+                current.append((row["iteration"], reason))
                 continue
-            if len(current) >= run_length:
-                out.append((current[0], current[-1]))
-            current = []
-    if len(current) >= run_length:
-        out.append((current[0], current[-1]))
+            close()
+    close()
     return out
 
 
@@ -531,12 +555,18 @@ def main(argv=None):
                   f"active change {f['active_change']} work {f['work']:.1f} "
                   f"{'after long' if f['after_long'] else ''}")
 
-    print("\n== stalls: runs of >= 3 consecutive CONVERGED_RTOL solves with step norm "
-          "< 0.1 trust radius")
+    # A run of short steps also appears near the end of a converging run, where the
+    # Newton step shrinks with the gradient while the trust radius stays large. J at
+    # the first and last iteration of each run tells the two cases apart: a stall
+    # holds J flat at a high value, the end phase holds J far below every threshold.
+    print("\n== stalls: runs of >= 3 consecutive Krylov solves with step norm "
+          "< 0.1 trust radius, any converged reason (J at first and last iteration)")
     for name, record in records.items():
         found = stalls(record)
-        print(f"{name:>8s} " + (", ".join(f"iterations {a}-{b}" for a, b in found)
-                                if found else "none"))
+        J = {row["iteration"]: row["J"] for row in record["iterations"]}
+        print(f"{name:>8s} " + (", ".join(
+            f"iterations {a}-{b} ({'/'.join(r)}; J {J[a]:.2e} to {J[b]:.2e})"
+            for a, b, r in found) if found else "none"))
 
     print("\n== negative-curvature stops: iteration, work, shift used in that solve, shift "
           "set for the next solve, curvature in the metric")
