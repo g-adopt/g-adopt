@@ -32,8 +32,9 @@ any partition itself.
 `state_from_checkpoint` reads the layouts of `selfgrav_common` (gia-mip):
 `solution_{i}` for every sub-function of the earlier mixed solution,
 `internal_variables_{j}` for a history outside it, `time_current_{i}` and
-`time_previous_{i}` for the `BDF2History` levels, and the metadata of
-`gadopt.viscoelastic_timestepping.time_history_metadata`. The field order of
+`time_previous_{i}` for the `BDF2History` levels (`HISTORY_LEVEL_FIELD`),
+and the time-history metadata whose keys this module defines
+(`TIME_SCHEME_ORDER_KEY` and the other `*_KEY` names). The field order of
 the earlier mixed space is the order of this solver's mixed space, so an
 index names the same field in both. The Exp01 driver stores the `Real` rows
 as `real_{i}` in its metadata and the fields under its own names, which the
@@ -47,15 +48,37 @@ another one.
 """
 
 from collections.abc import Mapping
+from contextlib import contextmanager
 from numbers import Number
+from pathlib import Path
 
+import h5py
 from firedrake import Function
 from pyadjoint.tape import stop_annotating
 
 from .gia_couplings import scalar_value
 from .viscoelastic_checkpointing import CheckpointField
 
-__all__ = ["decode_into", "read_state", "state_from_checkpoint", "write_state"]
+__all__ = ["decode_into", "has_state", "read_state", "state_from_checkpoint",
+           "stored_configuration", "write_state"]
+
+#: The keys of the time-history metadata in a file of the earlier solver,
+#: stored as the timestepping information of `CheckpointFile.save_function`:
+#: the time order (1.0 or 2.0), the version of the record (1.0), the
+#: accepted previous time step (-1.0 before the first BDF2 step), the history
+#: family (1.0 for a Quadrature history, absent or 0.0 for DG) and the
+#: quadrature degree of a Quadrature history. `state_from_checkpoint` reads
+#: them; this module is their one definition.
+TIME_SCHEME_ORDER_KEY = "time_scheme_order"
+TIME_HISTORY_VERSION_KEY = "time_history_version"
+TIME_PREVIOUS_DT_KEY = "time_previous_dt"
+MATERIAL_SOLVER_KIND_KEY = "material_solver_kind"
+MATERIAL_QUAD_DEGREE_KEY = "material_quad_degree"
+
+#: The stored name of one accepted history level in a file of the earlier
+#: solver: `level` is `"current"` or `"previous"`, `index` the number of the
+#: history Function (0 for the one history of the GIA solver).
+HISTORY_LEVEL_FIELD = "time_{level}_{index}"
 
 
 def _same_space(a, b) -> bool:
@@ -106,6 +129,71 @@ def decode_into(target: Function, value, parent, name: str) -> None:
 
 #: The HDF5 group of the configuration record of a state.
 _GROUP = "/gadopt_gia_state"
+
+
+@contextmanager
+def _h5(checkpoint):
+    """Give the `h5py.File` of an open `CheckpointFile`, or open a path read-only.
+
+    A path is opened with plain `h5py` on each rank that calls, which is a
+    read with no collective step, so a caller can test a file before it
+    builds any mesh or solver.
+    """
+    if isinstance(checkpoint, (str, Path)):
+        with h5py.File(checkpoint, "r") as f:
+            yield f
+    else:
+        yield checkpoint.h5pyfile
+
+
+def _decoded(value):
+    """An HDF5 attribute as a Python value: `str` for text, a plain number."""
+    # h5py returns a string attribute as bytes or str and a number as a
+    # NumPy scalar, depending on how it was written.
+    if isinstance(value, bytes):
+        value = value.decode()
+    if hasattr(value, "item"):
+        value = value.item()
+    return value
+
+
+def has_state(checkpoint, prefix: str = "") -> bool:
+    """Whether a checkpoint holds a state written by `write_state`.
+
+    A driver uses it to choose between `read_state` and the conversion of a
+    file of the earlier solver (`state_from_checkpoint`).
+
+    Args:
+      checkpoint: a path to the file, or a `CheckpointFile` open for reading.
+      prefix: the prefix given to `write_state`.
+    """
+    with _h5(checkpoint) as f:
+        return (_GROUP + prefix) in f
+
+
+def stored_configuration(checkpoint, prefix: str = "") -> dict | None:
+    """The configuration that `write_state` recorded, read before a solver exists.
+
+    The keys are the ones of the configuration of a solver: `time_scheme`,
+    `internal_variable_family`, `history_degree`, `dtn_representation` and
+    `fields`. A driver compares them with its own options before it builds
+    the solver, so that it can stop with a message that names its option;
+    `read_state` checks the same keys against the solver.
+
+    Args:
+      checkpoint: a path to the file, or a `CheckpointFile` open for reading.
+      prefix: the prefix given to `write_state`.
+
+    Returns:
+      `{key: value}` for the recorded keys (strings, and an integer degree),
+      or `None` when the file holds no state of `write_state` under
+      `prefix`.
+    """
+    with _h5(checkpoint) as f:
+        group = _GROUP + prefix
+        if group not in f:
+            return None
+        return {key: _decoded(value) for key, value in f[group].attrs.items()}
 
 
 def configuration(solver) -> dict:
@@ -166,16 +254,12 @@ def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
         when a Quadrature history cannot be read on this partition
         (`CheckpointField.load`).
     """
-    expected = configuration(solver)
-    for key, value in expected.items():
-        if not checkpoint.has_attr(_GROUP + prefix, key):
+    record = stored_configuration(checkpoint, prefix) or {}
+    for key, value in configuration(solver).items():
+        if key not in record:
             raise ValueError(f"The checkpoint has no {key!r}; it was not "
                              "written by gadopt.gia_state.write_state.")
-        stored = checkpoint.get_attr(_GROUP + prefix, key)
-        if isinstance(stored, bytes):
-            stored = stored.decode()
-        if hasattr(stored, "item"):
-            stored = stored.item()
+        stored = record[key]
         if stored != value:
             raise ValueError(f"The checkpoint was written with {key}={stored!r}; "
                              f"this solver has {value!r}.")
@@ -212,9 +296,9 @@ def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = No
         loaded on, with the configuration of the run that wrote the file.
       fields: `{stored name: Function on the parent}`, for example the
         `fields` of `selfgrav_common.load_checkpoint`.
-      metadata: the time-history metadata of the file
-        (`time_history_metadata`), and the `real_{i}` values of the Exp01
-        layout. `None` for a backward-Euler file without metadata.
+      metadata: the time-history metadata of the file (the `*_KEY` names
+        of this module), and the `real_{i}` values of the Exp01 layout.
+        `None` for a backward-Euler file without metadata.
       aliases: `{state name: stored name}` for fields stored under other
         names, for example `{"displacement": "u", "potential": "psi",
         "history": "m"}`.
@@ -236,15 +320,15 @@ def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = No
     metadata = dict(metadata or {})
     aliases = dict(aliases or {})
     order = 2 if solver.time_scheme == "bdf2" else 1
-    written = metadata.get("time_scheme_order", 1.0)
+    written = metadata.get(TIME_SCHEME_ORDER_KEY, 1.0)
     if float(written) != order:
         raise ValueError(f"The checkpoint has time order {written}; the solver "
                          f"runs order {order}.")
-    quadrature = float(metadata.get("material_solver_kind", 0.0)) == 1.0
+    quadrature = float(metadata.get(MATERIAL_SOLVER_KIND_KEY, 0.0)) == 1.0
     if quadrature != (solver.family == "Quadrature"):
         raise ValueError("The checkpoint's history family does not match the "
                          f"solver's {solver.family!r} family.")
-    if quadrature and float(metadata.get("material_quad_degree", -1)) != solver.quad_degree:
+    if quadrature and float(metadata.get(MATERIAL_QUAD_DEGREE_KEY, -1)) != solver.quad_degree:
         raise ValueError("The checkpoint's quadrature degree does not match "
                          "the solver's quad_degree.")
     state = {}
@@ -261,18 +345,20 @@ def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = No
     # reads.
     if "internal_variables_0" in fields:
         state["history"] = fields["internal_variables_0"]
-    if "time_current_0" in fields:
-        state["history"] = fields["time_current_0"]
-    if "time_previous_0" in fields:
-        state["history_previous"] = fields["time_previous_0"]
+    current = HISTORY_LEVEL_FIELD.format(level="current", index=0)
+    previous_level = HISTORY_LEVEL_FIELD.format(level="previous", index=0)
+    if current in fields:
+        state["history"] = fields[current]
+    if previous_level in fields:
+        state["history_previous"] = fields[previous_level]
     for name, stored in aliases.items():
         state[name] = fields[stored]
-    previous = metadata.get("time_previous_dt", -1.0)
+    previous = metadata.get(TIME_PREVIOUS_DT_KEY, -1.0)
     state["previous_dt"] = float(previous)
     expected = set(solver.state())
     if order == 2 and "history_previous" not in state:
         raise ValueError("A BDF2 restart needs the previous history level "
-                         "(time_previous_0).")
+                         f"({previous_level}).")
     missing = expected - set(state)
     if missing:
         raise ValueError(f"The checkpoint has no source for {sorted(missing)}.")

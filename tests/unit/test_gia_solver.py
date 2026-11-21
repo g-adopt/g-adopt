@@ -32,7 +32,8 @@ import gadopt
 import gia_cases as C
 from gadopt import gia_couplings as cp
 from gadopt.gia_solver import SelfGravitatingGIASolver as NewSolver
-from gadopt.gia_state import read_state, state_from_checkpoint, write_state
+from gadopt.gia_state import (configuration, has_state, read_state, state_from_checkpoint,
+                              stored_configuration, write_state)
 from gadopt.viscoelastic_checkpointing import written_rank_count
 from test_gravity_adjoint import assert_taylor_with_guards
 
@@ -400,6 +401,42 @@ def test_restore_needs_previous_dt_on_bdf2_and_the_file_its_configuration(
     with fd.CheckpointFile(str(directory / "s.h5"), "r") as chk:
         with pytest.raises(ValueError, match="time_scheme"):
             read_state(chk, e, idx=0)
+
+
+def test_a_file_tells_whether_it_holds_a_state_before_a_solver_reads_it(meshes, tmp_path):
+    """`has_state` and `stored_configuration` on a path and on an open file.
+
+    No time step: the state of a solver at construction is written. A file
+    with the mesh only holds no state; a file of `write_state` holds one
+    under its prefix and none under another, its stored configuration is
+    the one of the writing solver, and `read_state` refuses a solver of
+    another time scheme.
+    """
+    from pathlib import Path
+    case = Case(family="Quadrature", core="fluid")
+    a, _, _ = C.build_new(meshes, case)
+    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
+    empty, written = str(directory / "mesh.h5"), str(directory / "state.h5")
+    with fd.CheckpointFile(empty, "w") as chk:
+        chk.save_mesh(meshes[0])
+    with fd.CheckpointFile(written, "w") as chk:
+        chk.save_mesh(meshes[0])
+        write_state(chk, a, idx=0)
+    assert not has_state(empty)
+    assert stored_configuration(empty) is None
+    assert has_state(written) and has_state(Path(written))
+    assert not has_state(written, prefix="other")
+    assert stored_configuration(written) == configuration(a)
+    with fd.CheckpointFile(written, "r") as chk:
+        assert has_state(chk)
+        assert stored_configuration(chk) == configuration(a)
+    # The refusal comes from the stored configuration, before any field is
+    # loaded; a read that loads the fields needs a solver on the mesh loaded
+    # from the file (the `restart` entry of the `forward` case).
+    b, _, _ = C.build_new(meshes, case.but(scheme="bdf2"))
+    with fd.CheckpointFile(written, "r") as chk:
+        with pytest.raises(ValueError, match="time_scheme"):
+            read_state(chk, b, idx=0)
 
 
 # -- Interface ----------------------------------------------------------------------

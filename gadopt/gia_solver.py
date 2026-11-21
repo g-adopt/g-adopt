@@ -297,6 +297,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
     with `theta_psi = c B_mu / Lambda` (`B_mu` floored to one at zero).
 
+    `u` and `psi` (also `solver.u` and `solver.psi`) are the public way to
+    read the solution after `solve`; the mixed `solution` and its layout are
+    internal and can change.
+
     Args:
       u: the displacement, a vector Function on the mechanics mesh (usually
         a `Submesh` of the potential's mesh). Read once as the initial
