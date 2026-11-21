@@ -21,6 +21,7 @@ import warnings
 import firedrake as fd
 import numpy as np
 import pytest
+from firedrake import dmhooks
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
                                get_working_tape, pause_annotation,
                                stop_annotating)
@@ -625,6 +626,93 @@ def test_the_nullspace_check_can_be_skipped(meshes):
                   C.approximation(Case()), dt=C.dt_function(sub),
                   gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"u": 0.0}},
                   nullspace=basis, solver_parameters="direct", check_nullspace=False)
+
+
+def test_the_residual_loses_only_its_part_along_the_declared_rotation(meshes):
+    """`complete_residual` removes `<F, e> e` from the residual and nothing else.
+
+    No time step is taken. The residual of the step is assembled once at a
+    state with a rigid rotation and a shear in the displacement, through
+    the SNES of the step with the removal switched off, so it is the
+    residual that Firedrake assembles. A known multiple of the declared
+    mode `e` is then added to it, so the part to remove is large and the
+    test does not rest on the small `<F, e>` of the assembled residual
+    alone. The checks:
+
+    - `residual_kernel` is the transpose nullspace that Firedrake attached
+      to the Jacobian of the step (`monolithic_kernel` reads private
+      Firedrake attributes to get that object), so the residual and the
+      right-hand side of the linear solve lose the same part;
+    - the completed residual has no part along `e`, and it differs from the
+      input only by `<F, e> e`, so every other row is unchanged;
+    - the removed fraction is published by `_report_removed_residual`, it
+      is the measured `|<F, e>| / |F|` here, and the warning is given above
+      `REMOVED_RESIDUAL_WARN_FRACTION` and not below.
+    """
+    solver, _, _ = C.build_new(meshes, Case(family="Quadrature", core="fluid"),
+                               nullspace="rigid_rotation")
+    kernel = solver.residual_kernel
+    snes = solver.solver.snes
+    jacobian = snes.getJacobian()[0]
+    assert kernel.handle == jacobian.getTransposeNullSpace().handle
+    (e,) = kernel.getVecs()
+
+    # A state with a known rotation part and a non-rigid part of about the
+    # same size in the displacement block; the other blocks stay zero.
+    X = fd.SpatialCoordinate(meshes[1])
+    solver.solution.subfunctions[0].interpolate(
+        0.3 * fd.as_vector([-X[1], X[0]])
+        + 0.1 * fd.as_vector([X[0] * X[1], X[0] ** 2]))
+    with solver.solution.dat.vec_ro as x:
+        state = x.copy()
+
+    # The residual as Firedrake assembles it: `complete_residual` removes
+    # nothing while `residual_kernel` is `None` (multiplier path, so no
+    # low-rank term is added either). Firedrake's residual callback finds
+    # its context through the DM hooks, which `solve` installs; outside a
+    # solve the test installs them as `solve` does.
+    raw = state.duplicate()
+    solver.residual_kernel = None
+    try:
+        with dmhooks.add_hooks(snes.getDM(), solver.solver,
+                               appctx=solver.solver._ctx, save=False):
+            snes.computeFunction(state, raw)
+    finally:
+        solver.residual_kernel = kernel
+    assert raw.norm() > 0
+
+    def complete(F):
+        """Return a completed copy of `F` and the removed coefficient."""
+        completed = F.copy()
+        solver.complete_residual(state, completed)
+        return completed, F.dot(e)
+
+    # The assembled residual alone: its part along `e` is small, and the
+    # published fraction is that part over the residual norm (the residual
+    # scale of a fresh solver is the norm of its first residual).
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        completed, along = complete(raw)
+        solver._report_removed_residual()
+    assert abs(completed.dot(e)) <= 1e-14 * raw.norm()
+    np.testing.assert_allclose(solver.removed_residual_fraction,
+                               abs(along) / raw.norm(), rtol=1e-10)
+    assert solver.removed_residual_fraction < solver.REMOVED_RESIDUAL_WARN_FRACTION
+
+    # A residual with a large known part along `e`.
+    F = raw.copy()
+    F.axpy(10.0 * raw.norm(), e)
+    solver._removed_fraction = 0.0
+    with pytest.warns(UserWarning, match="declared nullspace"):
+        completed, along = complete(F)
+        solver._report_removed_residual()
+    assert abs(completed.dot(e)) <= 1e-14 * F.norm()
+    difference = F.copy()
+    difference.axpy(-1.0, completed)
+    difference.axpy(-along, e)
+    assert difference.norm() <= 1e-14 * F.norm()
+    np.testing.assert_allclose(solver.removed_residual_fraction,
+                               abs(along) / F.norm(), rtol=1e-10)
 
 
 def test_backstress_refuses_a_displacement_condition(meshes):

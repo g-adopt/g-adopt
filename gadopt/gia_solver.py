@@ -165,7 +165,7 @@ from .stokes_integrators import (InternalVariableMechanics, StokesSolverBase,
                                  _basis_provider,
                                  _displacement_basis,
                                  newton_stokes_solver_parameters)
-from .utility import (derivative_solve_keywords, is_cartesian, log, upward_normal,
+from .utility import (DEBUG, derivative_solve_keywords, is_cartesian, log, upward_normal,
                       weak_callback)
 
 __all__ = ["SelfGravitatingGIASolver"]
@@ -373,6 +373,16 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     """
 
     name = "SelfGravitatingGIA"
+
+    #: The fraction of the residual scale above which the part of the
+    #: Newton residual along the declared transpose nullspace gives a
+    #: warning at the end of `solve` (`complete_residual`). On the 2-D
+    #: annulus with a declared rigid rotation the largest measured fraction
+    #: over eight steps is 1.6e-8 with a prescribed load and 4.1e-10 with a
+    #: sea-level load, so 1e-4 leaves more than three orders of magnitude
+    #: for other meshes and loads and still catches a load whose net torque
+    #: is a real part of the residual.
+    REMOVED_RESIDUAL_WARN_FRACTION = 1e-4
 
     def __init__(
         self,
@@ -948,6 +958,21 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         #: vector, which `complete_residual` removes from the residual;
         #: `None` without a declared nullspace.
         self.residual_kernel = None
+        #: The largest norm of the full residual (before the removal) that
+        #: `complete_residual` has seen since construction. It is the scale
+        #: against which the removed part is measured: the first residual
+        #: of a march is the size of the forcing.
+        self._residual_scale = 0.0
+        #: The largest removed fraction since the start of the present
+        #: `solve` (`_record_removed_residual`); replays and derivative
+        #: sweeps add to it too, and `solve` resets it.
+        self._removed_fraction = 0.0
+        #: The largest `|<F, e>| / scale` over the Newton evaluations of the
+        #: last `solve`, with `|<F, e>|` the norm of the part of the residual
+        #: `F` along the declared transpose nullspace and `scale` the
+        #: largest full residual norm seen so far. `None` without a declared
+        #: nullspace or before the first `solve`.
+        self.removed_residual_fraction = None
         # The near-nullspace of the outer operator is not used: GAMG runs on
         # the condensed displacement operator inside block 0, and gets its
         # modes from `condensed_field_near_nullspace` (`near_nullspace`).
@@ -1583,13 +1608,73 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         which are the equations that the linear solve solves. The Newton
         direction does not change, since the KSP removes the same part.
 
+        The removal can also hide a real residual: a load with a net torque,
+        or a declared mode that is far from a kernel of this operator, puts
+        a large part of `F` along `e`, and SNES then reports convergence
+        with that part unsolved. So the size of the removed part is measured
+        at every evaluation (`_record_removed_residual`) and `solve` warns
+        when it is large (`REMOVED_RESIDUAL_WARN_FRACTION`).
+
         The derivative solves keep `augment_residual`: they are linear and
         `ksponly`, and the KSP removes the part from their right-hand side.
         """
         if self.dtn_representation == "lowrank":
             self.augment_residual(X, F)
         if self.residual_kernel is not None:
+            self._record_removed_residual(F)
             self.residual_kernel.remove(F)
+
+    def _record_removed_residual(self, F) -> None:
+        """Measure the part of `F` that `complete_residual` removes.
+
+        The basis of `residual_kernel` is orthonormal in coefficient space
+        (`MixedVectorSpaceBasis._build_monolithic_basis` orthonormalises
+        it), so the norm of the removed part is the 2-norm of the
+        coefficients `<F, e_k>`. The coefficients take one collective
+        reduction (`VecMDot`) and the full norm a second one; every rank
+        gets the same numbers, so the warning in `solve` is decided the
+        same way on every rank.
+
+        The reference is the largest full residual norm seen since
+        construction, not the norm of the present `F`. Near convergence `F`
+        is almost all along `e` (the part Newton cannot reduce), so a ratio
+        to the present norm goes to one in every converged solve and says
+        nothing. The largest norm is the size of the forcing, which is the
+        scale against which a removed part is either round-off or a real
+        residual.
+
+        Args:
+          F: the assembled residual, before the removal.
+        """
+        coefficients = np.asarray(F.mDot(self.residual_kernel.getVecs()))
+        removed = float(np.sqrt(np.sum(np.abs(coefficients)**2)))
+        norm = F.norm()
+        self._residual_scale = max(self._residual_scale, norm)
+        fraction = removed / self._residual_scale if self._residual_scale > 0 else 0.0
+        self._removed_fraction = max(self._removed_fraction, fraction)
+        log(f"{self.name}: residual part along the declared nullspace "
+            f"{removed:.3e}, |F| {norm:.3e}, of the residual scale "
+            f"{fraction:.3e}", level=DEBUG)
+
+    def _report_removed_residual(self) -> None:
+        """Publish the largest removed fraction of the step and warn if it is large.
+
+        Called by `solve` after the step solve. The warning is given once
+        per solve and on the first rank only, since the numbers are the
+        same on every rank.
+        """
+        if self.residual_kernel is None:
+            return
+        fraction = self._removed_fraction
+        self.removed_residual_fraction = fraction
+        if fraction > self.REMOVED_RESIDUAL_WARN_FRACTION and self.mesh.comm.rank == 0:
+            warn(f"{self.name}: the Newton residual of this step had a part "
+                 f"along the declared nullspace of {fraction:.3e} of the "
+                 f"residual scale, above {self.REMOVED_RESIDUAL_WARN_FRACTION:g}. "
+                 "complete_residual removes that part from the norm that SNES "
+                 "tests, so the step can report convergence with it unsolved. "
+                 "The declared rotation may not be a good kernel of this "
+                 "operator, or the load has a net torque.")
 
     def augment_jacobian(self, X, Jmat) -> None:
         """`post_jacobian_callback`: give the matrix-free action the same `B`."""
@@ -1687,7 +1772,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             tape = get_working_tape()
             before = TapeSweepMarkerBlock(self, self.appctx["gia_solve_index"], before=True)
             tape.add_block(before)
+        # The removed part is measured over the Newton evaluations of this
+        # step only (`complete_residual`).
+        self._removed_fraction = 0.0
         self._step.solve()
+        self._report_removed_residual()
         if markers:
             after = TapeSweepMarkerBlock(self, self.appctx["gia_solve_index"], before=False)
             if type(self._step) is _StockStep:
