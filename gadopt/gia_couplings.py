@@ -156,7 +156,9 @@ class CouplingContext:
       mechanics_quad_degree: the quadrature degree of the momentum
         equation, which its weak boundary terms also use.
       scaling_factor: `c`, the factor of the whole momentum residual.
-      row_scale_B_mu: `B_mu`, floored to one where it is exactly zero.
+      row_scale_B_mu: `B_mu`, or the constant `NULL_COUPLING_ROW_SCALE`
+        (one) when `B_mu` is zero at the construction of the solver
+        (`SelfGravitatingGIASolver.B_mu_floored`).
       theta_psi: `c B_mu / Lambda`, the scaling of the potential row.
       Lambda: the self-gravity number.
       four_pi_G: `4 pi G` of the boundary form, which equals `Lambda`.

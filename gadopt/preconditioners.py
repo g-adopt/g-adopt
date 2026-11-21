@@ -697,10 +697,14 @@ def _tape_sweep(pc):
     `gia_tape_sweep` in the application context when a replay, an adjoint
     sweep, a tangent sweep or a Hessian sweep of the tape starts. A forward run
     never moves it. Between two such sweeps the controls can change (a replay
-    at a new control value), and nothing else that the rebuild rule reads
-    moves then: `operator_version` and `gia_solve_index` are only moved by
-    `SelfGravitatingGIASolver.solve`. So a changed sweep number is the signal
-    that the cached pieces may describe another operator.
+    at a new control value), and the other markers that the rebuild rule
+    reads do not show that change: `gia_solve_index` and the integer
+    `operator_version` are moved only by `SelfGravitatingGIASolver.solve`,
+    and the key that a step block publishes in place of the version during a
+    sweep (`gadopt.gia_step_adjoint.tape_operator_version`) holds a field
+    coefficient by the identity of its block variable, which a replay at a
+    new control value does not change. So a changed sweep number is the
+    signal that the cached pieces may describe another operator.
 
     The counter is the same on every rank: every rank runs the same blocks of
     the tape in the same order.
@@ -2332,10 +2336,11 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     is one of them, so the replay solver shares the *live* application context
     of the forward solver. What a replay never does is run
     `SelfGravitatingGIASolver.solve`: replays go through `_forward_solve`
-    (`firedrake/adjoint_utils/blocks/solving.py:650`), so neither
-    `operator_version` nor `gia_solve_index` moves during a replay and the
-    replay solver's own complement is built once at its `initialize` and kept
-    across every replay, including every replayed step of a taped march. The
+    (`firedrake/adjoint_utils/blocks/solving.py:650`), so that method moves
+    neither `operator_version` nor `gia_solve_index` during a replay, and
+    without the refinements below the replay solver's own complement would
+    be built once at its `initialize` and kept across every replay,
+    including every replayed step of a taped march. The
     **adjoint** solve differs by path. On the multiplier path it carries
     Firedrake's default empty context, because pyadjoint pops `appctx` from
     its kwargs (`blocks/solving.py:578`), so both markers are absent, `update`
@@ -2347,11 +2352,18 @@ class DtNMultiplierDenseSchurPC(_RealBlockPCBase):
     compares equal values and the adjoint's complement is likewise built once,
     at the first adjoint solve, and kept.
 
-    Two refinements of that picture hold now. On the low-rank path and with
+    Three refinements of that picture hold. On the low-rank path and with
     the Quadrature history each step block binds the solve index and the
     time step of its own forward solve around its replay and derivative
     solves (`gadopt.gia_step_adjoint`), so
     the lagged rule moves through a sweep as it does through the forward run.
+    Where the forward run publishes an integer version, each step block
+    publishes a key of its saved Jacobian coefficients in its place
+    (`gadopt.gia_step_adjoint.tape_operator_version`), so a coefficient
+    changed between two taped steps rebuilds in the sweep where it rebuilt
+    in the forward run; around Firedrake's own solve block (multiplier path,
+    DG history) the sweep markers publish it for the replay only, because
+    the adjoint and tangent solvers of that block hold another context.
     And `gia_tape_sweep` (`_tape_sweep`, moved by
     `gadopt.gia_step_adjoint.TapeSweepMarkerBlock`) changes at the start of
     every replay and derivative sweep, in every context that carries the
@@ -3455,11 +3467,14 @@ class InternalVariableSCPC(fd.SCPC):
 
     A replay or a derivative sweep of the tape does not run the solver's
     `solve`, so the solver does not move the version there. For the solve
-    of each step block, the step block (or the sweep markers around
-    Firedrake's own solve block) publishes a key of the block's saved
+    of each step block, the step block publishes a key of the block's saved
     coefficients in place of the version
     (`gadopt.gia_step_adjoint.tape_operator_version`), which moves where the
-    forward version moved. Two more markers also force a reassembly: the
+    forward version moved. Around Firedrake's own solve block (multiplier
+    DtN, DG history) the sweep markers publish the key in the solver's
+    application context, which the replay solver of that block shares and
+    its adjoint and tangent solvers do not, so there the key reaches the
+    replay only. Two more markers also force a reassembly: the
     tape sweep counter `gia_tape_sweep`
     (`gadopt.gia_step_adjoint.TapeSweepMarkerBlock`), which moves when a
     replay at a new control value or a derivative sweep starts, and the

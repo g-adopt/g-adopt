@@ -46,7 +46,13 @@ The multiplier DtN path with the DG history (`_StockStep` of the GIA solver)
 puts Firedrake's solve block on the tape unchanged; its residual is a plain
 UFL form and it has no low-rank term, so it needs no adoption. The two sweep
 markers around it publish its operator version for its replay
-(`TapeSweepMarkerBlock`, `tape_operator_version`).
+(`TapeSweepMarkerBlock`, `tape_operator_version`). They write the key into
+the solver's application context, which the replay solver of that block
+shares. The adjoint and tangent solvers of the block hold another context,
+so the key does not reach them and their cached preconditioner pieces stay
+as first built. Their options accept no capped outer solve, so an
+out-of-date piece costs iterations or makes the solve raise; it cannot give
+a wrong derivative without an error.
 """
 
 from contextlib import contextmanager
@@ -200,6 +206,9 @@ class TapeSweepMarkerBlock(Block):
         Does nothing without a `step_block`. On entry the key of the step
         block (`tape_operator_version`) is published if there is one. On exit
         the forward value is published again if the context holds a key.
+        The key goes into `solver.appctx`, which the replay solver of
+        Firedrake's block shares; the adjoint and tangent solvers of that
+        block hold another context, so this route serves the replay only.
 
         Args:
           entering: True for the marker a sweep reaches before the step

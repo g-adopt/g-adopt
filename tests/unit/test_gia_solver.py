@@ -16,12 +16,15 @@ the `forward` and `adjoint` cases in `tests/gia` (`reference-quadrature`,
 `sea-direct-viscosity-disk` and `guards`).
 """
 
+import gc
 import warnings
+import weakref
 
 import firedrake as fd
 import numpy as np
 import pytest
 from firedrake import dmhooks
+from firedrake.petsc import PETSc
 from firedrake.adjoint import (Control, ReducedFunctional, continue_annotation,
                                get_working_tape, pause_annotation,
                                stop_annotating)
@@ -756,6 +759,28 @@ def test_backstress_refuses_a_displacement_condition(meshes):
     """The backstress history equation has no boundary part."""
     with pytest.raises(NotImplementedError, match="natural displacement"):
         C.build_new(meshes, Case(family="Quadrature", model="backstress", core="rigid"))
+
+
+def test_a_kept_dtn_operator_raises_once_its_solver_is_collected(meshes):
+    """The low-rank DtN operator reads `theta_psi` through a weak reference.
+
+    A caller that keeps `dtn_operator` (or an application context that holds
+    it) after the solver is gone gets the `ReferenceError` of
+    `gadopt.utility.weak_callback`, which names the cause, as from the
+    solver's PETSc callbacks. No time step is taken.
+    """
+    solver, _, _ = C.build_new(
+        meshes, Case(family="Quadrature", representation="lowrank", core="fluid"))
+    operator = solver.dtn_operator
+    assert operator.theta_value == solver.theta_psi_value
+    alive = weakref.ref(solver)
+    del solver
+    gc.collect()
+    PETSc.garbage_cleanup(meshes[1].comm)
+    gc.collect()
+    assert alive() is None
+    with pytest.raises(ReferenceError, match="garbage-collected"):
+        operator.theta_value
 
 
 def test_a_traction_without_a_surface_load_warns(meshes):

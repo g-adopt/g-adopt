@@ -126,7 +126,6 @@ of the earlier solver.
 """
 
 import itertools
-import weakref
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
@@ -658,11 +657,6 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         return B_mu_value
 
     @property
-    def _row_scale_B_mu(self):
-        # The name the quadrature backend reads.
-        return self.row_scale_B_mu
-
-    @property
     def theta_psi(self):
         """`c B_mu / Lambda`, the scaling of the potential rows, UFL."""
         return self.scaling_factor * self.row_scale_B_mu / self.Lambda
@@ -672,6 +666,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """`theta_psi` as a number, from the live values of its factors."""
         row_scale = self.row_scale_B_mu_value(scalar_value(self.approximation.B_mu))
         return scalar_value(self.scaling_factor) * row_scale / scalar_value(self.Lambda)
+
+    def _theta_psi_now(self) -> float:
+        """`theta_psi_value` as a method, for `weak_callback` (`set_lowrank_operator`)."""
+        return self.theta_psi_value
 
     def set_couplings(self) -> None:
         """Bind the couplings, check them, and run the potential and sheet stages."""
@@ -1307,11 +1305,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             # contexts from C. A strong reference back to the solver would
             # close a reference cycle through C, which Python's garbage
             # collector cannot see, so every solver of a finished run would
-            # stay alive with all its preconditioner trees.
-            solver_ref = weakref.ref(self)
+            # stay alive with all its preconditioner trees. `weak_callback`
+            # also gives an operator that outlives its solver the same
+            # `ReferenceError`, with the cause in the message, as the
+            # solver's PETSc callbacks.
             self.dtn_operator = self.gravity.build_lowrank_operator(
                 self.solution_space, self.potential_index,
-                lambda: solver_ref().theta_psi_value)
+                weak_callback(self._theta_psi_now))
 
     # -- Solver options ------------------------------------------------------------
 
@@ -1786,9 +1786,14 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
             if type(self._step) is _StockStep:
                 # Firedrake's solve block of this step binds nothing to its
                 # replay; the two markers publish its operator version
-                # around it (`TapeSweepMarkerBlock`). It is the last block
-                # the step recorded.
-                before.step_block = after.step_block = tape.get_blocks()[-1]
+                # around it for the replay (`TapeSweepMarkerBlock`). It is
+                # the last block the step recorded, and it must have the
+                # solution as an output: a Firedrake that recorded another
+                # block after it would give the markers a key that never
+                # changes.
+                step_block = tape.get_blocks()[-1]
+                assert any(v.output is self.solution for v in step_block.get_outputs())
+                before.step_block = after.step_block = step_block
             tape.add_block(after)
         snes = self.solver.snes
         self.appctx["gia_last_solve_linear_its"] = int(snes.getLinearSolveIterations())
