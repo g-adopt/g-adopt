@@ -151,8 +151,12 @@ def eustatic_rows(meshes, representation):
     d_ice = -1e-2
     out = {}
     for label, overrides in (("eustatic", None), ("eustatic_softplus", SH.width())):
+        # A stiff Earth leaves the rigid rotation in the Jacobian's kernel to
+        # round-off, so it is declared; otherwise the outer Krylov solve can
+        # stall on the low-rank path (see `sign_and_repeat_rows`).
         solver, _, sea = sea_build(meshes, S.surface_fields(sub, "caps", d_ice=d_ice),
                                    representation, lam=1e-6, stiff=True,
+                                   nullspace="rigid_rotation",
                                    sea_level_overrides=overrides)
         try_solve(solver)
         dss = S.re_measure(solver)
@@ -210,8 +214,11 @@ def fixed_coastline_rows(meshes, representation):
 
     d_ice = 1e-2
     fields = S.coastline_fields(sub, "caps", d_ice=d_ice, ocean_ice=S.GROUNDED)
+    # Rigid Earth: the rigid rotation is declared for the reason given in
+    # `eustatic_rows`.
     solver, _, sea = sea_build(meshes, fields, rep, lam=1e-6, stiff=True,
                                earth=dict(shear_modulus=1e8, bulk_modulus=1e8),
+                               nullspace="rigid_rotation",
                                sea_level_overrides=dict(fixed_ocean=True))
     try_solve(solver)
     dss = S.re_measure(solver)
