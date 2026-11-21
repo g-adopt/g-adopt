@@ -250,9 +250,8 @@ def test_newton_count(entry):
         f"{entry} newton: measured {newton!r}, at most {E.MAX_NEWTON_MOVING}")
 
 
-def load_values(entry):
-    """The `name value` file of an entry of `FORWARD_VALUES`, as a dictionary."""
-    path = E.CASE_DIR / E.forward_values(entry)
+def read_values(path):
+    """A file of `name value` lines as a dictionary."""
     out = {}
     for line in path.read_text().splitlines():
         name, value = line.split()
@@ -260,11 +259,36 @@ def load_values(entry):
     return out
 
 
+def load_values(entry):
+    """The `name value` file of an entry of `FORWARD_VALUES`, as a dictionary."""
+    return read_values(E.CASE_DIR / E.forward_values(entry))
+
+
 def local(entry):
-    """Skip `entry` where it does not run (more than 2 ranks) and has no output."""
-    if not E.FORWARD[entry].get("local", True) and not (
-            E.CASE_DIR / E.forward_log(entry)).exists():
-        pytest.skip(f"{entry} runs on CI only")
+    """Stop the test if `entry` runs on CI only (more than 2 ranks) and has no output.
+
+    The test fails, or skips where `gia_entries.LOCAL_ENV` is 1
+    (`gia_entries.require_output`). An entry that runs everywhere needs no
+    check here: reading its missing table raises.
+    """
+    if not E.FORWARD[entry].get("local", True):
+        E.require_output(E.CASE_DIR / E.forward_log(entry), entry)
+
+
+@pytest.mark.parametrize("entry,cores", E.FORWARD_MULTI_RANK.items())
+def test_each_multi_rank_entry_ran_on_its_ranks(entry, cores):
+    """A multi-rank entry ran on the number of ranks that its entry gives.
+
+    An entry for two ranks that ran as single-rank processes would pass its
+    relation with the serial entry without testing what it claims. A
+    missing file of an entry that runs on CI only fails the test, or skips
+    it where `gia_entries.LOCAL_ENV` is 1.
+    """
+    path = E.CASE_DIR / E.forward_ranks(entry)
+    if entry == E.SPHERE or not E.FORWARD[entry].get("local", True):
+        E.require_output(path, entry)
+    ranks = read_values(path)["ranks"]
+    assert ranks == cores, f"{entry}: ran on {ranks!r} rank(s), expected {cores!r}"
 
 
 @pytest.mark.parametrize("entry,reference,rtol,first", E.RELATIONS,
@@ -411,15 +435,15 @@ def test_a_checkpoint_of_the_earlier_solver_converts():
 # -- 3-D entry -----------------------------------------------------------------------
 
 def sphere_table():
-    """The table of the 3-D entry; skipped where that entry did not run.
+    """The table of the 3-D entry.
 
     The development machine runs no 3-D solve, so the table exists only on
-    CI. The entry has no recorded values: every check below is a bound or a
-    coupling floor.
+    CI. A missing table fails the test, or skips it where
+    `gia_entries.LOCAL_ENV` is 1. The entry has no recorded values: every
+    check below is a bound or a coupling floor.
     """
     path = E.CASE_DIR / E.forward_log(E.SPHERE)
-    if not path.exists():
-        pytest.skip(f"{E.SPHERE} runs on CI only")
+    E.require_output(path, E.SPHERE)
     return pd.read_csv(path, sep=r"\s+")
 
 

@@ -9,9 +9,10 @@ closed-form entries (`expected/gravity-counts.txt`); every other check is
 against a closed form, a theoretical order, an exact identity or another
 entry.
 
-An entry with `local` False runs a 3-D solve and runs on CI only; its tests
-skip where its output is missing. A missing output of any other entry is a
-failure. The basename is not `test_gia_gravity.py`, because
+An entry with `local` False runs a 3-D solve and runs on CI only. A
+missing output of such an entry fails its tests, or skips them where
+`gia_entries.LOCAL_ENV` is 1 (the development machine). A missing output
+of any other entry is a failure. The basename is not `test_gia_gravity.py`, because
 `tests/unit/test_gia_gravity.py` exists and pytest refuses two test modules
 of one name.
 
@@ -39,16 +40,20 @@ def read(path):
 
 
 def values(entry):
-    """The values of `entry`; skip an entry that runs on CI only and did not run here."""
+    """The values of `entry`.
+
+    A missing file of an entry that runs on CI only fails the test, or skips
+    it where `gia_entries.LOCAL_ENV` is 1 (`gia_entries.require_output`).
+    """
     path = E.CASE_DIR / E.gravity_values(entry)
-    if not E.GRAVITY[entry].get("local", True) and not path.exists():
-        pytest.skip(f"{entry} runs on CI only (3-D solve)")
+    if not E.GRAVITY[entry].get("local", True):
+        E.require_output(path, entry)
     return read(path)
 
 
 def counts(entry):
     """The CG counts of a closed-form entry, with the entry prefix removed."""
-    values(entry)  # skips a CI-only entry that did not run
+    values(entry)  # stops the test if a CI-only entry did not run
     prefix = f"{entry}_"
     return {name[len(prefix):]: value
             for name, value in read(E.CASE_DIR / E.gravity_counts(entry)).items()}
@@ -76,8 +81,11 @@ def test_each_entry_ran_on_its_ranks():
     """
     for entry, item in E.GRAVITY.items():
         path = E.CASE_DIR / E.gravity_values(entry)
-        if not path.exists() and not item.get("local", True):
-            continue
+        if not item.get("local", True):
+            if not path.exists() and E.on_local_machine():
+                continue  # this machine does not run the CI-only entries
+            # On CI a missing file of a CI-only entry fails here.
+            E.require_output(path, entry)
         ranks = read(path)["ranks"]
         assert ranks == item["cores"], (
             f"{entry}: ran on {ranks!r} rank(s), expected {item['cores']!r}")

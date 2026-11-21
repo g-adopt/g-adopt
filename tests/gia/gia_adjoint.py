@@ -521,6 +521,9 @@ def run_entry(name):
     values["tangent"] = tangent_of(rf, control, direction)
     values["tangent_replay"] = replay_difference(rf, control, direction, ADJOINT_REPLAY_EPS)
     values["wall"] = time.time() - start
+    # The rank count of the run; the test compares it with `cores` of the
+    # multi-rank entries.
+    values["ranks"] = meshes[1].comm.size
     print(f"values: {values}", flush=True)
     M.write_values(CASE_DIR / adjoint_values(name), values)
     write_counts(name, blocks, counts)

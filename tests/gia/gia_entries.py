@@ -9,12 +9,52 @@ This module is plain Python with no Firedrake import, because the test files
 import it and the weekly long-test run collects them on a login node.
 """
 
+import os
 from pathlib import Path
 
 #: The directory of the cases; every output path is relative to it.
 CASE_DIR = Path(__file__).resolve().parent
 OUT = "out"
 EXPECTED = "expected"
+
+#: The environment variable that marks a machine on which the entries with
+#: `local` False and the weekly entry do not run (the development machine).
+#: With the value 1, a test of such an entry skips when the output of the
+#: entry is missing. Without it, the test fails: on CI and on the weekly
+#: run a missing output means that the driver crashed or did not start, and
+#: a skip would show that as a pass.
+LOCAL_ENV = "GADOPT_GIA_LOCAL"
+
+
+def on_local_machine():
+    """Whether `LOCAL_ENV` marks this machine as one that does not run the CI-only entries."""
+    return os.environ.get(LOCAL_ENV) == "1"
+
+
+def require_output(path, entry):
+    """Stop the calling test when the output of an entry that runs on CI only is missing.
+
+    The case stage of CI runs the drivers with `|| true`, so a driver that
+    crashes leaves no file and the tests are the only place where the crash
+    shows. A missing file is therefore a failure, unless `LOCAL_ENV` is 1,
+    which marks a machine that does not run the entry.
+
+    Args:
+      path: The output file that the driver of the entry writes.
+      entry: The name of the entry, for the message.
+    """
+    if path.exists():
+        return
+    # pytest is imported here so that the drivers, which import this module
+    # for the names and tolerances only, do not depend on it.
+    import pytest
+    if on_local_machine():
+        pytest.skip(f"{entry}: {path.name} is missing; this entry does not run on a "
+                    f"machine with {LOCAL_ENV}=1")
+    pytest.fail(f"{entry}: {path.name} is missing, so the driver crashed or did not "
+                f"run. On a machine that does not run this entry, set {LOCAL_ENV}=1 "
+                "to skip its tests.")
+
 
 # -- forward ------------------------------------------------------------------------
 
@@ -298,6 +338,16 @@ def forward_expected(entry):
     return f"{EXPECTED}/forward-{entry}.txt"
 
 
+def forward_ranks(entry):
+    """The path of the file in which a multi-rank forward entry writes `ranks <size>`.
+
+    The rank count is in a file of its own, so that the per-step tables of
+    the multi-rank entries keep the columns of the serial tables they are
+    compared with.
+    """
+    return f"{OUT}/forward-{entry}-ranks.dat"
+
+
 def _forward_entries():
     """The `ENTRIES` items of the forward case."""
     out = []
@@ -305,6 +355,8 @@ def _forward_entries():
         outputs = [forward_log(name)]
         if entry.get("save_state"):
             outputs.append(forward_state(name))
+        if entry.get("cores", 1) > 1:
+            outputs.append(forward_ranks(name))
         item = {"case": "forward", "entry": name, "driver": "gia_forward.py",
                 "cores": entry.get("cores", 1), "outputs": outputs}
         if "restart_from" in entry:
@@ -316,8 +368,18 @@ def _forward_entries():
         out.append({"case": "forward", "entry": name, "driver": "gia_forward.py",
                     "cores": 1, "outputs": [forward_values(name)]})
     out.append({"case": "forward", "entry": SPHERE, "driver": "gia_forward.py",
-                "cores": SPHERE_CORES, "outputs": [forward_log(SPHERE)]})
+                "cores": SPHERE_CORES,
+                "outputs": [forward_log(SPHERE), forward_ranks(SPHERE)]})
     return out
+
+
+#: The forward entries on more than one rank, with their rank counts. Each
+#: writes `forward_ranks(entry)`, and the test compares it with the count:
+#: if `mpiexec` starts single-rank processes, a relation between a
+#: multi-rank entry and a serial one would pass without a multi-rank run.
+FORWARD_MULTI_RANK = {**{name: entry["cores"] for name, entry in FORWARD.items()
+                         if entry.get("cores", 1) > 1},
+                      SPHERE: SPHERE_CORES}
 
 
 # -- limits -------------------------------------------------------------------------

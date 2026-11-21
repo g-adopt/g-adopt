@@ -37,7 +37,7 @@ import gia_cases as C
 import gia_march as M
 from gia_entries import (CASE_DIR, FORWARD, FORWARD_VALUES, REFERENCE_LABEL,
                          RESTART_STEP, SPHERE, SPHERE_STEP_COUNT, forward_log,
-                         forward_state, forward_values)
+                         forward_ranks, forward_state, forward_values)
 
 BASES = {"SEA": M.SEA, "LOAD": M.LOAD}
 
@@ -82,6 +82,9 @@ def run_march(name):
 
     M.advance(run, steps, first=first, on_step=on_step)
     M.write_log(CASE_DIR / forward_log(name), rows)
+    if entry.get("cores", 1) > 1:
+        # The rank count of the run, which the test compares with `cores`.
+        M.write_values(CASE_DIR / forward_ranks(name), {"ranks": fd.COMM_WORLD.size})
 
 
 def save(run, path):
@@ -417,6 +420,8 @@ def run_sphere():
         time += h
         rows.append(sphere_diagnostics(solver, u, psi, k, time, dt))
     M.write_log(CASE_DIR / forward_log(SPHERE), rows)
+    # The rank count of the run, which the test compares with `SPHERE_CORES`.
+    M.write_values(CASE_DIR / forward_ranks(SPHERE), {"ranks": mesh.comm.size})
 
 
 VALUE_ENTRIES = {"unreduced": run_unreduced, "reference-quadrature": run_reference,

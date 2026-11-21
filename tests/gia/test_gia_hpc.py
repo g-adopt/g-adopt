@@ -16,9 +16,11 @@ file reads that table and asserts:
   which detects a change of the results (not a wrong result). The file is
   recorded on Gadi; until it exists, that test skips.
 
-Every test skips where the table does not exist (PR CI, the development
-machine). The module is marked `longtest`, so PR CI deselects it. It
-imports no Firedrake, because the weekly run collects it on a login node.
+A missing table fails every test: on the weekly run it means that the job
+failed before its first step. On a machine that does not run the entry,
+set `GADOPT_GIA_LOCAL=1` (`gia_entries.LOCAL_ENV`) and the tests skip. The
+module is marked `longtest`, so PR CI deselects it. It imports no
+Firedrake, because the weekly run collects it on a login node.
 """
 
 import math
@@ -33,11 +35,13 @@ pytestmark = pytest.mark.longtest
 
 
 def load_log():
-    """The per-step table of the weekly entry; skip where the entry did not run."""
+    """The per-step table of the weekly entry.
+
+    A missing table fails the test, or skips it where
+    `gia_entries.LOCAL_ENV` is 1 (`gia_entries.require_output`).
+    """
     path = E.CASE_DIR / E.WEEKLY_LOG
-    if not path.exists():
-        pytest.skip(f"{E.WEEKLY_LOG} does not exist: the weekly entry runs under "
-                    "`doit run_case_hpc` only")
+    E.require_output(path, E.WEEKLY_ENTRY)
     return pd.read_csv(path, sep=r"\s+")
 
 

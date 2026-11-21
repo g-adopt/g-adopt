@@ -116,6 +116,21 @@ def entry_params(test):
         yield pytest.param(entry, marks=marks, id=entry)
 
 
+MULTI_RANK = {name: entry["cores"] for name, entry in E.ADJOINT.items()
+              if entry.get("cores", 1) > 1}
+
+
+@pytest.mark.parametrize("entry,cores", MULTI_RANK.items())
+def test_each_multi_rank_entry_ran_on_its_ranks(entry, cores):
+    """A multi-rank entry ran on the number of ranks that its entry gives.
+
+    An entry for two ranks that ran as single-rank processes would pass its
+    comparison with the serial entry without testing what it claims.
+    """
+    ranks = values(entry)["ranks"]
+    assert ranks == cores, f"{entry}: ran on {ranks!r} rank(s), expected {cores!r}"
+
+
 @pytest.mark.parametrize("entry", list(entry_params("replay")))
 def test_replay_repeats_the_recording(entry):
     """The replay of the tape at the recorded control gives the recorded functional.

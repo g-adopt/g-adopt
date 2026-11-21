@@ -46,13 +46,28 @@ runs `GravitySolver` alone against closed forms. Its test file has another
 basename than `test_gia_gravity.py`, because `tests/unit/test_gia_gravity.py`
 exists and pytest does not collect two test modules of one name. An entry
 with `local` set to False runs a 3-D solve. The development machine does not
-run it, and its tests skip where its output is missing.
+run it.
 
-To run one entry and its tests:
+## Missing outputs and `GADOPT_GIA_LOCAL`
+
+Some entries run on CI only: the entries with `local` set to False (3-D
+solves and runs on more than 2 ranks) and the weekly entry. If the output
+of such an entry is missing, its tests fail. The CI case stage ignores the
+exit status of the drivers, so a missing output means that a driver crashed
+or did not start, and the failed tests show this.
+
+The development machine does not run these entries. On that machine, set
+the environment variable `GADOPT_GIA_LOCAL` to `1`. The tests of these
+entries then skip when their outputs are missing, and the skip message
+names the entry. Do not set the variable on CI or in the weekly run. The
+variable has no effect on the other entries: a missing output of an entry
+that runs everywhere is always a failure.
+
+To run one entry and its tests on the development machine:
 
 ```
 batch_mode=NO doit run run_case:tests/gia:forward-sea-direct
-python -m pytest tests/gia
+GADOPT_GIA_LOCAL=1 python -m pytest tests/gia
 ```
 
 A driver can also run by hand from this directory, for example
@@ -65,7 +80,8 @@ configuration on a tetrahedral sphere with a mantle submesh, on 48 cores.
 gmsh writes the mesh in the job. The entry has `"hpc": True`, so it is a
 step of `doit run_case_hpc` and not of `doit run_case`. The weekly long-test
 workflow runs it on Gadi. `test_gia_hpc.py` reads its outputs. That file is
-marked `longtest`, and its tests skip where the outputs do not exist.
+marked `longtest`. If the outputs do not exist, its tests fail, or skip
+where `GADOPT_GIA_LOCAL` is `1`.
 `doit check_hpc` runs only `test_gia_hpc.py` (`pytest_hpc` in `meta.py`).
 
 To run the entry and its tests on Gadi, from the repository root:
