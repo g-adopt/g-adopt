@@ -14,8 +14,9 @@ The binding correctness checks (the `S` the PC assembles against an
 independent elimination of the coupled Jacobian, the forward and transpose
 solves, the fluid-core pressure in the dense complement) are rows of the
 `schur` and `schur-np2` entries of the `operators` case in `tests/gia`
-(driver `gia_operators.py`), which imports the builders and constants of
-this module. The tests left here check that the factors are built once and
+(driver `gia_operators.py`). The builders and constants of the annulus
+are in `tests/gia/gia_models/dense_schur.py`, which that driver and this
+module share. The tests left here check that the factors are built once and
 rebuilt at a change of the time step.
 
 Every test states below how it can fail and its numerical floor.
@@ -39,23 +40,26 @@ from gadopt import (
     DtNMultiplierDenseSchurPC,
 )
 from gadopt.gia_couplings import FluidCore, SurfaceLoad
-from gadopt.gia_presets import selfgrav_dtn_schur_solver_parameters
 from gadopt.gia_solver import SelfGravitatingGIASolver
 from gadopt.preconditioners import _DenseLU
-from gadopt.stokes_integrators import newton_stokes_solver_parameters
+from gia_models.dense_schur import (
+    B_MU,
+    CURVE_INNER,
+    CURVE_OUTER,
+    CURVE_RC,
+    CURVE_RE,
+    G0,
+    LAMBDA,
+    SIGMA_HAT,
+    TRUNCATION,
+    _apply_pc,
+    _dense_ctx,
+    _dense_schur_params,
+)
 
-# ---------------------------------------------------------------------------
-# Geometry and constants: the coarse 2-D annulus of the adjoint suite
-# ---------------------------------------------------------------------------
-B_MU = 1.2769
-LAMBDA = 1.1116
-SIGMA_HAT = 1.0e-3
-G0 = 1.0
 CELL_MANTLE = 101
-CURVE_RE, CURVE_RC, CURVE_OUTER, CURVE_INNER = 2, 3, 4, 5
 DR_MANTLE = 0.2
 N_AZIMUTHAL = 32
-TRUNCATION = 3
 
 #: Round-off floor for a 13x13 dense solve at cond ~2e1: the LU solve is exact
 #: to a few ulp times the condition number, so ~1e-13 relative. Every parity and
@@ -86,24 +90,6 @@ def meshes():
     sub = curve_mesh(fd.Submesh(parent, 2, CELL_MANTLE))
     sub.cartesian = False
     return parent, sub
-
-
-def _dense_schur_params():
-    """The 2-D `direct` Schur preset, with block 1 on the dense-Schur PC.
-
-    Block 0 is `preonly` + assembled LU, so its inverse is exact and the Schur
-    complement the PC builds is exact and linear -- which is what lets the
-    `schur` entry of the `operators` case assert parity to roundoff rather
-    than to a preconditioner tolerance.
-    """
-    params = dict(newton_stokes_solver_parameters)
-    params.update(selfgrav_dtn_schur_solver_parameters)
-    params["dtn_fieldsplit_1_pc_type"] = "python"
-    params["dtn_fieldsplit_1_pc_python_type"] = (
-        "gadopt.DtNMultiplierDenseSchurPC")
-    # The true-residual monitor is pure noise in a test log; drop it.
-    params.pop("ksp_monitor_true_residual", None)
-    return params
 
 
 def _build_solver(meshes, block1_pc="gadopt.DtNMultiplierDenseSchurPC",
@@ -170,18 +156,6 @@ def _build_solver(meshes, block1_pc="gadopt.DtNMultiplierDenseSchurPC",
         internal_variable_family="DG", couplings=couplings,
         dtn_representation="multiplier", solver_parameters=params)
     return solver, u, psi
-
-
-def _dense_ctx(solver):
-    """The `DtNMultiplierDenseSchurPC` instance PETSc built inside the solve.
-
-    Outer python PC -> its inner Schur fieldsplit -> the block-1 sub-KSP's PC ->
-    its python context. Reaching it this way (rather than constructing one) is
-    what makes the test check the object the real solve used.
-    """
-    outer = solver.solver.snes.ksp.pc.getPythonContext()
-    _, ksp_real = outer.pc.getFieldSplitSchurGetSubKSP()
-    return ksp_real, ksp_real.getPC().getPythonContext()
 
 
 def _reference_S(solver):
@@ -251,23 +225,6 @@ def built(meshes):
         "ksp_real": ksp_real, "ctx": ctx,
         "S_pc": ctx._S.copy(), "S_ref": S_ref,
     }
-
-
-def _apply_pc(petsc_pc, ctx, rhs, transpose=False):
-    """Run the PC's `apply`/`applyTranspose` through real PETSc vectors."""
-    A = petsc_pc.getOperators()[0]
-    x, y = A.createVecRight(), A.createVecLeft()
-    lo, hi = x.owner_range
-    x.array_w[:] = np.asarray(rhs)[lo:hi]
-    x.assemble()
-    if transpose:
-        ctx.applyTranspose(petsc_pc, x, y)
-    else:
-        ctx.apply(petsc_pc, x, y)
-    out = ctx._gather(petsc_pc.comm.tompi4py(), y, ctx._n)
-    x.destroy()
-    y.destroy()
-    return out
 
 
 # ---------------------------------------------------------------------------

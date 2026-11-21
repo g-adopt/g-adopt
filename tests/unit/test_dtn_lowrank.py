@@ -22,7 +22,7 @@ from mpi4py import MPI
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
 from gadopt.dtn_lowrank import (
     boundary_facet_cellname, build_boundary_mode_rows, supports_trace_build)
-from test_gravity_solver import annulus_mesh, shell_mesh_3d
+from gia_models.gravity import annulus_mesh, shell_mesh_3d
 
 
 def rows_for(solver, bc_id, **kwargs):

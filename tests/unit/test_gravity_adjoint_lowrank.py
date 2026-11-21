@@ -10,7 +10,9 @@ The 2-D tests (Taylor tests for density and sheet, replay, the
 gradient, the sabotage control, the taped coefficient integral and the
 truncation that the multiplier path cannot reach) are rows of the
 `adjoint-2d-lowrank` entry of the `gravity` case in `tests/gia` (driver
-`gia_gravity.py`), which imports the forward maps of this module. The tests
+`gia_gravity.py`). The forward maps are in
+`tests/gia/gia_models/gravity_adjoint_lowrank.py`, which that driver and
+this module share. The tests
 left here are the 3-D ones (`adjoint-3d-lowrank` runs on CI only) and the
 2-D/3-D parametrisations whose 3-D half has no local run. They use the
 guarded Taylor harness, the perturbation builders and the meshes of
@@ -33,13 +35,29 @@ from firedrake.adjoint import (
     Control, ReducedFunctional, continue_annotation, get_working_tape,
     pause_annotation, stop_annotating, taylor_test)
 
-from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
+from gadopt import GravitySolver, SphericalDtN
 from gadopt.spherical_harmonics import real_spherical_harmonic
 from test_gravity_adjoint import (  # noqa: F401  (clean_tape is an autouse fixture)
-    assert_replay_b1, assert_replay_b2, assert_taylor_with_guards, clean_tape,
-    real_scalar, rho_control_2d, rho_control_3d, rho_control2_3d,
-    rho_perturb_3d, tape_forward)
-from test_gravity_solver import RMAX, annulus_mesh, shell_mesh_3d
+    assert_replay_b1,
+    assert_replay_b2,
+    assert_taylor_with_guards,
+    clean_tape,
+)
+from gia_models.gravity_adjoint import (  # noqa: F401  (clean_tape is an autouse fixture)
+    real_scalar,
+    rho_control_2d,
+    rho_control_3d,
+    rho_control2_3d,
+    rho_perturb_3d,
+    tape_forward,
+)
+from gia_models.gravity import RMAX, annulus_mesh, shell_mesh_3d
+from gia_models.gravity_adjoint_lowrank import (
+    LOW,
+    forward_G,
+    forward_rho_3d,
+    forward_sheet,
+)
 
 
 @pytest.fixture(scope="module")
@@ -50,76 +68,6 @@ def mesh_2d():
 @pytest.fixture(scope="module")
 def mesh_3d():
     return shell_mesh_3d(refinement_level=1, dr=0.5)
-
-
-LOW = dict(dtn_representation="lowrank")
-
-
-# ---------------------------------------------------------------------------
-# Forward maps, mirroring test_gravity_adjoint's but on the fast path
-# ---------------------------------------------------------------------------
-def forward_rho_2d(m_rho, gravitational_constant=1.0):
-    mesh = m_rho.function_space().mesh()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        solver = GravitySolver(
-            psi, m_rho,
-            bcs={"top": {"dtn": CylindricalDtN(M=2)},
-                 "bottom": {"dtn": CylindricalDtN(M=2)}},
-            gravitational_constant=gravitational_constant, **LOW)
-    solver.solve()
-    return fd.assemble(solver.solution ** 2 * fd.dx), solver
-
-
-def forward_rho_3d(m_rho, gravitational_constant=1.0):
-    mesh = m_rho.function_space().mesh()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        solver = GravitySolver(
-            psi, m_rho,
-            bcs={"top": {"dtn": SphericalDtN(L=1)},
-                 "bottom": {"dtn": SphericalDtN(L=1)}},
-            gravitational_constant=gravitational_constant, **LOW)
-    solver.solve()
-    return fd.assemble(solver.solution ** 2 * fd.dx), solver
-
-
-def forward_no_multiplier(m_rho, bc_variant):
-    """The two configurations with no DtN modes at all.
-
-    `dirichlet2d` has no DtN boundary, so the low-rank path degenerates to a
-    plain assembled Poisson solve with an empty mode set - worth covering
-    because the `C` machinery must survive having nothing to build.
-    """
-    mesh = m_rho.function_space().mesh()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        bcs = ({"top": {"psi": 0.0}} if bc_variant == "dirichlet2d"
-               else {"top": {"dtn": CylindricalDtN(M=0)}})
-        solver = GravitySolver(psi, m_rho, bcs=bcs, **LOW)
-    solver.solve()
-    return fd.assemble(solver.solution ** 2 * fd.dx), solver
-
-
-def forward_sheet(sigma_fn, geometry):
-    mesh = sigma_fn.function_space().mesh()
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", 1))
-        if geometry == "2d":
-            bcs = {"top": {"dtn": CylindricalDtN(M=2), "sigma": sigma_fn},
-                   "bottom": {"dtn": CylindricalDtN(M=2)}}
-        else:
-            bcs = {"top": {"dtn": SphericalDtN(L=1), "sigma": sigma_fn},
-                   "bottom": {"dtn": SphericalDtN(L=1)}}
-        solver = GravitySolver(psi, 0.0, bcs=bcs, **LOW)
-    solver.solve()
-    return fd.assemble(solver.solution ** 2 * fd.dx), solver
-
-
-def forward_G(G_const, geometry, rho_fixed):
-    if geometry == "2d":
-        return forward_rho_2d(rho_fixed, G_const)
-    return forward_rho_3d(rho_fixed, G_const)
 
 
 # ---------------------------------------------------------------------------
@@ -208,22 +156,6 @@ def test_gradient_G_constant(geometry, mesh_2d, mesh_3d):
     sabotage = taylor_test(rf, G, h, dJdm=1.01 * dJdG)
     print(f"    [G {geometry}] rate {stats['rate']:.4f} sabotage {sabotage:.4f}")
     assert sabotage <= 1.15
-
-
-# ---------------------------------------------------------------------------
-# Transpose consistency and sabotage detection
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-# Cross-mesh
-# ---------------------------------------------------------------------------
-def forward_submesh(m_rho_sub, marked):
-    with stop_annotating():
-        psi = fd.Function(fd.FunctionSpace(marked, "CG", 1))
-        solver = GravitySolver(psi, m_rho_sub,
-                               bcs={1: {"dtn": CylindricalDtN(M=2)}}, **LOW)
-    assert solver.cross_mesh
-    solver.solve()
-    return fd.assemble(solver.solution ** 2 * fd.dx), solver
 
 
 # ---------------------------------------------------------------------------

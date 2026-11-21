@@ -3,34 +3,29 @@
 Usage: `python gia_limits.py --entry <name>`, with the entry names of
 `gia_entries.LIMITS` (`sea`, `mechanics`, `rheology`).
 
-Each entry runs a group of rows. A row is the body of a solving unit test,
-run on the Quadrature history family (`internal_variable_family=
-"Quadrature"`, `quad_degree=gia_cases.QUAD`). The driver writes, for each
-row, the measured number and the number it is checked against (a closed
-form, a limit, an independent solve or an exact identity) as `name value`
-lines to `out/limits-<entry>.dat`. The test `test_gia_limits.py` holds the
-tolerance of the original unit test and asserts; this script asserts
+Each entry runs a group of rows, on the Quadrature history family
+(`internal_variable_family="Quadrature"`, `quad_degree=gia_cases.QUAD`).
+The driver writes, for each row, the measured number and the number it is
+checked against (a closed form, a limit, an independent solve or an exact
+identity) as `name value` lines to `out/limits-<entry>.dat`. The test
+`test_gia_limits.py` holds the tolerances and asserts; this script asserts
 nothing. No row uses a recorded value.
 
-The rows reuse the configurations of the unit tests through their helper
-functions, so that a row solves exactly the problem that the original test
-solved. The helpers come from three files of `tests/unit`, which this script
-puts on `sys.path`:
+The configurations come from the helper modules of `gia_models`, which the
+unit tests also use:
 
-- `test_sea_level.py`: `build`, `surface_fields`, `coastline_fields`,
+- `gia_models.sea_level`: `build`, `surface_fields`, `coastline_fields`,
   `indicator`, `re_measure`, `solve_settings`, `remove_rigid_rotation`,
   `sheet`, and the constants `RHO_I`, `RHO_W`, `EPS`, `GROUNDED`, `SHIFT`,
   `ELASTIC_EARTH`;
-- `test_sea_level_sheet.py`: `marine_fields`, `width`;
-- `test_gia_gravity.py`: `approximation`, `gravity_bcs`,
-  `TestFluidCore.build_fluid`, `TestCentreOfMassFrame` (its `build` and its
+- `gia_models.sea_level_sheet`: `marine_fields`, `width`;
+- `gia_models.annulus`: `approximation`, `gravity_bcs`,
+  `FluidCoreBuilder.build_fluid`, `CentreOfMassFrame` (its `build` and its
   reference gravity), and the constants `B_MU`, `LAMBDA`, `SIGMA_HAT`,
   `CURVE_RE`, `CURVE_RC`, `RE`.
 
-When those unit files are deleted, these helpers must move to `tests/gia`
-first. The stiff power-law march comes from a unit file that no longer
-exists (`test_gia_transient_power_law_gate.py`); its configuration is in
-this file (`stiff_power_law_march`).
+The stiff power-law march is configured in this file
+(`stiff_power_law_march`).
 
 The meshes are those of the unit fixture `test_gia_gravity.meshes` (the
 annulus written by gmsh with a mantle 0.2 deep per layer and 32 cells
@@ -56,10 +51,9 @@ import gia_cases as C
 import gia_march as M
 from gia_entries import CASE_DIR, LIMITS, REPRESENTATIONS, STIFF_STEPS, limits_values
 
-sys.path.insert(0, str(CASE_DIR.parent / "unit"))
-import test_gia_gravity as G  # noqa: E402  (after the path of tests/unit)
-import test_sea_level as S  # noqa: E402
-import test_sea_level_sheet as SH  # noqa: E402
+from gia_models import annulus as G
+from gia_models import sea_level as S
+from gia_models import sea_level_sheet as SH
 
 #: The keywords that put a solver on the Quadrature history family.
 QUADRATURE = dict(internal_variable_family="Quadrature", quad_degree=C.QUAD)
@@ -373,7 +367,7 @@ def null_coupling_rows(meshes):
     basis = fd.VectorSpaceBasis(rigid_modes(V))
     basis.orthonormalize()
     with stop_annotating():
-        solver, u, _ = G.TestFluidCore.build_fluid(
+        solver, u, _ = G.FluidCoreBuilder.build_fluid(
             meshes, sheet=False, approximation_kwargs={"B_mu": 0.0},
             dtn_representation="multiplier", extra_bcs=surface_bcs,
             nullspace=basis, check_nullspace=False, solver_parameters="direct",
@@ -450,7 +444,7 @@ def fluid_core_rows(meshes):
       Quadrature family needs the fluid core).
     """
     with stop_annotating():
-        solver, u, _ = G.TestFluidCore.build_fluid(meshes, rotation=True, **QUADRATURE)
+        solver, u, _ = G.FluidCoreBuilder.build_fluid(meshes, rotation=True, **QUADRATURE)
     solver.solve()
     core = [c for c in solver.couplings if isinstance(c, FluidCore)][0]
     dss = core.measure()
@@ -489,7 +483,7 @@ def centre_of_mass_rows(meshes, representation):
             multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
             outer_rtol=1e-12, block0_rtol=1e-4, snes_rtol=1e-10))
     with stop_annotating():
-        solver, _, _ = G.TestCentreOfMassFrame().build(
+        solver, _, _ = G.CentreOfMassFrame().build(
             meshes, load_degree=1, dtn_representation=representation,
             **QUADRATURE, **kwargs)
     solver.solve()
@@ -526,8 +520,8 @@ def rotation_mode_rows(meshes):
     out = {}
     for label, nullspace in (("plain", None), ("declared", "rigid_rotation")):
         with stop_annotating():
-            solver, u, _ = G.TestFluidCore.build_fluid(meshes, nullspace=nullspace,
-                                                       **QUADRATURE)
+            solver, u, _ = G.FluidCoreBuilder.build_fluid(meshes, nullspace=nullspace,
+                                                          **QUADRATURE)
         solver.solve()
         out[f"rotation_content_{label}"] = rotation_content(u)
         out[f"rotation_converged_{label}"] = converged(solver)
@@ -547,7 +541,7 @@ def accepted_state_rows(meshes):
     out = {}
     for label, nullspace in (("plain", None), ("declared", "rigid_rotation")):
         with stop_annotating():
-            solver, u, psi = G.TestFluidCore.build_fluid(
+            solver, u, psi = G.FluidCoreBuilder.build_fluid(
                 meshes, dtn_representation="multiplier", nullspace=nullspace,
                 **QUADRATURE)
         solver.solve()
@@ -602,7 +596,7 @@ def newtonian_limit_rows(meshes):
     def solve(**approximation_kwargs):
         # One step of the fluid-core annulus with the given power-law settings.
         with stop_annotating():
-            solver, u, psi = G.TestFluidCore.build_fluid(
+            solver, u, psi = G.FluidCoreBuilder.build_fluid(
                 meshes, solver_parameters="direct",
                 approximation_kwargs=approximation_kwargs or None, **QUADRATURE)
         solver.solve()
@@ -665,7 +659,7 @@ def stiff_power_law_march(meshes):
       `{stiff_newton_<k>, stiff_reason_<k>}` for the steps `k = 1, 2, 3`.
     """
     parent, sub = meshes
-    frame = G.TestCentreOfMassFrame()
+    frame = G.CentreOfMassFrame()
     Q = fd.FunctionSpace(sub, "DG", 0)
     X = fd.SpatialCoordinate(sub)
     r = fd.sqrt(fd.dot(X, X))

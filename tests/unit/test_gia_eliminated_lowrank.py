@@ -214,7 +214,7 @@ def build_without_real_fields(meshes, representation, preset):
     Returns:
       The solver. Nothing is solved.
     """
-    import test_gia_gravity as base
+    from gia_models import annulus as base
     parent, sub = meshes
     u, psi = base.new_fields(meshes)
     return SelfGravitatingGIASolver(

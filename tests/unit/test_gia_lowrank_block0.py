@@ -34,7 +34,7 @@ from gadopt.preconditioners import LowRankPotentialPC
 
 # The annulus of the GIA suite (dr 0.2, 32 cells around) and its constants.
 import test_gia_gravity  # noqa: E402
-from test_gia_gravity import (
+from gia_models.annulus import (
     B_MU,
     CURVE_INNER,
     CURVE_OUTER,

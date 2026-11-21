@@ -18,41 +18,34 @@ blocks are transposes when `x_a . J_ab x_b = x_b . J_ba x_a`. A `Real` row
 or column is read with the unit `Real` function as its direction, so no
 matrix block with a `Real` row or column is ever assembled: pyop3 Firedrake
 cannot assemble such a block on an interior facet of the parent
-(firedrakeproject/firedrake#5665), and the unit tests that did so are
-strict xfails today. Every number is a reduction over all ranks, so it does
+(firedrakeproject/firedrake#5665). Every number is a reduction over all ranks, so it does
 not depend on the order of the degrees of freedom.
 
 The driver writes, for each row, the measured number and the number it is
 checked against (an exact identity, a derived constant or an independent
 elimination) as `name value` lines to `out/operators-<entry>.dat`. The test
-`test_gia_operators.py` holds the tolerance of the original unit test and
-asserts; this script asserts nothing. No row uses a recorded value. Every
-solver runs on the Quadrature history family.
+`test_gia_operators.py` holds the tolerances and asserts; this script
+asserts nothing. No row uses a recorded value. Every solver runs on the
+Quadrature history family.
 
-The rows reuse the configurations of the unit tests through their helper
-functions, so that a row measures the operator the original test measured.
-The helpers come from four files of `tests/unit`, which this script puts on
-`sys.path`, and from two sibling drivers:
+The configurations come from the helper modules of `gia_models`, which the
+unit tests also use, and from two sibling drivers:
 
-- `test_sea_level.py`: `build`, `surface_fields`, `SHIFT`, `RHO_W`, `G_RE`;
-- `test_gia_gravity.py`: `approximation`, `gravity_bcs`, `new_fields`,
+- `gia_models.sea_level`: `build`, `surface_fields`, `SHIFT`, `RHO_W`, `G_RE`;
+- `gia_models.annulus`: `approximation`, `gravity_bcs`, `new_fields`,
   `load_density`, `polar_moment`, `coupling`, `real_block`,
   `predicted_real_diagonal`, `real_block_index_sets`, `read_real_rows`,
-  `TestFluidCore.build_fluid`, `TestCentreOfMassFrame` (its `build`), and
+  `FluidCoreBuilder.build_fluid`, `CentreOfMassFrame` (its `build`), and
   the constants `B_MU`, `SIGMA_HAT`, `CURVE_RE`, `CURVE_RC`;
-- `test_dtn_schur_ainvb.py`: `direct_params`, `ainvb_cache`;
-- `test_dtn_multiplier_dense_schur.py`: `_dense_schur_params`,
-  `_dense_ctx`, `_apply_pc` and the constants of its annulus;
+- `gia_models.schur_ainvb`: `direct_params`, `ainvb_cache`;
+- `gia_models.dense_schur`: `_dense_schur_params`, `_dense_ctx`,
+  `_apply_pc` and the constants of its annulus;
 - `gia_limits.py`: `unit_meshes` (the gmsh annulus of the unit fixture) and
   `QUADRATURE`;
 - `gia_forward.py`: `sphere_mesh` (the 24-column cubed sphere).
-
-When those unit files are deleted, these helpers must move to `tests/gia`
-first.
 """
 
 import argparse
-import sys
 from contextlib import ExitStack, contextmanager
 
 import gadopt
@@ -73,11 +66,10 @@ from gia_entries import (CASE_DIR, FRAME_CONFIGURATIONS, OPERATORS, ROTATION_PAI
 from gia_forward import sphere_mesh
 from gia_limits import QUADRATURE, unit_meshes
 
-sys.path.insert(0, str(CASE_DIR.parent / "unit"))
-import test_dtn_multiplier_dense_schur as TD  # noqa: E402  (after the path of tests/unit)
-import test_dtn_schur_ainvb as TA  # noqa: E402
-import test_gia_gravity as G  # noqa: E402
-import test_sea_level as S  # noqa: E402
+from gia_models import dense_schur as TD
+from gia_models import schur_ainvb as TA
+from gia_models import annulus as G
+from gia_models import sea_level as S
 
 #: The short names of the fields that the rows pair, mapped to the solver's
 #: field names. The first six are those of `test_sea_level._PAIR_FIELDS`.
@@ -333,7 +325,7 @@ def sphere_frame_solver():
                          "bottom": {"dtn": SphericalDtN(1)}},
             bcs={"top": {"normal_stress": G.B_MU * G.SIGMA_HAT}},
             couplings=[FluidCore(boundary="bottom",
-                                 rho_core=G.TestCentreOfMassFrame.RHO_CORE),
+                                 rho_core=G.CentreOfMassFrame.RHO_CORE),
                        CentreOfMass()],
             dtn_representation="multiplier", **QUADRATURE)
     return solver
@@ -359,7 +351,7 @@ def sphere_translation_moment(solver):
     X = fd.SpatialCoordinate(mesh)
     area = fd.assemble(fd.Constant(1.0) * ds_b)
     radius = fd.assemble(fd.sqrt(fd.dot(X, X)) * ds_b) / area
-    mass = shell + G.TestCentreOfMassFrame.RHO_CORE * area * radius / 3
+    mass = shell + G.CentreOfMassFrame.RHO_CORE * area * radius / 3
     out = {"sphere_mass": mass}
     displacement = solver.solution.subfunctions[solver.field_index["displacement"]]
     for i in range(3):
@@ -389,7 +381,7 @@ def run_frame(meshes):
       zero as well), against the integral of `|sigma| r^2` as its scale.
     """
     out = {}
-    frame = G.TestCentreOfMassFrame()
+    frame = G.CentreOfMassFrame()
     for representation, rotation in FRAME_CONFIGURATIONS:
         with stop_annotating():
             solver, _, _ = frame.build(meshes, rotation=rotation,
@@ -404,7 +396,7 @@ def run_frame(meshes):
     out.update(sphere_translation_moment(solver))
 
     with stop_annotating():
-        solver, _, _ = G.TestFluidCore.build_fluid(meshes, rotation=True, **QUADRATURE)
+        solver, _, _ = G.FluidCoreBuilder.build_fluid(meshes, rotation=True, **QUADRATURE)
     rotation = G.coupling(solver, Rotation)
     load = G.coupling(solver, SurfaceLoad)
     _, sub = meshes
@@ -439,7 +431,7 @@ def run_block0(meshes):
     """
     out = {}
     with stop_annotating():
-        solver, _, _ = G.TestFluidCore.build_fluid(
+        solver, _, _ = G.FluidCoreBuilder.build_fluid(
             meshes, rotation=True, approximation_kwargs=MAXWELL2, **QUADRATURE)
     set_state(solver)
     _, pairing = symmetry_of_block_zero(solver, "symmetry")

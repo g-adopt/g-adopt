@@ -25,7 +25,9 @@ The exact identities of the cached apply (the complement against an
 independent elimination, the forward and transpose applies against the
 operator, their adjoint pairing, the transpose margin) are rows of the
 `schur` and `schur-np2` entries of the `operators` case in `tests/gia`
-(driver `gia_operators.py`, which imports `direct_params` and `ainvb_cache`).
+(driver `gia_operators.py`); `direct_params` and `ainvb_cache` are in
+`tests/gia/gia_models/schur_ainvb.py`, which that driver and this module
+share.
 The rebuild at a change of the time step and the single build at a fixed
 operator are the rebuild rows of the `forward` case, and the gradient
 through the cached path is the `sea-iterative-viscosity` entry of the
@@ -72,12 +74,16 @@ from gadopt import CompressibleInternalVariableApproximation  # noqa: E402
 from gadopt import CylindricalDtN, SphericalDtN  # noqa: E402
 from gadopt.gia_couplings import FluidCore, Rotation, SurfaceLoad  # noqa: E402
 from gadopt.gia_presets import (  # noqa: E402
-    OMEGA_SQ_EARTH, selfgrav_dtn_iterative_solver_parameters,
-    selfgrav_dtn_schur_solver_parameters)
+    OMEGA_SQ_EARTH,
+    selfgrav_dtn_iterative_solver_parameters,
+)
 from gadopt.gia_solver import SelfGravitatingGIASolver  # noqa: E402
 from gadopt.preconditioners import _RebuildRule, _SchurAinvBCache  # noqa: E402
 import gadopt.preconditioners  # noqa: E402
-from gadopt.stokes_integrators import newton_stokes_solver_parameters  # noqa: E402
+from gia_models.schur_ainvb import (  # noqa: E402
+    ainvb_cache,
+    direct_params,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -137,28 +143,6 @@ def meshes():
     return td.meshes.__wrapped__()
 
 
-def ainvb_cache(pc):
-    """The `Z`/`S` cache the option installs on a `DtNTwoBlockSchurPC`.
-
-    Reached through the PETSc object the solve actually ran, never constructed
-    by hand, so that a test checks the object PETSc built.
-
-    Args:
-      pc: the outer PETSc `PC` (python type `gadopt.DtNTwoBlockSchurPC`).
-
-    Returns:
-      The cache object. The design (section 7.1) names it `ainvb` on the
-      python context and requires it to expose `n`, `S`, `Z`, `build_count`,
-      `apply_count` and `apply_transpose_count`.
-    """
-    context = pc.getPythonContext()
-    cache = getattr(context, "ainvb", None)
-    assert cache is not None, (
-        "the outer DtNTwoBlockSchurPC carries no `ainvb` cache, so the option "
-        "dtn_schur_ainvb did not select the cached apply path")
-    return cache
-
-
 def outer_pc(solver):
     """The outer python PC of a `SelfGravitatingGIASolver`."""
     return solver.solver.snes.ksp.pc
@@ -167,43 +151,6 @@ def outer_pc(solver):
 def outer_iterations(solver):
     """Outer FGMRES iterations of the last solve."""
     return solver.solver.snes.ksp.getIterationNumber()
-
-
-# ---------------------------------------------------------------------------
-# The `direct` fixture: exact block 0, so the algebra can be pinned exactly
-# ---------------------------------------------------------------------------
-def direct_params(*, ainvb=True, **overrides):
-    """The 2-D `direct` Schur preset, with block 1 left to the cached factors.
-
-    Block 0 is `preonly` + `firedrake.AssembledPC` + MUMPS LU, so `M0` is an
-    exact linear operator; block 1 is `preonly` + `none`, because under the
-    option nothing solves it -- the cache applies the factors of the exact
-    complement itself. The option is written as the raw PETSc key rather than
-    through the preset, so that a change to the preset's signature cannot stop
-    this fixture from building.
-
-    Args:
-      ainvb: whether to write the `dtn_schur_ainvb` key.
-      overrides: extra solver-parameter entries, for the refusal tests.
-
-    Returns:
-      The solver-parameter dictionary.
-    """
-    params = dict(newton_stokes_solver_parameters)
-    params.update(selfgrav_dtn_schur_solver_parameters)
-    # The true-residual monitor is pure noise in a test log; drop it.
-    params.pop("ksp_monitor_true_residual", None)
-    # Block 1 is never solved on the cached path, and the design refuses any
-    # other setting there (section 5.2), so the fixture writes what it asks
-    # for and the refusal tests write what it refuses.
-    params["dtn_fieldsplit_1_ksp_type"] = "preonly"
-    params["dtn_fieldsplit_1_pc_type"] = "none"
-    params.pop("dtn_fieldsplit_1_ksp_rtol", None)
-    params.pop("dtn_fieldsplit_1_ksp_max_it", None)
-    if ainvb:
-        params["dtn_schur_ainvb"] = True
-    params.update(overrides)
-    return params
 
 
 def build_direct(meshes, params, dt=1.0):

@@ -13,33 +13,29 @@ for a refusal or a flag, as `name value` lines to
 ranks is gathered first and written as a count or a largest difference. A
 rank that raises or waits in a collective for ever leaves no file, and the
 test of the entry then fails on the missing file. The test
-`test_gia_parallel.py` holds the tolerance of the original unit test and
-asserts; this script asserts nothing.
+`test_gia_parallel.py` holds the tolerances and asserts; this script
+asserts nothing.
 
-The entries reuse the configurations of the unit tests through their helper
-functions, so that an entry measures what the original test measured. The
-helpers come from these files of `tests/unit`, which this script puts on
-`sys.path`:
+The configurations come from the helper modules of `gia_models`, which
+the unit tests also use:
 
-- `test_viscoelastic_checkpointing.py`: `parent_and_submesh`, `fields_on`,
+- `gia_models.checkpointing`: `parent_and_submesh`, `fields_on`,
   `round_trip_error`, `SUBMESH_TAG`;
-- `test_gia_nullspace_projection_adjoint.py`: `_small_case`,
-  `_small_forward`, `_small_taped`, `_shifted`;
-- `test_gia_rotation_moments.py`: `build_rotation`, `closure`, `K_S_SPADA`;
-- `test_gia_gravity.py`: `polar_moment`, `RE`;
-- `test_gravity_solver.py`: `annulus_mesh`, `annulus_source`,
-  `solve_annulus`, `field_number_parameters`, `max_coefficient_difference`,
+- `gia_models.projection_adjoint`: `_small_case`, `_small_forward`,
+  `_small_taped`, `_shifted`;
+- `gia_models.rotation_moments`: `build_rotation`, `closure`, `K_S_SPADA`;
+- `gia_models.annulus`: `polar_moment`, `RE`;
+- `gia_models.gravity`: `annulus_mesh`, `annulus_source`, `solve_annulus`,
+  `field_number_parameters`, `max_coefficient_difference`,
   `relative_l2_error`, `RMIN`, `RMAX`;
-- `test_dtn_lowrank_parity.py`: `solve_both`;
+- `gia_models.lowrank_parity`: `solve_both`;
 
 and from the sibling driver `gia_limits.py`: `unit_meshes` (the gmsh annulus
-of the unit fixture `test_gia_gravity.meshes`). When those unit files are
-deleted, these helpers must move to `tests/gia` first.
+of the unit fixture `test_gia_gravity.meshes`).
 """
 
 import argparse
 import re
-import sys
 
 import gadopt  # imported before firedrake
 import firedrake as fd
@@ -58,13 +54,12 @@ from gia_entries import (CASE_DIR, CHECKPOINT_FIELDS, CHECKPOINT_FILES, CHECKPOI
                          parallel_checkpoint, parallel_values)
 from gia_limits import unit_meshes
 
-sys.path.insert(0, str(CASE_DIR.parent / "unit"))
-import test_dtn_lowrank_parity as TL  # noqa: E402  (after the path of tests/unit)
-import test_gia_gravity as G  # noqa: E402
-import test_gia_nullspace_projection_adjoint as TP  # noqa: E402
-import test_gia_rotation_moments as TR  # noqa: E402
-import test_gravity_solver as TG  # noqa: E402
-import test_viscoelastic_checkpointing as TV  # noqa: E402
+from gia_models import lowrank_parity as TL
+from gia_models import annulus as G
+from gia_models import projection_adjoint as TP
+from gia_models import rotation_moments as TR
+from gia_models import gravity as TG
+from gia_models import checkpointing as TV
 
 
 # -- dtn-guard-np2 ------------------------------------------------------------------

@@ -53,8 +53,10 @@ What each test checks:
 
 The replay and gradient checks of the small problem on two ranks, where the
 products with the basis are global, are the entry `projection-np2` of the
-`parallel` case in `tests/gia`, which uses `_small_case`, `_small_forward`,
-`_small_taped` and `_shifted` of this file.
+`parallel` case in `tests/gia`. `_small_case`, `_small_forward`,
+`_small_taped` and `_shifted` are in
+`tests/gia/gia_models/projection_adjoint.py`, which that driver and this
+module share.
 """
 
 import gadopt  # noqa: F401  (the project rule: import gadopt before firedrake)
@@ -75,12 +77,17 @@ from gadopt import KernelProjectionBlock, project_out_kernel
 
 # The annulus, its constants, the coupled solver builder and the tape
 # fixture. Importing the fixtures makes pytest use them here.
-from test_gia_gravity import CURVE_RE, meshes  # noqa: F401
+from test_gia_gravity import meshes  # noqa: F401
+from gia_models.annulus import CURVE_RE  # noqa: F401
 from test_gia_lowrank_block0 import (  # noqa: F401
     build,
     clean_tape,
 )
 from test_gravity_adjoint import assert_taylor_with_guards
+from gia_models.projection_adjoint import (
+    _small_case,
+    _small_taped,
+)
 
 #: Number of coupled time steps. Three steps give two steps in which the
 #: replayed initial guess and `solution_old` come from a recorded projection.
@@ -93,90 +100,6 @@ REPLAY_RTOL = 1e-10
 
 #: The G-ADOPT threshold for the Taylor rate of the first-order remainder.
 MIN_RATE = 1.98
-
-
-# ---------------------------------------------------------------------------
-# Part 1: the block on a small problem without a solver
-# ---------------------------------------------------------------------------
-def _small_case(comm=fd.COMM_WORLD):
-    """A mixed space, a rotation basis on its vector block, and a control.
-
-    The vector block carries the 2-D rotation about the origin. The scalar
-    block has no basis, so the projection must leave it unchanged.
-
-    Args:
-      comm: the communicator of the mesh.
-
-    Returns:
-      `(Z, nullspace, control, direction)`.
-    """
-    mesh = fd.UnitSquareMesh(6, 6, comm=comm)
-    V = fd.VectorFunctionSpace(mesh, "CG", 2)
-    Q = fd.FunctionSpace(mesh, "CG", 1)
-    Z = V * Q
-    X = fd.SpatialCoordinate(mesh)
-    with stop_annotating():
-        rotation = fd.Function(V).interpolate(fd.as_vector([-X[1], X[0]]))
-        basis = fd.VectorSpaceBasis([rotation], comm=mesh.comm)
-        basis.orthonormalize()
-        nullspace = fd.MixedVectorSpaceBasis(Z, [basis, Z.sub(1)])
-        control = fd.Function(Q).interpolate(1.0 + X[0])
-        direction = fd.Function(Q).interpolate(0.3 * fd.sin(3 * X[1]) + 0.1)
-    return Z, nullspace, control, direction
-
-
-def _small_forward(Z, nullspace, control, project=True):
-    """Fill a mixed function from the control, project, copy, and integrate.
-
-    The vector block is a nonlinear function of the control with a large
-    rotation part, so the projection removes a large component and the
-    Hessian of the functional is not zero. The copy after the projection is
-    the pattern of the solver (`u.assign(...)` after the projection).
-
-    Args:
-      Z: the mixed space.
-      nullspace: the nullspace of `Z` from `_small_case`.
-      control: the control Function.
-      project: whether to apply the projection.
-
-    Returns:
-      The functional, an `AdjFloat` when annotation is on.
-    """
-    X = fd.SpatialCoordinate(Z.mesh())
-    c = control
-    z = fd.Function(Z)
-    z.subfunctions[0].interpolate(
-        fd.as_vector([c**2 - 3 * X[1] * c, 3 * X[0] * c + c**3]))
-    z.subfunctions[1].interpolate(c**2)
-    if project:
-        project_out_kernel(nullspace, z)
-    copy = fd.Function(Z).assign(z)
-    u, p = fd.split(copy)
-    # The first term sees the rotation part of `u`, the second is the flux of
-    # the first component through the top edge, which a rotation changes.
-    return fd.assemble((fd.inner(u, u) + p * fd.inner(u, u)) * fd.dx
-                       + u[0] * fd.ds(4))
-
-
-def _small_taped(Z, nullspace, control):
-    """Tape `_small_forward` and return `(J, rf)`."""
-    tape = get_working_tape()
-    tape.clear_tape()
-    continue_annotation()
-    try:
-        J = _small_forward(Z, nullspace, control)
-        rf = ReducedFunctional(J, Control(control))
-    finally:
-        pause_annotation()
-    return J, rf
-
-
-def _shifted(control, direction):
-    """`control + direction` as a new Function, without annotation."""
-    with stop_annotating():
-        shifted = control.copy(deepcopy=True)
-        shifted += direction
-    return shifted
 
 
 @pytest.mark.longtest

@@ -61,28 +61,24 @@ The closed forms used below, with `G = 1` throughout:
   from `r1` to `min(max(r, r1), r2)`, `I_out = int r'^(1-m) dr'` from there
   to `r2`.
 
-The rows reuse the meshes and helpers of the unit tests, which this script
-imports from `tests/unit`:
+The meshes, sources and forward maps come from the helper modules of
+`gia_models`, which the unit tests also use:
 
-- `test_gravity_solver.py`: `annulus_mesh`, `shell_mesh_3d`,
+- `gia_models.gravity`: `annulus_mesh`, `shell_mesh_3d`,
   `relative_l2_error`, `annulus_source`, `solve_annulus`,
   `field_number_parameters`, `max_coefficient_difference`, `RMIN`, `RMAX`,
   `R1_SHELL`, `R2_SHELL`;
-- `test_dtn_lowrank_parity.py`: `solve_both`, `shell_source`, `tight`,
+- `gia_models.lowrank_parity`: `solve_both`, `shell_source`, `tight`,
   `multiplier_potential_iterations`;
-- `test_gravity_adjoint.py`: the control and direction builders, the
+- `gia_models.gravity_adjoint`: the control and direction builders, the
   forward maps, `tape_forward`, `trace_coeff_integral`,
   `trace_coeff_rdirect`, `real_scalar`, the tape inspection helpers;
-- `test_gravity_adjoint_lowrank.py`: the low-rank forward maps;
-- `test_gravity_quad_degree.py`: `annulus`, `shell`, `icosahedral_shell`,
-  `build`, `incumbent`, `TARGET`.
-
-When those unit files are deleted, these helpers must move to `tests/gia`
-first.
+- `gia_models.gravity_adjoint_lowrank`: the low-rank forward maps;
+- `gia_models.gravity_quadrature`: `annulus`, `shell`, `icosahedral_shell`,
+  `build`, `incumbent`.
 """
 
 import argparse
-import sys
 import warnings
 from collections import Counter
 from contextlib import contextmanager, nullcontext
@@ -108,12 +104,11 @@ from gia_entries import (CASE_DIR, GRAVITY, GRAVITY_DISC_LEVELS,
                          GRAVITY_SHEETS, GRAVITY_TOLERANCE_SWEEP, gravity_counts,
                          gravity_quadrature_entry, gravity_values)
 
-sys.path.insert(0, str(CASE_DIR.parent / "unit"))
-import test_dtn_lowrank_parity as TL  # noqa: E402  (after the path of tests/unit)
-import test_gravity_adjoint as TA  # noqa: E402
-import test_gravity_adjoint_lowrank as TAL  # noqa: E402
-import test_gravity_quad_degree as TQ  # noqa: E402
-import test_gravity_solver as TG  # noqa: E402
+from gia_models import lowrank_parity as TL
+from gia_models import gravity_adjoint as TA
+from gia_models import gravity_adjoint_lowrank as TAL
+from gia_models import gravity_quadrature as TQ
+from gia_models import gravity as TG
 
 RMIN, RMAX = TG.RMIN, TG.RMAX
 

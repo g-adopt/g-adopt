@@ -22,7 +22,9 @@ The tests check three things:
 
 The eustatic shift with the softplus sheet and the moving marine grounding
 line are rows of the `sea` entry of the `limits` case in `tests/gia` (driver
-`gia_limits.py`), which imports `marine_fields` and `width` from here.
+`gia_limits.py`). `marine_fields` and `width` are in
+`tests/gia/gia_models/sea_level_sheet.py`, which that driver and this module
+share.
 
 The configuration and the helpers are those of `test_sea_level.py`, which
 documents them and holds the tests of the sea-level equation on states where
@@ -48,8 +50,8 @@ from gadopt import sea_level_sheet as sls
 from gadopt.gia_couplings import CentreOfMass
 from gadopt.utility import scalar_value
 import test_sea_level as tsl
-from test_sea_level import (
-    B_MU,
+from test_sea_level import B_MU, perturb, real_value, solver_converged, vector_norm
+from gia_models.sea_level import (
     EPS,
     G_RE,
     MELT,
@@ -62,14 +64,15 @@ from test_sea_level import (
     build,
     coupling,
     indicator,
-    perturb,
     polar_angle,
     re_measure,
-    real_value,
     solve_settings,
-    solver_converged,
     surface_fields,
-    vector_norm,
+)
+from gia_models.sea_level_sheet import (
+    R,
+    marine_fields,
+    width,
 )
 # The module fixtures of `test_sea_level`, bound by assignment so that pytest finds
 # them here and flake8 does not read the test arguments of the same name as
@@ -77,13 +80,6 @@ from test_sea_level import (
 clean_tape = tsl.clean_tape
 meshes = tsl.meshes
 representation = tsl.representation
-
-R = RHO_W / RHO_I
-
-
-def width(eps=EPS):
-    """`sea_level_overrides` that set the width of the sheet."""
-    return dict(softplus_width=eps)
 
 
 # ---------------------------------------------------------------------------
@@ -424,29 +420,6 @@ class TestTransposes:
 # ---------------------------------------------------------------------------
 # 3. Solves and derivatives
 # ---------------------------------------------------------------------------
-
-def marine_fields(sub):
-    """A marine ice sheet with a grounding line that retreats when it thins.
-
-    A uniform ocean of depth 1 (in units of D) with ice everywhere. The ice is
-    `r (1 + 0.6 cos(phi - PHASE))` thick at the reference state, so it is
-    grounded where `cos(phi - PHASE) > 0` and floats elsewhere. The current
-    ice is 0.9 of that, so the flotation line moves from `cos = 0` to
-    `cos = 0.185`, about 10.7 degrees on each side, which is one facet of the
-    32-cell annulus. The ice is CG2 and positive everywhere (at least
-    `0.4 r`), so the clip does not act.
-
-    Returns:
-      `SeaLevel` keywords, as `surface_fields`.
-    """
-    V = fd.FunctionSpace(sub, "CG", 2)
-    phi = polar_angle(sub)
-    zero = fd.Function(V)
-    SL_init = fd.Function(V).assign(1.0)
-    I_init = fd.Function(V).interpolate(R * (1.0 + 0.6 * fd.cos(phi - PHASE)))
-    I = fd.Function(V).interpolate(0.9 * I_init)
-    return dict(SL_init=SL_init, I=I, I_init=I_init, N_init=zero.copy(True),
-                ur_init=zero.copy(True))
 
 
 def assert_mass_conserved(solver, sea, initial_norm):

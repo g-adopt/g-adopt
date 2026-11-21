@@ -13,6 +13,14 @@ and the reference values are in `tests/unit/data`.
 The unit tests in `tests/unit` import the helper as `gia_cases`.
 `tests/unit/conftest.py` puts this directory on `sys.path` for them.
 
+The package `gia_models` holds the builders, meshes, sources, forward maps
+and constants that the case drivers and the unit tests share. Each module
+holds the helpers of one file of `tests/unit` (for example
+`gia_models.sea_level` for `test_sea_level.py`). A driver imports them from
+`gia_models` and never from a test module, so that a change to a unit test
+file cannot break a driver. When a unit test needs a helper that a driver
+also uses, put the helper in `gia_models` and import it from there in both.
+
 CAUTION: Do not change the labels of `Case` or the functions
 `fingerprint`, `probe_pairing` and `coordinate_state`. The stored references
 depend on them, and they cannot be recorded again on the present code.

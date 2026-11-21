@@ -14,12 +14,14 @@ The 2-D parity problems (two DtN boundaries, a sheet, a strong boundary
 condition), the monopole datum on the fast path, the accuracy against the
 closed form and the submesh parity are rows of the `closed-2d-lowrank` and
 `submesh` entries of the `gravity` case in `tests/gia` (driver
-`gia_gravity.py`), which imports `solve_both`, `shell_source`, `tight` and
-`multiplier_potential_iterations` from here. The 3-D parity and the CG counts
-stay here until the CI-only entries `closed-3d-*` have run.
+`gia_gravity.py`). `solve_both`, `shell_source`, `tight` and
+`multiplier_potential_iterations` are in
+`tests/gia/gia_models/lowrank_parity.py`, which that driver and this module
+share. The 3-D parity and the CG counts are checked here and by the CI-only
+entries `closed-3d-*`.
 
 The repeated-application check exists because a wrong operator in this code
-area has previously been right once and wrong afterwards. The low-rank operator
+area can be right on the first application and wrong afterwards. The low-rank operator
 sums rank-local dot products through one `Allreduce`, so a rank-ownership
 mistake shows only on several ranks; the parity on two ranks is the entry
 `gravity-np2` of the `parallel` case in `tests/gia`, which uses `solve_both`.
@@ -30,7 +32,13 @@ import pytest
 import firedrake as fd
 
 from gadopt import CylindricalDtN, GravitySolver, SphericalDtN
-from test_gravity_solver import annulus_mesh, relative_l2_error, shell_mesh_3d
+from gia_models.gravity import annulus_mesh, relative_l2_error, shell_mesh_3d
+from gia_models.lowrank_parity import (
+    annulus_source,
+    multiplier_potential_iterations,
+    shell_source,
+    tight,
+)
 
 
 @pytest.fixture(scope="module")
@@ -41,35 +49,6 @@ def annulus():
 @pytest.fixture(scope="module")
 def shell():
     return shell_mesh_3d(refinement_level=2, dr=0.25)
-
-
-def annulus_source(mesh, m_mode=3):
-    X = fd.SpatialCoordinate(mesh)
-    r = fd.sqrt(fd.dot(X, X))
-    phi = fd.atan2(X[1], X[0])
-    return fd.Function(fd.FunctionSpace(mesh, "CG", 1)).interpolate(
-        fd.cos(m_mode * phi) * fd.exp(-(((r - 1.7) / 0.2) ** 2)))
-
-
-def shell_source(mesh):
-    from gadopt.spherical_harmonics import real_spherical_harmonic
-    X = fd.SpatialCoordinate(mesh)
-    r = fd.sqrt(fd.dot(X, X))
-    return fd.Function(fd.FunctionSpace(mesh, "CG", 1)).interpolate(
-        real_spherical_harmonic(2, 1, X) * fd.exp(-(((r - 1.7) / 0.2) ** 2)))
-
-
-def solve_both(mesh, rho, bcs_factory, degree=1, **kwargs):
-    """The same problem on both representations; returns (psi, solver) pairs."""
-    out = {}
-    for representation in ("multiplier", "lowrank"):
-        psi = fd.Function(fd.FunctionSpace(mesh, "CG", degree))
-        solver = GravitySolver(psi, rho, bcs=bcs_factory(),
-                               dtn_representation=representation, **kwargs)
-        solver.mixed_solution.assign(0)
-        solver.solve()
-        out[representation] = (psi, solver)
-    return out
 
 
 def compare(mesh, results, psi_rtol=1e-14, coeff_atol=1e-12, label=""):
@@ -88,24 +67,6 @@ def compare(mesh, results, psi_rtol=1e-14, coeff_atol=1e-12, label=""):
     assert psi_error <= psi_rtol
     assert worst <= coeff_atol
     return psi_error, worst
-
-
-# ---------------------------------------------------------------------------
-# Parity across the configurations of the shipped test suite
-# ---------------------------------------------------------------------------
-def tight(representation, rtol):
-    """Solver options that make both paths solve to the same tight tolerance.
-
-    The multiplier path's outer FGMRES converges in one iteration - a full
-    Schur factorisation is exact - so its accuracy is set by the potential
-    block's inner tolerance, not by the outer one. Tightening only the outer
-    rtol would leave it unchanged and make the comparison look tolerance-proof
-    when it is not.
-    """
-    if representation == "multiplier":
-        return {"ksp_rtol": rtol,
-                "dtn": {"fieldsplit_0": {"ksp_rtol": min(rtol * 1e-2, 1e-12)}}}
-    return {"ksp_rtol": rtol}
 
 
 @pytest.mark.longtest
@@ -263,18 +224,6 @@ def test_low_rank_term_is_not_a_no_op(annulus):
 #: two refinements have to be compared with each other, and a single test
 #: cannot render that verdict.
 CG_GAPS = {}
-
-
-def multiplier_potential_iterations(solver):
-    """Iterations of the multiplier path's potential block on its last solve.
-
-    Reached through `DtNTwoBlockSchurPC`'s inner fieldsplit rather than off the
-    outer KSP, whose count is 1 - a full Schur factorisation is exact, so the
-    outer number says nothing about how hard the potential block was.
-    """
-    inner = solver.solver.snes.ksp.pc.getPythonContext().pc
-    potential, _ = inner.getFieldSplitSchurGetSubKSP()
-    return potential.getIterationNumber()
 
 
 @pytest.mark.longtest

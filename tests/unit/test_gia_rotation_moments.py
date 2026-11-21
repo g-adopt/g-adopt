@@ -53,8 +53,9 @@ dimension:
 
 Nothing here solves, and nothing here is marked `slow`. The radius check on
 two ranks, where the mesh radius is a maximum over the ranks, is the entry
-`rotation-radius-np2` of the `parallel` case in `tests/gia`, which uses
-`build_rotation`, `closure` and `K_S_SPADA` of this file.
+`rotation-radius-np2` of the `parallel` case in `tests/gia`. `build_rotation`,
+`closure` and `K_S_SPADA` are in `tests/gia/gia_models/rotation_moments.py`,
+which that driver and this module share.
 """
 
 import re
@@ -67,21 +68,23 @@ import pytest
 
 from gadopt.gia_couplings import Rotation
 from gadopt.gia_presets import OMEGA_SQ_EARTH
-from gadopt.utility import scalar_value
 
-from test_gia_gravity import (  # noqa: E402  (module-level helpers)
+from gia_models.annulus import (  # noqa: E402  (module-level helpers)
     LAMBDA,
     RC,
     RE,
     approximation,
-    build,
-    coupling,
     polar_moment,
 )
 # The annulus fixture, requested by name by every 2-D test below. Imported on
 # its own line because pyflakes reports the whole `from` statement as unused
 # when the only unused name is in it.
 from test_gia_gravity import meshes  # noqa: E402,F401  (pytest fixture)
+from gia_models.rotation_moments import (
+    K_S_SPADA,
+    build_rotation,
+    closure,
+)
 
 
 class refstate:
@@ -113,12 +116,6 @@ class refstate:
     OMEGA_SQ = 7.292115e-5**2 * D_SCALE / G_BAR
 
 
-#: The secular (fluid-limit) tidal Love number of M3-L70-V01, from the TABOO
-#: transfer function the Spada et al. (2011) benchmark used. It is the number
-#: `selfgrav_common.C_MINUS_A`'s comment names as the origin of the consistent
-#: `C - A = 2.6952e35 kg m^2`, and it is dimensionless.
-K_S_SPADA = 0.96672389
-
 #: `Qhat` on the *test* annulus, whose `Lambda` and radius are not the
 #: benchmark's. Computed here from the closed form so that the tests compare
 #: the coupling against an independent evaluation of
@@ -131,34 +128,6 @@ Q_ANNULUS = 4 * np.pi * RE ** 5 * OMEGA_SQ_EARTH / (3 * LAMBDA)
 #: 1e-13 is that with three decades of margin, and it is tight enough that any
 #: change to the *formula* (a factor of 4 pi, a power of the radius) fails.
 FORMULA_RTOL = 1e-13
-
-
-def build_rotation(meshes, *, lambda_value=LAMBDA, **rotation_kwargs):  # noqa: F811  (the fixture's value, passed in)
-    """Build the 2-D annulus solver with one `Rotation` coupling.
-
-    `test_gia_gravity.build` with its own rotation switched off and this
-    `Rotation` passed as the only extra coupling: the same annulus, the same
-    rigid core, the same `cos 2 phi` `SurfaceLoad` on Re, and the assembled
-    polar moment `C` unless the caller gives one.
-
-    Args:
-      meshes: the `(parent, sub)` pair of the module fixture.
-      lambda_value: the self-gravity number of the approximation, which the
-        solver reads as `Lambda`.
-      **rotation_kwargs: keywords of `Rotation`. `C` defaults to the mantle's
-        polar moment and `Omega_sq` to `OMEGA_SQ_EARTH`.
-
-    Returns:
-      `(solver, rotation)`. Nothing is solved.
-    """
-    rotation_kwargs.setdefault("C", polar_moment(meshes))
-    rotation_kwargs.setdefault("Omega_sq", OMEGA_SQ_EARTH)
-    rotation = Rotation(**rotation_kwargs)
-    solver, _, _ = build(
-        meshes, rotation=False, couplings=[rotation],
-        approximation_kwargs={"self_gravity_number": lambda_value})
-    assert coupling(solver, Rotation) is rotation
-    return solver, rotation
 
 
 @pytest.fixture(scope="module")
@@ -199,11 +168,6 @@ def check_in_3d(sphere, *, lambda_value=LAMBDA, **rotation_kwargs):
     rotation.bind(None, context)
     rotation.check([rotation])
     return rotation
-
-
-def closure(rotation, i):
-    """The closure constant `K_i` of row `i` as a float (UFL on the `k_s` route)."""
-    return scalar_value(rotation.closure_constants[i])
 
 
 def numbers_in(message):
