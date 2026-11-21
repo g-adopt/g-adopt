@@ -149,6 +149,36 @@ def install_recorder():
     unnecessary.
     """
     optimisers.Recorder = CylindricalRecorder
+    install_step_norm_getter()
+
+
+def install_step_norm_getter():
+    """Give the box recorder the STCG step norm under PETSc 3.26.
+
+    ``recording.PETSC_LIBRARY`` looks up ``KSPCGGetNormD`` by ``ctypes``. PETSc 3.26
+    renamed it ``KSPCGGetTRSolutionNorm`` and keeps the old name only as a static
+    inline wrapper in ``petscksp.h``, so the library exports no ``KSPCGGetNormD``
+    symbol, and every solve record of the box code then holds ``step_norm = None``.
+    The new function has the same signature and returns the same number, the norm
+    of the trust-region solution in the norm of ``-ksp_cg_dtype``. This function
+    fills the getter with it when the old symbol is missing, and does nothing under
+    PETSc 3.25. The fix belongs in ``recording.py``; it is here because the box files
+    must not change while another campaign runs on them.
+    """
+    import ctypes
+    import recording
+    from petsc4py import PETSc
+
+    library = recording.PETSC_LIBRARY
+    if library._ksp_normd is not None:
+        return
+    try:
+        getter = ctypes.CDLL(PETSc.__file__).KSPCGGetTRSolutionNorm
+    except (OSError, AttributeError):
+        return
+    getter.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+    getter.restype = ctypes.c_int
+    library._ksp_normd = getter
 
 
 def parse_args(argv=None):
