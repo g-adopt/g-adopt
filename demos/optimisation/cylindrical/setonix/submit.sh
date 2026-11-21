@@ -5,6 +5,7 @@
 #     submit.sh gates       <code dir>
 #     submit.sh timing      <code dir>
 #     submit.sh runs        <code dir>
+#     submit.sh hessian20   <code dir>
 #     submit.sh radius      <code dir>   (conditional, see below)
 #     submit.sh metric      <code dir>   (conditional, see below)
 #
@@ -19,6 +20,13 @@
 # Phase "timing": the 125-step reference state, and the 125-step timing on 8 and on
 #   16 ranks. It gives the cost of one forward call and of one Hessian-vector
 #   product, the memory per rank, and <h, H h> and <h, A h> at the first guess.
+# Phase "hessian20": the November Hessian verification of
+#   NOTES/CYLINDRICAL-HESSIAN-2026-11.md, repeated on the code after the merge
+#   a0c9a6d1 (g-adopt #540 rewrites the weak normal-velocity terms and adds the
+#   viscosity-derivative terms, so a Stokes solve differs by about 2e-5 from the code
+#   the November campaign ran). Serial, 20 steps of 6e-6, smooth floor, smooth
+#   direction with seed 1: the Taylor sweep (eps0 0.05, 7 levels) and the central
+#   difference of the gradient (eps 1e-2, 1e-3, 1e-4), as in November.
 # Phase "runs": the three runs of configuration P (production objective of
 #   inverse.py), on one reference state, one rank count and one work budget:
 #     P-ROL-L2    rol-lbfgs, L2 inner product: g-adopt today, as inverse.inverse()
@@ -133,6 +141,21 @@ runs)
     j=$(submit_run cyl-P-rol-a --optimiser rol-lbfgs --riesz regularisation \
         --output "$RUNS/rol-lbfgs-A.json")
     echo "P-ROL-A:  $j"
+    ;;
+hessian20)
+    H=$BASE/hessian20
+    mkdir -p "$H"
+    harness=../../../tests/hessian/cylindrical_hvp_taylor.py
+    november=(Tobs --timesteps 20 --rundir "$H/run" --viscosity smooth
+              --perturbation smooth --seed 1)
+    serial=(--partition=work --mem=40G --time=08:00:00)
+    t=$(sbatch --parsable --job-name=cyl-h20-taylor "${serial[@]}" "$JOB" "$CODE" "$H" \
+        $harness "${november[@]}" --make-reference --and-measure --eps0 0.05 \
+        --levels 7 --repeats 1 --json "$H/taylor.json")
+    f=$(sbatch --parsable --job-name=cyl-h20-fd "${serial[@]}" --dependency=afterok:$t \
+        "$JOB" "$CODE" "$H" $harness "${november[@]}" --fd-check --fd-scheme central \
+        --fd-eps 1e-2 1e-3 1e-4)
+    echo "Taylor $t, central difference $f (after $t)"
     ;;
 radius)
     j=$(submit_run cyl-P-newton-r087 --optimiser tao-bnls-riesz --bnk-shift zero \
