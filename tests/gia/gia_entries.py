@@ -844,8 +844,9 @@ ADJOINT_REPLAY_EPS = 1e-4
 #:   (the definition of `pyadjoint.taylor_test`);
 #: - `taylor_rate_no_gradient`: the same with `dJ` replaced by 0 (the
 #:   negative control of `test_gravity_adjoint.assert_taylor_with_guards`);
-#: - `tangent`: the tangent sweep `dJ/dm h` on the tape;
-#: - `tangent_replay`: the central difference of two replays;
+#: - `tangent`: the tangent sweep `dJ/dm h` on the tape (not written by an
+#:   entry with `checkpoint="disk"`, see `gia_adjoint.run_entry`);
+#: - `tangent_replay`: the central difference of two replays (same rule);
 #: - `adjoint_refused_residual`: 0, or the true residual of a linear adjoint
 #:   solve that the library refused (`gia_adjoint.adjoint_derivative`; `dJ`
 #:   and the rate with the gradient are then NaN);

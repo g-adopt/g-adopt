@@ -518,8 +518,14 @@ def run_entry(name):
     J0 = float(rf(control))
     values["taylor_rate"], values["taylor_rate_no_gradient"] = taylor_rates(
         rf, control, direction, J0, (values["dJ"], 0.0))
-    values["tangent"] = tangent_of(rf, control, direction)
-    values["tangent_replay"] = replay_difference(rf, control, direction, ADJOINT_REPLAY_EPS)
+    if directory is None:
+        # No tangent under a disk schedule: pyadjoint's checkpoint manager
+        # has no tangent sweep, and `Tape.evaluate_tlm` walks the blocks
+        # without it, so it reads the values the last replay left on them
+        # and its result does not measure the solver.
+        values["tangent"] = tangent_of(rf, control, direction)
+        values["tangent_replay"] = replay_difference(rf, control, direction,
+                                                     ADJOINT_REPLAY_EPS)
     values["wall"] = time.time() - start
     # The rank count of the run; the test compares it with `cores` of the
     # multi-rank entries.

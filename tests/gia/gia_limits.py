@@ -274,7 +274,11 @@ def sign_and_repeat_rows(meshes, representation):
     # the near-kernel, and the step-norm test stops Newton after a number of
     # iterations that depends on rounding. With it, the residual part along
     # the rotation is removed (`SelfGravitatingGIASolver.complete_residual`)
-    # and the solve converges in one Newton step on both representations.
+    # and the measured second solve takes 2 Newton steps on the multiplier
+    # path and 1 on the low-rank path. It still stops on the step-norm test:
+    # `snes_atol` 1e-15 is below the round-off of the residual, so the count
+    # depends on rounding and can be different with another BLAS
+    # (`REPEAT_NEWTON_MAX`).
     solver, z, sea = sea_build(meshes, S.surface_fields(sub, "caps", d_ice=d_ice), rep,
                                earth=S.ELASTIC_EARTH, nullspace="rigid_rotation")
     first_converged = try_solve(solver)
