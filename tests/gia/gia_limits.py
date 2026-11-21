@@ -236,7 +236,8 @@ def sign_and_repeat_rows(meshes, representation):
     - `sign`: on a stiff Earth with ice growing on the two caps, the mean
       sea-level change on the ocean next to the caps exceeds the mean on the
       ocean farthest from them by more than 1e-3 of the eustatic value
-      (`test_sea_level.TestSignAgainstPhysics`);
+      (`test_sea_level.TestSignAgainstPhysics`, with the rigid rotation
+      declared as the nullspace);
     - `repeat`: a second solve with nothing changed gives the same `Shift`
       and potential to 1e-8 (`test_sea_level.TestRepeatedSolve`, elastic
       Earth, full `Lambda`); it fails if the datum of the first solve lags;
@@ -252,7 +253,15 @@ def sign_and_repeat_rows(meshes, representation):
     out = {}
     d_ice = 1e-2
     fields = S.surface_fields(sub, "caps", d_ice=d_ice)
-    solver, _, sea = sea_build(meshes, fields, rep, stiff=True)
+    # The stiff Earth declares the rigid rotation as its nullspace. With
+    # moduli 1e6 the Jacobian annihilates the rotation to 1.8e-12 relative
+    # (8e-6 on the default Earth), so without the declaration the system is
+    # singular to round-off along it: the outer FGMRES of the iterative
+    # low-rank preset stalls between 1e-9 and 6e-9 relative, above its rtol of
+    # 1e-12. With the declaration it converges in 4 outer iterations and one
+    # Newton step. The rotation does not change `u . n` on Re to first
+    # order, so the sea level does not depend on it.
+    solver, _, sea = sea_build(meshes, fields, rep, stiff=True, nullspace="rigid_rotation")
     try_solve(solver)
     dss = S.re_measure(solver)
     delta = sea.sea_level() - fields["SL_init"]

@@ -121,16 +121,7 @@ def test_ice_over_the_ocean_changes_nothing(representation):
          if k.startswith("ocean_ice_") and k.endswith(rep)}, "ocean_ice")
 
 
-@pytest.mark.parametrize("representation", [
-    "multiplier",
-    pytest.param("lowrank", marks=pytest.mark.xfail(
-        strict=True,
-        reason="On the Quadrature family the stiff Earth (moduli 1e6) with the "
-               "full Lambda does not converge under the iterative preset of the "
-               "low-rank path: the outer FGMRES stops at its cap of 200 "
-               "iterations in the first Newton step (DIVERGED_LINEAR_SOLVE). "
-               "The multiplier path solves the same row (near - far 5.7e-4 "
-               "against a margin of 9.3e-6)."))])
+@pytest.mark.parametrize("representation", E.REPRESENTATIONS)
 def test_water_piles_up_towards_added_ice(representation):
     """The geoid bulges towards added ice, so the sea rises next to it.
 
