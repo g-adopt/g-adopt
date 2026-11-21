@@ -555,7 +555,10 @@ def build_problem(checkpoint, window=10, alpha_d=1e-3, alpha_s=1e-3,
         # The wall values of the temperature, the same as ``temp_bcs`` and T0_bcs.
         wall_value_bcs = [DirichletBC(Q1, 1.0, boundary.bottom),
                           DirichletBC(Q1, 0.0, boundary.top)]
-        n_owned = Q1.dof_dset.size
+        # Local indices below the number of owned nodes are owned by this rank; the
+        # rest are ghost copies of nodes that another rank owns. pyop3 gives the
+        # owned count through the node axis of the function space.
+        n_owned = Q1.nodes.owned.local_size
         wall_nodes = {name: np.sort(bc.nodes[bc.nodes < n_owned])
                       for name, bc in zip(("bottom", "top"), wall_value_bcs)}
         wall_weights = {}

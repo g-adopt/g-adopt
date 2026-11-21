@@ -165,8 +165,10 @@ class InnerProductMat:
         v = assemble(self.inner_product.form(u, TestFunction(self.control_space)))
         for bc in bcs:
             # Zero rows on the constrained nodes, so that A x lies in the range of
-            # the operator that the Riesz map inverts.
-            v.dat.data_wo_with_halos[bc.nodes] = 0.0
+            # the operator that the Riesz map inverts. The write touches only some
+            # entries, so it needs read-write access: under pyop3 a write-only view
+            # does not promise to keep the entries that the write leaves alone.
+            v.dat.data_rw_with_halos[bc.nodes] = 0.0
         self.vec_interface.to_petsc(y, v)
 
     def multHermitian(self, A, x, y):
