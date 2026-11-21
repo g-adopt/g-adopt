@@ -633,7 +633,7 @@ for timestep in range(max_timesteps):
     stokes_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {float(time)} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
                  f"{gd.uv_min(boundary.top)} ")
 

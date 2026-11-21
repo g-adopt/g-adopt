@@ -207,7 +207,8 @@ initialise_background_field(
 # +
 viscosity_control = Function(P1, name="Viscosity (control)")
 
-control = Control(viscosity_control, riesz_map="L2")
+riesz_map = RieszMap(P1, "L2", constant_jacobian=True)
+control = Control(viscosity_control, riesz_map=riesz_map)
 
 viscosity = background_viscosity * 10**viscosity_control
 # -

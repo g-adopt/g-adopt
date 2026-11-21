@@ -141,7 +141,8 @@ T0.project(T_target)
 # ensuring that gradients are computed in the $L^2$ Hilbert space with
 # respect to the inner product.
 
-m = Control(T0, riesz_map="L2")
+riesz_map = RieszMap(Q, "L2", constant_jacobian=True)
+m = Control(T0, riesz_map=riesz_map)
 
 # Based on our guess for the initial temperature, we run the model for a specified number of timesteps:
 

@@ -230,18 +230,9 @@ def get_viscosity(r, T, u):
     mu_plast = 0.1 + (sigma_y / epsii)
     mu_eff = 2 * (mu_lin * mu_plast) / (mu_lin + mu_plast)
 
-    # Lower bound on the viscosity, mu >= mu_min, as a smooth maximum:
-    #     max(a, b) ~ 0.5 * (a + b + sqrt((a - b)**2 + delta**2))
-    # A hard `conditional(mu_eff > mu_min, mu_eff, mu_min)` is continuous but not
-    # continuously differentiable. UFL differentiates each branch separately, which
-    # is correct for the gradient, but the second derivative then misses the jump on
-    # the switching surface. The objective functional is then C1 and not C2 in the
-    # control, and no Hessian-vector product can pass a second-order Taylor test. The
-    # square-root form is C-infinity, and because sqrt((a-b)**2 + delta**2) >= |a-b|
-    # it never falls below mu_min, so the conditioning guarantee of the floor is
-    # kept. The overshoot is delta/2 at the crossing and decays as delta**2/(4|a-b|)
-    # away from it. delta is 5 percent of mu_min, which moves the functional by about
-    # 1e-4 in relative terms and keeps the second derivative bounded on the mesh.
+    # Smooth maximum for the floor mu >= mu_min. A `conditional` has a kink whose
+    # second derivative UFL drops, so the Hessian fails the second-order Taylor test.
+    # This form never falls below mu_min and exceeds max(mu_eff, mu_min) by at most delta/2.
     mu_min = reference_values["mu_min"]
     delta = reference_values["mu_min_smoothing"] * mu_min
     mu = 0.5 * (mu_eff + mu_min + sqrt((mu_eff - mu_min) ** 2 + delta**2))

@@ -346,25 +346,6 @@ approximation = approx(
     bulk_modulus=bulk_modulus, density=density, shear_modulus=shear_mod_list,
     viscosity=visc_list, B_mu=B_mu, bulk_shear_ratio=args.bulk_shear_ratio)
 
-iterative_parameters = {"mat_type": "matfree",
-                        "snes_monitor": None,
-                        "snes_converged_reason": None,
-                        "snes_type": "ksponly",
-                        "ksp_type": "cg",
-                        "ksp_rtol": 1e-5,
-                        "ksp_converged_reason": None,
-                        "ksp_monitor": None,
-                        "pc_type": "python",
-                        "pc_fieldsplit_type": "firedrake.AssembledPC",
-                        "pc_python_type": "gadopt.SPDAssembledPC",
-                        "assembled_pc_type": "gamg",
-                        "assembled_mg_levels_pc_type": "sor",
-                        "assembled_pc_gamg_threshold": args.gamg_threshold,
-                        "assembled_pc_gamg_square_graph": 100,
-                        "assembled_pc_gamg_coarse_eq_limit": 1000,
-                        "assembled_pc_gamg_mis_k_minimum_degree_ordering": True,
-                        }
-
 Z_nullspace = None  # Default: don't add nullspace for now
 Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
                                     translations=[0, 1, 2])
@@ -375,7 +356,7 @@ coupled_solver = InternalVariableSolver(
     dt=dt,
     internal_variables=m_list,
     bcs=stokes_bcs,
-    solver_parameters=iterative_parameters,
+    solver_parameters_extra={"snes_converged_reason": None},
     nullspace=Z_nullspace,
     transpose_nullspace=Z_nullspace,
     near_nullspace=Z_near_nullspace,
@@ -421,7 +402,7 @@ for timestep in range(1, max_timesteps+1):
     with coupled_stage: coupled_solver.solve()
 
     # Log diagnostics:
-    plog.log_str(f"{timestep} {time.dat.data[0]} {float(dt)} {gd.u_rms()} "
+    plog.log_str(f"{timestep} {float(time)} {float(dt)} {gd.u_rms()} "
                  f"{gd.u_rms_top()} {gd.ux_max(boundary.top)} "
                  f"{gd.uv_min(boundary.top)}")
     # Compute diagnostics:
@@ -432,7 +413,7 @@ for timestep in range(1, max_timesteps+1):
     log("Greatest (-ve) displacement", displacement_min)
     displacement_max = gd.uv_max(boundary.top) * D
     log("Greatest (+ve) displacement", displacement_max)
-    displacement_min_array.append([float(characteristic_maxwell_time*time.dat.data[0]/year_in_seconds), displacement_min])
+    displacement_min_array.append([characteristic_maxwell_time*float(time)/year_in_seconds, displacement_min])
     disp_norm_L2surf = gd.l2_norm_top()
     log("L2 surface norm displacement", disp_norm_L2surf)
     disp_norm_L1surf = gd.l1_norm_top()

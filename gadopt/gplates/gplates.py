@@ -46,7 +46,7 @@ class GPlatesFunctionalityMixin:
                 return
 
         # Assuming `self` is a Firedrake Function instance,
-        self.dat.data_with_halos[self.dbc.nodes, :] = (
+        self.dat.data_rw_with_halos[self.dbc.nodes, :] = (
             self.gplates_connector.get_plate_velocities(
                 self.boundary_coords, ndtime)
         )
@@ -251,7 +251,7 @@ class GplatesVelocityFunction(GPlatesFunctionalityMixin, SolverConfigurationMixi
         self.solver.solve()
 
         # Copy the tangential velocity back to self
-        self.dat.data_wo_with_halos[self.dbc.nodes, :] = (
+        self.dat.data_rw_with_halos[self.dbc.nodes, :] = (
             self.tangential_velocity.dat.data_ro_with_halos[self.dbc.nodes, :]
         )
 
@@ -760,7 +760,7 @@ class GplatesScalarFunction(fd.Function):
 
         with stop_annotating():
             values = connector.get_indicator(self.mesh_coords, ndtime)
-            self.dat.data_with_halos[:] = values
+            self.dat.data_wo_with_halos[:] = values
 
         if annotate_tape():
             self.create_block_variable()
