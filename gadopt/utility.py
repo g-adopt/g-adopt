@@ -12,6 +12,7 @@ from firedrake.ufl_expr import extract_unique_domain
 import pyop3 as op3
 import ufl
 import time
+import weakref
 from ufl.corealg.traversal import traverse_unique_terminals
 from firedrake.petsc import PETSc
 from firedrake.utils import get_device_type as fd_get_device_type
@@ -23,6 +24,7 @@ from logging import DEBUG, INFO, WARNING, ERROR, CRITICAL  # NOQA
 import os
 from scipy.linalg import solveh_banded
 from types import SimpleNamespace
+from pyadjoint.tape import annotate_tape
 
 try:
     from firedrake import MeshSequenceGeometry
@@ -765,3 +767,216 @@ def initialise_background_field(
             conditional(vertical_component(X) + shift > radii[i+1],
                         conditional(vertical_component(X) + shift <= radii[i],
                                     background_values[i], f), f))
+
+
+# -- Keywords of the adjoint and tangent solvers of an annotated variational solve --
+#
+# Two Firedrakes are in use. On Firedrake `main` an annotated variational solve
+# puts a `NonlinearVariationalSolveBlock` on the tape, and the keywords of its
+# adjoint solver are given to `solve` as `adj_kwargs`. Firedrake PR 4638 ("NLVS:
+# cache more adjoint solvers/forms and fix Hessian") puts a `CachedSolverBlock`
+# on the tape instead. Its forward, adjoint and tangent solvers are built once,
+# at the first annotated solve, from a namespace that the solver constructor
+# fills (`solver._ad_args_kwargs`), and `solve` refuses `adj_kwargs`. The
+# constructor of that branch does not accept `adj_kwargs` or `tlm_kwargs`
+# either: it removes them from the keywords only after the solver has been
+# initialised, so they raise `TypeError`. The namespace is therefore the only
+# place where these keywords can be given on that Firedrake. The write into the
+# private `solver._ad_args_kwargs` is to be replaced by passing `adj_kwargs`
+# and `tlm_kwargs` to the solver constructor once firedrakeproject/firedrake
+# #5666 ("Take adj/tlm kwargs out before NonlinearVariationalSolver.__init__")
+# is merged into Firedrake PR #4638.
+try:
+    from firedrake.adjoint_utils.blocks import CachedSolverBlock  # noqa: F401
+    CACHED_SOLVER_BLOCKS = True
+except ImportError:
+    CACHED_SOLVER_BLOCKS = False
+
+#: The names under which Firedrake PR 4638 caches the replay, tangent and
+#: adjoint solvers of a variational solver (`functools.cached_property`, so
+#: each one is in the instance `__dict__` once it is built).
+_DERIVATIVE_SOLVER_CACHES = ("_ad_forward_cache", "_ad_tangent_cache",
+                             "_ad_adjoint_cache", "_ad_hessian_cache")
+
+
+#: The attribute `derivative_solve_keywords` sets on a solver once it has
+#: written the derivative keywords into the solver's namespace.
+_DERIVATIVE_KEYWORDS_WRITTEN = "_gadopt_derivative_keywords_written"
+
+
+def derivative_solve_keywords(solver, adj_kwargs: dict,
+                              tlm_kwargs: dict | None = None) -> dict:
+    """Give the adjoint (and tangent) solver keywords to the running Firedrake.
+
+    Call this before every solve of `solver` and pass the result to `solve`.
+    Nothing is done unless the tape is recording, because only an annotated
+    solve builds derivative solvers.
+
+    With the stock solve block (Firedrake `main`) the adjoint keywords go to
+    `solve`, which takes them on the first annotated solve and ignores them
+    after that. The stock block builds its tangent solver itself, so
+    `tlm_kwargs` is not used there.
+
+    With cached solver blocks (Firedrake PR 4638) the keywords are written into
+    the namespace from which the solver builds its cached adjoint and tangent
+    solvers, and `solve` gets nothing. They are written only while those
+    solvers do not exist yet, which is the same rule as on the stock path: the
+    first annotated solve decides. `tlm_kwargs` defaults to a copy of
+    `adj_kwargs`, which is what Firedrake does when only `adj_kwargs` is given
+    to the constructor. A solver whose cached derivative solvers exist but
+    were not built from these keywords was solved under annotation before
+    this function saw it; its adjoint would run with the forward Newton
+    options and without the application context, so that raises.
+
+    Args:
+      solver: The `NonlinearVariationalSolver` (or subclass) to be solved. An
+        object without Firedrake's cached-solver namespace (a test stand-in
+        that solves by hand) builds no derivative solvers and gets nothing.
+      adj_kwargs: Constructor keywords of the adjoint `LinearVariationalSolver`.
+      tlm_kwargs: Constructor keywords of the tangent `LinearVariationalSolver`
+        (cached solver blocks only).
+
+    Returns:
+      The keywords to pass to `solver.solve`.
+
+    Raises:
+      RuntimeError: With cached solver blocks, if the derivative solvers of
+        `solver` already exist and were built without these keywords.
+    """
+    if not annotate_tape():
+        return {}
+    if not CACHED_SOLVER_BLOCKS:
+        return {"adj_kwargs": adj_kwargs}
+    namespace = getattr(solver, "_ad_args_kwargs", None)
+    if namespace is None:
+        return {}
+    built = vars(solver)
+    if any(name in built for name in _DERIVATIVE_SOLVER_CACHES):
+        if not built.get(_DERIVATIVE_KEYWORDS_WRITTEN, False):
+            raise RuntimeError(
+                "The cached adjoint and tangent solvers of this solver already "
+                "exist and were built without the G-ADOPT derivative keywords: "
+                "an annotated solve of the inner Firedrake solver ran before "
+                "the G-ADOPT solve. Its adjoint would use the forward Newton "
+                "options and no application context. Solve through the G-ADOPT "
+                "solver (its `solve` method) from the first annotated solve on.")
+        return {}
+    # A write into a private namespace of Firedrake. To be replaced by
+    # constructor keywords once firedrakeproject/firedrake#5666 is merged
+    # into Firedrake PR #4638.
+    namespace.adj_kwargs = dict(adj_kwargs)
+    namespace.tlm_kwargs = dict(adj_kwargs if tlm_kwargs is None else tlm_kwargs)
+    setattr(solver, _DERIVATIVE_KEYWORDS_WRITTEN, True)
+    return {}
+
+
+def weak_callback(method):
+    """A PETSc callback that calls the bound `method` through a weak reference.
+
+    A Firedrake solver keeps its callbacks (`pre_jacobian_callback`,
+    `post_function_callback` and the others) in its `_SNESContext`. A Python
+    preconditioner context, `firedrake.AssembledPC` for example, also holds
+    that `_SNESContext`, and PETSc holds the Python context from C. A bound
+    method holds its object strongly. If that object also holds the solver,
+    the references form a cycle that goes through C. Python's garbage
+    collector cannot see a reference held by C, so the solver, its PETSc
+    objects and every matrix factorisation in them stay alive to the end of
+    the process.
+
+    The callback that this function returns holds only a `weakref.WeakMethod`
+    to `method`. The cycle then has no strong link back to the object, and
+    the object is collected when nothing else holds it. The owner of the
+    callbacks (the user's solver object, or a tape block that holds it) must
+    hold the object while the PETSc solver is in use.
+
+    Args:
+      method: A bound method.
+
+    Returns:
+      A function with the same arguments and return value as `method`. Its
+      attribute `target` is the `weakref.WeakMethod` of `method`.
+
+    Raises:
+      ReferenceError: When the returned function is called after the object
+        of `method` was collected.
+    """
+    reference = weakref.WeakMethod(method)
+    name = method.__qualname__
+
+    def callback(*args, **kwargs):
+        bound = reference()
+        if bound is None:
+            raise ReferenceError(
+                f"The callback {name} was called after its object was "
+                "garbage-collected. Keep the solver that owns it alive while "
+                "its PETSc solvers are in use.")
+        return bound(*args, **kwargs)
+
+    callback.__qualname__ = f"weak_callback({name})"
+    #: The `weakref.WeakMethod`; calling it gives the bound method, or None
+    #: once its object is gone. A test can check which method a solver
+    #: carries as its callback with `callback.target() == obj.method`.
+    callback.target = reference
+    return callback
+
+
+def interior_facet_integrand(expr):
+    """Restrict a quantity of a mesh on that mesh's interior facets: `avg(expr)`.
+
+    UFL's rule: in an integral over interior facets, every `Argument` and
+    every `Coefficient` of a discontinuous element must carry a restriction
+    (`'+'`, `'-'` or `avg`); a coefficient of a continuous element is given a
+    default side. A `Real` field counts as continuous, so a `Real`
+    coefficient is accepted unrestricted in a form, but the derivative with
+    respect to it is a `Real` `Argument`, which UFL refuses unrestricted
+    (`Discontinuous type Argument must be restricted`). pyadjoint builds
+    exactly that derivative when the coefficient is a control. Firedrake
+    passes `Real` arguments to UFL as they are, so the rule applies to them.
+    Every quantity of the mesh whose facets are interior facets of the
+    integral therefore goes through this helper where the integrand is
+    built: test and trial functions, `Real` fields and `Real` coefficients
+    that can be controls (row scalings such as `B_mu`, `Lambda`, `G`, a
+    sheet scale), and continuous fields such as the potential.
+
+    `avg` and not `'+'`: which cell UFL calls `'+'` is the mesh's cell
+    ordering. `avg` of a field that is continuous across the facet is the
+    field itself, so the value of the integrand does not change. For a `Real`
+    function, whose one value is the same on both sides, `avg(r) = r`
+    exactly, and the derivative with respect to `r` adds half of the facet
+    integral from each side to its one global entry, once in total.
+
+    Only quantities of the mesh whose interior facets these are go through
+    here. On a facet-to-facet measure of a submesh (the submesh's exterior
+    facets, intersected with the parent's interior facets) the fields of the
+    submesh must stay unrestricted: their facets are exterior facets, and UFL
+    refuses a restriction there (`Inconsistent restrictions`). A coupling
+    parameter of the GIA solver can live on either mesh;
+    `gadopt.gia_couplings.CouplingContext.on_coupling_facet` reads its mesh
+    and calls this helper only for the parent.
+
+    Args:
+      expr: a UFL expression of the mesh whose interior facets are integrated.
+
+    Returns:
+      `avg(expr)`.
+    """
+    return ufl.avg(expr)
+
+
+def scalar_value(value) -> float:
+    """`float()` of one scalar carrier: a number, a `Constant` or a `Real` Function.
+
+    For checks and for numbers that a PETSc callback needs. A value that
+    enters a form stays UFL. `float()` of a composite UFL expression raises
+    when a factor is a `Real` Function (`Division.__float__ returned
+    non-float`), so a composite is computed from its factors by the caller.
+    """
+    try:
+        return float(value)
+    except (TypeError, NotImplementedError):
+        pass
+    # A `Real` value is owned by one rank and is a ghost entry on the others,
+    # so the array with ghosts is read.
+    import numpy as np
+    return float(np.asarray(value.dat.data_ro_with_halos,
+                            dtype=float).reshape(-1)[0])

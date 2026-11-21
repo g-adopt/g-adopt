@@ -1,0 +1,99 @@
+{
+  "scope": "curved 2D annulus, two Maxwell modes, variable-step BDF2, fixed coastline, five Real fields",
+  "timing_note": "Exploratory single run; timings are not isolated production measurements.",
+  "results": [
+    {
+      "case": "coupled_1e-4",
+      "outer_iterations": 37,
+      "newton_iterations": 12,
+      "relative_state_error": 0.0,
+      "seconds_per_step": [
+        2.2290891270004067,
+        0.5644056780001847,
+        0.48736466000082146,
+        0.49017729300067003
+      ],
+      "potential_column_builds": 1,
+      "block_applications": 57,
+      "inner_iterations": 818
+    },
+    {
+      "case": "coupled_1e-2",
+      "outer_iterations": 63,
+      "newton_iterations": 12,
+      "relative_state_error": 6.361796793744796e-16,
+      "seconds_per_step": [
+        1.1799162219995196,
+        0.6253358049998496,
+        0.5241752589990938,
+        0.4961047859997052
+      ],
+      "potential_column_builds": 1,
+      "block_applications": 83,
+      "inner_iterations": 782
+    },
+    {
+      "case": "one_u_psi_sweep",
+      "outer_iterations": 248,
+      "newton_iterations": 12,
+      "relative_state_error": 7.103080520863812e-16,
+      "seconds_per_step": [
+        1.1183201759995427,
+        0.5447953389993927,
+        0.5545773369995004,
+        0.6608207590015809
+      ],
+      "potential_column_builds": 1,
+      "block_applications": 268,
+      "inner_iterations": 268
+    }
+  ],
+  "initial_results": [
+    {
+      "case": "coupled_1e-4",
+      "outer_iterations": 37,
+      "newton_iterations": 12,
+      "relative_state_error": 0.0,
+      "seconds_per_step": [
+        2.3362145490009425,
+        0.4825347080004576,
+        0.4833519219992013,
+        0.49343346600107907
+      ],
+      "potential_column_builds": 1,
+      "block_applications": 57,
+      "inner_iterations": 818
+    },
+    {
+      "case": "coupled_1e-2",
+      "outer_iterations": 63,
+      "newton_iterations": 12,
+      "relative_state_error": 6.685239597686104e-16,
+      "seconds_per_step": [
+        1.1380675170003087,
+        0.4572610409995832,
+        0.4656296699995437,
+        0.4641822649991809
+      ],
+      "potential_column_builds": 1,
+      "block_applications": 83,
+      "inner_iterations": 782
+    },
+    {
+      "case": "one_u_psi_sweep",
+      "outer_iterations": 248,
+      "newton_iterations": 12,
+      "relative_state_error": 5.714873609399005e-16,
+      "seconds_per_step": [
+        1.1023650280003494,
+        0.6704624619997048,
+        0.5487388700003066,
+        0.5538395509993279
+      ],
+      "potential_column_builds": 1,
+      "block_applications": 268,
+      "inner_iterations": 268
+    }
+  ],
+  "operator_note": "Latest results include retained-operator rigid-kernel projection; initial results retained for comparison. Work counts agree."
+}

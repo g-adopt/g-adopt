@@ -82,8 +82,12 @@ parser.add_argument("--output_path", default="./", type=str,
                     help="Optional output path", required=False)
 parser.add_argument("--gamg_threshold", default=0.01, type=float,
                     help="Gamg threshold")
-parser.add_argument("--gamg_near_null_rot", action='store_true',
-                    help="Use rotational gamg near nullspace")
+parser.add_argument("--no_gamg_near_null_rot", action='store_true',
+                    help="Drop the rotational modes from the GAMG near "
+                         "nullspace, leaving only the three translations. "
+                         "Those three are exactly what GAMG synthesises from "
+                         "the block size when handed nothing, so this is the "
+                         "arm that measures no near-nullspace at all.")
 args = parser.parse_args()
 
 name = f"weerdesteijn-3d-iv-burgers{args.burgers}-{args.optional_name}"
@@ -370,8 +374,21 @@ dev_stress_2.interpolate(approximation.second_stress_invariant(stress))
 power_factor.interpolate(approximation.power_law_factor(stress))
 
 Z_nullspace = None  # Default: don't add nullspace for now
-Z_near_nullspace = rigid_body_modes(V, rotational=args.gamg_near_null_rot,
+# `rigid_body_modes` returns a basis on the displacement space V, but this solver's
+# space is the mixed Z = (V, S). Firedrake discards a sub-space basis handed to a
+# mixed solver: no error, no warning, and GAMG then coarsens the displacement block
+# on smoothed aggregation alone. Wrap it over Z, with the stress component left
+# unconstrained as its own sub-space.
+#
+# The rotations are on by default, and that is the whole point. Handed no
+# near-nullspace at all, GAMG calls PCSetCoordinates_AGG and writes the identity
+# translational modes itself, so a basis of three translations is bit-identical to
+# passing nothing -- measured, 112 Krylov iterations and the same answer to 15
+# digits. The rotations are the part GAMG cannot derive from the block size, and
+# they are the modes that matter for an elasticity block.
+u_near_nullspace = rigid_body_modes(V, rotational=not args.no_gamg_near_null_rot,
                                     translations=[0, 1, 2])
+Z_near_nullspace = MixedVectorSpaceBasis(Z, [u_near_nullspace, Z.sub(1)])
 
 coupled_solver = CoupledInternalVariableSolver(
     z,

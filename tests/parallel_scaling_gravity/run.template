@@ -1,0 +1,10 @@
+{header}
+
+{prescript}
+
+# {command} already carries the entrypoint and meta's "args" (level, --lmax,
+# --kind), so it is run bare. The -v env vars (KIND/LEVEL/LMAX) are used only to
+# name the profile file. The model/capacitance routine does its own warm-up and
+# writes a JSON sidecar; -log_view captures the PETSc timing breakdown.
+export PETSC_OPTIONS="-log_view :profile_${KIND}_l${LEVEL}_L${LMAX}.txt -options_left"
+{executor} {command}

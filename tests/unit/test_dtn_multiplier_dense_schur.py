@@ -1,0 +1,566 @@
+"""Gate for the build-once dense Schur block-1 preconditioner.
+
+`gadopt.DtNMultiplierDenseSchurPC` forms the multiplier Schur complement `S`
+once at setup, factors it, and applies the factors from then on. This file is
+the shipped-code gate for it, on the 2-D coupled annulus of
+`test_gia_gravity.py`: parent annulus + mantle submesh,
+`gadopt.gia_solver.SelfGravitatingGIASolver` with a DG history and the
+multiplier DtN representation, `TRUNCATION = 3`, `N_AZIMUTHAL = 32`.
+
+**A 2-D annulus establishes that the construction works, never that it helps.**
+Performance is a separate Gadi step; nothing here measures wall clock or sweeps.
+
+The binding correctness checks (the `S` the PC assembles against an
+independent elimination of the coupled Jacobian, the forward and transpose
+solves, the fluid-core pressure in the dense complement) are rows of the
+`schur` and `schur-np2` entries of the `operators` case in `tests/gia`
+(driver `gia_operators.py`). The builders and constants of the annulus
+are in `tests/gia/gia_models/dense_schur.py`, which that driver and this
+module share. The tests left here check that the factors are built once and
+rebuilt at a change of the time step.
+
+Every test states below how it can fail and its numerical floor.
+
+The whole file is gated on `gmsh` (the annulus generator) exactly as the adjoint
+suite is; without it the module skips.
+"""
+
+import sys
+from pathlib import Path
+
+import firedrake as fd
+import numpy as np
+import pytest
+from firedrake import derivative, TrialFunction
+from firedrake.petsc import PETSc
+
+from gadopt import (
+    CompressibleInternalVariableApproximation,
+    CylindricalDtN,
+    DtNMultiplierDenseSchurPC,
+)
+from gadopt.gia_couplings import FluidCore, SurfaceLoad
+from gadopt.gia_solver import SelfGravitatingGIASolver
+from gadopt.preconditioners import _DenseLU
+from gia_models.dense_schur import (
+    B_MU,
+    CURVE_INNER,
+    CURVE_OUTER,
+    CURVE_RC,
+    CURVE_RE,
+    G0,
+    LAMBDA,
+    SIGMA_HAT,
+    TRUNCATION,
+    _apply_pc,
+    _dense_ctx,
+    _dense_schur_params,
+)
+
+CELL_MANTLE = 101
+DR_MANTLE = 0.2
+N_AZIMUTHAL = 32
+
+#: Round-off floor for a 13x13 dense solve at cond ~2e1: the LU solve is exact
+#: to a few ulp times the condition number, so ~1e-13 relative. Every parity and
+#: solve test sits five orders under a 1e-8 gate.
+PARITY_FLOOR = 1e-10
+
+
+@pytest.fixture(scope="module")
+def meshes():
+    """Parent annulus and mantle submesh, both P2-curved.
+
+    Same dr/nazim and the same cached `.msh` as the other GIA unit tests, so the
+    file is generated at most once across the suite.
+    """
+    pytest.importorskip("gmsh")
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "demos" / "gravity"))
+    import generate_selfgrav_annulus as gen
+    from validate_selfgrav_annulus import curve_mesh
+
+    path = Path("/tmp") / f"gadopt_selfgrav_gia_{DR_MANTLE}_{N_AZIMUTHAL}.msh"
+    if fd.COMM_WORLD.rank == 0 and not path.exists():
+        gen.generate(str(path), dr_mantle=DR_MANTLE, n_azimuthal=N_AZIMUTHAL)
+    fd.COMM_WORLD.barrier()
+
+    parent = curve_mesh(fd.Mesh(str(path)))
+    parent.cartesian = False
+    sub = curve_mesh(fd.Submesh(parent, 2, CELL_MANTLE))
+    sub.cartesian = False
+    return parent, sub
+
+
+def _build_solver(meshes, block1_pc="gadopt.DtNMultiplierDenseSchurPC",
+                  dt=None, fluid_core=False):
+    """The coupled solver on the annulus, block 1 preconditioned by `block1_pc`.
+
+    Drives the iterative Schur path (`DtNTwoBlockSchurPC` with a full Schur
+    factorisation) and not the monolithic direct preset, so that the block-1
+    python PC is handed the `MATSCHURCOMPLEMENT` as its `Amat`.
+
+    The history is the DG family, an unknown of the mixed space, so the
+    residual `solver.F` is a plain UFL form whose Jacobian the reference
+    `_reference_S` can assemble. The DtN boundary is the multiplier
+    representation: one `Real` row per retained mode, which is the block the
+    dense complement is built for. The surface load is one `SurfaceLoad`,
+    `sigma = SIGMA_HAT cos(2 theta)` on the mechanics mesh: the traction
+    `B_mu g sigma` on the momentum equation and the mass sheet in the
+    potential row.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      block1_pc: the python type of the block-1 preconditioner.
+      dt: the time step, a float or a live `Constant`; `None` gives 1.
+      fluid_core: a `FluidCore` at the CMB (one more `Real` row, the core
+        pressure) instead of the rigid core `un = 0`.
+
+    Returns:
+      `(solver, u, psi)`: the solver, and the displacement and potential
+      Functions that it writes after every solve.
+    """
+    parent, sub = meshes
+    Xm = fd.SpatialCoordinate(sub)
+    # Only the DtN rows: the new solver takes the load sheet from the
+    # SurfaceLoad coupling and refuses a sheet in `gravity_bcs`.
+    gravity_bcs = {
+        CURVE_OUTER: {"dtn": CylindricalDtN(TRUNCATION)},
+        CURVE_INNER: {"dtn": CylindricalDtN(TRUNCATION)},
+    }
+
+    approx = CompressibleInternalVariableApproximation(
+        bulk_modulus=1.0, density=1.0, shear_modulus=1.0, viscosity=1.0,
+        bulk_shear_ratio=100.0, g=G0, B_mu=B_MU, self_gravity_number=LAMBDA)
+
+    # The degree-2 displacement on the mantle and potential on the parent.
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+
+    couplings = [SurfaceLoad(
+        boundary=CURVE_RE,
+        sigma=SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0])),
+        g_surface=G0)]
+    mechanics_bcs = {}
+    if fluid_core:
+        couplings.append(FluidCore(boundary=CURVE_RC, rho_core=2.0))
+    else:
+        mechanics_bcs[CURVE_RC] = {"un": 0.0}
+
+    params = _dense_schur_params()
+    params["dtn_fieldsplit_1_pc_python_type"] = block1_pc
+
+    dt = 1.0 if dt is None else dt
+    solver = SelfGravitatingGIASolver(
+        u, psi, approx, dt=dt, gravity_bcs=gravity_bcs, bcs=mechanics_bcs,
+        internal_variable_family="DG", couplings=couplings,
+        dtn_representation="multiplier", solver_parameters=params)
+    return solver, u, psi
+
+
+def _reference_S(solver):
+    """`S_ref = D - C @ inv(A00) @ B` from the assembled coupled Jacobian.
+
+    Independent of the code under test: it assembles the coupled Jacobian as a
+    PETSc `nest` (the one matrix type that tolerates the `Real` blocks), reads
+    every sub-block into a dense monolithic array with the same strong boundary
+    conditions the solve applies, and eliminates block 0 exactly.
+
+    Args:
+      solver: a solved `SelfGravitatingGIASolver` on the multiplier path,
+        whose residual `solver.F` holds every term (no low-rank update).
+
+    Returns:
+      The dense `n x n` complement of the `Real` block, `n` the number of
+      `Real` fields.
+    """
+    z, Z = solver.solution, solver.solution_space
+    J = derivative(solver.F, z, TrialFunction(Z))
+    Jn = fd.assemble(J, bcs=solver.strong_bcs, mat_type="nest").petscmat
+
+    nfields = len(Z)
+    reals = [i for i, V in enumerate(Z)
+             if V.ufl_element().family() == "Real"]
+    block0 = [i for i in range(nfields) if i not in reals]
+
+    row_is, _ = Jn.getNestISs()
+    sizes = [iset.getSize() for iset in row_is]
+    starts = np.concatenate([[0], np.cumsum(sizes)])
+    N = int(starts[-1])
+    full = np.zeros((N, N))
+    for i in range(nfields):
+        for j in range(nfields):
+            block = Jn.getNestSubMatrix(i, j)
+            if block is None:
+                continue
+            block.assemble()
+            full[starts[i]:starts[i + 1], starts[j]:starts[j + 1]] = \
+                block.convert("dense").getDenseArray()
+
+    def idx(fields):
+        return np.concatenate(
+            [np.arange(starts[f], starts[f + 1]) for f in fields])
+
+    i0, i1 = idx(block0), idx(reals)
+    A00 = full[np.ix_(i0, i0)]
+    B = full[np.ix_(i0, i1)]
+    C = full[np.ix_(i1, i0)]
+    D = full[np.ix_(i1, i1)]
+    return D - C @ np.linalg.solve(A00, B)
+
+
+@pytest.fixture(scope="module")
+def built(meshes):
+    """Solve once with the dense-Schur PC; return the PC's `S` and the reference.
+
+    Module-scoped: the solve and the reference assembly are the expensive part,
+    so the tests below share this one build.
+    """
+    solver, _, _ = _build_solver(meshes)
+    solver.solve()
+    ksp_real, ctx = _dense_ctx(solver)
+    S_ref = _reference_S(solver)
+    return {
+        "solver": solver,
+        "ksp_real": ksp_real, "ctx": ctx,
+        "S_pc": ctx._S.copy(), "S_ref": S_ref,
+    }
+
+
+# ---------------------------------------------------------------------------
+# T4  build-once: initialize runs once, no rebuild on the second solve
+# ---------------------------------------------------------------------------
+@pytest.mark.longtest
+def test_T4_build_once(built):
+    """The complement is built in `initialize` and never rebuilt.
+
+    `PCBase.setUp` dispatches to `initialize` the first time and to `update` (a
+    no-op) thereafter, so a second solve must not replace the cached factors.
+
+    FAILS IF `update` rebuilds, or the build moved into a `setUp` override that
+    PETSc re-invokes every solve. CHECK: object identity of the cached array and
+    the cached LU factors is unchanged across a second solve.
+    """
+    solver, ctx = built["solver"], built["ctx"]
+    S_id = id(ctx._S)
+    factor_id = id(ctx._lu if hasattr(ctx, "_lu") else ctx._inv)
+
+    solver.solve()  # a second solve at the same, constant operator
+
+    ksp_real, ctx2 = _dense_ctx(solver)
+    assert ctx2 is ctx, "the PC instance was rebuilt across solves"
+    assert id(ctx2._S) == S_id, "S was rebuilt on the second solve"
+    assert id(ctx2._lu if hasattr(ctx2, "_lu") else ctx2._inv) == factor_id, \
+        "the factors were rebuilt on the second solve"
+
+
+@pytest.mark.longtest
+def test_T4b_dt_change_rebuilds_and_matches_reference(meshes):
+    """A live `dt.assign(...)` must rebuild the cached dense complement.
+
+    The solver object and state stay live. The new factor must match an
+    independent elimination of the Jacobian at the new time step.
+    """
+    dt = fd.Constant(1.0)
+    solver, _, _ = _build_solver(meshes, dt=dt)
+    solver.solve()
+    _, ctx = _dense_ctx(solver)
+    old_S_id = id(ctx._S)
+    old_S = ctx._S.copy()
+
+    dt.assign(2.0)
+    solver.solve()
+    _, ctx2 = _dense_ctx(solver)
+    S_ref = _reference_S(solver)
+
+    assert ctx2 is ctx, "the PC instance changed after dt.assign"
+    assert id(ctx2._S) != old_S_id, "the dense complement did not rebuild"
+    assert not np.allclose(ctx2._S, old_S), "the dt change left S unchanged"
+    rel = np.linalg.norm(ctx2._S - S_ref) / np.linalg.norm(S_ref)
+    assert rel < PARITY_FLOOR, f"rebuilt S vs S_ref error {rel:.3e}"
+
+
+# ---------------------------------------------------------------------------
+# T5  no regression: the diagonal PC still solves on the same fixture
+# ---------------------------------------------------------------------------
+def test_T5_diagonal_pc_transpose_unchanged():
+    """`DtNMultiplierDiagPC` is symmetric, so its transpose must equal its solve.
+
+    The base class now routes `applyTranspose` through `_solve_transpose`, whose
+    default forwards to `_solve`. For the diagonal PC -- whose block is diagonal,
+    hence symmetric -- `apply` and `applyTranspose` must therefore give the
+    IDENTICAL result. This is the backward-compatibility guarantee of the
+    base-class change, checked directly rather than through an outer solve.
+
+    (The broad regression for the diagonal PC is `test_dtn_multiplier_pc.py`,
+    run alongside this file; here we pin only the one behaviour the base change
+    could have altered.)
+
+    FAILS IF the transpose hook made the diagonal PC's transpose differ from its
+    forward solve. FLOOR: exact, bit-for-bit equality -- both are `rhs / d`.
+    """
+    from gadopt import DtNMultiplierDiagPC
+
+    rng = np.random.default_rng(3)
+    n = 9
+    d = rng.standard_normal(n) + 2.0  # strictly nonzero diagonal
+    A = PETSc.Mat().createDense((n, n), array=np.diag(d),
+                                comm=PETSc.COMM_SELF)
+    A.assemble()
+    pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
+    pc.setType("python")
+    ctx = DtNMultiplierDiagPC()
+    pc.setPythonContext(ctx)
+    pc.setOperators(A, A)
+    ctx.get_appctx = staticmethod(lambda _pc: {"dtn_block1_diagonal": d})
+    ctx.initialize(pc)
+
+    rhs = rng.standard_normal(n)
+    forward = _apply_pc(pc, ctx, rhs, transpose=False)
+    transpose = _apply_pc(pc, ctx, rhs, transpose=True)
+    assert np.array_equal(forward, transpose), \
+        "diagonal PC transpose diverged from its forward solve"
+    assert np.allclose(forward, rhs / d, rtol=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# T6  loud failure: singular or mis-sized S raises a NAMED error via _loud
+# ---------------------------------------------------------------------------
+def _pc_on_dense(array):
+    """A python PC carrying a `DtNMultiplierDenseSchurPC`, over a dense Amat."""
+    array = np.asarray(array, dtype=float)
+    m, n = array.shape
+    A = PETSc.Mat().createDense((m, n), array=array, comm=PETSc.COMM_SELF)
+    A.assemble()
+    pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
+    pc.setType("python")
+    ctx = DtNMultiplierDenseSchurPC()
+    # This standalone PETSc PC has no Firedrake DM or application context.
+    ctx._current_time_step = lambda _pc: None
+    pc.setPythonContext(ctx)
+    pc.setOperators(A, A)
+    return pc, ctx
+
+
+def test_T6_singular_raises_named(capsys):
+    """A singular complement raises a NAMED `ValueError`, never a bare 101.
+
+    FAILS IF the singular matrix reaches a solve as a silent NaN, or the error
+    text never leaves the python PC. CHECK: the raised type is `ValueError`, its
+    message names the complement as singular, and `_loud` has already written
+    that message to stderr (so it sits above any eventual PETSc 101).
+    """
+    pc, ctx = _pc_on_dense(np.ones((4, 4)))  # rank 1, hence singular
+    with pytest.raises(ValueError, match="singular"):
+        ctx.initialize(pc)
+    assert "singular" in capsys.readouterr().err
+
+
+def test_T6_unknown_rebuild_rule_raises_named(capsys):
+    """An unknown `gia_rebuild` value raises a NAMED `ValueError`.
+
+    The option decides how often the complement is rebuilt: `per_solve`, the
+    rule the class has always had, or `always`, which rebuilds at every
+    update. A misspelled value that fell back to the default would make a
+    campaign arm report the cost of a rule it did not run, and nothing else
+    in the log would say so.
+
+    FAILS IF a wrong value is accepted, or the refusal reaches the user as a
+    bare `PETSc.Error: error code 101`. The value is read in `initialize`, so
+    no solve is needed.
+    """
+    options = PETSc.Options()
+    options["gia_rebuild"] = "per_step"
+    try:
+        # A 1x1 identity: non-singular and square, so the two checks above
+        # pass and the option check is the one that fires.
+        pc, ctx = _pc_on_dense([[1.0]])
+        with pytest.raises(ValueError, match="gia_rebuild"):
+            ctx.initialize(pc)
+        assert "gia_rebuild" in capsys.readouterr().err
+    finally:
+        del options["gia_rebuild"]
+
+
+def test_T6_missized_raises_named(capsys):
+    """A non-square Amat raises a NAMED `ValueError` before any MatMult.
+
+    FAILS IF the size mismatch surfaces as a bare 101 naming nothing. CHECK: the
+    message names the operator as non-square and reaches stderr via `_loud`.
+    """
+    pc, ctx = _pc_on_dense(np.ones((4, 3)))
+    with pytest.raises(ValueError, match="square"):
+        ctx.initialize(pc)
+    assert "square" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# The scaled dense factorisation, `gadopt.preconditioners._DenseLU`.
+#
+# These two are the exact `Real`-block Schur complements the sea-level branch
+# saved in `NOTES/frame3d/` of the `sghelichkhani/sea-level` worktree, on
+# 2026-09-18: `cond_block1-lr-cap_S.npy`, the low-rank cap arm with the frame
+# on, and `cond_block1-lr-sl_S.npy`, the same with the sea-level row added.
+# They are embedded as literals because a test in this repository cannot read
+# another worktree's `NOTES/`, and because this branch cannot build a 5-row
+# block at all: it has no centre-of-mass row and no sea-level row, so its `n`
+# takes the values 1, 4 and about 76 only.
+#
+# Their rows measure different physical things at different scales -- a core
+# pressure against three rotation rows against a sea-level shift -- which is
+# the whole reason the factorisation scales the array by its own diagonal.
+# ---------------------------------------------------------------------------
+SAVED_COMPLEMENT_CAP = np.array([
+    [-2.91831147659889716e+01, -3.47603115811944008e+00,
+     -3.53325723344460130e+00, -1.05414416396342858e+00],
+    [2.12640184260603604e-01, -8.40316249301178614e+05,
+     5.96223567070399986e+03, -4.46132549162621581e+03],
+    [-4.48395639935665891e-01, 5.95751481456575766e+03,
+     -8.28900919284902862e+05, 3.42109671244343645e+03],
+    [6.73769487912463383e-02, -4.45047842248389861e+03,
+     3.42070632531966248e+03, -8.20771594843685161e+05],
+])
+
+SAVED_COMPLEMENT_SEA_LEVEL = np.array([
+    [-3.13236114869367483e+01, -3.53295923054429295e+00,
+     -3.77751513522525784e+00, -1.21314085266567417e+00,
+     -1.44682547471877965e+00],
+    [1.74318151128364440e+00, -8.40315015228123637e+05,
+     5.96398467817361598e+03, -4.46321945661501104e+03,
+     3.34416905102248085e-01],
+    [-1.70701537491730226e+00, 5.95583423489545748e+03,
+     -8.28903770601395518e+05, 3.42093270515404765e+03,
+     -3.02228589414197280e-01],
+    [-2.71252644023900147e-01, -4.45180713147611641e+03,
+     3.41671492740287385e+03, -8.20770764378747321e+05,
+     -7.31674933188322940e-02],
+    [-1.44681966185083066e+00, -3.83889597430613350e-02,
+     -1.64252928313302848e-01, -1.07434554555380840e-01,
+     -9.77961724107316299e-01],
+])
+
+#: The two saved complements, with the names the assertions use.
+SAVED_COMPLEMENTS = (("cap", SAVED_COMPLEMENT_CAP),
+                     ("sea level", SAVED_COMPLEMENT_SEA_LEVEL))
+
+#: `numpy.linalg.cond` of each array as it stands, and of the same array after
+#: the symmetric diagonal scaling. Measured 2026-09-20. The raw numbers are the
+#: spread of the row scales; the scaled ones describe how the rows couple.
+SAVED_CONDITION_NUMBERS = {
+    "cap": (2.8925e4, 1.0187),
+    "sea level": (9.2850e5, 1.7079),
+}
+
+
+class TestTheDenseFactorisationScalesByItsOwnDiagonal:
+    """`_DenseLU` factors `D^-1 S D^-1`, and solves the original system.
+
+    With `d = sqrt(abs(diag(S)))` and `D = diag(d)` the array that is factored
+    is `T = D^-1 S D^-1`, whose diagonal is plus or minus one. `S = D T D`, so
+    a solve is three steps, and `D` is symmetric, so the transposed solve is
+    the same three steps with the transposed factors. Nothing about the
+    original system changes; what changes is the condition number the class
+    reports, which now measures the coupling between the `Real` rows instead of
+    the spread of their physical scales.
+
+    FAILS IF the scaling is dropped, applied on one side only, or left on the
+    returned solution.
+    """
+
+    @pytest.mark.parametrize("name, S", SAVED_COMPLEMENTS)
+    def test_it_solves_the_original_system_to_machine_precision(self, name, S):
+        """The scaling must be invisible from outside.
+
+        CHECK: against `numpy.linalg.solve` on the RAW array, which knows
+        nothing about the scaling. Floor 1e-12 relative, far above the 1e-15
+        these actually reach and far below the 1e-2 that dropping one of the
+        two divisions by `d` would produce on a block whose row scales span
+        five orders of magnitude.
+        """
+        n = S.shape[0]
+        factors = _DenseLU(S, f"{name} complement")
+        rhs = np.arange(1.0, n + 1.0)
+        x = factors.solve(rhs)
+        assert np.allclose(x, np.linalg.solve(S, rhs), rtol=1e-12), (
+            f"the {name} complement's solve does not solve the raw system")
+
+    @pytest.mark.parametrize("name, S", SAVED_COMPLEMENTS)
+    def test_the_transposed_solve_uses_the_same_factors_and_is_right(
+            self, name, S):
+        """`S^T = D T^T D`, because `D` is diagonal and so symmetric.
+
+        The transposed solve exists for the adjoint of the cached apply, so it
+        has to be as exact as the forward one.
+        """
+        n = S.shape[0]
+        factors = _DenseLU(S, f"{name} complement")
+        rhs = np.arange(1.0, n + 1.0)
+        x = factors.solve_transpose(rhs)
+        assert np.allclose(x, np.linalg.solve(S.T, rhs), rtol=1e-12), (
+            f"the {name} complement's transposed solve is wrong")
+
+    @pytest.mark.parametrize("name, S", SAVED_COMPLEMENTS)
+    def test_the_reported_condition_number_is_the_scaled_one(self, name, S):
+        """This is what the change is for.
+
+        The raw condition number of the low-rank block IS the spread of the row
+        scales -- 2.89e4 at 4 rows and 9.29e5 at 5 -- so two arms holding
+        different kinds of row cannot be compared by it. After the scaling both
+        are near 1 and the number describes the coupling.
+        """
+        raw, scaled = SAVED_CONDITION_NUMBERS[name]
+        factors = _DenseLU(S, f"{name} complement")
+        assert factors.scaled, "the saved complements have nonzero diagonals"
+        assert np.isclose(np.linalg.cond(S), raw, rtol=1e-3)
+        assert np.isclose(factors.condition_number, scaled, rtol=1e-3)
+        assert factors.condition_number < np.linalg.cond(S) / 1e3
+
+    def test_a_zero_diagonal_refuses_the_scaling_and_factors_the_raw_array(
+            self):
+        """A row with a zero diagonal has no known scale.
+
+        The scaling is refused as a whole in that case, so the class falls back
+        to the raw array and still solves it. The exchange matrix below is
+        regular with a zero diagonal, which is exactly that case.
+        """
+        S = np.array([[0.0, 1.0], [1.0, 0.0]])
+        factors = _DenseLU(S, "zero-diagonal block")
+        assert not factors.scaled
+        rhs = np.array([1.0, 2.0])
+        assert np.allclose(factors.solve(rhs), np.linalg.solve(S, rhs))
+        assert np.allclose(factors.solve_transpose(rhs),
+                           np.linalg.solve(S.T, rhs))
+        assert factors.condition_number == pytest.approx(np.linalg.cond(S))
+
+    def test_a_singular_block_still_raises_the_named_error(self):
+        """The zero-pivot refusal must survive the scaling.
+
+        A diagonal scaling by strictly positive numbers cannot turn a singular
+        matrix into a regular one -- `det T = det S / prod(d)^2` -- so the test
+        detects the same blocks it detected before, and the message still names
+        the block so that a singular one identifies itself in the log.
+        """
+        with pytest.raises(ValueError, match="is singular"):
+            _DenseLU(np.array([[1.0, 2.0], [2.0, 4.0]]), "singular block")
+        # and a singular block that ALSO has a zero diagonal, which is the
+        # path where the scaling is refused and the raw array is factored
+        with pytest.raises(ValueError, match="is singular"):
+            _DenseLU(np.array([[0.0, 0.0], [0.0, 1.0]]), "singular block")
+
+    def test_a_negative_diagonal_is_scaled_by_its_magnitude(self):
+        """Which is why `d` is the square root of the ABSOLUTE diagonal.
+
+        A complement row may carry a negative diagonal, and the scale of that
+        row is still its magnitude. Without the absolute value `d` would be
+        complex and the factorisation would fail on every arm here, because
+        these complements are negative definite on their mechanics rows.
+        """
+        S = np.diag([-4.0, -1.0e8])
+        factors = _DenseLU(S, "negative-diagonal block")
+        assert factors.scaled
+        rhs = np.array([1.0, 1.0])
+        assert np.allclose(factors.solve(rhs), np.linalg.solve(S, rhs))
+        # the raw array's condition number is the ratio of the two scales, and
+        # the scaled one is 1 because the rows do not couple at all
+        assert np.isclose(np.linalg.cond(S), 2.5e7, rtol=1e-6)
+        assert np.isclose(factors.condition_number, 1.0, rtol=1e-12)

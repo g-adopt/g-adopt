@@ -1,0 +1,354 @@
+r"""The DtN low-rank update inside a COUPLED mixed space.
+
+`gadopt.dtn_lowrank` builds `B = sum_k w_k u_k u_k^T` for the scalar gravity
+solver, where the potential is the whole unknown and the rows index the
+potential space directly. The self-gravitating GIA solver puts the potential in
+a mixed space beside the displacement, the internal variables and the `Real`
+fields, so the same `B` has to be applied to a monolithic mixed vector and
+carries the potential row's scaling.
+
+This module holds only what that costs: the index shift onto the mixed vector,
+and the operator that uses it. The mode rows themselves, the elimination and
+the Dirichlet masking are unchanged and come from `gadopt.dtn_lowrank`.
+
+## The two things that are different, and both have been paid for
+
+**The index shift.** `build_boundary_mode_rows` returns owned local indices
+into the potential space. The coupled residual and Jacobian act on the mixed
+vector, so every index moves by the owned sizes of the fields in front of the
+potential. Those sizes come from the field index sets and never from
+`subfunctions[i].dat`; see `psi_local_offset`.
+
+**The prefactor.** `SelfGravitatingGIASolver` multiplies the whole potential
+row - the DtN constraint and feedback rows included - by
+`theta_psi = scaling_factor * B_mu / Lambda`, so it multiplies `B`. It is held
+as a callable and read at every application, never folded into the weights,
+because all three of its factors can be adjoint controls and a frozen product
+cannot be corrected at replay time.
+"""
+
+import numpy as np
+from firedrake.petsc import PETSc
+from firedrake.matrix_free.operators import ImplicitMatrixContext
+
+__all__ = ["AugmentedImplicitMatrixContext", "CoupledLowRankDtN",
+           "install_augmented_context",
+           "monolithic_rows", "psi_local_offset",
+           "taped_coupled_trace_coefficients"]
+
+
+def psi_local_offset(mixed_space, psi_field: int) -> int:
+    """Local offset of field `psi_field` inside `Function(Z).dat.vec_rw`.
+
+    The owned sizes of the preceding fields, taken from the field index sets.
+
+    **Do NOT sum `Z.subfunctions[i].dat` sizes.** A `Real` space holds one
+    entry with ghosts on every rank but owns its entry of the monolithic vector
+    on one rank only, so an offset built from the sizes with ghosts drifts
+    by one per preceding `Real` field. Measured on 2, 3 and 4 ranks and cross-mesh
+    (`NOTES/fastdtn/REVIEW-FORWARD.md` section 3.2): with the layout
+    `(u, psi, R, R, R)` on 4 ranks the true offsets on rank 1 are
+    `[0, 24, 36, 36, 36]`, the field index sets agree, and the `dat` recipe
+    returns `[0, 24, 36, 37, 38]`.
+
+    With the `Real` fields **after** psi the wrong recipe returns the right psi
+    offset by accident, so a test of psi alone cannot see the defect. It is
+    already wrong today for the rotation `Real` fields.
+
+    A cross-mesh configuration produces a rank on which the mechanics `Submesh`
+    owns no displacement dofs at all, so the offset is 0 there. That is legal
+    and this function returns 0, rather than treating 0 as "not found".
+    """
+    ises = mixed_space.field_ises
+    return int(sum(ises[i].getLocalSize() for i in range(psi_field)))
+
+
+def monolithic_rows(mixed_space, psi_field: int, dofs) -> np.ndarray:
+    """`dofs` from `build_boundary_mode_rows` as rows of the monolithic vector.
+
+    `build_boundary_mode_rows` returns owned local indices into the potential
+    space, with no ghosts. The coupled residual and Jacobian act on the mixed
+    vector, so every index must be shifted by the owned sizes of the fields in
+    front of psi.
+    """
+    return psi_local_offset(mixed_space, psi_field) + np.asarray(
+        dofs, dtype=np.int64)
+
+
+class CoupledLowRankDtN:
+    r"""`B = theta_psi * B0` on the psi rows of a monolithic mixed vector.
+
+    `B0 = sum_k w_k u_k u_k^T` is the DtN feedback the multiplier
+    representation obtains through its Schur complement, eliminated by hand.
+    One application is, per boundary,
+
+        y[psi] += theta * C^T (W (C x[psi]))
+
+    two small dense products against the boundary entries with one `Allreduce`
+    of the `k`-vector in between, exactly as `LowRankDtNOperator` does it for
+    the gravity-alone solver. The only differences here are the index shift
+    onto the mixed vector and the `theta_psi` prefactor.
+
+    **`theta_psi` and `B0` stay separately addressable, deliberately.** The
+    prefactor is `scaling_factor * B_mu / Lambda`, all three of which can be
+    adjoint controls, and it is read through a callable at every application
+    rather than folded into `weights` once. A frozen product cannot be
+    corrected at replay time, which is the failure the adjoint design exists to
+    avoid; and `apply_local(..., theta=1.0)` gives `B0` alone, which is what a
+    derivative with respect to one of those three needs.
+
+    Attributes:
+      mode_rows: One `BoundaryModeRows` per DtN boundary, positionally aligned
+        with `DtNGravityForm.dtn_boundaries`.
+      rows_mono: The same rows' `dofs`, shifted onto the monolithic vector.
+      applications: Counts applications, so a test can confirm the operator was
+        exercised rather than bypassed.
+    """
+
+    def __init__(self, mixed_space, psi_field, mode_rows, theta, comm):
+        self.mixed_space = mixed_space
+        self.psi_field = psi_field
+        self.mode_rows = list(mode_rows)
+        self.psi_offset = psi_local_offset(mixed_space, psi_field)
+        self.rows_mono = [monolithic_rows(mixed_space, psi_field, rows.dofs)
+                          for rows in self.mode_rows]
+        #: Read at every application, never at construction. `theta_psi` is a
+        #: UFL expression over `Constant`s and any of them can be a control.
+        self.theta = theta
+        self.comm = comm
+        self.applications = 0
+        #: D3: applications made through the augmented Jacobian
+        #: action specifically. `applications` counts residual and
+        #: Jacobian alike, so it cannot distinguish an
+        #: augmentation that was installed from one that ran.
+        self.jacobian_applications = 0
+
+    @property
+    def theta_value(self) -> float:
+        """The prefactor now. A callable is called; anything else is cast."""
+        theta = self.theta
+        return float(theta() if callable(theta) else theta)
+
+    @property
+    def n_modes(self) -> int:
+        return sum(len(rows.keys) for rows in self.mode_rows)
+
+    def coefficients(self, x_local):
+        """Trace coefficients `c_k` per boundary, summed across ranks.
+
+        `theta_psi` does not appear: it multiplies the constraint row and the
+        feedback row alike and cancels out of `c_k`.
+        """
+        out = []
+        for rows, mono in zip(self.mode_rows, self.rows_mono):
+            if rows.rows.size:
+                local = rows.rows @ np.asarray(x_local)[mono] * rows.recovery
+            else:
+                local = np.zeros(len(rows.keys))
+            total = np.empty_like(local)
+            self.comm.Allreduce(local, total)
+            out.append(total)
+        return out
+
+    def apply_local(self, x_local, y_local, theta=None) -> None:
+        """`y[psi] += theta * B0 x[psi]`, in place, on local arrays.
+
+        Args:
+          x_local: The owned entries of the monolithic vector, read only.
+          y_local: The owned entries of the target, written in place.
+          theta: Override the prefactor. Pass `1.0` for `B0` alone.
+        """
+        scale = self.theta_value if theta is None else float(theta)
+        for rows, mono in zip(self.mode_rows, self.rows_mono):
+            if rows.rows.size:
+                local = rows.rows @ np.asarray(x_local)[mono]
+            else:
+                local = np.zeros(len(rows.keys))
+            total = np.empty_like(local)
+            # The modes are global and the boundary dofs are partitioned, so
+            # the `k`-vector must be summed before it is scattered back. This
+            # is the whole of the parallel communication.
+            self.comm.Allreduce(local, total)
+            if rows.rows.size:
+                y_local[mono] += scale * (rows.rows.T @ (rows.weights * total))
+        self.applications += 1
+
+    def mult(self, x_vec, y_vec, theta=None) -> None:
+        """`y = B x` on PETSc vectors. `y` is zeroed first.
+
+        `array_r` and `array_w` rather than the context manager, to match
+        `LowRankDtNOperator._add_low_rank`: `array_w` hands back the same local
+        memory and marks it modified, so the `+=` below accumulates onto the
+        zeros just written rather than onto whatever PETSc last left there.
+        """
+        y_vec.set(0.0)
+        self.apply_local(x_vec.array_r, y_vec.array_w, theta=theta)
+
+    def add_mult(self, x_vec, y_vec, theta=None) -> None:
+        """`y += B x` on PETSc vectors, leaving whatever `y` already held."""
+        self.apply_local(x_vec.array_r, y_vec.array_w, theta=theta)
+
+
+class AugmentedImplicitMatrixContext(ImplicitMatrixContext):
+    """`ImplicitMatrixContext` whose action carries the low-rank DtN update.
+
+    Mechanism M1 of `NOTES/fastdtn/REVIEW-FORWARD.md` section 2.2: subclass the
+    matrix-free context and install it with `Mat.setPythonContext` from a
+    `post_jacobian_callback`. Two properties make this the right mechanism.
+
+    **`createSubMatrix` is left alone, and that is what keeps `B` out of
+    `Pmat`.** `firedrake/matrix_free/operators.py:435` builds sub-blocks as
+    `ImplicitMatrixContext(asub, ...)` and not `type(self)(asub, ...)`, so a
+    subclass never propagates into a fieldsplit block and GAMG never sees the
+    dense update. Nobody chose that; it is guard G1's whole subject.
+
+    **The bcs are already handled by the parent.** `super().mult` zeroes the
+    constrained entries of the input and writes the input back on the
+    constrained rows of the output. `B`'s rows and columns at those degrees of
+    freedom were zeroed by `apply_dirichlet_to_rows`, so adding it afterwards
+    cannot disturb them.
+
+    `B` is symmetric, so the transpose action is the same action. Stated rather
+    than inherited, because PETSc uses it for a transposed solve and getting it
+    wrong would surface only in the adjoint.
+
+    **The declared nullspaces are made exact on the action.** A declared
+    nullspace is in general only an approximate kernel of the discrete
+    operator. The rigid rotation, for example, is annihilated only to about
+    `2e-6` relative, because `u . n_h` is not zero on curved facets
+    (the `nullspace="rigid_rotation"` of the GIA solver). PETSc removes the transpose
+    nullspace from the right-hand side once, and the displacement split of
+    the block-0 preconditioner removes the rotation from its input and its
+    output. A right-preconditioned outer FGMRES therefore never produces a
+    direction that reduces the rotation part of the residual, which equals
+    `-(A k) . x` and is not zero. The outer residual then stops at that part
+    and the solve runs to its cap, although every other part of the
+    residual is converged; past that point the FGMRES estimate falls below
+    the true residual, so some solves are also reported as converged when
+    they are not. Removing the transpose nullspace from the output of `mult`
+    (and the nullspace from the output of `multTranspose`) makes the declared
+    space an exact left kernel of the operator the Krylov method sees. The
+    residual then stays orthogonal to it and PETSc's default convergence
+    test measures only the equations the declaration keeps. The solution
+    the solve returns is unchanged up to the solver tolerance: it already
+    lies in the complement, and that equation is the one the declaration
+    drops. A wrongly declared nullspace now deletes part of the equations,
+    which is the same warning that `project_out_nullspace` carries.
+    """
+
+    #: Set by the installer. Not a constructor argument, because
+    #: `createSubMatrix` builds the parent class and would not pass it on.
+    dtn_operator = None
+
+    def mult(self, mat, X, Y):
+        super().mult(mat, X, Y)
+        if self.dtn_operator is not None:
+            self.dtn_operator.apply_local(X.array_r, Y.array_w)
+            # D3. Counted on the OPERATOR, which is shared, rather than on this
+            # context, which is one per matrix. "Was it installed" and "did it
+            # run" are different questions and only the second one matters: a
+            # guard that fails to install leaves this at 0 while every reason
+            # code still reads converged.
+            self.dtn_operator.jacobian_applications += 1
+        # The output of `A x` must lie in the range of A, which is orthogonal
+        # to the left kernel: the transpose nullspace declared on this matrix.
+        _remove_declared_space(mat.getTransposeNullSpace(), Y)
+
+    def multTranspose(self, mat, X, Y):
+        super().multTranspose(mat, X, Y)
+        if self.dtn_operator is not None:
+            self.dtn_operator.apply_local(X.array_r, Y.array_w)
+            self.dtn_operator.jacobian_applications += 1
+        # The left kernel of A^T is the kernel of A: the declared nullspace.
+        _remove_declared_space(mat.getNullSpace(), Y)
+
+
+def _remove_declared_space(space, vec):
+    """Remove a declared PETSc nullspace from `vec`, in place, if one is set.
+
+    `Mat.getNullSpace` and `Mat.getTransposeNullSpace` return a wrapper around
+    a NULL handle when nothing is declared, so the handle is tested first.
+    `MatNullSpaceRemove` takes the orthonormal basis Firedrake built when the
+    space was attached (`VectorSpaceBasis.nullspace`), plus the constant
+    vector if the space declares one, and costs one dot product and one
+    vector update per basis vector.
+
+    Args:
+      space: a `PETSc.NullSpace`, possibly with a NULL handle.
+      vec: the PETSc vector to project, modified in place.
+    """
+    if space is not None and space.handle:
+        space.remove(vec)
+
+
+def install_augmented_context(Jmat, dtn_operator):
+    """Swap `Jmat`'s python context for one that adds `B`. Idempotent.
+
+    **The guard is the context's TYPE, not the matrix's identity, and the
+    difference is a silent wrong answer.** The obvious key is `Jmat.handle`
+    against a set of handles already done. It is unsound: PETSc reuses freed
+    `Mat` addresses immediately, and forty build/destroy cycles were measured
+    producing **one distinct handle across all forty matrices** - 39 repeats of
+    an earlier address. A genuinely new Jacobian whose handle reuses a freed one
+    is then skipped, so the augmentation sits in the residual and is absent from
+    the Jacobian, which under `ksponly` converges with a clean reason and the
+    wrong answer.
+
+    That defect hides from the test anyone would write first. In a tape /
+    replay / adjoint sweep the matrices coexist, so their addresses really are
+    distinct and the handle key looks correct. It fires where matrices are
+    destroyed between installs - a solver rebuilt across timesteps, which is the
+    GIA production pattern.
+
+    A boolean flag is worse again: pyadjoint builds a different solver object
+    for the replay from the same kwargs, so one closure is shared across several
+    matrices and a flag set while taping makes every later one skip
+    (`NOTES/fastdtn/REVIEW-FORWARD.md` section 7.1, `DIVERGED_DTOL`).
+
+    Asking the object what it is carries no bookkeeping at all: there is no set
+    to go stale and no key to get wrong.
+
+    Args:
+      Jmat: the PETSc `Mat` handed to `post_jacobian_callback`.
+      dtn_operator: the `CoupledLowRankDtN` to add.
+
+    Returns:
+      Whether an install happened on this call.
+    """
+    # The augmentation replaces the Python context of a matrix-free Jacobian.
+    # Any other matrix type has no such context, and `getPythonContext` on it
+    # reads invalid memory and kills the process (a bus error or a
+    # segmentation fault), so refuse it with a message instead.
+    if Jmat.getType() != PETSc.Mat.Type.PYTHON:
+        raise RuntimeError(
+            "The low-rank DtN representation needs a matrix-free Jacobian "
+            f"(mat_type 'matfree'), but Firedrake assembled a '{Jmat.getType()}' "
+            "matrix. The pyop3 Firedrake replaces an explicit 'matfree' with "
+            "'nest' for every mixed form with a Real subspace "
+            "(`make_mat_spec` in firedrake/assemble.py). Use a Firedrake in "
+            "which that is fixed.")
+    ctx = Jmat.getPythonContext()
+    if isinstance(ctx, AugmentedImplicitMatrixContext):
+        return False
+    new = AugmentedImplicitMatrixContext(
+        ctx.a, row_bcs=ctx.row_bcs, col_bcs=ctx.col_bcs,
+        fc_params=ctx.fc_params, appctx=ctx.appctx)
+    new.on_diag = ctx.on_diag
+    new.dtn_operator = dtn_operator
+    Jmat.setPythonContext(new)
+    return True
+
+
+def taped_coupled_trace_coefficients(solver):
+    """`{bc_id: {key: AdjFloat}}` for the coupled low-rank path, differentiable.
+
+    The potential is one field of the mixed solution, so each row indexes
+    the monolithic local vector (`CoupledLowRankDtN.rows_mono`). The block
+    and the rows are those of `GravitySolver`
+    (`gadopt.dtn_adjoint.taped_mode_coefficients`).
+    """
+    from .dtn_adjoint import taped_mode_coefficients
+    operator = solver.dtn_operator
+    return taped_mode_coefficients(
+        solver.solution, solver.form.dtn_boundaries, operator.mode_rows,
+        operator.rows_mono, operator.comm)

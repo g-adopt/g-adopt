@@ -1,0 +1,5 @@
+*.out
+*.err
+profile*.txt
+profile*.xml
+results/
