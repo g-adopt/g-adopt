@@ -38,35 +38,63 @@ from petsc4py import PETSc
 # ---------------------------------------------------------------------------------
 
 class _PetscLibrary:
-    """Access to two PETSc getters that petsc4py 3.25 has no binding for.
+    """Access to two PETSc getters that petsc4py has no binding for.
 
     ``TaoGetCurrentTrustRegionRadius`` returns ``tao->trust``, the radius that BNK
     passes to the Krylov solver before each solve and updates after each step. The
     only value petsc4py gives for it is the step length of the line search, which
     ``TaoGetSolutionStatus`` returns as ``xdiff``; that is a different number.
-    ``KSPCGGetNormD`` returns the norm of the step that the trust-region conjugate
-    gradient solver computed, which tells whether the step reached the radius.
+    The trust-region step norm getter returns the norm of the step that the
+    trust-region conjugate gradient solver computed, which tells whether the step
+    reached the radius. Its name depends on the PETSc version, with the signature
+    ``(KSP, PetscReal *)`` in both:
 
-    Both are pure getters. They are reached through ``ctypes`` on the petsc4py
+    - ``KSPCGGetNormD``: exported by PETSc 3.25 and 3.26.0 (``petscksp.h:1145`` of the
+      Setonix build of 3.26.0, which has no other name);
+    - ``KSPCGGetTRSolutionNorm``: the name in PETSc main from October 2026 on, where
+      ``KSPCGGetNormD`` is only a deprecated ``static inline`` wrapper in the header
+      and so is no symbol of the library.
+
+    The new name is tried first and the old name second, so the getter works on both
+    sides of the rename.
+
+    Both getters are pure getters. They are reached through ``ctypes`` on the petsc4py
     extension module: ``dlsym`` on that handle also searches the libraries the
-    module links, and ``libpetsc`` is one of them. If the symbol cannot be found the
+    module links, and ``libpetsc`` is one of them. If a symbol cannot be found, its
     value is recorded as None, so a missing symbol never stops a run.
     """
+
+    # Names of the trust-region step norm getter, newest first.
+    STEP_NORM_GETTERS = ("KSPCGGetTRSolutionNorm", "KSPCGGetNormD")
 
     def __init__(self):
         self._tao_trust = None
         self._ksp_normd = None
+        # The name of the step norm getter that was found, or None. Recorded so that a
+        # run log can show which symbol the step norms came from.
+        self.step_norm_symbol = None
         try:
             library = ctypes.CDLL(PETSc.__file__)
+        except OSError:
+            # Without the library both getters stay None.
+            return
+        try:
             self._tao_trust = library.TaoGetCurrentTrustRegionRadius
             self._tao_trust.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
             self._tao_trust.restype = ctypes.c_int
-            self._ksp_normd = library.KSPCGGetNormD
-            self._ksp_normd.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
-            self._ksp_normd.restype = ctypes.c_int
-        except (OSError, AttributeError):
-            # A build without these symbols leaves both getters at None.
-            pass
+        except AttributeError:
+            # A build without this symbol leaves the trust radius at None.
+            self._tao_trust = None
+        for name in self.STEP_NORM_GETTERS:
+            try:
+                function = getattr(library, name)
+            except AttributeError:
+                continue
+            function.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_double)]
+            function.restype = ctypes.c_int
+            self._ksp_normd = function
+            self.step_norm_symbol = name
+            break
 
     @staticmethod
     def _call(function, obj):
