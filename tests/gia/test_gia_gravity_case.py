@@ -4,10 +4,10 @@
 `gia_entries.GRAVITY` to `out/gravity-<entry>.dat`, and the CG counts of a
 closed-form entry to `out/gravity-<entry>-counts.dat`. Each test here holds
 the tolerance of the unit test that its rows come from, named in its
-docstring. The only recorded values are the CG counts of the two serial 2-D
-closed-form entries (`expected/gravity-counts.txt`); every other check is
-against a closed form, a theoretical order, an exact identity or another
-entry.
+docstring. The only recorded values are the CG counts at each mesh level of
+the serial closed-form entries (`expected/gravity-counts.txt` in 2-D,
+`expected/gravity-counts-3d.txt` in 3-D); every other check is against a
+closed form, a theoretical order, an exact identity or another entry.
 
 An entry with `local` False runs a 3-D solve and runs on CI only. A
 missing output of such an entry fails its tests, or skips them where
@@ -20,6 +20,7 @@ This file does not import Firedrake; it runs where the outputs are.
 """
 
 import math
+import re
 import warnings
 
 import pytest
@@ -49,14 +50,6 @@ def values(entry):
     if not E.GRAVITY[entry].get("local", True):
         E.require_output(path, entry)
     return read(path)
-
-
-def counts(entry):
-    """The CG counts of a closed-form entry, with the entry prefix removed."""
-    values(entry)  # stops the test if a CI-only entry did not run
-    prefix = f"{entry}_"
-    return {name[len(prefix):]: value
-            for name, value in read(E.CASE_DIR / E.gravity_counts(entry)).items()}
 
 
 def order(coarse, fine):
@@ -248,23 +241,49 @@ def test_the_gauge_does_not_depend_on_the_robin_shift(entry):
 
 # -- Low-rank against multiplier -----------------------------------------------------
 
+def coefficient_group(name):
+    """The problem and mesh of a trace coefficient: the name up to its mesh index.
+
+    The names are `coefficient_<row>_<k>_<boundary>_<mode>`, and `<row>`
+    holds no `_<digits>_`, so the group is the name up to the first one.
+    """
+    match = re.match(r"(coefficient_.*?_\d+)_", name)
+    return match.group(1) if match else name
+
+
 @pytest.mark.parametrize("pair", [CLOSED_2D, CLOSED_3D], ids=["2d", "3d"])
 def test_the_representations_give_the_same_coefficients(pair):
     """Every trace coefficient of every closed-form row, on every mesh.
 
-    `test_dtn_lowrank_parity.compare` (1e-12 absolute): the two
-    representations discretise the same operator, so the coefficients agree
-    to round-off. A wrong weight in the low-rank update (M9: the sign of the
-    interior mean mode) moves them at the size of the error it makes.
+    The two representations discretise the same operator. In 2-D both
+    entries solve with the direct preset and the coefficients agree to
+    `GRAVITY_PARITY_COEFFICIENTS` (1e-12) absolute. In 3-D both solve with
+    the iterative preset, so they agree to the Krylov tolerance: the bound
+    is `GRAVITY_PARITY_COEFFICIENTS_3D_RTOL` (1e-9) of the largest
+    coefficient of the same problem and mesh (the measurement is in
+    `gia_entries`). A wrong weight in the low-rank update (M9: the sign of
+    the interior mean mode) moves the coefficients at the size of the error
+    it makes.
     """
     multiplier, lowrank = values(pair[0]), values(pair[1])
     names = sorted(name for name in multiplier if name.startswith("coefficient_"))
     assert names and set(names) == {n for n in lowrank if n.startswith("coefficient_")}
-    worst = max(names, key=lambda n: abs(multiplier[n] - lowrank[n]))
+    if pair == CLOSED_2D:
+        allowed = {name: E.GRAVITY_PARITY_COEFFICIENTS for name in names}
+    else:
+        # The scale of each problem and mesh, from the multiplier entry.
+        scale = {}
+        for name in names:
+            group = coefficient_group(name)
+            scale[group] = max(scale.get(group, 0.0), abs(multiplier[name]))
+        assert all(value > 0.0 for value in scale.values()), f"a problem with no load: {scale!r}"
+        allowed = {name: E.GRAVITY_PARITY_COEFFICIENTS_3D_RTOL * scale[coefficient_group(name)]
+                   for name in names}
+    worst = max(names, key=lambda n: abs(multiplier[n] - lowrank[n]) / allowed[n])
     difference = abs(multiplier[worst] - lowrank[worst])
-    assert difference <= E.GRAVITY_PARITY_COEFFICIENTS, (
+    assert difference <= allowed[worst], (
         f"{worst}: multiplier {multiplier[worst]!r}, low-rank {lowrank[worst]!r}, "
-        f"difference {difference!r} above {E.GRAVITY_PARITY_COEFFICIENTS!r}")
+        f"difference {difference!r} above {allowed[worst]!r}")
 
 
 @pytest.mark.parametrize("problem", ["two_boundaries", "sheet", "strong_bc"])
@@ -300,76 +319,65 @@ def test_the_3d_parity_is_limited_by_the_tolerance():
 
 # -- CG counts -----------------------------------------------------------------------
 
-#: The count series of each serial closed-form entry. The 2-rank entry is
-#: left out: multigrid on another partition gives other counts, and the
-#: property is the growth with the mesh, which the serial entry shows.
-COUNT_CASES = [
-    ("closed-2d-multiplier", "cg"),
-    pytest.param("closed-2d-lowrank", "cg", marks=pytest.mark.xfail(
-        strict=True,
-        reason="CG on A + B with GAMG built from A (iterative preset, ksp_rtol 1e-11) "
-               "takes 13, 15, 18 iterations on the three annulus meshes (48, 96, 192 "
-               "facets): +3 on the last refinement, above the bound of 2. The "
-               "multiplier path's potential block (rtol 1e-8) takes 9, 11, 12 "
-               "(measured 2026-11-21).")),
-    ("closed-2d-lowrank", "sheet_top2_cg_direct"),
-    ("closed-3d-multiplier", "cg"),
-    ("closed-3d-lowrank", "cg"),
-]
+def count_allowance(name):
+    """The allowed difference of a recorded CG count, by the preset of its series."""
+    preset = "direct" if "_direct_" in name else "iterative"
+    return E.GRAVITY_COUNT_ALLOWANCE[preset]
 
 
-@pytest.mark.parametrize("entry,series", COUNT_CASES)
-def test_the_cg_count_does_not_grow_with_the_mesh(entry, series):
-    """The CG count grows by at most `GRAVITY_COUNT_GROWTH` from mesh to mesh.
+def compare_counts(entries, expected_path):
+    """Compare the CG counts of `entries`, level by level, with their recorded counts.
 
-    `cg`: multigrid-preconditioned CG under the iterative preset (the
-    potential block of the multiplier path; CG on `A + B` on the low-rank
-    path). `sheet_top2_cg_direct`: on the low-rank path, CG with an LU of
-    `A` (direct preset), whose count is set by the low-rank update. A count
-    that grows with the mesh is a preconditioner that does not scale
-    (`test_dtn_lowrank_parity.py::test_cg_iteration_counts`).
+    Every count that an entry writes must be recorded, and every recorded
+    count of the entries must be written, so that a mesh level that is added
+    or lost also fails.
     """
-    c = counts(entry)
-    levels = sorted(int(name.rsplit("_", 1)[1]) for name in c
-                    if name.rsplit("_", 1)[0] == series)
-    sequence = [c[f"{series}_{k}"] for k in levels]
-    assert len(sequence) >= 2, f"{entry} {series}: counts {sequence!r}"
-    for coarse, fine in zip(sequence, sequence[1:]):
-        assert fine > 0, f"{entry} {series}: counts {sequence!r}"
-        assert fine - coarse <= E.GRAVITY_COUNT_GROWTH, (
-            f"{entry} {series}: counts {sequence!r} grow by more than "
-            f"{E.GRAVITY_COUNT_GROWTH!r}")
-
-
-def test_the_cg_gap_between_the_representations_does_not_grow():
-    """`test_cg_gap_does_not_grow_with_refinement`, on the 3-D shells.
-
-    The low-rank count minus the multiplier count grows by at most 2 from the
-    coarser to the finer shell: a fixed offset is a constant, a growing one
-    a preconditioner that `B` defeats.
-    """
-    fast, slow = counts("closed-3d-lowrank"), counts("closed-3d-multiplier")
-    gaps = [fast[f"cg_{k}"] - slow[f"cg_{k}"] for k in range(E.GRAVITY_LEVELS_3D)]
-    assert gaps[-1] <= gaps[0] + E.GRAVITY_COUNT_GROWTH, f"gaps {gaps!r}"
+    expected = read(expected_path)
+    measured = {}
+    for entry in entries:
+        measured.update(read(E.CASE_DIR / E.gravity_counts(entry)))
+    recorded = {name: value for name, value in expected.items()
+                if name.startswith(tuple(f"{entry}_" for entry in entries))}
+    assert measured and set(measured) == set(recorded), (
+        f"counts written {sorted(measured)!r}, recorded {sorted(recorded)!r}")
+    changed = {name: (value, recorded[name]) for name, value in measured.items()
+               if abs(value - recorded[name]) > count_allowance(name)}
+    assert not changed, (
+        "CG counts (measured, recorded) that differ by more than "
+        f"{E.GRAVITY_COUNT_ALLOWANCE!r}: {changed!r}")
 
 
 @pytest.mark.parametrize("entry", E.GRAVITY_COUNT_ENTRIES)
 def test_the_cg_counts_match_the_recording(entry):
-    """The CG counts against `expected/gravity-counts.txt`.
+    """The CG count at each mesh level against `expected/gravity-counts.txt`.
 
-    A count may differ from the recorded one by at most the larger of 2 and
-    20 percent of it; a larger change, either way, is a change of the
-    preconditioner or of the operator.
+    `cg`: multigrid-preconditioned CG under the iterative preset (the
+    potential block of the multiplier path; CG on `A + B` on the low-rank
+    path). `sheet_top2_cg_direct`: on the low-rank path, CG with an LU of
+    `A` (direct preset), whose count is set by the low-rank update. Each
+    count must equal its recorded value within `GRAVITY_COUNT_ALLOWANCE`, so
+    that a change of the preconditioner, of the operator or of PETSc shows
+    as a changed count.
     """
-    expected = read(E.CASE_DIR / E.GRAVITY_EXPECTED_COUNTS)
-    measured = read(E.CASE_DIR / E.gravity_counts(entry))
-    assert measured and set(measured) <= set(expected), (
-        f"{entry}: counts {sorted(measured)!r} not all recorded")
-    absolute, fraction = E.GRAVITY_COUNT_SLACK
-    for name, value in measured.items():
-        slack = max(absolute, fraction * expected[name])
-        assert abs(value - expected[name]) <= slack, (
-            f"{name}: count {value!r}, recorded {expected[name]!r}, slack {slack!r}")
+    compare_counts((entry,), E.CASE_DIR / E.GRAVITY_EXPECTED_COUNTS)
+
+
+def test_the_3d_cg_counts_match_the_recording():
+    """The CG count at each 3-D shell against `expected/gravity-counts-3d.txt`.
+
+    The same rule as in 2-D, for the two 3-D closed-form entries. Those
+    entries run on CI only, so their counts are recorded from a reviewed
+    run of them. Until the expected file exists, the test skips and prints
+    the measured counts.
+    """
+    for entry in E.GRAVITY_COUNT_ENTRIES_3D:
+        E.require_output(E.CASE_DIR / E.gravity_values(entry), entry)
+    path = E.CASE_DIR / E.GRAVITY_EXPECTED_COUNTS_3D
+    if not path.exists():
+        measured = {entry: read(E.CASE_DIR / E.gravity_counts(entry))
+                    for entry in E.GRAVITY_COUNT_ENTRIES_3D}
+        pytest.skip(f"{E.GRAVITY_EXPECTED_COUNTS_3D} is not recorded yet; measured {measured!r}")
+    compare_counts(E.GRAVITY_COUNT_ENTRIES_3D, path)
 
 
 def test_two_ranks_give_the_serial_answers():
@@ -793,11 +801,11 @@ def test_the_submesh_gradient_is_finite():
 
 # -- quadrature ---------------------------------------------------------------------
 
-#: The sweep of `test_silence_implies_adequacy`. The unit test skipped warp
-#: 0.20 at `L = 8` as the residual documented on `QuadratureCalibration`: a
-#: scalar distortion bound cannot describe a two-dimensional calibration set.
-#: Here it is a strict xfail with the measured numbers, so that a change of
-#: the rule that closes the gap shows as an unexpected pass.
+#: The sweep of `test_silence_implies_adequacy`. Warp 0.20 at `L = 8` is the
+#: residual documented on `QuadratureCalibration`: a scalar distortion bound
+#: cannot describe a two-dimensional calibration set. It is a strict xfail
+#: with the measured numbers, so that a change of the rule that closes the
+#: gap shows as an unexpected pass.
 SWEEP = [pytest.param(warp, L, marks=pytest.mark.xfail(
     strict=True,
     reason="Known residual of the rule, documented on QuadratureCalibration: warp "

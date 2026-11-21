@@ -11,10 +11,10 @@ Every entry solves the gravitational Poisson problem
 with DtN maps, `psi` (Dirichlet), `flux` and `sigma` (sheet) conditions on
 its boundaries, and writes measured numbers as `name value` lines to
 `out/gravity-<entry>.dat`. The test file `test_gia_gravity_case.py` holds
-the tolerances of the unit tests that the rows come from and asserts; this
-script asserts nothing. The only recorded values of the case are the CG
-counts of the two serial 2-D closed-form entries, which these entries also
-write to `out/gravity-<entry>-counts.dat`.
+the tolerances and asserts; this script asserts nothing. The only recorded
+values of the case are the CG counts of the serial closed-form entries at
+each mesh level, which these entries also write to
+`out/gravity-<entry>-counts.dat`.
 
 The groups of entries:
 

@@ -1166,11 +1166,14 @@ GRAVITY = {
     "quadrature-rank-np2": dict(cores=2),
 }
 
-#: The entries that write CG counts, and the two of them whose counts are
-#: recorded in `expected/gravity-counts.txt` (the 3-D ones run on CI only).
+#: The entries that write CG counts. The counts of the 2-D entries are
+#: recorded in `expected/gravity-counts.txt` (`GRAVITY_COUNT_ENTRIES`), those
+#: of the 3-D entries, which run on CI only, in
+#: `expected/gravity-counts-3d.txt` (`GRAVITY_COUNT_ENTRIES_3D`).
 GRAVITY_CLOSED = tuple(name for name in GRAVITY
                        if name.startswith("closed-") and not name.endswith("-np2"))
 GRAVITY_COUNT_ENTRIES = ("closed-2d-multiplier", "closed-2d-lowrank")
+GRAVITY_COUNT_ENTRIES_3D = ("closed-3d-multiplier", "closed-3d-lowrank")
 
 #: The number of meshes per closed-form row: in 2-D each mesh has half the
 #: facet size of the one before, and so does the second 3-D shell; the
@@ -1235,11 +1238,25 @@ GRAVITY_ALPHA_RTOL = 1e-9
 #: are compared with the same bound.
 GRAVITY_PARITY_PSI = 1e-14
 GRAVITY_PARITY_COEFFICIENTS = 1e-12
-#: The CG count of the iterative preset (and of CG with an LU of `A` on the
-#: low-rank path) grows by at most this from one mesh to the next; a recorded
-#: count may grow by at most the larger of 2 and 20 percent.
-GRAVITY_COUNT_GROWTH = 2
-GRAVITY_COUNT_SLACK = (2, 0.2)
+#: Low-rank against multiplier in 3-D: the trace coefficients of the two
+#: closed-form entries, relative to the largest coefficient of the same
+#: problem and mesh. The 3-D entries solve with the default iterative
+#: preset (outer `ksp_rtol` 1e-11), so the two answers differ by the Krylov
+#: tolerance and not by round-off. Measured on the shell of
+#: `tests/unit/test_dtn_lowrank_parity.py` at that tolerance: 4.2e-12
+#: relative L2 in the potential, and a gap below `10 * ksp_rtol` (1e-10) at
+#: each of `ksp_rtol` 1e-9, 1e-11 and 1e-13. The bound 1e-9 is ten times
+#: that largest gap. M9 (the sign of the interior mean mode) moves the
+#: coefficients by order one and still fails.
+GRAVITY_PARITY_COEFFICIENTS_3D_RTOL = 1e-9
+#: The CG count at each mesh level is compared with its recorded count, so
+#: that any change of an iteration count (a changed preconditioner or
+#: operator, or a PETSc update) fails a test. The allowed difference, by the
+#: preset of the series: a series whose name contains `_direct_` is CG with
+#: an LU of `A` on the low-rank path; every other series is CG with
+#: multigrid (the iterative preset). The counts of both entries repeated
+#: exactly in two runs on the same machine, so both allowances are zero.
+GRAVITY_COUNT_ALLOWANCE = {"direct": 0, "iterative": 0}
 #: The 3-D gap between the two representations follows the Krylov tolerance:
 #: each hundredfold tightening lowers it by more than `GRAVITY_SWEEP_FACTOR`,
 #: and it stays below `GRAVITY_SWEEP_BOUND` times the tolerance.
@@ -1338,6 +1355,7 @@ def gravity_counts(entry):
 
 
 GRAVITY_EXPECTED_COUNTS = f"{EXPECTED}/gravity-counts.txt"
+GRAVITY_EXPECTED_COUNTS_3D = f"{EXPECTED}/gravity-counts-3d.txt"
 
 
 def _gravity_entries():
@@ -1433,7 +1451,11 @@ RECORDED = {
     "adjoint": {name: (adjoint_counts(name), adjoint_expected(name))
                 for name in ADJOINT},
     "gravity": {"counts": (tuple(gravity_counts(name) for name in GRAVITY_COUNT_ENTRIES),
-                           GRAVITY_EXPECTED_COUNTS)},
+                           GRAVITY_EXPECTED_COUNTS),
+                # Recorded from a reviewed run of the 3-D entries:
+                # `python gia_record_expected.py --case gravity --entry counts-3d`.
+                "counts-3d": (tuple(gravity_counts(name) for name in GRAVITY_COUNT_ENTRIES_3D),
+                              GRAVITY_EXPECTED_COUNTS_3D)},
     # Recorded on Gadi: `python gia_record_expected.py --case weekly`.
     WEEKLY_CASE: {WEEKLY_ENTRY: (WEEKLY_LOG, WEEKLY_EXPECTED)},
 }
