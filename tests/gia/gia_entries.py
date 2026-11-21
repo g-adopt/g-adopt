@@ -421,6 +421,14 @@ GROUNDING_FACET_FRACTION = 0.5
 #: this tolerance; the shift is above the floor (`TestRepeatedSolve`).
 REPEAT_RTOL = 1e-8
 REPEAT_SHIFT_FLOOR = 1e-3
+#: The second solve of the repeated row declares the rigid rotation and
+#: takes at most this many Newton steps. Measured: 2 on the multiplier path
+#: (the second solve starts at a residual of 8.2e-14 against 3.5e-15 at the
+#: end of the first, one step reaches 7.1e-15, and the step-norm test stops
+#: the next) and 1 on the low-rank path. Without the declaration the same
+#: solve took 8 and 26 steps, and once the cap of 100: Newton iterated on
+#: round-off along the undeclared near-kernel.
+REPEAT_NEWTON_MAX = 2
 #: The surface sinks under added ice on an elastic Earth: the mean radial
 #: displacement under the caps is below `-SINK_RMS_FRACTION` times the root
 #: mean square of the radial displacement over Re.

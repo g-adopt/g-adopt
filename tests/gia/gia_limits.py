@@ -233,8 +233,9 @@ def sign_and_repeat_rows(meshes, representation):
       (`test_sea_level.TestSignAgainstPhysics`, with the rigid rotation
       declared as the nullspace);
     - `repeat`: a second solve with nothing changed gives the same `Shift`
-      and potential to 1e-8 (`test_sea_level.TestRepeatedSolve`, elastic
-      Earth, full `Lambda`); it fails if the datum of the first solve lags;
+      and potential to 1e-8 (elastic Earth, full `Lambda`, the rigid
+      rotation declared as the nullspace); it fails if the datum of the
+      first solve lags. The Newton count of the second solve is written;
     - `sink`: in the same elastic solve the surface under the growing ice
       moves down: the mean of `u . n` over the caps is negative. No unit
       test checked this sign in a solve; it is the row that fails when the
@@ -266,12 +267,21 @@ def sign_and_repeat_rows(meshes, representation):
     out[f"sign_eustatic_{rep}"] = S.RHO_I / S.RHO_W * d_ice
     out[f"sign_converged_{rep}"] = converged(solver)
 
+    # The repeated solve also declares the rigid rotation. The rotation is a
+    # kernel of the Jacobian to 8e-6 relative, and the second solve starts
+    # from a converged state whose residual is at round-off. Without the
+    # declaration, Newton updates driven by that round-off are large along
+    # the near-kernel, and the step-norm test stops Newton after a number of
+    # iterations that depends on rounding. With it, the residual part along
+    # the rotation is removed (`SelfGravitatingGIASolver.complete_residual`)
+    # and the solve converges in one Newton step on both representations.
     solver, z, sea = sea_build(meshes, S.surface_fields(sub, "caps", d_ice=d_ice), rep,
-                               earth=S.ELASTIC_EARTH)
+                               earth=S.ELASTIC_EARTH, nullspace="rigid_rotation")
     first_converged = try_solve(solver)
     shift_first = float(sea.shift())
     psi_first = z.subfunctions[solver.potential_index].dat.data_ro.copy()
     second_converged = try_solve(solver)
+    out[f"repeat_second_newton_{rep}"] = solver.solver.snes.getIterationNumber()
     psi_second = z.subfunctions[solver.potential_index].dat.data_ro
     out[f"repeat_shift_{rep}"] = shift_first
     out[f"repeat_shift_change_{rep}"] = abs(float(sea.shift()) - shift_first)

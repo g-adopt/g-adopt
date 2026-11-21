@@ -155,13 +155,19 @@ def test_the_marine_grounding_line_moves():
 def test_a_second_solve_gives_the_same_shift_and_geoid(representation):
     """A second solve with nothing changed repeats `Shift` and the potential.
 
-    `test_sea_level.py::TestRepeatedSolve::
-    test_a_second_solve_gives_the_same_shift_and_geoid` (1e-8 relative); a
-    datum that lags one solve behind moves `Shift` by 17 percent.
+    `Shift` and the potential repeat to `REPEAT_RTOL` (1e-8 relative); a
+    datum that lags one solve behind moves `Shift` by 17 percent. The second
+    solve, with the rigid rotation declared, takes at most
+    `REPEAT_NEWTON_MAX` Newton steps, so that the row does not depend on how
+    Newton iterates on round-off.
     """
     v = values("sea")
     rep = representation
     assert_converged(v, f"repeat_converged_{rep}")
+    newton = v[f"repeat_second_newton_{rep}"]
+    assert newton <= E.REPEAT_NEWTON_MAX, (
+        f"repeat {rep}: second solve took {newton!r} Newton steps, at most "
+        f"{E.REPEAT_NEWTON_MAX!r}")
     shift = v[f"repeat_shift_{rep}"]
     assert abs(shift) > E.REPEAT_SHIFT_FLOOR, f"repeat shift {shift!r} at the floor"
     change = v[f"repeat_shift_change_{rep}"]
