@@ -1347,3 +1347,45 @@ def test_a_discontinuous_displacement_is_refused(meshes):
             C.approximation(Case()), dt=C.dt_function(sub),
             gravity_bcs=C.gravity_bcs(parent), bcs={C.CURVE_RC: {"un": 0.0}},
             internal_variable_family="Quadrature")
+
+
+#: One case of each step kind: Firedrake's solve block with the multiplier
+#: DtN and with the low-rank DtN (DG family, in-place solve), and the
+#: Quadrature backend, which solves on a copy of its own.
+FAILED_STEP_CASES = [Case(), Case(representation="lowrank"),
+                     Case(family="Quadrature", core="fluid")]
+
+
+@pytest.mark.parametrize("case", FAILED_STEP_CASES, ids=[c.label for c in FAILED_STEP_CASES])
+def test_a_failed_step_leaves_its_start_in_the_mixed_solution(meshes, case):
+    """A step solve that raises leaves the start of the step, so a retry starts there too.
+
+    The Newton solve is stopped after one iteration with zero tolerances,
+    so it raises `ConvergenceError` after it changed the iterate. The start
+    is a nonzero `u` and `psi`, copied in by the step, and the `Real` fields
+    as they are. After the failure every field of the mixed solution holds
+    that start bit for bit, and `u` and `psi` are not written. On the DG
+    family Firedrake solves for the mixed solution in place, so without the
+    restore of the step the mixed solution would hold the failed iterate.
+    """
+    stop_after_one = {"snes_max_it": 1, "snes_rtol": 0.0, "snes_atol": 0.0,
+                      "snes_stol": 0.0}
+    solver, u, psi = C.build_new(meshes, case, extra=stop_after_one)
+    # A smooth nonzero start in both fields, so the copy in runs and the
+    # start differs from the iterate after one Newton step.
+    X = fd.SpatialCoordinate(u.function_space().mesh())
+    u.interpolate(fd.as_vector([1e-3 * X[0] * X[1], 2e-3 * X[0] ** 2]))
+    Y = fd.SpatialCoordinate(psi.function_space().mesh())
+    psi.interpolate(1e-3 * Y[0] * Y[1])
+    expected = solver.solution.copy(deepcopy=True)
+    expected.subfunctions[0].assign(u)
+    expected.subfunctions[solver.potential_index].assign(psi)
+    u_before, psi_before = u.copy(deepcopy=True), psi.copy(deepcopy=True)
+    with pytest.raises(fd.ConvergenceError):
+        solver.solve()
+    # The solve did take its Newton step before it raised.
+    assert solver.solver.snes.getIterationNumber() == 1
+    for got, want in zip(solver.solution.subfunctions, expected.subfunctions):
+        assert np.array_equal(got.dat.data_ro, want.dat.data_ro), got.name()
+    assert np.array_equal(u.dat.data_ro, u_before.dat.data_ro)
+    assert np.array_equal(psi.dat.data_ro, psi_before.dat.data_ro)

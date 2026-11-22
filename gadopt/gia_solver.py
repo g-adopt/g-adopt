@@ -241,7 +241,33 @@ class _StockStep:
         self.owner = owner
         self.problem = NonlinearVariationalProblem(
             owner.F, owner.solution, bcs=owner.strong_bcs)
+        #: The start of the present step solve, kept off the tape. Firedrake
+        #: solves for the mixed solution in place, so a step that raises
+        #: leaves its last Newton iterate there (possibly NaN). The step
+        #: puts this copy back, so the mixed solution holds the start again
+        #: and a retry (for example with a smaller time step) starts from
+        #: `u`, `psi` and the `Real` fields of before, as on the Quadrature
+        #: family, whose backend solves on a copy of its own.
+        self.start = Function(owner.solution.function_space(), name="gia_step_start")
         self.build()
+
+    def keep_start(self):
+        """Copy the mixed solution into `start`, off the tape."""
+        with stop_annotating():
+            self.start.assign(self.owner.solution)
+
+    def restore_start(self):
+        """Put `start` back into the mixed solution, off the tape, after a step that raised.
+
+        The write is not recorded. The block variable of the mixed solution
+        on the tape is still the one that the failed solve read, and its
+        recorded value is this start, so the write makes the value of the
+        Function agree with the tape again. A taped run that continues
+        after a failed step still holds the solve block of that step without
+        an output, so its tape is not usable for a replay or an adjoint.
+        """
+        with stop_annotating():
+            self.owner.solution.assign(self.start)
 
     def build(self):
         """Build the variational solver from the owner's present options."""
@@ -264,7 +290,12 @@ class _StockStep:
         keywords = self.owner.adjoint_solve_keywords()
         solve_keywords = (derivative_solve_keywords(self.solver, keywords["adj_kwargs"])
                           if keywords else {})
-        self.solver.solve(**solve_keywords)
+        self.keep_start()
+        try:
+            self.solver.solve(**solve_keywords)
+        except Exception:
+            self.restore_start()
+            raise
 
 
 class _LowRankStep(_StockStep):
@@ -297,7 +328,13 @@ class _LowRankStep(_StockStep):
             tape = get_working_tape()
             n0 = len(tape.get_blocks())
         # `LowRankVariationalSolver.solve` supplies its own derivative keywords.
-        self.solver.solve()
+        # The start is kept and put back on a failure as on the stock step.
+        self.keep_start()
+        try:
+            self.solver.solve()
+        except Exception:
+            self.restore_start()
+            raise
         if adopt:
             from .dtn_coupled_adjoint import adopt_coupled_lowrank_block
             adopt_coupled_lowrank_block(self.owner, tape, n0)
@@ -1900,6 +1937,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         `u` and `psi` into the mixed solution (the start of the Newton
         solve), the step as one recorded block, the recorded kernel
         projection, the history accept, and the copy into `u` and `psi`.
+
+        If the step solve raises, the exception passes to the caller, the
+        mixed solution holds the start of the step again on both families
+        (`_StockStep.restore_start`; the Quadrature backend solves on a copy
+        of its own), the history is not accepted and `u` and `psi` are not
+        written. A retry, for example with a smaller time step, then starts
+        from the same point as the failed step.
         """
         from .gia_step_adjoint import TapeSweepMarkerBlock
         # Refuse a `B_mu` that reached zero after a construction with a
