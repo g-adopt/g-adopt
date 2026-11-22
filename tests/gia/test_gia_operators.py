@@ -142,7 +142,8 @@ def test_the_sphere_potential_pair_transposes():
     source of the potential row are both integrated at the mechanics
     quadrature degree. With the source on a measure without a degree, at
     UFL's estimate, the two pairings differ by 2.4e-4 of their value on
-    this sphere (6.2e-6 of the Cauchy-Schwarz scale); on the annulus the two rules agree, so the `u-psi` pairs of
+    this sphere (6.2e-6 of the Cauchy-Schwarz scale). On the annulus the
+    two rules agree, so the `u-psi` pairs of
     `test_the_sheet_blocks_transpose` do not see that defect.
     """
     assert_transposes(values("frame"), "frame_sphere_u_psi")

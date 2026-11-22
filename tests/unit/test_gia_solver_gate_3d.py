@@ -84,23 +84,39 @@ CASES = [("lowrank", "maxwell2", "Quadrature")]
 #: The stored fingerprints of the earlier solver, by case label.
 REFERENCE = C.reference_values("gate")["3d"]
 
-#: The blocks with a bound of their own. The earlier solver integrated three
-#: coupling integrals on a measure without a degree, so at the degree UFL
-#: estimated: the mantle term of the rotation rows (`Rotation.inertia_form`),
-#: the mantle term of the centre-of-mass rows (`CentreOfMass.dipole_form`)
-#: and the displacement source of the potential row
-#: (`GravityPotential.volume_source`). This solver integrates all three at
-#: the explicit mechanics quadrature degree, the degree of their transposes
-#: in the momentum row. On this coarse sphere the two rules differ by more
-#: than on the annulus. Measured largest differences over the residual and
-#: the two Jacobian actions: potential 6.98e-5, `m1` and `m2` 1.99e-6, `m3`
-#: 1.04e-5, `centre_of_mass_i` 2.55e-7. The potential row moves only through
-#: the displacement source: with that source put back on UFL's estimate the
-#: block agrees to 1e-12, and the `(u, psi)` pair of the Jacobian is then a
-#: transpose only to 4.1e-4 (3.0e-16 with the explicit degree). The
-#: displacement block still agrees to 1e-12.
-FIELD_BOUNDS = {"potential": 1e-4, "m1": 2.5e-6, "m2": 2.5e-6, "m3": 1.5e-5,
-                **{f"centre_of_mass_{i}": 3e-7 for i in range(3)}}
+#: The blocks with a bound of their own, one dictionary for each compared
+#: vector: the residual, then the two Jacobian actions. The earlier solver
+#: integrated three coupling integrals on a measure without a degree, so at
+#: the degree UFL estimated: the mantle term of the rotation rows
+#: (`Rotation.inertia_form`), the mantle term of the centre-of-mass rows
+#: (`CentreOfMass.dipole_form`) and the displacement source of the potential
+#: row (`GravityPotential.volume_source`). This solver integrates all three
+#: at the explicit mechanics quadrature degree, the degree of their
+#: transposes in the momentum row. On this coarse sphere the two rules
+#: differ by more than on the annulus. Measured differences, residual /
+#: action 0 / action 1:
+#:
+#: - potential: 3.48e-5 / 6.98e-5 / 1.20e-5;
+#: - `m1`, `m2`: 1.99e-6 / 1.20e-7 / 9.08e-7;
+#: - `m3`: 1.04e-5 / 1.46e-7 / 7.64e-7;
+#: - `centre_of_mass_0`, `centre_of_mass_1`: 2.55e-7 / 1.10e-8 / 4.2e-11;
+#: - `centre_of_mass_2`: 5.57e-8 / 1.10e-8 / 4.0e-11.
+#:
+#: Each bound is about 1.25 to 1.3 times its own measured value, so a later
+#: change of one row that is larger than that in one vector is seen, also
+#: if it stays below the bound of another vector. The centre-of-mass rows of
+#: action 1 are below `FIELD_RTOL` and keep it. The potential row moves only
+#: through the displacement source: with that source put back on UFL's
+#: estimate the block agrees to 1e-12, and the `(u, psi)` pair of the
+#: Jacobian is then a transpose only to 4.1e-4 (3.0e-16 with the explicit
+#: degree). The displacement block agrees to 1e-12.
+FIELD_BOUNDS = [
+    {"potential": 4.5e-5, "m1": 2.5e-6, "m2": 2.5e-6, "m3": 1.3e-5,
+     "centre_of_mass_0": 3.2e-7, "centre_of_mass_1": 3.2e-7, "centre_of_mass_2": 7e-8},
+    {"potential": 9e-5, "m1": 1.5e-7, "m2": 1.5e-7, "m3": 1.9e-7,
+     **{f"centre_of_mass_{i}": 1.4e-8 for i in range(3)}},
+    {"potential": 1.5e-5, "m1": 1.15e-6, "m2": 1.15e-6, "m3": 1e-6},
+]
 
 
 @pytest.mark.parametrize("representation, model, family", CASES,
@@ -118,9 +134,10 @@ def test_3d_residual_and_jacobian_action_match_the_reference(
                   for k in range(2)]
     residual, actions = C.residual_and_actions(new, directions)
     reference = REFERENCE["-".join((representation, model, family))]
-    for vector, ref in zip([residual, *actions], reference):
+    for vector, ref, bounds in zip([residual, *actions], reference, FIELD_BOUNDS,
+                                   strict=True):
         C.assert_fingerprints_agree(C.fingerprint(vector, new.field_index), ref,
-                                    field_rtol=FIELD_BOUNDS)
+                                    field_rtol=bounds)
 
 
 def test_a_fluid_core_tag_with_no_facets_is_still_refused(mesh):
