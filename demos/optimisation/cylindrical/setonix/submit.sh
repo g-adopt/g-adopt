@@ -41,12 +41,15 @@
 #
 # The resources of the runs are environment variables with the values of the plan,
 # so that the timing phase can change them without an edit:
-#   RANKS (8), PARTITION (highmem), MEM (80G), WALL (96:00:00), BUDGET (200).
-# The defaults come from the 125-step timing jobs of 2026-11-22: 8 ranks take 799 s
-# per forward call and 6.9 GB per rank at peak (16 ranks: 624 s, 4.5 GB). highmem
-# bills max(2 x ranks, mem / 3.95 GB) per hour, so 8 ranks with 80 GB bill 21 and 16
-# ranks with any memory up to 126 GB bill 32. highmem runs at most two jobs of one
-# user at a time; the third run waits until one of the first two ends.
+#   RANKS (16), PARTITION (highmem), MEM (120G), WALL (96:00:00), BUDGET (200).
+# The defaults come from the 125-step timing jobs of 2026-11-22: 16 ranks take 624 s
+# per forward call and 4.5 GB per rank at peak (8 ranks: 799 s, 6.9 GB). highmem
+# allows at most 7.9 GB per allocated CPU and gives each task a whole core (2 CPUs),
+# so Slurm allocates max(2 x ranks, mem / 7.9 GB rounded up to whole cores) CPUs and
+# bills each one: 16 ranks with 120 GB bill 32 per hour, and 8 ranks with 80 GB bill
+# 32 as well (10 GB per task needs two cores per task), at 1.28 times the wall time.
+# highmem runs at most two jobs of one user at a time; the third run waits until one
+# of the first two ends.
 set -euo pipefail
 PHASE=$1
 CODE=$2
@@ -55,9 +58,9 @@ JOB=$CODE/demos/optimisation/cylindrical/setonix/job.slurm
 STEPS=125
 DT=1.2e-5
 REF=$BASE/reference/s${STEPS}-dt${DT}
-RANKS=${RANKS:-8}
+RANKS=${RANKS:-16}
 PARTITION=${PARTITION:-highmem}
-MEM=${MEM:-80G}
+MEM=${MEM:-120G}
 WALL=${WALL:-96:00:00}
 BUDGET=${BUDGET:-200}
 RUNS=$BASE/runs-P-b$BUDGET-n$RANKS
