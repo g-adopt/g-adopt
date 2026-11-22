@@ -31,6 +31,12 @@ truth is not the measure. The measure is the work to reach a value of J:
 
 The same rule reads P-ROL-A against P-ROL-L2, the effect of the inner product alone.
 ``initial_misfit`` is printed beside it as supporting information only.
+
+A second reading follows the rule, as a sensitivity check and not as the rule: every
+run priced with its own per-call ratios. The pooled product price divides a median
+taken from the Newton record alone by a forward median pooled over three nodes, so load
+on the Newton node moves it; a run's own ratios take both times from one node. The
+script says so when the two readings give different verdicts.
 """
 
 import argparse
@@ -120,6 +126,36 @@ def compare(name, rows, reference_rows, w_star, newton):
     return {"J_ref": j_ref, "W_N": [w_lo, w_hi], "S": [s_lo, s_hi], "verdict": result}
 
 
+def apply_rule(records, rows, levels):
+    """W*, and the rule for P-Newton and P-ROL-A (and any extra run) on priced rows.
+
+    Args:
+        records: the records by name.
+        rows: the priced iteration rows by name.
+        levels: the candidate levels of W*.
+
+    Returns:
+        dict with ``W_star`` and one result per challenger.
+    """
+    reached = min(r[-1]["work_priced"] for r in rows.values())
+    candidates = [level for level in sorted(levels) if level <= reached]
+    if not candidates:
+        raise SystemExit(f"no run reached work {min(levels):g} "
+                         f"(smallest final work {reached:.1f})")
+    w_star = candidates[-1]
+    print(f"W* = {w_star:.0f} (smallest final work over the runs {reached:.1f})")
+    out = {"W_star": w_star}
+    out["P-Newton"] = compare("P-Newton (zero shift) against P-ROL-L2", rows["P-Newton"],
+                              rows["P-ROL-L2"], w_star, newton=True)
+    out["P-ROL-A"] = compare("P-ROL-A against P-ROL-L2 (inner product alone)",
+                             rows["P-ROL-A"], rows["P-ROL-L2"], w_star, newton=False)
+    for name in records:
+        if name.startswith("extra:"):
+            out[name] = compare(f"{name} against P-ROL-L2", rows[name], rows["P-ROL-L2"],
+                                w_star, newton=True)
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--reference", required=True, help="P-ROL-L2 record")
@@ -141,24 +177,29 @@ def main(argv=None):
     print(f"pooled medians: forward {medians['forward']:.1f} s, gradient "
           f"{medians['gradient']:.1f} s, product {medians['hessian'] or float('nan'):.1f} s; "
           f"prices: gradient {gp:.3f}, product {hp or float('nan'):.3f}")
+    out = {"prices": {"gradient": gp, "hessian": hp}, "medians": medians}
+    # The rule: one set of pooled prices for every run.
     rows = {name: priced_rows(r, gp, hp) for name, r in records.items()}
-    reached = min(r[-1]["work_priced"] for r in rows.values())
-    candidates = [level for level in sorted(args.levels) if level <= reached]
-    if not candidates:
-        raise SystemExit(f"no run reached work {min(args.levels):g} (smallest final work {reached:.1f})")
-    w_star = candidates[-1]
-    print(f"W* = {w_star:.0f} (smallest final work over the runs {reached:.1f})")
-
-    out = {"W_star": w_star, "prices": {"gradient": gp, "hessian": hp},
-           "medians": medians}
-    out["P-Newton"] = compare("P-Newton (zero shift) against P-ROL-L2", rows["P-Newton"],
-                              rows["P-ROL-L2"], w_star, newton=True)
-    out["P-ROL-A"] = compare("P-ROL-A against P-ROL-L2 (inner product alone)",
-                             rows["P-ROL-A"], rows["P-ROL-L2"], w_star, newton=False)
-    for name in records:
-        if name.startswith("extra:"):
-            out[name] = compare(f"{name} against P-ROL-L2", rows[name], rows["P-ROL-L2"],
-                                w_star, newton=True)
+    out["pooled"] = apply_rule(records, rows, args.levels)
+    # A sensitivity reading, not the rule: each run priced with its own per-call
+    # ratios (median gradient / median forward and median product / median forward
+    # of that run). The pooled product price comes from the Newton record alone, so
+    # load on that node moves it; this reading shows whether the verdict depends on
+    # that. A run without products takes the pooled product price, which it never
+    # uses.
+    print("\n--- sensitivity: each run priced with its own per-call ratios ---")
+    own_rows = {}
+    for name, record in records.items():
+        own_gp, own_hp, _ = pooled_prices([record])
+        own_rows[name] = priced_rows(record, own_gp, own_hp if own_hp else hp)
+        print(f"{name}: gradient {own_gp:.3f}, product "
+              f"{(own_hp if own_hp else float('nan')):.3f}")
+    out["own"] = apply_rule(records, own_rows, args.levels)
+    for key in ("P-Newton", "P-ROL-A"):
+        if out["pooled"][key]["verdict"] != out["own"][key]["verdict"]:
+            print(f"\nNOTE: the verdict for {key} differs between the pooled prices "
+                  f"({out['pooled'][key]['verdict']}) and the own per-call ratios "
+                  f"({out['own'][key]['verdict']}).")
     if args.json:
         with open(args.json, "w") as f:
             json.dump(out, f, indent=1)
