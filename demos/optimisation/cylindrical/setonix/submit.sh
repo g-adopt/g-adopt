@@ -6,6 +6,7 @@
 #     submit.sh timing      <code dir>
 #     submit.sh runs        <code dir>
 #     submit.sh hessian20   <code dir>
+#     submit.sh rolA        <code dir>   (deferred, see below)
 #     submit.sh radius      <code dir>   (conditional, see below)
 #     submit.sh metric      <code dir>   (conditional, see below)
 #
@@ -27,21 +28,23 @@
 #   the November campaign ran). Serial, 20 steps of 6e-6, smooth floor, smooth
 #   direction with seed 1: the Taylor sweep (eps0 0.05, 7 levels) and the central
 #   difference of the gradient (eps 1e-2, 1e-3, 1e-4), as in November.
-# Phase "runs": the three runs of configuration P (production objective of
-#   inverse.py), on one reference state, one rank count and one work budget:
+# Phase "runs": the two runs of configuration P (production objective of
+#   inverse.py), on one reference state, one rank count and one work budget (400):
 #     P-ROL-L2    rol-lbfgs, L2 inner product: g-adopt today, as inverse.inverse()
-#     P-Newton    tao-bnls-riesz, zero shift, inner product A
-#     P-ROL-A     rol-lbfgs, inner product A: separates the inner product from the
-#                 algorithm
+#     P-Newton    tao-bnls-riesz, zero shift, inner product A, Krylov cap 100. The box
+#                 records show the Newton gain starting at the first long Krylov
+#                 solve (16 to 42 CG iterations), which a cap of 20 cuts off.
 # Conditional phases, never submitted by "runs":
-#   "radius"  P-Newton at initial radius 0.87, only if the rule of PLAN.md section 5
+#   "rolA"    P-ROL-A, rol-lbfgs with the inner product A, which separates the inner
+#             product from the algorithm; deferred until Newton shows a win;
+#   "radius"  P-Newton at initial radius 0.87 (cap 100), only if the rule of PLAN.md section 5
 #             gives "undecided";
-#   "metric"  P-Newton with the metric shift, only if the zero-shift run stalls
+#   "metric"  P-Newton with the metric shift (cap 100), only if the zero-shift run stalls
 #             after a negative-curvature solve.
 #
 # The resources of the runs are environment variables with the values of the plan,
 # so that the timing phase can change them without an edit:
-#   RANKS (16), PARTITION (highmem), MEM (120G), WALL (96:00:00), BUDGET (200).
+#   RANKS (16), PARTITION (highmem), MEM (120G), WALL (96:00:00), BUDGET (400).
 # The defaults come from the 125-step timing jobs of 2026-11-22: 16 ranks take 624 s
 # per forward call and 4.5 GB per rank at peak (8 ranks: 799 s, 6.9 GB). highmem
 # allows at most 7.9 GB per allocated CPU and gives each task a whole core (2 CPUs),
@@ -62,7 +65,7 @@ RANKS=${RANKS:-16}
 PARTITION=${PARTITION:-highmem}
 MEM=${MEM:-120G}
 WALL=${WALL:-96:00:00}
-BUDGET=${BUDGET:-200}
+BUDGET=${BUDGET:-400}
 RUNS=$BASE/runs-P-b$BUDGET-n$RANKS
 mkdir -p "$BASE"
 cd "$BASE"
@@ -144,8 +147,10 @@ runs)
         --output "$RUNS/rol-lbfgs-L2.json")
     echo "P-ROL-L2: $j"
     j=$(submit_run cyl-P-newton --optimiser tao-bnls-riesz --bnk-shift zero \
-        --riesz regularisation --output "$RUNS/tao-zero.json")
+        --riesz regularisation --krylov-max-it 100 --output "$RUNS/tao-zero.json")
     echo "P-Newton: $j"
+    ;;
+rolA)
     j=$(submit_run cyl-P-rol-a --optimiser rol-lbfgs --riesz regularisation \
         --output "$RUNS/rol-lbfgs-A.json")
     echo "P-ROL-A:  $j"
@@ -167,16 +172,16 @@ hessian20)
     ;;
 radius)
     j=$(submit_run cyl-P-newton-r087 --optimiser tao-bnls-riesz --bnk-shift zero \
-        --riesz regularisation --initial-radius 0.87 --output "$RUNS/tao-zero-r0.87.json")
+        --riesz regularisation --krylov-max-it 100 --initial-radius 0.87 --output "$RUNS/tao-zero-r0.87.json")
     echo "P-Newton, radius 0.87: $j"
     ;;
 metric)
     j=$(submit_run cyl-P-newton-metric --optimiser tao-bnls-riesz --bnk-shift metric \
-        --riesz regularisation --output "$RUNS/tao-metric.json")
+        --riesz regularisation --krylov-max-it 100 --output "$RUNS/tao-metric.json")
     echo "P-Newton, metric shift: $j"
     ;;
 *)
-    echo "unknown phase $PHASE (gates, timing, runs, radius or metric)" >&2
+    echo "unknown phase $PHASE (gates, timing, runs, rolA, radius, metric or hessian20)" >&2
     exit 2
     ;;
 esac

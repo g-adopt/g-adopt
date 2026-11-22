@@ -2,7 +2,7 @@
 
 Usage:
     python summarise.py --reference rol-lbfgs-L2.json --newton tao-zero.json \
-        --rol-metric rol-lbfgs-A.json [--extra tao-zero-r0.87.json ...]
+        [--rol-metric rol-lbfgs-A.json] [--extra tao-zero-r0.87.json ...]
 
 The rule was fixed before any run (NOTES/team/cylindrical-newton/PLAN.md section 5).
 This script is that rule in code, so that the verdict is computed and not read off a
@@ -17,7 +17,9 @@ truth is not the measure. The measure is the work to reach a value of J:
    costs ``median(gradient) / median(forward)`` forward-equivalents and a product
    ``median(hessian) / median(forward)``. Shared nodes change the times of a single
    run; the pooled medians remove that from the comparison.
-2. ``W*`` is the largest of 50, 100, 150 and 200 that every run reached.
+2. ``W*`` is the largest of 100, 200, 300 and 400 that every run reached (revision 3
+   of the rule, fixed on 2026-11-22 before any result of the budget-400 runs; the
+   levels were 50 to 200 for the budget-200 run set, which was cancelled unread).
 3. ``J_ref`` is the J of the reference run (P-ROL-L2, what g-adopt runs today) at the
    last iteration with work at or below ``W*``.
 4. For a challenger, ``W_N`` is the work at which its J first falls to ``J_ref`` or
@@ -43,7 +45,7 @@ import argparse
 import json
 from statistics import median
 
-LEVELS = (50.0, 100.0, 150.0, 200.0)
+LEVELS = (100.0, 200.0, 300.0, 400.0)
 
 
 def load(path):
@@ -147,8 +149,9 @@ def apply_rule(records, rows, levels):
     out = {"W_star": w_star}
     out["P-Newton"] = compare("P-Newton (zero shift) against P-ROL-L2", rows["P-Newton"],
                               rows["P-ROL-L2"], w_star, newton=True)
-    out["P-ROL-A"] = compare("P-ROL-A against P-ROL-L2 (inner product alone)",
-                             rows["P-ROL-A"], rows["P-ROL-L2"], w_star, newton=False)
+    if "P-ROL-A" in rows:
+        out["P-ROL-A"] = compare("P-ROL-A against P-ROL-L2 (inner product alone)",
+                                 rows["P-ROL-A"], rows["P-ROL-L2"], w_star, newton=False)
     for name in records:
         if name.startswith("extra:"):
             out[name] = compare(f"{name} against P-ROL-L2", rows[name], rows["P-ROL-L2"],
@@ -160,7 +163,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--reference", required=True, help="P-ROL-L2 record")
     parser.add_argument("--newton", required=True, help="P-Newton zero-shift record")
-    parser.add_argument("--rol-metric", required=True, help="P-ROL-A record")
+    parser.add_argument("--rol-metric", default=None,
+                        help="P-ROL-A record; deferred in the budget-400 run set")
     parser.add_argument("--extra", nargs="*", default=[],
                         help="conditional runs, read against the reference as Newton")
     parser.add_argument("--json", default=None, help="write the verdicts here")
@@ -169,8 +173,9 @@ def main(argv=None):
                              "other values are for testing the script on short runs")
     args = parser.parse_args(argv)
 
-    paths = {"P-ROL-L2": args.reference, "P-Newton": args.newton,
-             "P-ROL-A": args.rol_metric}
+    paths = {"P-ROL-L2": args.reference, "P-Newton": args.newton}
+    if args.rol_metric:
+        paths["P-ROL-A"] = args.rol_metric
     paths.update({f"extra:{p}": p for p in args.extra})
     records = {name: load(path) for name, path in paths.items()}
     gp, hp, medians = pooled_prices(list(records.values()))
@@ -195,7 +200,7 @@ def main(argv=None):
         print(f"{name}: gradient {own_gp:.3f}, product "
               f"{(own_hp if own_hp else float('nan')):.3f}")
     out["own"] = apply_rule(records, own_rows, args.levels)
-    for key in ("P-Newton", "P-ROL-A"):
+    for key in [k for k in ("P-Newton", "P-ROL-A") if k in out["pooled"]]:
         if out["pooled"][key]["verdict"] != out["own"][key]["verdict"]:
             print(f"\nNOTE: the verdict for {key} differs between the pooled prices "
                   f"({out['pooled'][key]['verdict']}) and the own per-call ratios "
