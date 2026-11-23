@@ -64,6 +64,14 @@ class MaxwellQuadratureUpdate:
         self.q = fd.Function(Q, name="constitutive_fluidity")
         self.E0 = fd.Function(Q, name="constitutive_residual")
         self.Eq = fd.Function(Q, name="constitutive_derivative").assign(1)
+        #: The fields of the local solve: the fluidity root and the residual
+        #: and the derivative of the local equation at it. `refresh` writes
+        #: them from the state and from the other coefficients at every
+        #: residual and Jacobian evaluation, so they are no inputs of the
+        #: step: the step block does not take them as dependencies, and the
+        #: fingerprint of the Jacobian coefficients leaves them out
+        #: (`SelfGravitatingGIASolver._detect_solution_dependence`).
+        self.auxiliary = (self.q, self.E0, self.Eq)
         self.tolerance = 1e-12
         self.max_iterations = 50
 
@@ -295,7 +303,7 @@ class DirectConstitutiveBackend:
     def __init__(self, owner, material):
         self.owner, self.material = owner, material
         material.owner = owner
-        auxiliary = (material.q, material.E0, material.Eq)
+        auxiliary = material.auxiliary
         coefficients = set(owner.F.coefficients()) | set(extract_coefficients(material.equation))
         for g in material.updates:
             coefficients.update(extract_coefficients(g))
@@ -410,8 +418,18 @@ class DirectConstitutiveBackend:
         The solution keeps the gauge the solve gave it; the projection that
         removes the rigid rotation is the recorded one after the step block
         (`SelfGravitatingGIASolver.solve`).
+
+        The cached preconditioner pieces read `operator_version` from the
+        owner's application context, as on the DG family. A forward step
+        publishes it before this solve
+        (`SelfGravitatingGIASolver._refresh_operator_version`): an integer
+        that moves when a coefficient of the Jacobian changes, or None when
+        the Jacobian depends on the state (a power law, a moving coastline).
+        A replay publishes the key of the step block in place of the
+        integer (`ConstitutiveStepBlock._bound_to_block`). With a Jacobian
+        that does not depend on the state, the caches are then built once
+        and again only where the operator changes.
         """
-        self.owner.appctx["operator_version"] = None
         self.solver.solve()
         self.material.refresh(self.work)
         # Interpolate on the mechanics mesh only, not through mixed-domain split.
@@ -478,7 +496,11 @@ class DirectConstitutiveBackend:
             nullspace of the operator removed, is above the bound.
         """
         owner = self.owner
-        owner.appctx["operator_version"] = None
+        # The preconditioners of the derivative solve read the operator
+        # version of the step block: `ConstitutiveStepBlock` runs every
+        # derivative solve inside `_bound_to_block`, which publishes the key
+        # of the block when the forward version is an integer and leaves
+        # None in place for a Jacobian that depends on the state.
         form = fd.adjoint(self.J) if kind == "adjoint" else self.J
         if kind not in self.derivative_solvers:
             matrix = fd.assemble(form, bcs=owner.strong_bcs, mat_type='matfree',

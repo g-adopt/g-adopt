@@ -271,15 +271,18 @@ LINEAR_ENTRIES = ["sea-fixed", "sea-fixed-iterative", "load-direct", "load-itera
 LINEAR_REDUCTION = {"direct": 1.6e-10, "iterative": 4.4e-8}
 
 #: The rebuild rule of the cached operators, checked in the iterative
-#: entries with a linear residual. Their solver publishes no operator version
-#: (the Quadrature step marks its Jacobian as dependent on the solution), so
-#: the caches follow the lagged branch of `gadopt.preconditioners.
-#: _RebuildRule`, which rebuilds when the effective history step `h / alpha`
-#: differs from the one of the last build. That step changes at step 1 (the
-#: first build), step 2 (the first BDF2 step after the backward-Euler start),
-#: step 5 (the new `dt`, with the BDF2 coefficients of unequal steps) and
-#: step 6 (the coefficients of equal steps again), so each counter increases
-#: by 1 at exactly those 1-based steps.
+#: entries with a linear residual. Their Jacobian does not depend on the
+#: state, so the solver publishes an integer operator version, which moves
+#: only when a coefficient of the Jacobian changes
+#: (`SelfGravitatingGIASolver._refresh_operator_version`). The caches follow
+#: the version branch of `gadopt.preconditioners._RebuildRule`: they rebuild
+#: when the version or the effective history step `h / alpha` differs from
+#: the one of the last build, and never after a count of solves. That step
+#: changes at step 1 (the first build), step 2 (the first BDF2 step after
+#: the backward-Euler start), step 5 (the new `dt`, with the BDF2
+#: coefficients of unequal steps) and step 6 (the coefficients of equal
+#: steps again), so each counter increases by 1 at exactly those 1-based
+#: steps, and the version moves at none of the other steps.
 REBUILD_ENTRIES = ("sea-fixed-iterative", "load-iterative")
 REBUILD_STEPS = (1, 2, 5, 6)
 REBUILD_COUNTERS = ("pc_DtNTwoBlockSchurPC_ainvb_build_count",

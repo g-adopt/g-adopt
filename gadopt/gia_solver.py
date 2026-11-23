@@ -1032,6 +1032,19 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         the power-law factor, so a Newtonian rheology is detected; a
         `Constant` exponent of value one is not folded and counts as a power
         law, which is correct and costs a preconditioner rebuild per solve.
+
+        The same method lists the coefficients of the Jacobian that the
+        operator version follows (`_current_fingerprint`). On the Quadrature
+        family it leaves out the fields of the local constitutive solve
+        (`MaxwellQuadratureUpdate.auxiliary`). The step writes them at every
+        residual and Jacobian evaluation, so their `dat_version` moves at
+        every solve, also when their values do not change (a linear Maxwell
+        rheology, whose fluidity root is one). Their values follow from the
+        state, which a state-independent Jacobian does not read, and from
+        coefficients that the list holds already (`dt`, the BDF coefficient
+        `alpha`, the material fields). With them in the list the version
+        would move at every step, and the caches of a linear problem would
+        be built at every step.
         """
         def depends(form, unknown):
             jacobian = expand_derivatives(derivative(form, unknown))
@@ -1045,8 +1058,10 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.rheology_nonlinear = rheology
         self.jacobian_depends_on_solution = rheology or depends(self.F, self.solution)
         jacobian = expand_derivatives(derivative(self.F, self.solution))
+        local = self.history.material.auxiliary if self.family == "Quadrature" else ()
         self._jacobian_coefficients = [
-            *extract_coefficients(jacobian),
+            *(c for c in extract_coefficients(jacobian)
+              if not any(c is field for field in local)),
             *ufl.algorithms.analysis.extract_type(jacobian, Constant)]
         self._jacobian_fingerprint = self._current_fingerprint()
         self._operator_version = 0

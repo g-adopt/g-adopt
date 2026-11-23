@@ -351,6 +351,27 @@ def test_the_caches_rebuild_where_the_step_changes(entry, counter):
         f"expected {expected!r}")
 
 
+@pytest.mark.parametrize("entry", E.REBUILD_ENTRIES)
+def test_a_linear_problem_publishes_an_operator_version(entry):
+    """The operator version is an integer at every step and moves only at `REBUILD_STEPS`.
+
+    A Jacobian that does not depend on the state has an integer version on
+    both history families. On the Quadrature family the fields of the local
+    constitutive solve, which the step writes at every evaluation, are not
+    part of its fingerprint, so the version moves only with `dt` and the
+    BDF2 coefficients. A version of None (NaN in the log) would make the
+    caches follow the lagged rule of a state-dependent Jacobian.
+    """
+    table = load_log(entry)
+    versions = table["operator_version"].to_numpy(float)
+    assert np.all(np.isfinite(versions)), f"{entry}: operator_version {versions!r}"
+    steps = table["step"].to_numpy()
+    moved = [int(s) for s, a, b in zip(steps[1:], versions[:-1], versions[1:]) if a != b]
+    assert set(moved) <= set(E.REBUILD_STEPS), (
+        f"{entry}: the version moves at steps {moved!r}, expected a subset of "
+        f"{E.REBUILD_STEPS!r}; versions {versions!r}")
+
+
 def test_the_elimination_matches_the_unreduced_system():
     """The Quadrature solver agrees with the unreduced mixed system.
 
