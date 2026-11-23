@@ -416,7 +416,8 @@ class DirectConstitutiveBackend:
           kind: "adjoint" or "tangent".
           rhs: The right-hand side, a Cofunction; its rows of the strong
             boundary conditions are set to zero here.
-          solution: The Function to write the solution into.
+          solution: The Function to write the solution into. It is set to
+            zero first, the start of the Krylov solve.
 
         Raises:
           RuntimeError: If the true relative residual, with the transpose
@@ -459,6 +460,19 @@ class DirectConstitutiveBackend:
             solver.invalidate_jacobian()
         for bc in owner.strong_bcs:
             bc.zero(rhs)
+        # Each derivative solve starts from zero. `LinearSolver.solve` takes
+        # the value of `solution` as the start: it is a
+        # `LinearVariationalSolver`, whose `ksponly` SNES solves for the
+        # correction to that value. `solution` is one Function of the backend
+        # for every solve of its kind, so it holds the result of the solve
+        # before this one. A start from that value makes the result depend
+        # on the order of the solves at the level of the Krylov tolerance,
+        # and the part of it along a declared nullspace, which the Krylov
+        # solve does not change, adds up over the sweeps. With the zero start
+        # two sweeps over the same states agree bit for bit. Firedrake's
+        # solve block starts its adjoint and tangent solves from zero in the
+        # same way (`firedrake.adjoint_utils.blocks.solving`).
+        solution.zero()
         solver.solve(solution, rhs)
         # The space that the KSP removed from the right-hand side: the
         # transpose nullspace of its operator (`KSPSolve` reads it with
