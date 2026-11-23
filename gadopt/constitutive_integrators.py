@@ -31,12 +31,13 @@ DISPLACEMENT = 0
 #: true relative residual that `DirectConstitutiveBackend._linear_solve`
 #: accepts. The outer Krylov method of the GIA presets is FGMRES, which is
 #: right preconditioned: it tests the norm of the unpreconditioned residual
-#: `b - A x` from its Arnoldi recurrence against `max(rtol |b|, atol)`, with
-#: `b` the right-hand side after the removal of the transpose nullspace
-#: (the start is zero, so the first residual is `b`). The residual computed
-#: explicitly after the solve differs from the recurrence by rounding only.
-#: The factor 10 leaves room for that difference and still refuses a solve
-#: that stopped an order of magnitude short of its tolerance. A left
+#: `b - A x` from its Arnoldi recurrence against `rtol |b|`, with `b` the
+#: right-hand side after the removal of the transpose nullspace (the start
+#: is zero, so the first residual is `b`). The residual computed explicitly
+#: after the solve differs from the recurrence by rounding only. The factor
+#: 10 leaves room for that difference and still refuses a solve that
+#: stopped an order of magnitude short of its relative tolerance. The bound
+#: does not follow `atol`: see `DirectConstitutiveBackend._linear_solve`. A left
 #: preconditioned method tests the preconditioned residual; its true
 #: residual can then be above the bound although the KSP converged, and
 #: the solve is refused, which is the correct answer for a derivative.
@@ -470,16 +471,26 @@ class DirectConstitutiveBackend:
         removes the same space from the residual and from the right-hand side
         before it takes the ratio.
 
-        The bound of the check follows the tolerances the outer KSP of the
-        derivative solve ran with, which are the forward `ksp_rtol` and
-        `ksp_atol` (`SelfGravitatingGIASolver.adjoint_solver_parameters`):
-        `DERIVATIVE_RESIDUAL_SAFETY * max(rtol, atol / |b|)`, and at least
-        `DERIVATIVE_RESIDUAL_FLOOR`. A solve at the driver tolerance
-        `outer_rtol = 1e-6` is accepted up to a true relative residual of
-        1e-5. The check catches a solve that PETSc reports as converged
-        while its true residual is far above the tolerance, for example an
-        outer cap counted as convergence (`ksp_converged_maxits`) given on
-        the command line under the prefix of the derivative solve. A solve
+        The bound of the check follows the relative tolerance `rtol` that
+        the outer KSP of the derivative solve ran with, which is the
+        forward `ksp_rtol` (`SelfGravitatingGIASolver.
+        adjoint_solver_parameters`): `DERIVATIVE_RESIDUAL_SAFETY * rtol`,
+        and at least `DERIVATIVE_RESIDUAL_FLOOR`. A solve at the driver
+        tolerance `outer_rtol = 1e-6` is accepted up to a true relative
+        residual of 1e-5. The absolute tolerance `ksp_atol` does not enter
+        the bound. The derivative solve takes it from the forward options,
+        where it is a number in the units of the forward residual, and the
+        right-hand side of a derivative solve has the scale of the seed of
+        the functional, which can be at or below that number. A bound that
+        grew with `atol / |b|` then accepts a solve that `atol` stopped at
+        zero iterations, with a zero solution and a wrong gradient. With the
+        bound from `rtol` alone such a solve is refused, and the message
+        names `ksp_atol`.
+
+        The check catches a solve that PETSc reports as converged while its
+        true residual is far above the tolerance: an outer cap counted as
+        convergence (`ksp_converged_maxits`) given on the command line under
+        the prefix of the derivative solve, or a stop at `ksp_atol`. A solve
         that PETSc reports as not converged raises `ConvergenceError` in
         Firedrake before the check. The residual and the bound of the last
         solve of each kind are kept in `derivative_residuals`.
@@ -576,10 +587,12 @@ class DirectConstitutiveBackend:
             # floating-point floor applies.
             bound = DERIVATIVE_RESIDUAL_FLOOR
         else:
-            # The KSP stops at `|r| <= max(rtol |b|, atol)`; relative to `|b|`
-            # that is `max(rtol, atol / |b|)`.
-            tolerance = max(rtol, atol/max(kept_norm, 1e-30))
-            bound = max(DERIVATIVE_RESIDUAL_FLOOR, DERIVATIVE_RESIDUAL_SAFETY*tolerance)
+            # The KSP stops at `|r| <= max(rtol |b|, atol)`. Only the relative
+            # part sets the bound: `atol` comes from the forward options and
+            # has no meaning against the scale of a derivative right-hand
+            # side (docstring). A solve that `atol` stopped above the bound
+            # is refused.
+            bound = max(DERIVATIVE_RESIDUAL_FLOOR, DERIVATIVE_RESIDUAL_SAFETY*rtol)
         self.derivative_residuals[kind] = (relative, bound)
         if relative > bound:
             # The residual is the last word of the message, which callers
