@@ -143,21 +143,11 @@ jobs:
           cmake --build ./tsp_build
           mv ./tsp_build/tsp-hpc /usr/local/bin/tsp
 
-      - name: Fetch gplates
-        uses: actions/checkout@v5
-        with:
-          repository: dsroberts/GPlates
-          path: ./gplates
-          ref: PyGPlates-1.0.0
-
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
-          uv pip install ./gplates
+          uv pip install 'pygplates @ git+https://github.com/dsroberts/GPlates.git@PyGPlates-1.0.0'
           uv pip install .[demos,optimisation,gplates]
-          # Clear gplates otherwise pytest picks up the tests from
-          # its source tree
-          rm -rf ./gplates
 
       - name: Check out repository linked to Trim et al. (2023)
         uses: actions/checkout@v5
@@ -214,3 +204,18 @@ jobs:
         with:
           name: run-log
           path: /tmp/tsp_db.sqlite3
+
+      - name: Cleanup temporary files
+        if: always()
+        shell: bash
+        run: |
+          uv cache prune --ci
+          . .venv/bin/activate
+          # see https://github.com/inducer/pytools/blob/main/pytools/persistent_dict.py#L484
+          export PYTOOLS_CACHE_DIR=$( python -c 'import platformdirs; print(platformdirs.user_cache_dir("pytools","pytools"))')
+          if [[ "${PYTOOLS_CACHE_DIR}" ]]; then
+            echo Cleaning pytools persistent dicts from "${PYTOOLS_CACHE_DIR}"
+            rm -rf --preserve-root=all "${PYTOOLS_CACHE_DIR}"
+          else
+            echo PYTOOLS_CACHE_DIR could not be determined
+          fi
