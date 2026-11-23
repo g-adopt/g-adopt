@@ -161,3 +161,34 @@ def test_a_finished_run_is_collected(meshes, case, preset, taped):
     PETSc.garbage_cleanup(meshes[1].comm)
     gc.collect()
     assert alive() is None
+
+
+class _NoDependencies:
+    """A stand-in for a step block on the tape: no dependency enters the key."""
+
+    def get_dependencies(self):
+        return []
+
+
+@pytest.mark.parametrize("depends", [True, False], ids=["state-dependent", "linear"])
+def test_the_tape_key_follows_the_jacobian_and_not_the_context(depends):
+    """`tape_operator_version` decides from `jacobian_depends_on_solution`.
+
+    `invalidate_jacobian` writes an integer `operator_version` into the
+    context whatever the Jacobian is. Called after the last forward solve of
+    a march whose Jacobian depends on the state, it leaves that integer for
+    the replay and the derivative sweeps. The key of the tape must still be
+    None there, so that the caches of those sweeps keep the rule of a
+    state-dependent Jacobian. For a linear problem the key is a tuple.
+    """
+    from types import SimpleNamespace
+    from gadopt.gia_step_adjoint import tape_operator_version
+
+    solver = SimpleNamespace(jacobian_depends_on_solution=depends,
+                             appctx={"operator_version": 3},
+                             _jacobian_coefficients=[], solution=None)
+    key = tape_operator_version(solver, _NoDependencies())
+    if depends:
+        assert key is None, f"key {key!r} for a state-dependent Jacobian"
+    else:
+        assert key == ("tape", ()), f"key {key!r} for a linear problem"

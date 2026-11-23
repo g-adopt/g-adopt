@@ -105,11 +105,18 @@ def tape_operator_version(gia_solver, block):
         history.
 
     Returns:
-      A tuple to publish as `operator_version`; None when the forward run
-      publishes None (a Jacobian that moves inside one solve, where every
-      cache already rebuilds by the solve index or at every update).
+      A tuple to publish as `operator_version`; None for a Jacobian that
+      moves inside one solve (`jacobian_depends_on_solution`), for which the
+      forward run publishes None and every cache already rebuilds by the
+      solve index or at every update.
     """
-    if gia_solver.appctx.get("operator_version") is None:
+    # The decision reads the property of the forms that the forward run
+    # reads in `_refresh_operator_version`, not the value in the context.
+    # `invalidate_jacobian` writes an integer into the context whatever the
+    # Jacobian is, so after a call that follows the last forward solve the
+    # context would make a sweep of a state-dependent problem publish a key,
+    # and its caches would then rebuild only where the key moves.
+    if gia_solver.jacobian_depends_on_solution:
         return None
     jacobian = gia_solver._jacobian_coefficients
     entries = []
