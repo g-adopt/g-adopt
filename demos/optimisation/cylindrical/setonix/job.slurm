@@ -30,17 +30,21 @@ export SRUN_CPUS_PER_TASK=1
 CODE_DIR=$1; WORK_DIR=$2; SCRIPT=$3; shift 3
 
 # ---- environment of this job ----
-# env-hessian-v2.sh reads MY_GADOPT, so the code copy of this job must be set first. It
-# loads the hessian-fix container of 2026-11-20 (firedrake a11e4be9, pyop3, PETSc
-# 3.26.0), puts the UFL overlay before MY_GADOPT on PYTHONPATH, sets per-job kernel
-# caches in /tmp and pins every threaded library to one thread.
+# env-hessian-v3.sh reads MY_GADOPT, so the code copy of this job must be set first. It
+# mounts private copies of the hessian-fix container of 2026-11-23 (firedrake a11e4be9,
+# pyadjoint 957f265, UFL ccf1ba61, pyop3, PETSc 3.26.0) and of its PETSc overlay, so
+# that a change to the shared group image cannot reach a running job. It puts only
+# MY_GADOPT on PYTHONPATH (the image needs no UFL overlay), sets per-job kernel caches
+# in /tmp and pins every threaded library to one thread.
 export MY_GADOPT="$CODE_DIR"
-source /software/projects/pawsey0821/sghelichkhani/env-hessian-v2.sh
+source /software/projects/pawsey0821/sghelichkhani/env-hessian-v3.sh
 # The per-job caches live in /tmp of the first node; a single-node job has no other.
 trap 'rm -rf "$PYOP3_CACHE_DIR" "$FIREDRAKE_TSFC_KERNEL_CACHE_DIR" "$XDG_CACHE_HOME"' EXIT
 
 echo "### job $SLURM_JOB_ID on $(hostname), $SLURM_NTASKS ranks, $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "### code $CODE_DIR"
+# The images that this job mounts, so that the log names the exact container.
+echo "### container $CONTAINER_PATH overlays $CONTAINER_OVERLAY_PATH"
 cat "$CODE_DIR/CODE_STATE" 2>/dev/null || echo "(no CODE_STATE in $CODE_DIR)"
 echo "### provenance"
 python3 - <<'PY'
