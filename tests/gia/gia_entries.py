@@ -768,13 +768,12 @@ def _time_convergence_entries():
 #:   The direct preset has no cached preconditioner and so no counter
 #:   (block 0 is `AssembledPC` with MUMPS). With the iterative preset, a
 #:   moving coastline makes the Jacobian depend on the state, and the
-#:   Quadrature low-rank path then sets `gia_rebuild = always`
-#:   (`SelfGravitatingGIASolver._adjust_options`): every cache rebuilds at
-#:   every Newton iteration, whatever the time step. So `sea-direct-dt`
-#:   measures its derivatives with the direct preset on `SEA`, and its
-#:   counters with the iterative preset on `SEA` with a fixed coastline,
-#:   whose caches follow the lagged rule of `gadopt.preconditioners.
-#:   _RebuildRule` (rebuild when the effective step `dt / alpha` changes);
+#:   caches then also rebuild after `gia_rebuild_every` solves, whatever
+#:   the time step. So `sea-direct-dt` measures its derivatives with the
+#:   direct preset on `SEA`, and its counters with the iterative preset on
+#:   `SEA` with a fixed coastline, whose caches rebuild only when the
+#:   effective step `dt / alpha` changes (`gadopt.preconditioners.
+#:   _RebuildRule`);
 #: - `zero_start`: True assigns zero to `u` and `psi` before each `solve`,
 #:   on the tape, as a user does who sets the start of the step solve
 #:   (`gia_adjoint.zero_start`). The step block reads the mixed solution, so

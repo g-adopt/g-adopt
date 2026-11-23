@@ -125,8 +125,9 @@ def check_lowrank_adjoint(meshes, model, checkpoint, tmp_path, moving=False):
       checkpoint: "memory" keeps the tape in memory; "disk" stores each step
         with `SingleDiskStorageSchedule`.
       tmp_path: the pytest directory for the disk checkpoints.
-      moving: the live coastline, which needs the `Real`-block complement
-        rebuilt at every step (`gia_rebuild = always`).
+      moving: the live coastline. The solver then sets no rebuild rule, so
+        the cached preconditioner pieces follow the default `lagged` rule
+        in the taped march, in every replay and in the adjoint.
     """
     from pathlib import Path
     _, sub = meshes
@@ -136,7 +137,8 @@ def check_lowrank_adjoint(meshes, model, checkpoint, tmp_path, moving=False):
         solver, dt, ice = direct.build(meshes, control, direct=True, model=model,
                                        representation='lowrank', iterative=True, moving_coastline=moving)
     if moving:
-        assert solver.solver_parameters['gia_rebuild'] == 'always'
+        # The default rule applies: the solver forces no rule on this path.
+        assert 'gia_rebuild' not in solver.solver_parameters
     continue_annotation()
     c = Control(control)
     if checkpoint == 'disk':

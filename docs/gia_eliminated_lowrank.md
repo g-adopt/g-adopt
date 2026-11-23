@@ -117,12 +117,13 @@ stronger gravity feedback and moving coastlines can change the balance.
 Wall times are illustrative, not isolated timing measurements. The default
 remains the existing $10^{-4}$ tolerance.
 
-With a moving coastline, a tangent frozen at the zero replay guess failed to
-converge during a Taylor perturbation. The direct low-rank route therefore
-selects `gia_rebuild="always"` by default for a moving coastline, refreshing
-preconditioner blocks and the Real complement at each Newton iteration.
-Explicit user rebuild settings still take precedence. Fixed-coastline runs
-retain the existing per-solve/lagged policy.
+A moving coastline or a power law makes the Jacobian depend on the state.
+On this route the preconditioner blocks and the Real complement then follow
+the default rebuild rule of the solver, `gia_rebuild="lagged"`: they are built
+again every `gia_rebuild_every` nonlinear solves (default 5) and at a change
+of the time step. A taped replay starts each step from the saved start of the
+forward step, so it repeats the Newton iterations of the forward run under
+this rule. A caller can select `per_solve` or `always` with `gia_rebuild`.
 
 ## Validation and remaining scope
 

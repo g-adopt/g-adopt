@@ -1596,22 +1596,19 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     def _adjust_options(self, extras) -> None:
         """The option rules that depend on the residual, applied to the options.
 
-        `gia_rebuild = always` on the Quadrature low-rank path with a
-        state-dependent Jacobian, unless the caller chose a rebuild rule.
-        With this rule every cached preconditioner piece is built again at
-        every Newton iteration, in the forward run and in a replay. No
-        measurement shows that this path needs it: a replay starts each step
-        from the saved start of the forward step, so it sees the same Newton
-        iterates as the forward run, and whether the lagged rule converges
-        as well on a moving coastline is not measured. A CG
-        on the condensed displacement split becomes a GMRES of the same
+        A CG on the condensed displacement split becomes a GMRES of the same
         length when the material makes that operator nonsymmetric, unless
         the caller named the Krylov method in `extras`.
+
+        The rebuild rule of the cached preconditioner pieces is not set
+        here. Every family and DtN representation uses the rule of
+        `gadopt.preconditioners._RebuildRule`: `gia_rebuild` as the caller
+        gives it, else `lagged`. So a caller can also pass
+        `gia_rebuild_every` or `gia_rebuild_max_outer` alone on every
+        path. A replay starts each step from the saved start of the forward
+        step, so it repeats the Newton iterates of the forward run under the
+        lagged rule as well (measured in NOTES/design/tests/REBUILD-RULE.md).
         """
-        if (self.family == "Quadrature" and self.dtn_representation == "lowrank"
-                and self.jacobian_depends_on_solution
-                and "gia_rebuild" not in self.solver_parameters):
-            self.add_to_solver_config({"gia_rebuild": "always"})
         for prefix in ("dtn_fieldsplit_0_fieldsplit_0_condensed_field_",
                        "dtn_fieldsplit_0_condensed_fieldsplit_0_",
                        "condensed_fieldsplit_0_"):
@@ -1643,8 +1640,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """Rebuild the variational solver after an options change.
 
         The rules that read the options run again first: the `ksponly`
-        refusal, the `gia_rebuild` rule and the Krylov method of the
-        condensed displacement split.
+        refusal and the Krylov method of the condensed displacement split.
         """
         self._refuse_ksponly_on_a_nonlinear_residual()
         self._adjust_options(self._solver_parameters_extra)

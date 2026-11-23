@@ -885,6 +885,45 @@ def test_the_preset_options_and_the_derivative_cap(meshes):
                     default_options=False)
 
 
+@pytest.mark.parametrize("model,load", [("maxwell2", "sea_moving"),
+                                        ("power", "sea_fixed")])
+def test_the_lag_options_are_accepted_on_the_quadrature_lowrank_path(meshes, model, load):
+    """The production lag options pass the rebuild rule of the cached pieces.
+
+    The GIAMIP job scripts pass `gia_rebuild_every` and
+    `gia_rebuild_max_outer` and no `gia_rebuild`. The preconditioners
+    refuse the two lag options under any rule other than `lagged`
+    (`gadopt.preconditioners._rebuild_lag_options`), so a solver that set
+    another rule on this path would stop at its first solve. Both
+    configurations have a Jacobian that depends on the state: a moving
+    coastline, and a power law with a fixed coastline.
+
+    The check needs no solve. With the options of the variational solver
+    inserted, `_RebuildRule.from_options` reads the rule from a PC under
+    the prefix of the condensed block, as `CondensedBlockPC` does at set-up.
+    """
+    from gadopt.preconditioners import _RebuildRule
+    case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
+                model=model, core="fluid", centre=True, load=load)
+    solver, _, _ = C.build_new(
+        meshes, case, solver_parameters="iterative", nullspace="rigid_rotation",
+        default_options=False,
+        extra={"gia_rebuild_every": 20, "gia_rebuild_max_outer": 6.0})
+    # The configuration must be the one the lag is for.
+    assert solver.jacobian_depends_on_solution
+    # The solver sets no rule of its own.
+    assert "gia_rebuild" not in solver.solver_parameters
+    variational = solver.solver
+    with variational.inserted_options():
+        pc = PETSc.PC().create(comm=solver.mesh.comm)
+        try:
+            pc.setOptionsPrefix(variational.options_prefix + "dtn_fieldsplit_0_condensed_")
+            rule = _RebuildRule.from_options(pc)
+        finally:
+            pc.destroy()
+    assert (rule.rule, rule._every, rule._max_outer) == ("lagged", 20, 6.0)
+
+
 @pytest.mark.longtest
 def test_an_options_change_rebuilds_the_quadrature_solver_only(meshes):
     """F16: the backend and its private coefficients are built once."""
