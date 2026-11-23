@@ -610,7 +610,19 @@ class DirectConstitutiveBackend:
           seeds: The adjoint seeds of `outputs`: a Cofunction on the mixed
             space for the solution, then one Cofunction (or None) per history
             buffer.
+
+        Raises:
+          RuntimeError: If the number of seeds is not the number of
+            `outputs`, for example for a step block that recorded the
+            solution but not the accepted history.
         """
+        # One seed per output: the solution, then one per history level of
+        # `current`. The densities are paired with `seeds[1:]` by `zip`, so a
+        # shorter list would leave the densities of the adjoint solve before
+        # this one in place for the levels that `zip` drops, with no error.
+        if len(seeds) != len(self.outputs):
+            raise RuntimeError(f"{len(seeds)} adjoint seeds for the {len(self.outputs)} "
+                               "outputs of the Quadrature step block")
         for density, seed, weights in zip(self.densities, seeds[1:], self.weights):
             if seed is None:
                 density.assign(0)
