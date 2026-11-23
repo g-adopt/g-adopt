@@ -152,7 +152,7 @@ jobs:
       - name: Install Python dependencies
         run: |
           uv venv --system-site-packages
-          uv pip install ./GPlates-PyGPlates-1.0.0
+          uv pip install 'pygplates @ git+https://github.com/dsroberts/GPlates.git@PyGPlates-1.0.0'
           uv pip install .[demos,optimisation,gplates]
           # Clear gplates otherwise pytest picks up the tests from
           # its source tree
@@ -218,7 +218,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          uv cache prune
+          uv cache prune --ci
           . .venv/bin/activate
           # see https://github.com/inducer/pytools/blob/main/pytools/persistent_dict.py#L484
           export PYTOOLS_CACHE_DIR=$( python -c 'import platformdirs; print(platformdirs.user_cache_dir("pytools","pytools"))')
