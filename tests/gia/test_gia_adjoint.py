@@ -18,6 +18,11 @@ This file reads them and asserts:
   `expected/adjoint-<entry>.txt` (a recorded value, which detects a change),
   and in `sea-direct-dt` a rebuild at the change of the time step in the
   forward march, the replay and the adjoint sweep;
+- in the entries with a frozen datum (`gia_entries.REPLAY_GRADIENT`), under
+  a memory and a disk checkpoint schedule: the step block reads the
+  solution of the step before, the gradient after gradient, replay,
+  gradient equals a central difference of replays, and the replay repeats
+  the recording with the Newton iterations of the forward run;
 - the flags of the `guards` entry.
 
 This file does not import Firedrake; it runs where the outputs are.
@@ -281,6 +286,75 @@ def test_the_caches_rebuild_at_the_change_of_dt(phase):
     missing = {name: measured[name] for name in names if measured[name] < 1}
     assert not missing, (
         f"sea-direct-dt {phase}: increase at step {step} {missing!r}, expected at least 1")
+
+
+#: The entries of the gradient after a replay (`gia_entries.REPLAY_GRADIENT`).
+REPLAY_GRADIENT_ENTRIES = list(E.REPLAY_GRADIENT)
+
+
+@pytest.mark.parametrize("entry", REPLAY_GRADIENT_ENTRIES)
+def test_the_step_block_reads_the_solution_of_the_step_before(entry):
+    """Every step block after the first depends on the projected solution of the step before.
+
+    The march has the frozen datum, so no other block of a step reads the
+    mixed solution of the step before. The step block reads it as the start
+    of its Newton solve, as Firedrake's solve block reads its unknown, and
+    this keeps the solved state of each step saved across a replay.
+    """
+    v = values(entry)
+    assert v["step_reads_previous_solution"] == 1, (
+        f"{entry}: the step block does not read the mixed solution of the step before")
+
+
+@pytest.mark.parametrize("entry", REPLAY_GRADIENT_ENTRIES)
+def test_the_gradient_after_a_replay_matches_a_difference_of_replays(entry):
+    """After gradient, replay, gradient, the adjoint equals a central difference of replays.
+
+    The second gradient is taken at another control than the first, after
+    a replay there, under the checkpoint schedule of the entry. The central
+    difference of two replays about that control uses no adjoint. An
+    adjoint that linearises a step about the solved state of an earlier run
+    of the tape differs from it by far more than `REPLAY_GRADIENT_RTOL`.
+    """
+    v = values(entry)
+    assert v["adjoint_refused_residual"] == 0, (
+        f"{entry}: an adjoint solve was refused at residual {v['adjoint_refused_residual']!r}")
+    error = relative(v["dJ_after_replay"], v["dJ_replay_difference"])
+    assert error <= E.REPLAY_GRADIENT_RTOL, (
+        f"{entry}: adjoint after the replay {v['dJ_after_replay']!r}, difference of "
+        f"replays {v['dJ_replay_difference']!r}, relative difference {error!r}, "
+        f"tolerance {E.REPLAY_GRADIENT_RTOL!r}")
+    # The derivative must carry the change of the control, or the
+    # comparison above is between two numbers near round-off.
+    floor = E.DERIVATIVE_FLOOR * abs(v["J"])
+    assert abs(v["dJ_after_replay"]) >= floor, (
+        f"{entry}: |dJ| {abs(v['dJ_after_replay'])!r} below {floor!r}")
+
+
+@pytest.mark.parametrize("entry", REPLAY_GRADIENT_ENTRIES)
+def test_the_replay_repeats_the_newton_iterations_of_the_forward_run(entry):
+    """The replay at the recorded control repeats the recording and its Newton counts.
+
+    The replay follows the first adjoint sweep. Each step of the replay
+    starts its Newton solve from the saved start of the forward step, so it
+    repeats the Newton iterates of the forward run: the same functional and
+    the same number of Newton iterations at every step. A replay that starts
+    a step from another point (zero, for example) takes another number of
+    iterations at the steps after the first. The march has a moving
+    coastline, so at least one step takes more than one Newton iteration
+    and the counts can differ at all.
+    """
+    v = values(entry)
+    error = relative(v["J_replay"], v["J"])
+    assert error <= E.REPLAY_RTOL, (
+        f"{entry}: replay {v['J_replay']!r}, recorded {v['J']!r}, relative "
+        f"difference {error!r}, tolerance {E.REPLAY_RTOL!r}")
+    steps = range(1, int(v["steps"]) + 1)
+    forward = [v[E.newton_name("forward", k)] for k in steps]
+    replay = [v[E.newton_name("replay", k)] for k in steps]
+    assert max(forward) > 1, f"{entry}: Newton iterations {forward!r}; the march is linear"
+    assert replay == forward, (
+        f"{entry}: Newton iterations per step, forward {forward!r}, replay {replay!r}")
 
 
 #: The guards that fail with the measured numbers, with the numbers (strict

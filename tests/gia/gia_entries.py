@@ -953,6 +953,77 @@ SCALED_GRADIENT_RATE_MAX = 1.15
 PROJECTION_RTOL = 1e-6
 
 
+#: The entries of the `adjoint` case that measure the gradient after a
+#: replay under a checkpoint schedule (`gia_adjoint.run_replay_gradient`),
+#: one process each.
+#:
+#: In 2-D the recorded datum solve of each step (`SelfGravitatingGIASolver.
+#: update_total_mass`) reads the mixed solution of the step before. A 3-D
+#: march has no datum, so there only the step block itself reads the mixed
+#: solution of the step before. Under a checkpoint schedule pyadjoint keeps
+#: the solved state of a step across a replay only if a later block reads
+#: it, and the adjoint of the step linearises about that state. These
+#: entries march `SEA` (moving coastline, so Newton takes several
+#: iterations per step) with the viscosity control and with the datum
+#: frozen at its initial value (`gia_adjoint.FrozenDatumSolver`), which
+#: gives the annulus march the tape dependencies of the 3-D march. The
+#: forward run, the replay and the adjoint all use the same frozen datum,
+#: so the march is self-consistent.
+#:
+#: Each entry gives the DtN representation and the single-storage
+#: schedule: `"memory"` is `SingleMemoryStorageSchedule`, `"disk"` is
+#: `SingleDiskStorageSchedule` with disk checkpointing.
+REPLAY_GRADIENT = {
+    "frozen-datum-lowrank-memory": dict(representation="lowrank", schedule="memory"),
+    "frozen-datum-lowrank-disk": dict(representation="lowrank", schedule="disk"),
+    "frozen-datum-multiplier-memory": dict(representation="multiplier", schedule="memory"),
+    "frozen-datum-multiplier-disk": dict(representation="multiplier", schedule="disk"),
+}
+
+#: The values each `REPLAY_GRADIENT` entry writes to `out/adjoint-<entry>.dat`,
+#: in the order of the sequence of an optimisation (tape, gradient, replay,
+#: gradient):
+#:
+#: - `J`: the functional of the taped march;
+#: - `dJ_first`: `<dJ/dm, h>` from the first adjoint sweep;
+#: - `J_replay`: the replay at the recorded control after that sweep;
+#: - `newton_forward_step_<k>`, `newton_replay_step_<k>`: the Newton
+#:   iterations of step `k` (1-based) in the taped march and in that
+#:   replay (`newton_name`);
+#: - `J_other_replay`: the replay at `control + ADJOINT_OTHER_STEP * h`;
+#: - `dJ_after_replay`: `<dJ/dm, h>` from the adjoint sweep after that
+#:   replay, at the other control;
+#: - `dJ_replay_difference`: the central difference of two replays about
+#:   the other control with the step `ADJOINT_REPLAY_EPS`, which uses no
+#:   adjoint;
+#: - `step_reads_previous_solution`: 1 if every step block after the
+#:   first has the projected mixed solution of the step before among its
+#:   dependencies, else 0;
+#: - `adjoint_refused_residual`: 0, or the largest true residual of a
+#:   linear adjoint solve that the library refused
+#:   (`gia_adjoint.adjoint_derivative`; the derivative is then NaN);
+#: - `steps`, `ranks`, `wall`: the number of steps, the rank count and the
+#:   wall time in seconds (`wall` is not asserted).
+REPLAY_GRADIENT_VALUES = ("J", "dJ_first", "J_replay", "J_other_replay",
+                          "dJ_after_replay", "dJ_replay_difference",
+                          "step_reads_previous_solution", "adjoint_refused_residual",
+                          "steps", "ranks", "wall")
+
+#: The adjoint derivative after a replay against the central difference of
+#: two replays, relative to the difference. Measured: 3.2e-9 (low-rank) and
+#: 3.3e-9 (multiplier) under both schedules, the `O(eps^2)` error of the
+#: difference. When the step block does not read the mixed solution of the
+#: step before, the adjoint after the replay linearises the steps about the
+#: solved states of an earlier run of the tape, and the two differ by 0.59
+#: (memory schedule) and 9.2e-4 (disk schedule) on both representations.
+REPLAY_GRADIENT_RTOL = 1e-6
+
+
+def newton_name(phase, step):
+    """The name of the Newton count of the 1-based `step` in `phase` (`"forward"` or `"replay"`)."""
+    return f"newton_{phase}_step_{step}"
+
+
 def adjoint_values(entry):
     """The path of the `name value` file of an `adjoint` entry."""
     return f"{OUT}/adjoint-{entry}.dat"
@@ -984,6 +1055,8 @@ def _adjoint_entries():
             "cores": entry.get("cores", 1),
             "outputs": [adjoint_values(name), adjoint_counts(name)]}
            for name, entry in ADJOINT.items()]
+    out += [{"case": "adjoint", "entry": name, "driver": "gia_adjoint.py", "cores": 1,
+             "outputs": [adjoint_values(name)]} for name in REPLAY_GRADIENT]
     out.append({"case": "adjoint", "entry": GUARDS, "driver": "gia_adjoint.py",
                 "cores": 1, "outputs": [adjoint_values(GUARDS)]})
     return out

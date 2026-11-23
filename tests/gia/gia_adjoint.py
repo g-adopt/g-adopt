@@ -30,6 +30,13 @@ case with a sea level. The values go as `name value` lines to
 `out/adjoint-<entry>-counts.dat`. The test `test_gia_adjoint.py` reads both
 and asserts; this script asserts nothing.
 
+An entry of `REPLAY_GRADIENT` tapes one march of the same scenario with
+the 2-D datum frozen (`FrozenDatumSolver`) under a single-storage checkpoint
+schedule, and runs the sequence of an optimisation: gradient, replay,
+gradient (`run_replay_gradient`). It writes the gradient after the replay,
+the central difference of two replays, and the Newton iterations of each
+step in the taped march and in the replay.
+
 The entry `guards` runs the unit tests that need a taped solve and writes 1
 or 0 per guard, with the numbers behind each flag (`gia_entries.GUARD_FLAGS`).
 """
@@ -55,10 +62,11 @@ import gia_cases as C
 import gia_march as M
 from gia_entries import (ADJOINT, ADJOINT_FRESH_EPS, ADJOINT_OTHER_STEP,
                          ADJOINT_REPLAY_EPS, ADJOINT_STEPS, CASE_DIR, COUNT_PHASES,
-                         GUARD_FLAGS, GUARDS, OUT, REPLAY_RTOL,
+                         GUARD_FLAGS, GUARDS, OUT, REPLAY_GRADIENT, REPLAY_RTOL,
                          SCALED_GRADIENT_RATE_MAX, TAYLOR_RATE_MIN, adjoint_blocks_name,
-                         adjoint_count_name, adjoint_counts, adjoint_values)
+                         adjoint_count_name, adjoint_counts, adjoint_values, newton_name)
 from gadopt import gia_couplings as cp
+from gadopt.gia_solver import SelfGravitatingGIASolver
 
 
 # -- Controls ----------------------------------------------------------------------
@@ -237,6 +245,75 @@ def phase_counts(forward, log, steps):
             "adjoint": adjoint_increase}
 
 
+class NewtonProbeBlock(Block):
+    """A tape block that reads the Newton iterations of the last step solve in a replay.
+
+    It has no dependencies and no outputs, so it changes no value on the
+    tape. `Scenario.march` puts one after each step. A replay reaches it
+    after the solve of its step and appends the Newton iteration count of
+    that solve to `log` (`newton_iterations`). The adjoint and tangent
+    sweeps leave it alone.
+
+    Args:
+      log: the list the counts are appended to.
+      solver: the `SelfGravitatingGIASolver` of the march.
+    """
+
+    def __init__(self, log, solver):
+        super().__init__()
+        self.log = log
+        self.solver = solver
+
+    def __str__(self):
+        return "NewtonProbeBlock"
+
+    # The stock versions return early for a block without outputs, so they
+    # are replaced (as in `CounterProbeBlock`).
+    def recompute(self, markings=False):
+        self.log.append(newton_iterations(self.solver))
+
+    def evaluate_adj(self, markings=False):
+        pass
+
+    def evaluate_tlm(self, markings=False):
+        pass
+
+    def evaluate_hessian(self, markings=False):
+        pass
+
+
+def newton_iterations(solver):
+    """The Newton iterations of the last step solve, forward or replayed.
+
+    The forward step and its replay solve with the same variational solver
+    (`SelfGravitatingGIASolver.solver`), so its SNES holds the count of the
+    last of the two.
+    """
+    return int(solver.solver.snes.getIterationNumber())
+
+
+# -- The solver with a frozen datum ----------------------------------------------------
+
+class FrozenDatumSolver(SelfGravitatingGIASolver):
+    """`SelfGravitatingGIASolver` with the 2-D monopole datum frozen at its initial value.
+
+    Before each step, `SelfGravitatingGIASolver.solve` refreshes the 2-D
+    monopole datum (`update_total_mass`) by recorded solves that read the
+    mixed solution of the step before, because the fluid-core sheet enters
+    the datum one solve late. A 3-D march has no such datum, so there no
+    block but the step block reads the mixed solution of the step before.
+    This subclass refreshes nothing, so the enclosed-mass scalars of the
+    datum keep their initial value zero in the forward run, in every replay
+    and in the adjoint, and the annulus march has the tape dependencies of
+    the 3-D march. The march solves another problem than the one of
+    `SelfGravitatingGIASolver`, and it is consistent with itself. Only the
+    `REPLAY_GRADIENT` entries use it.
+    """
+
+    def update_total_mass(self) -> None:
+        """Keep the datum at its initial value: solve and record nothing."""
+
+
 # -- The march -----------------------------------------------------------------------
 
 def zero_start(solver):
@@ -275,6 +352,8 @@ class Scenario:
         self.kind = spec["control"]
         #: Start every step from zero (`gia_entries.ADJOINT`, `zero_start`).
         self.zero_start = spec.get("zero_start", False)
+        #: Build a `FrozenDatumSolver` (`gia_entries.REPLAY_GRADIENT`).
+        self.frozen_datum = spec.get("frozen_datum", False)
         with stop_annotating():
             # The fixed ice shape of the entries whose control is not the ice.
             self.ice_shape = fd.Function(fd.FunctionSpace(meshes[1], "CG", 2)).interpolate(
@@ -289,12 +368,14 @@ class Scenario:
             parameters["approximation.B_mu"] = control
         if self.kind == "viscosity":
             kwargs["control"] = control
+        if self.frozen_datum:
+            kwargs["solver_class"] = FrozenDatumSolver
         return M.build(self.meshes, self.case, preset=self.preset,
                        default_options=self.default_options, sea=sea,
                        parameters=parameters or None, **kwargs)
 
     def march(self, control, *, steps=ADJOINT_STEPS, blocks=None, forward=None,
-              probe=None, schedule=False, restore_after=None, **kwargs):
+              probe=None, newton=None, schedule=False, restore_after=None, **kwargs):
         """March `steps` from rest with `control`; taped if annotation is on.
 
         Args:
@@ -306,6 +387,10 @@ class Scenario:
             each step.
           probe: a list for the readings of a `CounterProbeBlock` put on
             the tape after each step, or `None` for no probe.
+          newton: `None`, or two lists `(forward, replay)`: `forward` gets
+            the Newton iterations of each step of this march, and a
+            `NewtonProbeBlock` put on the tape after each step appends the
+            Newton iterations of the step to `replay` in every replay.
           schedule: mark the steps with `tape.timestepper`, for a
             checkpoint schedule.
           restore_after: after this many steps, copy the state, build a
@@ -353,6 +438,10 @@ class Scenario:
                 forward.append(M.preconditioner_counters(run.solver))
             if probe is not None and annotate_tape():
                 tape.add_block(CounterProbeBlock(probe, run.solver))
+            if newton is not None:
+                newton[0].append(newton_iterations(run.solver))
+                if annotate_tape():
+                    tape.add_block(NewtonProbeBlock(newton[1], run.solver))
         return self.functional(run), run
 
     def functional(self, run):
@@ -437,6 +526,12 @@ def enable_disk(comm):
     get_working_tape().enable_checkpointing(SingleDiskStorageSchedule(),
                                             gc_timestep_frequency=1)
     return directory
+
+
+def enable_memory():
+    """Turn on checkpointing under `SingleMemoryStorageSchedule`."""
+    from checkpoint_schedules import SingleMemoryStorageSchedule
+    get_working_tape().enable_checkpointing(SingleMemoryStorageSchedule())
 
 
 def counted_run(scenario, control):
@@ -554,6 +649,114 @@ def run_entry(name):
     print(f"values: {values}", flush=True)
     M.write_values(CASE_DIR / adjoint_values(name), values)
     write_counts(name, blocks, counts)
+    if directory is not None and meshes[1].comm.rank == 0:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+# -- The gradient after a replay ---------------------------------------------------------
+
+def step_reads_previous_solution(solver):
+    """Whether every step block after the first reads the projected solution of the step before.
+
+    Each step records one step block and then one kernel projection of the
+    mixed solution (`SelfGravitatingGIASolver.solve`). The output of the
+    projection of step k is the mixed solution that step k + 1 starts
+    from, and the step block of step k + 1 must have it among its
+    dependencies, as Firedrake's solve block has its unknown.
+
+    Args:
+      solver: the `SelfGravitatingGIASolver` of the taped march.
+
+    Returns:
+      True if the tape holds one projection per step block and every step
+      block after the first reads the output of the projection before it.
+    """
+    from gadopt.gia_step_adjoint import GIAStepBlockMixin
+    from gadopt.nullspaces import KernelProjectionBlock
+    blocks = get_working_tape().get_blocks()
+    steps = [b for b in blocks if isinstance(b, GIAStepBlockMixin)]
+    projections = [b for b in blocks if isinstance(b, KernelProjectionBlock)]
+    if not steps or len(steps) != len(projections):
+        return False
+    for step, projection in zip(steps[1:], projections[:-1]):
+        projected = projection.get_outputs()[0]
+        if projected.output is not solver.solution:
+            return False
+        if not any(dependency is projected for dependency in step.get_dependencies()):
+            return False
+    return True
+
+
+def run_replay_gradient(name):
+    """Measure one entry of `REPLAY_GRADIENT` and write its values.
+
+    The march is `SEA` with the direct preset, the viscosity control, the
+    DtN representation of the entry and a `FrozenDatumSolver`, taped under
+    the checkpoint schedule of the entry. On the tape, in this order:
+
+    1. the first adjoint sweep. In it pyadjoint works out which saved
+       values a later replay keeps; before it a replay keeps them all;
+    2. a replay at the recorded control, with the Newton iterations of each
+       step. A replay that starts each step from the saved start of the
+       forward step repeats its Newton iterates and so its counts;
+    3. a replay at `control + ADJOINT_OTHER_STEP * direction` and the
+       adjoint sweep there;
+    4. the central difference of two replays about that control, which
+       uses no adjoint.
+
+    The adjoint of each step linearises about the solved state of the step.
+    If no block after a step reads that state, pyadjoint drops its saved
+    value after step 1, and the sweep in step 3 linearises about the state
+    of an earlier run of the tape.
+
+    Args:
+      name: a key of `REPLAY_GRADIENT`.
+    """
+    spec = REPLAY_GRADIENT[name]
+    start = time.time()
+    meshes = C.annulus_meshes()
+    tape = get_working_tape()
+    tape.clear_tape()
+    scenario = Scenario(meshes, dict(base="SEA", preset="direct", control="viscosity",
+                                     changes={"representation": spec["representation"]},
+                                     frozen_datum=True))
+    control, direction = control_and_direction("viscosity", meshes)
+    directory = None
+    if spec["schedule"] == "disk":
+        directory = enable_disk(meshes[1].comm)
+    else:
+        enable_memory()
+    forward, replay = [], []
+    continue_annotation()
+    J, run = scenario.march(control, newton=(forward, replay), schedule=True)
+    rf = ReducedFunctional(J, Control(control))
+    pause_annotation()
+    values = {"J": float(J)}
+    values["step_reads_previous_solution"] = int(step_reads_previous_solution(run.solver))
+    values["dJ_first"], refused_first = adjoint_derivative(rf, direction)
+    # Only the readings of this replay count, so a schedule that replays
+    # steps inside an adjoint sweep does not add readings to it.
+    first = len(replay)
+    values["J_replay"] = float(rf(control))
+    replayed = replay[first:]
+    assert len(replayed) == len(forward) == len(ADJOINT_STEPS), (replayed, forward)
+    print(f"taped march, adjoint, replay: J {values['J']!r} replay {values['J_replay']!r} "
+          f"dJ {values['dJ_first']!r} Newton {forward} / {replayed} "
+          f"({time.time() - start:.0f} s)", flush=True)
+    other = shifted(control, direction, ADJOINT_OTHER_STEP)
+    values["J_other_replay"] = float(rf(other))
+    values["dJ_after_replay"], refused_after = adjoint_derivative(rf, direction)
+    values["dJ_replay_difference"] = replay_difference(rf, other, direction,
+                                                       ADJOINT_REPLAY_EPS)
+    values["adjoint_refused_residual"] = max(refused_first, refused_after)
+    for k, (n_forward, n_replay) in enumerate(zip(forward, replayed), start=1):
+        values[newton_name("forward", k)] = n_forward
+        values[newton_name("replay", k)] = n_replay
+    values["steps"] = len(ADJOINT_STEPS)
+    values["ranks"] = meshes[1].comm.size
+    values["wall"] = time.time() - start
+    print(f"values: {values}", flush=True)
+    M.write_values(CASE_DIR / adjoint_values(name), values)
     if directory is not None and meshes[1].comm.rank == 0:
         shutil.rmtree(directory, ignore_errors=True)
 
@@ -794,10 +997,13 @@ def run_guards():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--entry", required=True, choices=sorted([*ADJOINT, GUARDS]))
+    parser.add_argument("--entry", required=True,
+                        choices=sorted([*ADJOINT, *REPLAY_GRADIENT, GUARDS]))
     name = parser.parse_args().entry
     print(f"gadopt from {gadopt.__file__}", flush=True)
     if name == GUARDS:
         run_guards()
+    elif name in REPLAY_GRADIENT:
+        run_replay_gradient(name)
     else:
         run_entry(name)

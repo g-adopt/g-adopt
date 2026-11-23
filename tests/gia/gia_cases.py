@@ -227,7 +227,7 @@ def dt_function(sub, value=DT0):
 
 def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
               solver_parameters="direct", extra=None, default_options=True,
-              parameters=None, extra_bcs=None, **kwargs):
+              parameters=None, extra_bcs=None, solver_class=NewSolver, **kwargs):
     """The new solver for `case`. Returns `(solver, u, psi)`.
 
     Args:
@@ -248,6 +248,9 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
       extra_bcs: displacement conditions added to the ones the case gives,
         `{boundary: {name: value}}`, merged per boundary, for example
         `{CURVE_RE: {"normal_stress": sigma}}`.
+      solver_class: `SelfGravitatingGIASolver` or a subclass of it, for
+        example the solver with a frozen datum of the `adjoint` case
+        (`gia_adjoint.FrozenDatumSolver`).
       kwargs: further arguments of the solver.
     """
     parent, sub = meshes
@@ -293,7 +296,7 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
         self_gravity_number=value("approximation.self_gravity_number", LAMBDA))
     # Every replacement must have reached a coupling of the case.
     assert not parameters, f"parameters of couplings the case lacks: {sorted(parameters)}"
-    solver = NewSolver(
+    solver = solver_class(
         u, psi, material, dt=dt or dt_function(sub),
         time_scheme=case.scheme, internal_variable_family=case.family,
         quad_degree=QUAD if case.family == "Quadrature" else None,
