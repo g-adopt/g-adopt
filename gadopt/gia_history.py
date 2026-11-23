@@ -23,6 +23,7 @@ the solver passes it to the momentum terms as the equation attribute `mu`.
 """
 
 import firedrake as fd
+from pyadjoint.tape import annotate_tape
 
 from .equations import Equation
 from .internal_variable_equation import history_slices, internal_variable_space
@@ -164,8 +165,13 @@ class QuadratureHistory(HistoryFormulation):
         return None
 
     def advance(self, solver) -> None:
-        # The step that solved knows where the new history is.
-        self.time_integrator.accept([solver.solved_history()])
+        # The step that solved knows where the new history is. On a taped
+        # step the accepted level becomes the history output of the step
+        # block (`BDF2History.accept`), which has only the mixed solution as
+        # an output until here (`DirectConstitutiveBackend.solve`).
+        self.time_integrator.accept(
+            [solver.solved_history()],
+            output_of=solver.adjoint_block if annotate_tape() else None)
 
 
 def history_formulation(family, solver, degree, order):

@@ -82,14 +82,39 @@ class BDF2History:
         return [self.beta*m + self.gamma*p
                 for m, p in zip(self.current, self.previous)]
 
-    def accept(self, histories):
-        if self.previous is None:
-            for current, updated in zip(self.current, histories):
-                current.assign(updated)
-        else:
-            for previous, current, updated in zip(self.previous, self.current, histories):
+    def accept(self, histories, output_of=None):
+        """Accept `histories` as the new level, after a successful solve.
+
+        With BDF2 the accepted level first moves to the previous level by a
+        recorded assignment. Its saved value on the tape refers to the saved
+        value of the accepted level (`DelegatedFunctionCheckpoint`), so it
+        costs no copy.
+
+        Args:
+          histories: the new value of every history Function.
+          output_of: the tape block whose map produced `histories`, or None.
+            With a block, the new accepted level is written without
+            annotation, and its new block variable becomes an output of that
+            block, in the order of `histories`. Firedrake's solve wrapper
+            makes the unknown of a solve an output of its solve block in the
+            same way. The tape then holds one block variable of the new
+            history per step, and no assign block between the block's own
+            history buffer and the accepted level. The block must return the
+            value of this output in a replay and take its adjoint seed and
+            its tangent (`gadopt.constitutive_integrators.
+            ConstitutiveStepBlock` does). Without a block, the new level is
+            assigned, which the tape records as a block of its own when it
+            annotates.
+        """
+        previous_levels = self.previous or [None]*len(self.current)
+        for previous, current, updated in zip(previous_levels, self.current, histories):
+            if previous is not None:
                 previous.assign(current)
+            if output_of is None:
                 current.assign(updated)
+            else:
+                current.assign(updated, annotate=False)
+                output_of.add_output(current.create_block_variable())
         self.previous_dt = self.prepared_dt
         self.prepared_dt = None
 

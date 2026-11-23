@@ -9,7 +9,10 @@ order:
     KernelProjectionBlock           the rigid-rotation projection, if declared
 
 followed by the blocks of the history accept and of the copy into `u` and
-`psi`. The step block is one of two kinds:
+`psi`. On the Quadrature history the accept records only the move of the
+accepted level to the previous level (BDF2); the new accepted level is an
+output of the step block (`gadopt.viscoelastic_timestepping.BDF2History.
+accept` with `output_of`). The step block is one of two kinds:
 
   - The low-rank DtN path with the DG history: the solve block of Firedrake's
     annotated variational solve, adopted by

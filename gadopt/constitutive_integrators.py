@@ -124,7 +124,13 @@ class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
     history levels, the time coefficients, the material and coupling
     parameters, the loads, and the mixed solution) to the coupled solution
     and the updated history at the quadrature points
-    (`DirectConstitutiveBackend.outputs`).
+    (`DirectConstitutiveBackend.outputs`). The history output is the
+    accepted history level itself: `DirectConstitutiveBackend.solve` adds the
+    mixed solution as the first output, and the history accept of the step
+    adds the new accepted level after the kernel projection
+    (`gadopt.viscoelastic_timestepping.BDF2History.accept` with
+    `output_of`). In a replay the block returns the values of its private
+    buffers for both (`numeric_outputs`).
 
     The mixed solution is a dependency and the first output, as the unknown
     of a variational solve is on Firedrake's solve block
@@ -298,7 +304,14 @@ class DirectConstitutiveBackend:
         self.problem = fd.NonlinearVariationalProblem(self.F, self.work, bcs=owner.strong_bcs, J=self.J)
         self.build_solver()
         self.buffers = [fd.Function(m.function_space()) for m in owner.time_integrator.current]
-        self.outputs = [owner.solution, *self.buffers]
+        # The outputs of the step block: the mixed solution, and the accepted
+        # history level itself. `solve` adds the mixed solution;
+        # `QuadratureHistory.advance` adds the accepted level when it accepts
+        # the new history (`BDF2History.accept` with `output_of`). The tape
+        # then holds one block variable of the new history per step. The
+        # buffers stay private to the backend, as `work` is, and give the
+        # values of the outputs in a replay (`numeric_outputs`).
+        self.outputs = [owner.solution, *owner.time_integrator.current]
         self.numeric_outputs = [self.work, *self.buffers]
         self.adjoint = fd.Function(owner.solution_space)
         # Each history Function may hold several Maxwell modes in one tensor.
@@ -388,8 +401,7 @@ class DirectConstitutiveBackend:
             self.owner.solution.assign(self.work)
         if block:
             get_working_tape().add_block(block)
-            for output in self.outputs:
-                block.add_output(output.create_block_variable())
+            block.add_output(self.owner.solution.create_block_variable())
             self.owner.adjoint_block = block
 
     def _linear_solve(self, kind, rhs, solution):
