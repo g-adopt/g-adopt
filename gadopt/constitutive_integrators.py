@@ -128,7 +128,9 @@ class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
 
     The mixed solution is a dependency and the first output, as the unknown
     of a variational solve is on Firedrake's solve block
-    (`firedrake.adjoint_utils.blocks.solving.CachedSolverBlock`):
+    (`firedrake.adjoint_utils.blocks.NonlinearVariationalSolveBlock`, or
+    `CachedSolverBlock` on a Firedrake with PR 4638, see
+    `gadopt.dtn_coupled_adjoint`):
 
     - The dependency is the value the mixed solution has when the step
       starts, the start of the Newton solve. A replay starts from its saved
@@ -513,7 +515,8 @@ class DirectConstitutiveBackend:
         """The forms of the tangent map, with one placeholder per input tangent.
 
         Built once, at the first tangent sweep. `directions[i]` holds the
-        tangent of input `i` (zero where it has none), `state` the tangent
+        tangent of input `i` (zero where it has none; None for the mixed
+        solution, whose tangent is not read), `state` the tangent
         of the mixed solution and `displacement` its displacement part on the
         mechanics mesh.
 
@@ -528,15 +531,19 @@ class DirectConstitutiveBackend:
         only.
         """
         material = self.material
-        directions = [fd.Function(c.function_space()) for c in self.private_inputs]
+        # One direction per input, in the order of `inputs`, and None for the
+        # mixed solution. `work` is the unknown: a derivative of the residual
+        # along it is the Jacobian, not a part of the right-hand side, and
+        # the map does not depend on the start of the Newton solve, so its
+        # tangent is not read (Firedrake's solve block skips its unknown in
+        # the same way).
+        directions = [None if c is self.work else fd.Function(c.function_space())
+                      for c in self.private_inputs]
         state = fd.Function(self.owner.solution_space)
         displacement = fd.Function(material.u.function_space())
         # The parameters of the map: every input but the mixed solution.
-        # `work` is the unknown; a derivative of the residual along it is the
-        # Jacobian, not a part of the right-hand side, and the map does not
-        # depend on the start of the Newton solve.
         parameters = [(c, d) for c, d in zip(self.private_inputs, directions)
-                      if c is not self.work]
+                      if d is not None]
         in_residual = set(self.sensitivity_F.coefficients())
         rhs_form = sum(fd.derivative(self.sensitivity_F, c, d)
                        for c, d in parameters if c in in_residual)
@@ -575,6 +582,9 @@ class DirectConstitutiveBackend:
             self._build_tangent()
         t = self._tangent
         for direction, value in zip(t["directions"], tlm_inputs):
+            if direction is None:
+                # The mixed solution: the start of the Newton solve.
+                continue
             if value is None:
                 direction.assign(0)
             else:

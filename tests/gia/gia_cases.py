@@ -463,9 +463,10 @@ def residual_and_actions(solver, directions):
     else:
         backend = None
     if backend is not None:
+        # The mixed solution is one of the inputs, so this also copies the
+        # state into `backend.work`.
         for target, value in zip(backend.private_inputs, backend.inputs):
             target.assign(value)
-        backend.work.assign(solver.solution)
         backend.material.refresh(backend.work)
         state, F, J = backend.work, backend.F, backend.J
     else:

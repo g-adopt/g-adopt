@@ -774,9 +774,10 @@ def preconditioner_set_up(solver):
       The outer PETSc `PC`.
     """
     backend = solver._step.backend
+    # The mixed solution is one of the inputs, so this also copies the state
+    # into `backend.work`.
     for target, value in zip(backend.private_inputs, backend.inputs):
         target.assign(value)
-    backend.work.assign(solver.solution)
     solver.appctx["gia_solve_index"] = solver.appctx.get("gia_solve_index", 0) + 1
     solver._refresh_operator_version()
     solver.appctx["operator_version"] = None
