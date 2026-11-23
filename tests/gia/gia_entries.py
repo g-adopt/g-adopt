@@ -783,7 +783,15 @@ def _time_convergence_entries():
 #:   the replay starts each step from the same point as the forward run with
 #:   or without these assignments (module docstring of `gadopt.gia_solver`,
 #:   "The initial guess and the replay"). The `LOAD` entries keep the
-#:   assignments, so the adjoint case covers a start that the user sets.
+#:   assignments, so the adjoint case covers a start that the user sets;
+#: - `steps`: the step lengths of the march, in place of `ADJOINT_STEPS`;
+#: - `material_change`: `(step, factor)`: the viscosity control reaches the
+#:   material through a copy of it on the tape, and before the 1-based
+#:   `step` the copy is assigned `copy + factor * control`, a recorded
+#:   change of a material field between two steps at one `dt`
+#:   (`gia_adjoint.Scenario.march`; viscosity control only);
+#: - `repeat_sweep`: True writes `dJ_repeat`, the derivative of a second
+#:   adjoint sweep directly after the one of `dJ`.
 #:
 #: Each entry writes the values of `ADJOINT_VALUES` to
 #: `out/adjoint-<entry>.dat` and the counts (`adjoint_count_names`) to
@@ -809,7 +817,33 @@ ADJOINT = {
                                       checkpoint="disk"),
     "sea-direct-viscosity-np2": dict(base="SEA", preset="direct", control="viscosity",
                                      cores=2),
+    "sea-fixed-material-change": dict(base="SEA", preset="iterative", control="viscosity",
+                                      changes={"load": "sea_fixed"},
+                                      steps=(.08,) * 6, material_change=(4, .05),
+                                      repeat_sweep=True),
 }
+
+#: The steps at which the cached operators of `sea-fixed-material-change`
+#: rebuild, by phase (1-based). The entry marches a linear problem (fixed
+#: coastline, Maxwell), so the solver publishes an integer operator version
+#: and a replay and an adjoint sweep publish a key of the tape in its place
+#: (`gadopt.gia_step_adjoint.tape_operator_version`). The caches rebuild
+#: where that key or the effective step `dt / alpha` differs from the one
+#: of the last build, and at the first solve of a sweep. With six steps at
+#: one `dt` and the material field assigned before step 4 (`material_change`):
+#:
+#: - forward and replay: step 1 (the first solve), step 2 (the first BDF2
+#:   step after the backward-Euler start, another `alpha`), step 4 (the
+#:   material field changed);
+#: - adjoint, which runs from step 6 down to step 1: step 6 (the first solve
+#:   of the sweep), step 3 (the key of the material field before the
+#:   change), step 1 (backward Euler).
+#:
+#: Steps 3, 5 and 6 of the forward run and steps 5, 4 and 2 of the adjoint
+#: keep the caches of the step before: the key and `dt / alpha` do not move.
+MATERIAL_CHANGE_ENTRY = "sea-fixed-material-change"
+MATERIAL_CHANGE_REBUILD_STEPS = {"forward": (1, 2, 4), "replay": (1, 2, 4),
+                                 "adjoint": (1, 3, 6)}
 
 #: The controls, by name: a CG1 field on the mantle that scales every
 #: viscosity by `exp(m)`; the shape of the ice thickness (CG2 on the
@@ -865,10 +899,13 @@ ADJOINT_REPLAY_EPS = 1e-4
 #: - `adjoint_refused_residual`: 0, or the true residual of a linear adjoint
 #:   solve that the library refused (`gia_adjoint.adjoint_derivative`; `dJ`
 #:   and the rate with the gradient are then NaN);
+#: - `dJ_repeat`: the derivative of a second adjoint sweep directly after
+#:   the one of `dJ` (only an entry with `repeat_sweep`);
 #: - `wall`: the wall time of the entry in seconds (not asserted).
 ADJOINT_VALUES = ("J", "J_replay", "J_fresh", "J_other_replay", "J_other_fresh",
                   "dJ", "dJ_fresh", "taylor_rate", "taylor_rate_no_gradient",
-                  "tangent", "tangent_replay", "adjoint_refused_residual", "wall")
+                  "tangent", "tangent_replay", "adjoint_refused_residual", "dJ_repeat",
+                  "wall")
 
 #: Tolerances of the per-entry assertions, relative to the
 #: second value named: replay against the recording; fresh march against

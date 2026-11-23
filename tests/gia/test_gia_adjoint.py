@@ -16,8 +16,11 @@ This file reads them and asserts:
   (DtN representation, preset, checkpoint schedule, rank count);
 - the counts: the tape blocks per step and the build counters against
   `expected/adjoint-<entry>.txt` (a recorded value, which detects a change),
-  and in `sea-direct-dt` a rebuild at the change of the time step in the
-  forward march, the replay and the adjoint sweep;
+  in `sea-direct-dt` a rebuild at the change of the time step in the
+  forward march, the replay and the adjoint sweep, and in
+  `sea-fixed-material-change` the rebuilds of a linear march at one `dt`
+  with a material field changed on the tape, together with two adjoint
+  sweeps that agree bit for bit;
 - in the entries with a frozen datum (`gia_entries.REPLAY_GRADIENT`), under
   a memory and a disk checkpoint schedule: the step block reads the
   solution of the step before, the gradient after gradient, replay,
@@ -286,6 +289,49 @@ def test_the_caches_rebuild_at_the_change_of_dt(phase):
     missing = {name: measured[name] for name in names if measured[name] < 1}
     assert not missing, (
         f"sea-direct-dt {phase}: increase at step {step} {missing!r}, expected at least 1")
+
+
+@pytest.mark.parametrize("phase", E.COUNT_PHASES)
+def test_the_caches_follow_the_key_of_the_tape(phase):
+    """In `sea-fixed-material-change` the caches rebuild exactly at the steps of the design.
+
+    The march is linear at one `dt`, so the operator version is an integer,
+    and a replay and an adjoint sweep publish a key of the tape in its
+    place. The material field changes on the tape before step 4. Each
+    counter of `REBUILD_COUNTERS` increases by 1 at the steps of
+    `MATERIAL_CHANGE_REBUILD_STEPS[phase]` and by 0 at the other steps. A
+    key that does not move at the change keeps a preconditioner of the old
+    material; a key that moves at every step (or a rule that falls back to
+    the count of solves) rebuilds where nothing changed.
+    """
+    entry = E.MATERIAL_CHANGE_ENTRY
+    measured = counts(entry)
+    steps = len(E.ADJOINT[entry]["steps"])
+    rebuilds = E.MATERIAL_CHANGE_REBUILD_STEPS[phase]
+    for counter in E.REBUILD_COUNTERS:
+        names = [E.adjoint_count_name(phase, counter, k) for k in range(1, steps + 1)]
+        absent = [name for name in names if name not in measured]
+        assert not absent, f"{entry} has no counter {absent!r}: {sorted(measured)!r}"
+        increase = [measured[name] for name in names]
+        expected = [1 if k in rebuilds else 0 for k in range(1, steps + 1)]
+        assert increase == expected, (
+            f"{entry} {phase} {counter}: increase per step {increase!r}, "
+            f"expected {expected!r}")
+
+
+def test_a_second_adjoint_sweep_repeats_the_first():
+    """In `sea-fixed-material-change` two adjoint sweeps in a row give the same derivative.
+
+    Every derivative solve starts from zero and the first solve of each
+    sweep rebuilds the caches, so the second sweep runs the same operations
+    on the same saved states and its result is equal bit for bit. A solve
+    that starts from the result of the sweep before, or a cache that the
+    second sweep keeps from the end of the first, makes the two differ.
+    """
+    v = values(E.MATERIAL_CHANGE_ENTRY)
+    assert v["dJ_repeat"] == v["dJ"], (
+        f"{E.MATERIAL_CHANGE_ENTRY}: first sweep {v['dJ']!r}, second sweep "
+        f"{v['dJ_repeat']!r}")
 
 
 #: The entries of the gradient after a replay (`gia_entries.REPLAY_GRADIENT`).

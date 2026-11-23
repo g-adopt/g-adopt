@@ -4,9 +4,10 @@ Usage: `python gia_adjoint.py --entry <name>`, with the entry names of
 `gia_entries.ADJOINT` and `gia_entries.GUARDS`.
 
 An entry of `ADJOINT` tapes one march of the adjoint scenario
-(`gia_entries.ADJOINT_STEPS`, the ice `.002 (1 + .2 k) (1 - cos theta) / 2`
-before step `k`) for one configuration and one control, and measures the
-tape against independent evaluations:
+(`gia_entries.ADJOINT_STEPS`, or the `steps` of the entry; the ice
+`.002 (1 + .2 k) (1 - cos theta) / 2` before step `k`) for one
+configuration and one control, and measures the tape against independent
+evaluations:
 
 - the replay of the tape at the recorded control and a fresh, untaped march
   there, against the recorded functional;
@@ -356,6 +357,13 @@ class Scenario:
         self.zero_start = spec.get("zero_start", False)
         #: Build a `FrozenDatumSolver` (`gia_entries.REPLAY_GRADIENT`).
         self.frozen_datum = spec.get("frozen_datum", False)
+        #: The step lengths of a march (`gia_entries.ADJOINT`, `steps`).
+        self.steps = tuple(spec.get("steps", ADJOINT_STEPS))
+        #: `(step, factor)` of a recorded change of the material field, or
+        #: None (`gia_entries.ADJOINT`, `material_change`).
+        self.material_change = spec.get("material_change")
+        if self.material_change is not None and self.kind != "viscosity":
+            raise ValueError("material_change needs the viscosity control")
         with stop_annotating():
             # The fixed ice shape of the entries whose control is not the ice.
             self.ice_shape = fd.Function(fd.FunctionSpace(meshes[1], "CG", 2)).interpolate(
@@ -376,14 +384,24 @@ class Scenario:
                        default_options=self.default_options, sea=sea,
                        parameters=parameters or None, **kwargs)
 
-    def march(self, control, *, steps=ADJOINT_STEPS, blocks=None, forward=None,
+    def march(self, control, *, steps=None, blocks=None, forward=None,
               probe=None, newton=None, schedule=False, restore_after=None, **kwargs):
         """March `steps` from rest with `control`; taped if annotation is on.
+
+        With `material_change = (step, factor)` the solver reads the
+        viscosity factor from a copy of the control, made on the tape, and
+        before the 1-based `step` the copy is assigned
+        `copy + factor * control`, also on the tape. The material field then
+        changes between two steps at one `dt`, so the operator version of
+        the forward run and the key of the tape move at that step and at no
+        other step of a constant `dt` (`gadopt.gia_step_adjoint.
+        tape_operator_version`). The functional depends on the control
+        through both the copy and the change.
 
         Args:
           control: the control Function: the one of the `Control` for the
             taped march, a copy at another value for a fresh march.
-          steps: the step lengths.
+          steps: the step lengths; `self.steps` when None.
           blocks: a list that gets the number of tape blocks of each step.
           forward: a list that gets the counters of the forward solve after
             each step.
@@ -413,7 +431,13 @@ class Scenario:
                 # The reference sea level enters the residual of every step.
                 sea.SL_init = control
         ice_shape = control if self.kind == "ice" else self.ice_shape
-        run = self.build(control, sea, **kwargs)
+        steps = self.steps if steps is None else steps
+        material = control
+        if self.material_change is not None:
+            # A recorded copy, so that the assignment below changes the
+            # field the material reads and not the control itself.
+            material = fd.Function(control.function_space()).assign(control)
+        run = self.build(material, sea, **kwargs)
         tape = get_working_tape()
         iterator = enumerate(steps)
         if schedule and annotate_tape():
@@ -428,6 +452,8 @@ class Scenario:
                 second.solver.restore(copies)
                 run = second
             n0 = len(tape.get_blocks())
+            if self.material_change is not None and k + 1 == self.material_change[0]:
+                material.assign(material + self.material_change[1] * control)
             run.dt.assign(h * control if self.kind == "dt" else h)
             if sea is not None:
                 sea.I.assign((1 + .2 * k) * ice_shape)
@@ -552,7 +578,7 @@ def counted_run(scenario, control):
     rf(control)
     rf.derivative()
     log.append(("end", *CounterProbeBlock(log, run.solver).read()))
-    return J, rf, blocks, phase_counts(forward, log, len(ADJOINT_STEPS))
+    return J, rf, blocks, phase_counts(forward, log, len(scenario.steps))
 
 
 def adjoint_derivative(rf, direction):
@@ -624,6 +650,11 @@ def run_entry(name):
         values["J_replay"] = float(rf(control))
     values["J"] = float(J)
     values["dJ"], values["adjoint_refused_residual"] = adjoint_derivative(rf, direction)
+    if spec.get("repeat_sweep"):
+        # A second sweep over the same saved states. Each derivative solve
+        # starts from zero and the first solve of each sweep rebuilds the
+        # caches, so the two sweeps run the same operations.
+        values["dJ_repeat"], _ = adjoint_derivative(rf, direction)
     print(f"taped march, replay, adjoint: J {values['J']!r} replay {values['J_replay']!r} "
           f"dJ {values['dJ']!r} ({time.time() - start:.0f} s)", flush=True)
     values["J_fresh"] = scenario.fresh(control)
