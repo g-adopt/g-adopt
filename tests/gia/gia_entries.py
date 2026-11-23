@@ -183,9 +183,13 @@ RECORDED_RTOL_ITERATIVE = 1e-5
 #: listed is compared relative to its own value only.
 #: The direct entries reproduce the small columns (`core_pressure`, `m3`,
 #: `ur_mean` at 1e-8 to 1e-10 of their scale) to at most 3e-15 of the scale
-#: between rank counts, restarts and DtN representations; 1e-12 leaves room
-#: for another BLAS and factorisation order and still fails a sign flip.
-SCALE_RTOL_DIRECT = 1e-12
+#: between rank counts, restarts and DtN representations on one machine.
+#: Between the CI runner and the machine that recorded the values the
+#: `geoid_mean` column of `sea-fixed` (2.6e-11 against a scale of 6.9e-5)
+#: differed by 1.4e-12 of the scale (CI run 45021671038), from another BLAS
+#: and factorisation order. 1e-11 covers that and still fails a sign flip of
+#: such a column, which moves it by about 1e-6 of the scale.
+SCALE_RTOL_DIRECT = 1e-11
 
 SCALE_OF = {
     "u_probe": ("product", "u_norm", "u_probe_norm"),
