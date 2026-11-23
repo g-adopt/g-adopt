@@ -122,10 +122,28 @@ class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
     The map takes the coefficients of the step residual and of the local
     constitutive equation (`DirectConstitutiveBackend.inputs`: the previous
     history levels, the time coefficients, the material and coupling
-    parameters, the loads) to the coupled solution and the updated history
-    at the quadrature points (`DirectConstitutiveBackend.outputs`). The
-    previous solution is not an input: it is only the initial guess of the
-    forward Newton solve, and a replay starts from zero.
+    parameters, the loads, and the mixed solution) to the coupled solution
+    and the updated history at the quadrature points
+    (`DirectConstitutiveBackend.outputs`).
+
+    The mixed solution is a dependency and the first output, as the unknown
+    of a variational solve is on Firedrake's solve block
+    (`firedrake.adjoint_utils.blocks.solving.CachedSolverBlock`):
+
+    - The dependency is the value the mixed solution has when the step
+      starts, the start of the Newton solve. A replay starts from its saved
+      value, which the blocks before this one recomputed, so a replay at the
+      recorded control repeats the Newton iterates of the forward run.
+    - The derivative of the map with respect to the start is zero: a
+      converged root does not depend on the start. The adjoint returns None
+      for this dependency and the tangent does not read its tangent.
+    - The adjoint and the tangent linearise about the solved state, the
+      saved value of the first output.
+
+    The dependency also puts the solved state of every step on the path from
+    the controls to the functional: the next step block reads the mixed
+    solution, so pyadjoint keeps, under a checkpoint schedule, the saved
+    values that `_restore_state` reads.
 
     The solution leaves the map with the gauge the solve gave it. The
     `KernelProjectionBlock` that `SelfGravitatingGIASolver.solve` records
@@ -157,7 +175,12 @@ class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
         return "ConstitutiveStepBlock"
 
     def _restore(self, inputs):
-        """Set the private inputs of the backend to this block's input values."""
+        """Set the private inputs of the backend to this block's input values.
+
+        The private copy of the mixed solution (`backend.work`) is one of
+        them, so this also sets the start of the Newton solve to its saved
+        value.
+        """
         for target, value in zip(self.backend.private_inputs, inputs):
             target.assign(value)
 
@@ -166,17 +189,18 @@ class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
 
         The derivative of the map is taken at the forward solution of this
         block, with the frozen quadrature coefficients of the local solve at
-        that solution (`MaxwellQuadratureUpdate.refresh`).
+        that solution (`MaxwellQuadratureUpdate.refresh`). `_restore` put
+        the start of the step into `backend.work`; the solved state, the
+        saved value of the first output, replaces it here.
         """
         self._restore(inputs)
         self.backend.work.assign(self.get_outputs()[0].saved_output)
         self.backend.material.refresh(self.backend.work)
 
     def prepare_recompute_component(self, inputs, relevant_outputs):
+        # `_restore` sets `backend.work` to the saved start of this step, so
+        # the solve does not read what an earlier sweep left there.
         self._restore(inputs)
-        # A shared workspace may hold an unrelated later step after reverse.
-        # Use a deterministic gauge-free guess for this algebraic solve.
-        self.backend.work.assign(0)
         with self._bound_to_block():
             self.backend.forward()
 
@@ -189,6 +213,9 @@ class ConstitutiveStepBlock(GIAStepBlockMixin, Block):
             self.backend.reverse(adj_inputs)
 
     def evaluate_adj_component(self, inputs, adj_inputs, block_variable, idx, prepared=None):
+        if block_variable.output is self.gia_solver.solution:
+            # No derivative with respect to the start of the Newton solve.
+            return None
         gradient = self.backend.input_gradient(idx)
         return self._add_theta_adjoint_term(
             gradient, block_variable.output, self.backend.work, self.backend.adjoint)
@@ -236,16 +263,24 @@ class DirectConstitutiveBackend:
     def __init__(self, owner, material):
         self.owner, self.material = owner, material
         material.owner = owner
-        auxiliary = (owner.solution, material.q, material.E0, material.Eq)
+        auxiliary = (material.q, material.E0, material.Eq)
         coefficients = set(owner.F.coefficients()) | set(extract_coefficients(material.equation))
         for g in material.updates:
             coefficients.update(extract_coefficients(g))
         coefficients.discard(material.u)
+        # Every Function the step reads, the mixed solution among them: the
+        # unknown is a coefficient of the residual, and its value when the
+        # step starts is the start of the Newton solve. Firedrake's solve
+        # block takes the coefficients of its residual in the same way, the
+        # unknown included.
         self.inputs = tuple(sorted((c for c in coefficients if isinstance(c, fd.Function)
                                     and all(c is not a for a in auxiliary)), key=lambda c: c.count()))
         self.private_inputs = tuple(c.copy(deepcopy=True) for c in self.inputs)
-        self.work = owner.solution.copy(deepcopy=True)
-        mapping = dict(zip(self.inputs, self.private_inputs)) | {owner.solution: self.work}
+        mapping = dict(zip(self.inputs, self.private_inputs))
+        #: The private copy of the mixed solution: the start of the Newton
+        #: solve before `forward`, the solved state after it, and the point
+        #: of linearisation of the derivative solves.
+        self.work = mapping[owner.solution]
         self.lowrank = owner.dtn_representation == "lowrank"
         self.F = ufl.replace(owner.F, mapping)
         material.equation = ufl.replace(material.equation, mapping)
@@ -343,9 +378,10 @@ class DirectConstitutiveBackend:
         """One forward step from the owner's solution, recorded as one block."""
         block = ConstitutiveStepBlock(self) if annotate_tape() else None
         with stop_annotating():
+            # The mixed solution is one of the inputs, so this also copies
+            # the start of the step into `work`.
             for target, value in zip(self.private_inputs, self.inputs):
                 target.assign(value)
-            self.work.assign(self.owner.solution)
             self.forward()
             self.owner.solution.assign(self.work)
         if block:
@@ -463,7 +499,8 @@ class DirectConstitutiveBackend:
         """The gradient of the step map with respect to input `index`, from the forms.
 
         The derivative of the low-rank prefactor, which no form carries, is
-        added by `ConstitutiveStepBlock`.
+        added by `ConstitutiveStepBlock`. Not called for the mixed solution:
+        the map does not depend on the start of the Newton solve.
         """
         if index not in self.gradient_forms:
             coefficient = self.private_inputs[index]
@@ -494,16 +531,22 @@ class DirectConstitutiveBackend:
         directions = [fd.Function(c.function_space()) for c in self.private_inputs]
         state = fd.Function(self.owner.solution_space)
         displacement = fd.Function(material.u.function_space())
+        # The parameters of the map: every input but the mixed solution.
+        # `work` is the unknown; a derivative of the residual along it is the
+        # Jacobian, not a part of the right-hand side, and the map does not
+        # depend on the start of the Newton solve.
+        parameters = [(c, d) for c, d in zip(self.private_inputs, directions)
+                      if c is not self.work]
         in_residual = set(self.sensitivity_F.coefficients())
         rhs_form = sum(fd.derivative(self.sensitivity_F, c, d)
-                       for c, d in zip(self.private_inputs, directions) if c in in_residual)
+                       for c, d in parameters if c in in_residual)
         lifted = material.q + (material.E0 - material.equation)/material.Eq
         history = []
         for g in material.updates:
             g = ufl.replace(g, {material.q: lifted})
             read = set(extract_coefficients(g))
             tangent = ufl.derivative(g, material.u, displacement)
-            for c, d in zip(self.private_inputs, directions):
+            for c, d in parameters:
                 if c in read:
                     tangent = tangent + ufl.derivative(g, c, d)
             history.append(ufl.algorithms.expand_derivatives(tangent))
@@ -519,7 +562,8 @@ class DirectConstitutiveBackend:
 
         Args:
           tlm_inputs: The tangent of each input, in the order of `inputs`,
-            or None where the input has none.
+            or None where the input has none. The tangent of the mixed
+            solution (the start of the Newton solve) is not read.
           B0_state: `B0 x` at the forward solution (low-rank path with a
             tangent of a factor of `theta_psi`), or None.
           theta_coefficient: `(d theta_psi / dz) zdot`.

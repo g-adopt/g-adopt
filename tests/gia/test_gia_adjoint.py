@@ -75,9 +75,7 @@ NOT_APPLICABLE = {
 
 #: The assertions that fail with the measured numbers, by `(test, entry)`,
 #: with the numbers. They are strict xfails, so a change that makes one pass
-#: shows in the report. None at present. A `LOAD` march that starts each
-#: step from the previous solution replays only to 1.8e-8, so the `LOAD`
-#: entries start each step from zero (`gia_entries.ADJOINT`, `zero_start`).
+#: shows in the report. None at present.
 KNOWN_FAILURES = {}
 
 
@@ -304,12 +302,13 @@ def test_the_projection_replays_the_tangential_functional():
     With the rigid rotation declared and its projection on the tape, a
     functional of the tangential surface displacement, which a rigid
     rotation changes, replays to the recorded value. The bound 1e-6 is set
-    by the measurement and by the defect it must catch: the replay differs by
-    2.6e-8 (the replay starts each step from zero and the rotation is a
-    kernel only to 8e-6, so the two projected solves stop at points about
-    1e-8 apart in the rotation content), and without the recorded projection
-    (mutation M6) the replay error is 0.68. The fresh march repeats the
-    recording exactly.
+    by the defect it must catch: without the recorded projection (mutation
+    M6) the replay error is 0.68. The replay and the fresh march repeat the
+    recording exactly (error 0): the step block reads the mixed solution, so
+    the replay starts each step solve from the same point as the forward run
+    and repeats its Newton iterates. The bound leaves room for a replay
+    that starts from another point, because the rotation is a kernel only
+    to 8e-6 and two starts give projected solves about 1e-8 apart.
     """
     v = values(E.GUARDS)
     for name in ("projection_replay_error", "projection_fresh_error"):

@@ -776,13 +776,12 @@ def _time_convergence_entries():
 #:   whose caches follow the lagged rule of `gadopt.preconditioners.
 #:   _RebuildRule` (rebuild when the effective step `dt / alpha` changes);
 #: - `zero_start`: True assigns zero to `u` and `psi` before each `solve`,
-#:   on the tape, as a user does whose replay must equal the forward run to
-#:   round-off (`gia_adjoint.zero_start`). The replay of the
-#:   Quadrature step starts from zero; a march that starts each step from
-#:   the previous solution replays the `LOAD` entries only to 1.8e-8,
-#:   because the part of the solution along the declared rigid rotation
-#:   depends on the start (module docstring of `gadopt.gia_solver`, "The
-#:   initial guess and the replay").
+#:   on the tape, as a user does who sets the start of the step solve
+#:   (`gia_adjoint.zero_start`). The step block reads the mixed solution, so
+#:   the replay starts each step from the same point as the forward run with
+#:   or without these assignments (module docstring of `gadopt.gia_solver`,
+#:   "The initial guess and the replay"). The `LOAD` entries keep the
+#:   assignments, so the adjoint case covers a start that the user sets.
 #:
 #: Each entry writes the values of `ADJOINT_VALUES` to
 #: `out/adjoint-<entry>.dat` and the counts (`adjoint_count_names`) to
@@ -947,9 +946,10 @@ GUARD_FLAGS = ("capped_derivative_raises", "uncapped_derivative_passes",
 #: so its rate falls to about 1 (`test_gravity_adjoint.py` sabotage bound).
 SCALED_GRADIENT_RATE_MAX = 1.15
 #: The replay of the tangential functional against the recording and a
-#: fresh march. Measured: replay 2.6e-8, fresh march 0. Without the recorded
-#: projection (mutation M6) the replay error is 0.68, so 1e-6 separates the
-#: two by more than a factor of 30 on the clean side.
+#: fresh march. Measured: replay 0, fresh march 0. Without the recorded
+#: projection (mutation M6) the replay error is 0.68. The bound 1e-6 is far
+#: from both, and above the 1e-8 by which two marches that start their steps
+#: from different points differ.
 PROJECTION_RTOL = 1e-6
 
 

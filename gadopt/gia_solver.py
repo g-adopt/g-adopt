@@ -118,7 +118,7 @@ and the recorded kernel projection it writes the solved displacement and
 potential back into them with recorded `assign`s. A user who writes
 `u.assign(0); psi.assign(0)` before `solve()` gets a zero start in the
 forward run, and the two `assign`s are on the tape. A taped replay follows
-that start on the DG family only ("The initial guess and the replay").
+that start on both history families ("The initial guess and the replay").
 
 Three parts of the step are not in `u` and `psi`, because the coupled system
 has more unknowns and more memory than the two fields:
@@ -145,24 +145,24 @@ To change the state between steps (a restart, a reset), use `restore` or
 
 ## The initial guess and the replay
 
-The forward run and a taped replay start each step solve from different
-points on the Quadrature family: the forward run from `u`, `psi` and the
-`Real` fields, the replay from zero (`gadopt.constitutive_integrators.
-ConstitutiveStepBlock`). With a declared rigid rotation this matters at the
-level of the approximate kernel: the right-preconditioned outer FGMRES does
-not remove the rotation from its search directions, so the part of the step
-solution along the rotation depends on the start, and since the rotation is
-a kernel of the discrete operator only to about 1e-5, that part moves the
-other components. A replay of a march that starts each step from the
-previous solution then differs from the forward run by about 1e-7 relative
-on the annulus. A run whose replay must equal its forward run to round-off
-(an adjoint or an inversion) assigns zero to `u` and `psi` before each
-`solve`, on the tape. The `Real` fields then still start from their last
-solved values, which leaves a difference at round-off (1e-14 relative on
-the annulus); a `Real` field can be set to zero as well through its view,
-`real_field(name).assign(0)`. Firedrake's solve block of the DG family
-starts its replay from the recorded start, so there the replay follows the
-forward run either way.
+The forward run and a taped replay start each step solve from the same
+point on both history families: the value of the mixed solution when the
+step starts (`u`, `psi` and the `Real` fields). The step block depends on
+the mixed solution and starts its replay from the saved value of that
+dependency: Firedrake's solve block on the DG family, and
+`gadopt.constitutive_integrators.ConstitutiveStepBlock` on the Quadrature
+family, which follows it. The derivative with respect to the start is zero
+on both. A replay at the recorded control therefore repeats the Newton
+iterates of the forward run, and a run whose replay must equal its forward
+run (an adjoint or an inversion) needs no assignment to `u` and `psi`.
+
+The start matters at the level of the approximate kernel. With a declared
+rigid rotation, the right-preconditioned outer FGMRES does not remove the
+rotation from its search directions, so the part of the step solution along
+the rotation depends on the start, and since the rotation is a kernel of
+the discrete operator only to about 1e-5, that part moves the other
+components. Two marches that start their steps from different points (the
+previous solution and zero) differ by about 1e-7 relative on the annulus.
 
 A zero start costs nothing on a step whose residual is linear in the
 solution (a prescribed load, a fixed coastline): with the prescribed load
@@ -2029,15 +2029,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         and Firedrake solves the coupled system for one mixed Function, so
         the step cannot solve for `u` and `psi` in place as `EnergySolver`
         solves for its solution. The recorded copy makes the present values
-        of the two Functions the starting point of the forward step on both
-        families. It is the starting point of a taped replay on the DG
-        family only, where the step is Firedrake's solve block, which
-        depends on the mixed solution and starts its replay from the
-        recorded value. The Quadrature step block
-        (`gadopt.constitutive_integrators.ConstitutiveStepBlock`) does not
-        depend on the mixed solution and starts its replay from zero, so
-        there the two recorded `assign`s are on the tape but no block reads
-        them (module docstring, "The initial guess and the replay").
+        of the two Functions the starting point of the forward step and of
+        a taped replay on both families: the step block (Firedrake's solve
+        block, or `gadopt.constitutive_integrators.ConstitutiveStepBlock`)
+        depends on the mixed solution and starts its replay from the saved
+        value (module docstring, "The initial guess and the replay").
 
         The copy is skipped when neither Function was written since the
         solver last wrote them (`_copy_out`, `restore`, `reset`, the

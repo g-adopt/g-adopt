@@ -244,11 +244,10 @@ def zero_start(solver):
 
     The step solve starts from `u` and `psi` (`gadopt.gia_solver`, "The
     contract of `u`, `psi` and the history"), and the two assignments are
-    on the tape. The replay of the Quadrature step starts from zero, so a
-    forward march that starts from zero replays to round-off. The `Real`
-    fields of the couplings keep their previous values as their start;
-    on `load-direct-B_mu` the replay then repeats the recording to 1.1e-14
-    (bit for bit when they are set to zero as well).
+    on the tape. The step block reads the mixed solution, so a replay
+    starts each step from the same point as the forward run: zero in `u`
+    and `psi`, and the previous values in the `Real` fields of the
+    couplings.
 
     Args:
       solver: the `SelfGravitatingGIASolver`.
