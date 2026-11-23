@@ -27,6 +27,30 @@ from .utility import weak_callback
 #: own a quadrature step; the field order of either solver starts with it.
 DISPLACEMENT = 0
 
+#: The factor between the tolerance of a derivative solve and the largest
+#: true relative residual that `DirectConstitutiveBackend._linear_solve`
+#: accepts. The outer Krylov method of the GIA presets is FGMRES, which is
+#: right preconditioned: it tests the norm of the unpreconditioned residual
+#: `b - A x` from its Arnoldi recurrence against `max(rtol |b|, atol)`, with
+#: `b` the right-hand side after the removal of the transpose nullspace
+#: (the start is zero, so the first residual is `b`). The residual computed
+#: explicitly after the solve differs from the recurrence by rounding only.
+#: The factor 10 leaves room for that difference and still refuses a solve
+#: that stopped an order of magnitude short of its tolerance. A left
+#: preconditioned method tests the preconditioned residual; its true
+#: residual can then be above the bound although the KSP converged, and
+#: the solve is refused, which is the correct answer for a derivative.
+DERIVATIVE_RESIDUAL_SAFETY = 10.0
+
+#: The smallest bound of the true relative residual of a derivative solve,
+#: and the bound of a solve whose outer KSP is `preonly` and so applies no
+#: tolerance. The residual `b - A x` is computed in floating point, with an
+#: error of about the machine precision times `|A| |x|`; relative to `|b|`
+#: that error grows with the condition number of `A`. A tolerance far below
+#: this floor would otherwise refuse a solve that is as accurate as the
+#: arithmetic allows.
+DERIVATIVE_RESIDUAL_FLOOR = 1e-8
+
 
 class MaxwellQuadratureUpdate:
     """One scalar common-fluidity root per mechanical quadrature point."""
@@ -330,6 +354,10 @@ class DirectConstitutiveBackend:
         self.rhs_form = fd.derivative(self.H, self.work, fd.TestFunction(owner.solution_space))
         self.reverse_functional = self.H-fd.action(self.sensitivity_F, self.adjoint)
         self.gradient_forms = {}
+        #: `{"adjoint": (relative, bound), "tangent": (relative, bound)}`:
+        #: the true relative residual of the last derivative solve of each
+        #: kind and the bound `_linear_solve` checked it against.
+        self.derivative_residuals = {}
         #: The tangent forms and Functions, built at the first tangent sweep
         #: (`_build_tangent`): only Taylor and tangent tests use them.
         self._tangent = None
@@ -424,6 +452,20 @@ class DirectConstitutiveBackend:
         removes the same space from the residual and from the right-hand side
         before it takes the ratio.
 
+        The bound of the check follows the tolerances the outer KSP of the
+        derivative solve ran with, which are the forward `ksp_rtol` and
+        `ksp_atol` (`SelfGravitatingGIASolver.adjoint_solver_parameters`):
+        `DERIVATIVE_RESIDUAL_SAFETY * max(rtol, atol / |b|)`, and at least
+        `DERIVATIVE_RESIDUAL_FLOOR`. A solve at the driver tolerance
+        `outer_rtol = 1e-6` is accepted up to a true relative residual of
+        1e-5. The check catches a solve that PETSc reports as converged
+        while its true residual is far above the tolerance, for example an
+        outer cap counted as convergence (`ksp_converged_maxits`) given on
+        the command line under the prefix of the derivative solve. A solve
+        that PETSc reports as not converged raises `ConvergenceError` in
+        Firedrake before the check. The residual and the bound of the last
+        solve of each kind are kept in `derivative_residuals`.
+
         Args:
           kind: "adjoint" or "tangent".
           rhs: The right-hand side, a Cofunction; its rows of the strong
@@ -433,7 +475,7 @@ class DirectConstitutiveBackend:
 
         Raises:
           RuntimeError: If the true relative residual, with the transpose
-            nullspace of the operator removed, is above 1e-8.
+            nullspace of the operator removed, is above the bound.
         """
         owner = self.owner
         owner.appctx["operator_version"] = None
@@ -499,11 +541,32 @@ class DirectConstitutiveBackend:
             if removed.handle:
                 removed.remove(r)
                 removed.remove(kept)
-            relative = r.norm()/max(kept.norm(), 1e-30)
+            kept_norm = kept.norm()
+            relative = r.norm()/max(kept_norm, 1e-30)
             r.destroy()
             kept.destroy()
-        if relative > 1e-8:
-            raise RuntimeError(f"Direct {kind} solve true relative residual {relative}")
+        # The tolerances the outer KSP ran with: the options of the
+        # derivative solve, with any command-line option under its prefix.
+        ksp = solver.ksp
+        rtol, atol, _, _ = ksp.getTolerances()
+        if ksp.getType() == "preonly":
+            # No Krylov iteration and so no convergence test: only the
+            # floating-point floor applies.
+            bound = DERIVATIVE_RESIDUAL_FLOOR
+        else:
+            # The KSP stops at `|r| <= max(rtol |b|, atol)`; relative to `|b|`
+            # that is `max(rtol, atol / |b|)`.
+            tolerance = max(rtol, atol/max(kept_norm, 1e-30))
+            bound = max(DERIVATIVE_RESIDUAL_FLOOR, DERIVATIVE_RESIDUAL_SAFETY*tolerance)
+        self.derivative_residuals[kind] = (relative, bound)
+        if relative > bound:
+            # The residual is the last word of the message, which callers
+            # that report the refusal read (`tests/gia/gia_adjoint.py`).
+            raise RuntimeError(
+                f"Direct {kind} solve: the true relative residual is above its bound "
+                f"{bound:.3e} (ksp_rtol {rtol:.3e}, ksp_atol {atol:.3e}, KSP "
+                f"{ksp.getType()}, {ksp.getIterationNumber()} iterations, reason "
+                f"{ksp.getConvergedReason()}); true relative residual {relative}")
 
     def reverse(self, seeds):
         """Solve the adjoint system of the step for the seeds of its outputs.

@@ -909,6 +909,14 @@ COUNT_PHASES = ("forward", "replay", "adjoint")
 #: - `capped_derivative_raises`, `uncapped_derivative_passes`: an adjoint
 #:   solve capped with `derivative_max_it=1` raises `ConvergenceError`, with
 #:   400 it does not (`test_gia_solver.py::test_a_capped_derivative_solve_raises`);
+#: - `loose_derivative_accepted`, `forced_cap_refused`: on the
+#:   `sea-iterative-viscosity` march with the outer tolerance of the GIAMIP
+#:   drivers (`LOOSE_OUTER_RTOL`) and with `COARSE_OUTER_RTOL`, the adjoint
+#:   sweep is accepted, with the bound of the true residual at ten times the
+#:   tolerance; an outer adjoint solve capped at one iteration and counted
+#:   as converged (`ksp_converged_maxits` under the prefix of the derivative
+#:   solve) is refused on its true residual
+#:   (`gia_adjoint.guard_residual_bound`);
 #: - `hessian_refused`: the Hessian of the Quadrature step raises
 #:   `NotImplementedError` (`test_gia_step_adjoint.py::
 #:   test_the_quadrature_step_refuses_a_hessian`);
@@ -938,9 +946,17 @@ COUNT_PHASES = ("forward", "replay", "adjoint")
 #:   test_taylor_through_a_restore_on_the_tape`).
 GUARDS = "guards"
 GUARD_FLAGS = ("capped_derivative_raises", "uncapped_derivative_passes",
-               "hessian_refused", "absent_control_refused", "present_control_accepted",
+               "loose_derivative_accepted", "forced_cap_refused", "hessian_refused", "absent_control_refused", "present_control_accepted",
                "scaled_gradient_detected", "tape_structure", "projection_taylor", "collected_direct", "collected_iterative",
                "restore_replay", "restore_taylor")
+#: The outer Krylov tolerance of the GIAMIP and benchmark drivers
+#: (`outer_rtol`), at which the guard `loose_derivative_accepted` runs the
+#: adjoint of `sea-iterative-viscosity`.
+LOOSE_OUTER_RTOL = 1e-6
+#: A looser outer tolerance, at which the outer FGMRES of the adjoint solve
+#: of that march stops after one iteration at a true relative residual of
+#: about 3e-5, far above the floor `DERIVATIVE_RESIDUAL_FLOOR`.
+COARSE_OUTER_RTOL = 1e-4
 #: A gradient scaled by 1.01 makes the first-order remainder `0.01 eps dJ`,
 #: so its rate falls to about 1 (`test_gravity_adjoint.py` sabotage bound).
 SCALED_GRADIENT_RATE_MAX = 1.15

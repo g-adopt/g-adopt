@@ -62,7 +62,8 @@ import gia_cases as C
 import gia_march as M
 from gia_entries import (ADJOINT, ADJOINT_FRESH_EPS, ADJOINT_OTHER_STEP,
                          ADJOINT_REPLAY_EPS, ADJOINT_STEPS, CASE_DIR, COUNT_PHASES,
-                         GUARD_FLAGS, GUARDS, OUT, REPLAY_GRADIENT, REPLAY_RTOL,
+                         COARSE_OUTER_RTOL, GUARD_FLAGS, GUARDS, LOOSE_OUTER_RTOL, OUT,
+                         REPLAY_GRADIENT, REPLAY_RTOL,
                          SCALED_GRADIENT_RATE_MAX, TAYLOR_RATE_MIN, adjoint_blocks_name,
                          adjoint_count_name, adjoint_counts, adjoint_values, newton_name)
 from gadopt import gia_couplings as cp
@@ -558,7 +559,8 @@ def adjoint_derivative(rf, direction):
 
     `DirectConstitutiveBackend._linear_solve` raises a `RuntimeError` when
     the true relative residual of a linear adjoint solve, with the transpose
-    nullspace of its operator removed, is above 1e-8. The refusal is caught
+    nullspace of its operator removed, is above its bound (ten times the
+    tolerance of the solve, at least 1e-8). The refusal is caught
     here so that an entry still writes its other values if it happens; the
     residual is written, and the rows that need the derivative then fail.
     Any other error propagates.
@@ -570,7 +572,7 @@ def adjoint_derivative(rf, direction):
         return float(direction._ad_dot(rf.derivative())), 0.0
     except RuntimeError as error:
         message = str(error)
-        if "adjoint solve true relative residual" not in message:
+        if not message.startswith("Direct adjoint solve"):
             raise
         print(f"adjoint refused: {message}", flush=True)
         return math.nan, float(message.split()[-1])
@@ -812,6 +814,76 @@ def guard_capped(meshes, out):
         out[flag] = int(raised if cap == 1 else not raised)
 
 
+def guard_residual_bound(meshes, out):
+    """The bound of the derivative residual follows the tolerance of the solve.
+
+    Three taped marches of `sea-iterative-viscosity` (Quadrature history,
+    low-rank DtN, moving coastline, iterative preset) with a loose outer
+    Krylov tolerance, each followed by one adjoint sweep:
+
+    - `loose`: the four steps at the tolerance of the GIAMIP drivers,
+      `ksp_rtol = LOOSE_OUTER_RTOL` (1e-6). The outer FGMRES takes two
+      iterations per adjoint solve and ends at a true relative residual of
+      about 5e-9.
+    - `coarse`: one step at `ksp_rtol = COARSE_OUTER_RTOL` (1e-4). The
+      outer FGMRES stops after one iteration at a true relative residual of
+      about 3e-5, which a fixed bound of 1e-8 refused.
+    - `capped`: one step at `LOOSE_OUTER_RTOL`, with the outer adjoint KSP
+      stopped after one iteration and that iteration counted as convergence
+      (the command-line options `ksp_max_it 1` and `ksp_converged_maxits`
+      under the prefix of the derivative solve). PETSc reports a converged
+      solve, and `DirectConstitutiveBackend._linear_solve` must refuse it
+      on its true residual, about three times its bound. The options are
+      removed again whatever happens.
+
+    `loose_derivative_accepted` is 1 when the first two sweeps give a finite
+    derivative with no refusal and their bound is
+    `DERIVATIVE_RESIDUAL_SAFETY` times the tolerance. `forced_cap_refused`
+    is 1 when the third sweep is refused with a residual above its bound.
+    The residual and the bound of the last adjoint solve of each march are
+    written beside the flags.
+    """
+    from gadopt.constitutive_integrators import DERIVATIVE_RESIDUAL_SAFETY
+    scenario = Scenario(meshes, ADJOINT["sea-iterative-viscosity"])
+    accepted = True
+    for name, rtol, steps, capped in (("loose", LOOSE_OUTER_RTOL, ADJOINT_STEPS, False),
+                                      ("coarse", COARSE_OUTER_RTOL, ADJOINT_STEPS[:1], False),
+                                      ("capped", LOOSE_OUTER_RTOL, ADJOINT_STEPS[:1], True)):
+        get_working_tape().clear_tape()
+        control, direction = control_and_direction("viscosity", meshes)
+        continue_annotation()
+        J, run = scenario.march(control, steps=steps, extra={"ksp_rtol": rtol})
+        rf = ReducedFunctional(J, Control(control))
+        pause_annotation()
+        cap = {}
+        if capped:
+            # Command-line options under the prefix of the adjoint solve,
+            # read when its solver is built at the first adjoint solve.
+            prefix = f"{run.solver.name}_quadrature_adj_"
+            cap = {prefix + "ksp_max_it": 1, prefix + "ksp_converged_maxits": True}
+        options = PETSc.Options()
+        try:
+            for key, value in cap.items():
+                options.setValue(key, value)
+            dJ, refused = adjoint_derivative(rf, direction)
+        finally:
+            for key in cap:
+                options.delValue(key)
+        relative, bound = run.solver._step.backend.derivative_residuals.get(
+            "adjoint", (math.nan, math.nan))
+        out[f"{name}_dJ"] = dJ
+        out[f"{name}_refused_residual"] = refused
+        out[f"{name}_last_residual"] = relative
+        out[f"{name}_bound"] = bound
+        if capped:
+            out["forced_cap_refused"] = int(math.isnan(dJ) and refused > bound)
+        else:
+            accepted = accepted and (
+                math.isfinite(dJ) and refused == 0
+                and math.isclose(bound, DERIVATIVE_RESIDUAL_SAFETY * rtol, rel_tol=1e-12))
+    out["loose_derivative_accepted"] = int(accepted)
+
+
 def guard_hessian_and_controls(meshes, out):
     """The Hessian of the Quadrature step raises; a control absent from the residual raises."""
     get_working_tape().clear_tape()
@@ -977,8 +1049,8 @@ def run_guards():
     start = time.time()
     meshes = C.annulus_meshes()
     out = {}
-    for guard in (guard_capped, guard_hessian_and_controls, guard_tape, guard_collected,
-                  guard_restore):
+    for guard in (guard_capped, guard_residual_bound, guard_hessian_and_controls, guard_tape,
+                  guard_collected, guard_restore):
         try:
             guard(meshes, out)
             out[f"{guard.__name__}_raised"] = 0
