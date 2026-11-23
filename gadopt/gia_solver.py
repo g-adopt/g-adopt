@@ -1597,8 +1597,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """The option rules that depend on the residual, applied to the options.
 
         `gia_rebuild = always` on the Quadrature low-rank path with a
-        state-dependent Jacobian, where a tangent frozen at the replay's zero
-        initial guess is not good enough (a chosen lag policy is kept). A CG
+        state-dependent Jacobian, unless the caller chose a rebuild rule.
+        With this rule every cached preconditioner piece is built again at
+        every Newton iteration, in the forward run and in a replay. No
+        measurement shows that this path needs it: a replay starts each step
+        from the saved start of the forward step, so it sees the same Newton
+        iterates as the forward run, and whether the lagged rule converges
+        as well on a moving coastline is not measured. A CG
         on the condensed displacement split becomes a GMRES of the same
         length when the material makes that operator nonsymmetric, unless
         the caller named the Krylov method in `extras`.
