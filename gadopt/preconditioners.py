@@ -4381,13 +4381,214 @@ class _ProjectedRetainedOperator:
         _remove_declared_space(mat.getNullSpace(), y)
 
 
+class _TranslationDeflation:
+    r"""Galerkin deflation of the rigid translations of the retained `(u, psi)` system.
+
+    The retained block of `ReducedGIABlockPC` is the exact displacement and
+    potential block of the Jacobian, the sea-level load included. With a
+    sea level, that block has `d` eigenvalues close to zero: a rigid
+    translation of the mantle together with the potential it induces. The
+    translation moves the geoid with the solid surface, so it leaves the sea
+    level `SL = N - u_r + ...` unchanged, and the weight of the ocean column
+    in the displacement row (`-c B_mu g rho_w (dsigma/dSL) (u.n)(w.n)`, a
+    negative stiffness) cancels the restoring force that the potential
+    coupling leaves. The `Real` rows of `CentreOfMass` fix this translation in
+    the full system, but the block-0 solve inside the Schur factorisation does
+    not see those rows, so it must resolve the near-singular directions with
+    Krylov iterations alone.
+
+    Measured on the 1000 km test sphere of the GIAMIP drivers with 95 percent
+    ocean (NOTES/design/block0/REPORT.md): for `z_k = (e_k, psi_k)` the energy
+    left after the potential responds is `z_k^T A z_k / e_k^T S_uu e_k = 7e-4`
+    with the sea-level term and 0.15 without it. The inner FGMRES then finds
+    two or three Ritz values near `2e-4` (the others are above `3e-2`), and
+    every block-0 solve whose right-hand side has a component along a
+    translation stagnates for 10 to 25 iterations before it converges. On
+    GIAMIP Exp01 at 624 ranks most of these solves stop at their cap.
+
+    The deflation removes these directions from the Krylov solve exactly.
+    With the deflation space `Z = [z_0, ..., z_{d-1}]`,
+
+        z_k = (e_k, psi_k),   psi_k = -(A_psipsi + B)^-1 A_psiu e_k,
+
+    `E = Z^T A Z` (`d` by `d`), the left projector `P = I - A Z E^-1 Z^T` and
+    `Q = Z E^-1 Z^T`, the solution of `A x = b` is
+
+        x = Q b + (I - Q A) x~,   P A x~ = P b,
+
+    which holds for any `Z` with an invertible `E` (`A x = A Q b + P A x~ =
+    A Q b + P b = b`). The Krylov method only sees `P A`, which maps `Z` to
+    zero, so the near-null eigenvalues are gone from its spectrum. The space
+    is a choice of the preconditioner; the identity itself is exact, so the
+    converged block-0 solution is the same with or without deflation to the
+    inner tolerance.
+
+    `A` is the operator of the inner Krylov solve: the projected operator of
+    `CondensedBlockPC._initialise_projected_operator` when rigid rotations
+    are declared, so `A Z` holds no component along the declared left kernel
+    and the projection keeps the right-hand side free of it.
+
+    Cost. A build solves the `d` potential systems for `psi_k` with the
+    potential split's own preconditioner (GMRES with `LowRankPotentialPC`) and
+    applies `A` `d` times; `refresh` applies `A` `d` times. One block-0
+    application adds one application of `A` (the correction `Q A x~`) and,
+    per inner iteration, one reduction of `d` dot products and `d` vector
+    updates. Memory: `2 d + 3` vectors of the retained system.
+
+    Args:
+      pc: the `ReducedGIABlockPC` whose retained solve is deflated.
+      operator: the operator of its inner Krylov solve (`A` above).
+    """
+
+    def __init__(self, pc, operator):
+        self.pc = pc
+        self.operator = operator
+        comm = operator.getComm()
+        V = pc.displacement_space
+        dim = V.value_size
+        # The rigid translations as Firedrake Functions, so that the
+        # component layout of the displacement vector is Firedrake's and not
+        # an assumption about interlacing.
+        self._translations = []
+        for k in range(dim):
+            direction = [0.0] * dim
+            direction[k] = 1.0
+            self._translations.append(fd.Function(V).assign(fd.Constant(direction)))
+        self.Z = []
+        for translation in self._translations:
+            u = pc.S_uu.petscmat.createVecRight()
+            with translation.dat.vec_ro as vec:
+                vec.copy(u)
+            psi = pc.A_psipsi.petscmat.createVecRight()
+            self.Z.append(PETSc.Vec().createNest([u, psi], comm=comm))
+        self.AZ = [z.duplicate() for z in self.Z]
+        self._psi_rhs = pc.A_psipsi.petscmat.createVecLeft()
+        # The potential solve that gives `psi_k`. It shares the PC of the
+        # potential split of the inner fieldsplit (`LowRankPotentialPC`), so
+        # it needs no preconditioner of its own; `setPC` without
+        # `setOperators` keeps that PC's operators, which are the potential
+        # block of the nest with the low-rank update. The options sit under
+        # the retained solve's prefix plus `deflation_psi_` and default to a
+        # GMRES to 1e-8: `psi_k` only shapes the deflation space, so its
+        # accuracy changes the iteration count and not the solution.
+        self.psi_ksp = PETSc.KSP().create(comm=comm)
+        self.psi_ksp.setOptionsPrefix(pc.condensed_ksp.getOptionsPrefix() + "deflation_psi_")
+        self.psi_ksp.setType("gmres")
+        self.psi_ksp.setTolerances(rtol=1e-8, max_it=200)
+        self.psi_ksp.setGMRESRestart(200)
+        # Read the options before the shared PC is attached: `setFromOptions`
+        # also runs `PCSetFromOptions` on the KSP's PC, and the potential
+        # split's PC must keep the options of its own prefix.
+        self.psi_ksp.setFromOptions()
+        self._potential_pc = None
+        self.build_count = 0
+        self.build()
+
+    def build(self):
+        """Solve for the potential parts `psi_k` and refresh `A Z` and `E`.
+
+        Called after every reassembly of the retained blocks: the potential
+        response of a translation depends on the Jacobian.
+        """
+        pc = self.pc
+        # The fieldsplit must be set up on the present nest before its
+        # potential split's PC can serve the solve below. The inner solve
+        # would run this setup at its next solve anyway. Only the PC is set
+        # up, not the KSP: `KSPSetUp` would make the Krylov work vectors now,
+        # from the operator alone, as plain vectors where the solve needs
+        # nest vectors like its right-hand side.
+        fieldsplit = pc.condensed_ksp.getPC()
+        fieldsplit.setUp()
+        potential_pc = fieldsplit.getFieldSplitSubKSP()[1].getPC()
+        if potential_pc is not self._potential_pc:
+            self.psi_ksp.setPC(potential_pc)
+            self._potential_pc = potential_pc
+        for translation, z in zip(self._translations, self.Z):
+            u, psi = z.getNestSubVecs()
+            with translation.dat.vec_ro as vec:
+                vec.copy(u)
+            pc.A_psiu.petscmat.mult(u, self._psi_rhs)
+            self._psi_rhs.scale(-1.0)
+            psi.set(0.0)
+            self.psi_ksp.solve(self._psi_rhs, psi)
+            z.assemble()
+        self.build_count += 1
+        self.refresh()
+
+    def refresh(self):
+        """Recompute `A Z` and the coarse matrix `E = Z^T A Z` for the present `A`.
+
+        The deflation is exact only while `A Z` and `E` belong to the operator
+        of the Krylov solve. The assembled blocks change at a reassembly, and
+        the low-rank DtN prefactor of the potential block is read at every
+        application, so `ReducedGIABlockPC.update` calls this at every update
+        (`d` applications of `A`).
+        """
+        for z, az in zip(self.Z, self.AZ):
+            self.operator.mult(z, az)
+        dim = len(self.Z)
+        E = np.empty((dim, dim))
+        for i, z in enumerate(self.Z):
+            E[i, :] = z.mDot(self.AZ)
+        self.E = E
+        # `d` is 2 or 3, so the explicit inverse is the cheapest form to apply.
+        self._E_inverse = np.linalg.inv(E)
+
+    def _coefficients(self, vec):
+        """`E^-1 Z^T vec`, with one reduction for the `d` dot products."""
+        return self._E_inverse @ np.asarray(vec.mDot(self.Z))
+
+    def project(self, vec):
+        """`vec <- P vec = vec - A Z E^-1 Z^T vec`, in place."""
+        vec.maxpy(-self._coefficients(vec), self.AZ)
+
+    def coarse(self, vec, out):
+        """`out <- Q vec = Z E^-1 Z^T vec`."""
+        out.set(0.0)
+        out.maxpy(self._coefficients(vec), self.Z)
+
+
+class _DeflatedRetainedOperator:
+    """The operator `P A` of the deflated retained solve (`_TranslationDeflation`).
+
+    Args:
+      operator: `A`, the operator of the retained solve without deflation.
+      deflation: the `_TranslationDeflation` that holds `P`.
+    """
+
+    def __init__(self, operator, deflation):
+        self.operator = operator
+        self.deflation = deflation
+
+    def mult(self, mat, x, y):
+        """`y = P A x`."""
+        self.operator.mult(x, y)
+        self.deflation.project(y)
+
+
 class ReducedGIABlockPC(CondensedBlockPC):
-    """Precondition the retained (u, psi) block after material elimination.
+    r"""Precondition the retained (u, psi) block after material elimination.
 
     Assemble the four consistent tangent blocks directly, without Slate or
     constitutive derivative-matrix products. Reuse the coupled preconditioner's
     retained-field solve, low-rank potential correction and rebuild rules.
     Adjoint solves supply the transposed UFL form and use this forward apply.
+
+    The displacement block holds the whole consistent tangent, the weight of
+    the ocean column of the sea-level load included. `CondensedBlockPC`
+    leaves that one term out of its Slate complement (`single_domain_slate_form`),
+    and it is the term that makes the rigid translations near-null
+    directions of the retained system (`_TranslationDeflation`). The inner
+    solve therefore deflates the translations by default. Without the
+    deflation, a block-0 solve whose right-hand side holds a translation
+    stagnates; with the term left out instead, the inner solve converges but
+    the block-0 preconditioner no longer describes the translation, and the
+    outer solve takes more iterations (2 against 4 per step on the 1000 km
+    test sphere; NOTES/design/block0/REPORT.md).
+
+    Options under this preconditioner's prefix plus `condensed_`:
+    `deflate_translations` (default true) switches the deflation, and
+    `deflation_psi_ksp_*` configure the potential solves of its build.
     """
 
     DISPLACEMENT, POTENTIAL = 0, 1
@@ -4432,16 +4633,103 @@ class ReducedGIABlockPC(CondensedBlockPC):
         self._assemble_blocks()
         self._displacement_nullspaces = {}
         self._set_displacement_nullspaces()
-        self._initialise_kept_solve(pc, (pc.getOptionsPrefix() or "") + "condensed_")
+        prefix = (pc.getOptionsPrefix() or "") + "condensed_"
+        self._initialise_kept_solve(pc, prefix)
+        self._initialise_deflation(pc, prefix)
+
+    def _retained_operator(self):
+        """The operator of the retained solve before deflation."""
+        return (self.projected_operator if self.projected_operator is not None
+                else self.condensed_operator)
+
+    def _initialise_deflation(self, pc, prefix):
+        """Build the translation deflation and hand its operator to the inner KSP.
+
+        The deflated operator carries the declared kernels of the retained
+        operator, because the Krylov solve reads them off its operator: the
+        transpose nullspace is removed from the right-hand side and the
+        nullspace from the preconditioned vectors.
+        """
+        self.deflation = None
+        if not PETSc.Options().getBool(prefix + "deflate_translations", True):
+            return
+        operator = self._retained_operator()
+        self.deflation = _TranslationDeflation(self, operator)
+        deflated = PETSc.Mat().createPython(
+            operator.getSizes(), _DeflatedRetainedOperator(operator, self.deflation),
+            comm=pc.comm)
+        deflated.setUp()
+        if self.projected_operator is not None:
+            for getter, setter in ((operator.getNullSpace, deflated.setNullSpace),
+                                   (operator.getTransposeNullSpace,
+                                    deflated.setTransposeNullSpace)):
+                space = getter()
+                if space is not None and space.handle:
+                    setter(space)
+        self.deflated_operator = deflated
+        self.condensed_ksp.setOperators(deflated, self.condensed_operator)
+        self._deflation_assembly = self.assembly_count
+        work = self._rhs.duplicate()
+        self._deflation_work = (work, work.duplicate(), work.duplicate())
+
+    def update(self, pc):
+        """Rebuild as `CondensedBlockPC.update` does, then refresh the deflation.
+
+        After a reassembly the potential parts of the deflation space are
+        solved again (`_TranslationDeflation.build`); otherwise only `A Z` and
+        `E` are recomputed, which keeps the deflation exact for the operator
+        the inner solve sees.
+        """
+        super().update(pc)
+        if self.deflation is None:
+            return
+        if self.assembly_count != self._deflation_assembly:
+            self.deflation.build()
+            self._deflation_assembly = self.assembly_count
+        else:
+            self.deflation.refresh()
+        # `CondensedBlockPC.update` hands the undeflated operator to the KSP
+        # after a reassembly; the deflated one must stay.
+        self.condensed_ksp.setOperators(self.deflated_operator, self.condensed_operator)
 
     def apply(self, pc, x, y):
+        """One block-0 application: the retained solve, deflated by default.
+
+        Without deflation this is one inner Krylov solve on the retained nest.
+        With it, the solve is split as in `_TranslationDeflation`:
+        `x = Q b + (I - Q A) x~` with `P A x~ = P b`.
+
+        Args:
+          pc: the PETSc preconditioner object.
+          x: the block-0 residual on the `(u, psi)` layout.
+          y: the output, on the same layout.
+        """
         with self.residual.dat.vec_wo as residual:
             x.copy(residual)
         for source, target in zip(self.residual.subfunctions, self._rhs_blocks):
             with source.dat.vec_ro as vector:
                 vector.copy(target)
         self._solution_vec.set(0.)
-        self.condensed_ksp.solve(self._rhs, self._solution_vec)
+        if self.deflation is None:
+            self.condensed_ksp.solve(self._rhs, self._solution_vec)
+        else:
+            from .dtn_coupled import _remove_declared_space
+            operator = self._retained_operator()
+            coarse, projected, work = self._deflation_work
+            # The Krylov solve would remove the declared left kernel from its
+            # right-hand side; it is removed here first, so that the coarse
+            # part and the projected right-hand side are built from the same
+            # vector the solve works on.
+            _remove_declared_space(operator.getTransposeNullSpace(), self._rhs)
+            self.deflation.coarse(self._rhs, coarse)
+            self._rhs.copy(projected)
+            self.deflation.project(projected)
+            self.condensed_ksp.solve(projected, self._solution_vec)
+            # x = Q b + x~ - Q A x~.
+            operator.mult(self._solution_vec, work)
+            self.deflation.coarse(work, projected)
+            self._solution_vec.axpy(-1.0, projected)
+            self._solution_vec.axpy(1.0, coarse)
         for source, target in zip(self._solution_blocks, self.solution.subfunctions):
             with target.dat.vec_wo as vector:
                 source.copy(vector)

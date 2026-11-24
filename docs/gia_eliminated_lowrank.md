@@ -48,6 +48,20 @@ nest. On curved facets rigid rotations are only approximate discrete kernels.
 Merely attaching the basis to the displacement diagonal left the two-rank
 moving-coastline solve stagnating; matching the outer projection resolved it.
 
+The displacement block of `ReducedGIABlockPC` holds the whole consistent
+tangent, the weight of the ocean column of the sea-level load included. That
+term cancels the restoring force on a rigid translation of the mantle with its
+induced potential, so with a large ocean the retained system has $d$
+eigenvalues close to zero. The `Real` rows of `CentreOfMass` fix the
+translation in the full system, but the retained solve does not see them. The
+retained solve therefore deflates the translations: with
+$Z=[(e_k,\psi_k)]$, $\psi_k=-(A_{\psi\psi}+B)^{-1}A_{\psi u}e_k$ and
+$E=Z^TAZ$, it solves $PA\tilde x=Pb$ with $P=I-AZE^{-1}Z^T$ and returns
+$x=Qb+(I-QA)\tilde x$, $Q=ZE^{-1}Z^T$. This identity is exact, so the
+converged block-0 solution does not change; the Krylov method no longer
+sees the near-null directions. The option `condensed_deflate_translations`
+(default true) switches it off.
+
 The direct constitutive block owns forward/replay and the first reverse solve.
 Its transpose matrix receives the same symmetric DtN correction. Because that
 term is outside UFL, the gradient additionally includes

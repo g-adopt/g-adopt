@@ -89,7 +89,10 @@ def test_lowrank_matches_multipliers(meshes, model, exponent, moving=False):
     assert reduced.projected_operator is not None
     # Check the actual retained residual, independently of the KSP recurrence.
     # A declared curved-mesh kernel must be projected on both RHS and action.
-    operator, _ = reduced.condensed_ksp.getOperators()
+    # The operator is the retained one and not the KSP's: the KSP solves the
+    # deflated system `P A x~ = P b`, and the solution it leaves in
+    # `_solution_vec` is the assembled `x = Q b + (I - Q A) x~` of `A x = b`.
+    operator = reduced._retained_operator()
     rhs = reduced._rhs.copy()
     left = operator.getTransposeNullSpace()
     if left and left.handle:
