@@ -1606,8 +1606,7 @@ class InternalVariableMechanics:
         # the history), which becomes an equation of its own at the degree of
         # the history. Both equations have the displacement test function;
         # the solver adds their residuals. With one rule for both the stress
-        # stays one expression (`stress`), so the residual is the same
-        # expression as without this option.
+        # is the one expression `stress`.
         history_degree = formulation.history_quad_degree
         separate = history_degree is not None and history_degree != solver.quad_degree
         if separate:

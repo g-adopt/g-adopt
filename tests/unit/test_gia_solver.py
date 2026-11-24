@@ -456,15 +456,16 @@ HISTORY_DEGREE_CASE = Case(family="Quadrature", core="fluid")
 @pytest.mark.parametrize("family, kwargs, message", [
     ("DG", dict(history_quad_degree=2), "Quadrature history only"),
     ("Quadrature", dict(history_quad_degree=6), "above quad_degree=4"),
-    ("Quadrature", dict(history_quad_degree=0), "positive integer"),
-    ("Quadrature", dict(history_quad_degree=2.0), "positive integer"),
+    ("Quadrature", dict(history_quad_degree=0), "integer of at least 2"),
+    ("Quadrature", dict(history_quad_degree=1), "one point per cell"),
+    ("Quadrature", dict(history_quad_degree=2.0), "integer of at least 2"),
     ("Quadrature", dict(history_quad_degree=2, internal_variable_degree=4),
      "history_quad_degree"),
     ("Quadrature", dict(internal_variable_degree=2), "history_quad_degree"),
-], ids=["dg", "above", "zero", "float", "degree-mismatch", "degree-without-option"])
+], ids=["dg", "above", "zero", "one", "float", "degree-mismatch", "degree-without-option"])
 def test_a_history_quad_degree_that_does_not_apply_is_refused(meshes, family, kwargs,
                                                               message):
-    """`history_quad_degree` is refused on the DG family, above `quad_degree`, below 1.
+    """`history_quad_degree` is refused on the DG family, above `quad_degree`, below 2.
 
     `internal_variable_degree` on the Quadrature family must equal the
     history degree, and the message names `history_quad_degree`. No solve.

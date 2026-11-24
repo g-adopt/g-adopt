@@ -56,6 +56,13 @@ class BackstressApproximation(CompressibleInternalVariableApproximation):
         The creep strain `p` relaxes the elastic stress `2 mu0 e(u)`
         (`elastic_stress`, inherited); the backstress `a` does not enter
         the stress, only the creep rate.
+
+        Args:
+          internal_variables: the two history tensors `[p, a]`, the creep
+            strain and the strain-like backstress.
+
+        Returns:
+          A UFL expression for the relaxed stress.
         """
         p, _ = internal_variables
         return -2*self.mu0*p

@@ -111,6 +111,11 @@ FORWARD = {
                            solver={"history_quad_degree": 2}),
     "restart-hq2": dict(base="SEA", preset="direct", restart_from="sea-direct-hq2",
                         solver={"history_quad_degree": 2}),
+    # The same state read on 2 ranks: the degree-2 points are paired by
+    # their stored coordinates on another partition.
+    "restart-hq2-np2": dict(base="SEA", preset="direct", cores=2,
+                            restart_from="sea-direct-hq2",
+                            solver={"history_quad_degree": 2}),
 }
 
 #: The entries of the forward case that are not a march of `FORWARD`, each
@@ -171,6 +176,7 @@ RELATIONS = [
     ("restart-from-np2", "sea-direct", 1e-8, RESTART_STEP),
     ("sea-iterative-np3", "sea-direct", 1e-5, 0),
     ("restart-hq2", "sea-direct-hq2", 1e-10, RESTART_STEP),
+    ("restart-hq2-np2", "sea-direct-hq2", 1e-8, RESTART_STEP),
 ]
 
 #: Entries with the direct preset; the others are iterative.
@@ -355,9 +361,9 @@ CONVERT_PREVIOUS_DT = .13
 #: The variants: `Q4`, the Quadrature history at the mechanics degree 4
 #: (the default); `Q2`, the same with `history_quad_degree=2`; `DG1`, the
 #: DG history of degree 1 (with that family's volume degree 6).
-#: Eight steps give the same differences between the variants as the 32
-#: steps of the study in which the option was measured (Q2 - Q4 in `u`:
-#: 9.50e-5 at 8 steps, 9.46e-5 at 32), at a quarter of the cost.
+#: Eight steps give the same differences between the variants as 32 steps
+#: to the same end time (Q2 - Q4 in `u`: 9.50e-5 at 8 steps, 9.46e-5 at
+#: 32), at a quarter of the cost.
 HISTORY_DEGREE_STEPS = 8
 HISTORY_DEGREE_VARIANTS = {
     "Q4": dict(family="Quadrature", solver={}),
@@ -373,7 +379,7 @@ HISTORY_DEGREE_QUANTITIES = ("u", "psi", "geoid", "sea_level", "shift")
 #: stress of a P2 displacement is a polynomial of degree 1 at every step, so
 #: its integrand has degree 2 and the degree-2 history gives the degree-4
 #: result: every quantity of `straight_Q2_Q4` is below this bound, which is
-#: round-off of the direct solves (the study measured 1.5e-14 at most).
+#: round-off of the direct solves (measured: 2.0e-14 at most).
 HISTORY_DEGREE_STRAIGHT_RTOL = 1e-11
 
 #: On the curved annulus the degree-2 history differs from the degree-4 one
@@ -381,13 +387,12 @@ HISTORY_DEGREE_STRAIGHT_RTOL = 1e-11
 #: differences of `curved_Q2_Q4` in `u`, `psi`, `geoid` and `sea_level` lie
 #: in this band. The lower bound shows that the option reaches the residual;
 #: the upper bound that the difference stays at the size of the error of
-#: the history representation (the study measured 1e-5 to 1.2e-3 against a
-#: converged history).
+#: the history representation (measured: 1.0e-5 to 1.15e-3).
 HISTORY_DEGREE_CURVED_BAND = (1e-6, 3e-3)
 HISTORY_DEGREE_CURVED_QUANTITIES = ("u", "psi", "geoid", "sea_level")
 
-#: The degree-2 history is about as accurate as the DG1 history: on the
-#: curved annulus `curved_Q2_Q4 / curved_DG1_Q4` lies in this band for the
+#: On the curved 2-D annulus the degree-2 history is about as close to Q4
+#: as the DG1 history: `curved_Q2_Q4 / curved_DG1_Q4` lies in this band for the
 #: quantities of `HISTORY_DEGREE_CURVED_QUANTITIES` (the degree-4 history
 #: is 15 to 50 times closer to a converged history than either, so it
 #: serves as the reference here).
@@ -896,13 +901,27 @@ ADJOINT = {
     # the functional integrates it with that rule (`gia_cases.mantle_functional`).
     "sea-direct-viscosity-hq2": dict(base="SEA", preset="direct", control="viscosity",
                                      solver={"history_quad_degree": 2}),
+    # The split at degree 2 with the two nonlinear rheologies: the lifted
+    # fluidity of the power law, and the relaxed stress `-2 mu0 p` of the
+    # backstress rheology, at the second rule. Three steps, with the
+    # variable-step BDF2 coefficients at the third.
+    "power-direct-viscosity-hq2": dict(base="SEA", preset="direct", control="viscosity",
+                                       changes={"model": "power"},
+                                       parameters={"approximation.transition_stress": 1e-3},
+                                       steps=(.08, .08, .13),
+                                       solver={"history_quad_degree": 2}),
+    "backstress-direct-viscosity-hq2": dict(base="SEA", preset="direct", control="viscosity",
+                                            changes={"model": "backstress"},
+                                            steps=(.08, .08, .13),
+                                            solver={"history_quad_degree": 2}),
 }
 
 #: The entries whose replay at the recorded control must give the recorded
 #: functional bit for bit: the step block replays each step from the start
 #: of the forward step with the same solver and the same options, so the
 #: Newton iterates repeat exactly. `REPLAY_RTOL` holds for every entry.
-EXACT_REPLAY_ENTRIES = ("sea-direct-viscosity", "sea-direct-viscosity-hq2")
+EXACT_REPLAY_ENTRIES = ("sea-direct-viscosity", "sea-direct-viscosity-hq2",
+                        "power-direct-viscosity-hq2", "backstress-direct-viscosity-hq2")
 
 #: The steps at which the cached operators of `sea-fixed-material-change`
 #: rebuild, by phase (1-based). The entry marches a linear problem (fixed

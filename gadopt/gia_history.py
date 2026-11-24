@@ -141,9 +141,6 @@ class QuadratureHistory(HistoryFormulation):
         approximation = solver.approximation
         #: The DG degree, or the quadrature degree.
         self.degree = degree
-        #: The history can be evaluated at the points of this rule only
-        #: (`HistoryFormulation.history_quad_degree`).
-        self.history_quad_degree = degree
         self.space = internal_variable_space(
             solver.mesh, approximation.n_history_tensors, degree,
             family="Quadrature")
@@ -151,6 +148,16 @@ class QuadratureHistory(HistoryFormulation):
         self.time_integrator = _make_integrator(self.history, solver.dt, order)
         #: The local constitutive update, built in `history_values`.
         self.material = None
+
+    @property
+    def history_quad_degree(self) -> int:
+        """The degree of the rule whose points hold the history: `degree`.
+
+        The history can be evaluated at the points of this rule only
+        (`HistoryFormulation.history_quad_degree`). The same integer as
+        `degree`, under the name the mechanics reads.
+        """
+        return self.degree
 
     def shear_coefficient(self, approximation, dt):
         alpha = self.time_integrator.alpha

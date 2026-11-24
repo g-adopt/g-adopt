@@ -489,11 +489,15 @@ def test_the_degree_two_history_differs_on_curved_cells_by_the_history_error(qua
 
 
 @pytest.mark.parametrize("quantity", E.HISTORY_DEGREE_CURVED_QUANTITIES)
-def test_the_degree_two_history_is_as_accurate_as_dg1(quantity):
-    """On the curved annulus Q2 and DG1 are at the same distance from Q4.
+def test_on_the_2d_annulus_the_degree_two_history_is_as_close_to_q4_as_dg1(quantity):
+    """On the curved 2-D annulus Q2 and DG1 are at the same distance from Q4.
 
     The ratio `curved_Q2_Q4 / curved_DG1_Q4` lies in
     `HISTORY_DEGREE_RATIO_BAND`, with the degree-4 history as the reference.
+    This holds on this 2-D mesh at 0.64 Maxwell times. It does not hold on
+    tetrahedra, where degree 2 has 4 points and the same storage as DG1 but
+    is several times further from a converged history (docstring of
+    `history_quad_degree`).
     """
     values = load_values("history-degree")
     ratio = values[f"curved_Q2_Q4_{quantity}"] / values[f"curved_DG1_Q4_{quantity}"]
@@ -508,16 +512,16 @@ def test_the_degree_two_history_has_the_size_of_dg1(mesh):
     """The degree-2 history stores half the values of the degree-4 one in 2-D.
 
     3 points per triangle against 6, and 3 is the node count of DG1: the
-    two histories have the same number of values. All variants take the
-    same Newton iterations.
+    two histories have the same number of values. The Newton counts are
+    written but not compared between the variants: equal counts are not a
+    property of the method, and a change of PETSc can move one variant by
+    one iteration.
     """
     values = load_values("history-degree")
     q2, q4 = values[f"{mesh}_Q2_history_dofs"], values[f"{mesh}_Q4_history_dofs"]
     assert 2 * q2 == q4, f"{mesh}: Q2 {q2!r} values, Q4 {q4!r}"
     if f"{mesh}_DG1_history_dofs" in values:
         assert q2 == values[f"{mesh}_DG1_history_dofs"], f"{mesh}: Q2 {q2!r}, DG1 {values}"
-    newton = {v: values[f"{mesh}_{v}_newton"] for v in E.HISTORY_DEGREE_MESHES[mesh]}
-    assert len(set(newton.values())) == 1, f"{mesh}: Newton iterations {newton!r}"
 
 
 # -- 3-D entry -----------------------------------------------------------------------

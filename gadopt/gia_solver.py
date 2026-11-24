@@ -421,39 +421,42 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         degree-6 rule stores 23 values per tetrahedron and component.
       history_quad_degree: Quadrature family only: the degree of the
         quadrature rule at whose points the history (the internal variables)
-        and the scalar fluidity of the local constitutive solve are stored.
-        `None` (default) takes `quad_degree`, and the residual is then the
-        same expression as without this option. With another value the
-        relaxed part of the stress, `-sum_i 2 mu_i m_i` (`-2 mu0 p` for the
-        backstress rheology), which is the only term that reads the history,
-        is integrated with this rule, and the elastic stress and every other
-        term keep `quad_degree` (`InternalVariableMechanics.set_equations`);
-        the adjoint and tangent forms of the step integrate the history with
-        this rule too. Firedrake's default rules have these point counts per
-        cell: degree 2, 4 per tetrahedron and 3 per triangle; degree 3, 6
-        and 6; degree 4, 11 and 6. Degree 2 has the node count of the DG1
-        history, so it stores the history in 24 numbers per tetrahedron and
-        Maxwell element (a symmetric tensor has 6 components) against 66 at
-        degree 4, and the tape and the checkpoints shrink by the same
-        factor. Accuracy: on straight cells with cell-constant linear
-        Maxwell properties the relaxed stress of a P2 displacement is a
-        polynomial of degree 1, its integrand of degree 2, and degree 2
-        gives the degree-4 result to round-off. On the curved (P2) 2-D
-        annulus of `tests/gia`, degree 2 is about as accurate as the DG1
-        history (1.2 to 1.5 times its difference from a converged history
-        in the displacement, the potential, the geoid and the sea level),
-        and degree 4 is 15 to 50 times closer to a converged history than
-        either. The error goes to zero with the cell curvature; how large
-        it is against the spatial error of a 3-D mesh is not measured. For
-        a power-law rheology the fluidity (the scalar of the local solve) is
-        a non-polynomial function of the stress, so the relaxed stress is
-        not a polynomial even on straight cells: at a lower degree the local
-        solve and the integral of the relaxed stress see the fluidity at
-        fewer points per cell (3 against 6 per triangle at degree 2), and
-        degree 2 is no longer exact on straight cells. The size of that
-        error is not measured. A value above `quad_degree` is
-        refused: it stores more history values than `quad_degree` and makes
-        only the relaxed part more accurate; raise `quad_degree` instead.
+        and the scalar fluidity of the local constitutive solve are stored,
+        from 2 to `quad_degree`. `None` (default) takes `quad_degree`, and
+        the stress is then the one expression `approximation.stress`. With a
+        lower degree the relaxed part of the stress (`relaxed_stress`, the
+        only part that reads the history) is integrated with this rule and
+        every other term with `quad_degree`
+        (`InternalVariableMechanics.set_equations`); the adjoint and tangent
+        forms of the step integrate the history with this rule too.
+        Firedrake's default rules have these point counts per cell: degree
+        2, 4 per tetrahedron and 3 per triangle; degree 3, 6 and 6; degree
+        4, 11 and 6. A symmetric tensor has 6 components in 3-D, so the
+        history takes 24, 36 or 66 numbers per tetrahedron and Maxwell
+        element, and its copies on the tape and in the checkpoints follow.
+        Accuracy: on straight cells with cell-constant linear Maxwell
+        properties the relaxed stress of a P2 displacement is a polynomial of
+        degree 1, and degree 2 gives the degree-4 result to round-off. On
+        curved (P2) cells it does not. On a curved P2 spherical shell of
+        about 7000 and 22000 mantle cells with a layered Maxwell viscosity
+        (elastic lid, one viscosity jump), at 3 Maxwell times of the upper
+        mantle, the distance to a converged history in the displacement,
+        the potential and the sea level is 3 to 5 times that of the DG1
+        history at degree 2 (which stores as many values as DG1), about 0.5
+        times at degree 3 and 0.03 to 0.05 times at degree 4. The error
+        falls with the cell curvature, by a factor of about 4 when the cell
+        size falls by 1.5; how it grows over many Maxwell times was not
+        measured. For a power-law rheology the fluidity is a non-polynomial
+        function of the stress, so the relaxed stress is not a polynomial
+        even on straight cells, and a lower degree sees the fluidity at
+        fewer points per cell; that error is not measured. Degree 1 (one
+        point per cell) is refused: it is not exact for a P2 displacement on
+        straight cells, and on the curved 2-D annulus of `tests/gia` it
+        differs from degree 4 by 8.8e-3 in the displacement (relative L2)
+        after 3 steps of 0.08 Maxwell times, against 4.1e-5 at degree 2. A
+        value above `quad_degree` is refused: it stores more
+        history values and makes only the relaxed part more accurate; raise
+        `quad_degree` instead.
       dtn_quad_degree: the boundary quadrature degree of the DtN rows and of
         every coupling facet integral; `None` takes the DtN form's
         calibrated default.
@@ -590,10 +593,6 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.dt = dt
         self.time_scheme = time_scheme
         self.quad_degree = quad_degree
-        #: The quadrature degree of the stored history on the Quadrature
-        #: family (`quad_degree` unless `history_quad_degree` was given);
-        #: `None` on the DG family, whose history is a polynomial field.
-        self.history_quad_degree = history_quad_degree
         self.scaling_factor = scaling_factor
         self.bcs = dict(bcs or {})
         self.near_nullspace_modes = near_nullspace
@@ -931,10 +930,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
           quad_degree: the volume quadrature degree of the mechanics.
 
         Returns:
-          The degree, a positive integer no larger than `quad_degree`.
+          The degree, an integer from 2 to `quad_degree`.
 
         Raises:
-          ValueError: for a value that is not a positive integer, or one
+          ValueError: for a value that is not an integer, for degree 1 (not
+            exact for a P2 displacement on straight cells), or for one
             above `quad_degree`. A higher degree stores more history values
             than the mechanics rule and makes only the relaxed part of the
             stress more accurate, so the message asks for a higher
@@ -946,8 +946,18 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                 or not isinstance(history_quad_degree, Integral)
                 or history_quad_degree < 1):
             raise ValueError(
-                "history_quad_degree must be a positive integer; got "
+                "history_quad_degree must be an integer of at least 2; got "
                 f"{history_quad_degree!r}.")
+        if history_quad_degree == 1:
+            # One point per cell: the relaxed stress of a P2 displacement is
+            # linear on a straight cell, and a one-point rule does not
+            # integrate its product with the linear test gradient exactly.
+            raise ValueError(
+                "history_quad_degree=1 (one point per cell) is refused: it is "
+                "not exact for a P2 displacement even on straight cells, and on "
+                "the curved annulus of tests/gia it differs from degree 4 by "
+                "8.8e-3 in the displacement after 3 steps, against 4.1e-5 at "
+                "degree 2. Use 2 or more.")
         if history_quad_degree > quad_degree:
             raise ValueError(
                 f"history_quad_degree={history_quad_degree} is above "
@@ -2203,6 +2213,16 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
     def internal_variables(self) -> Function:
         """The accepted history level: the one history Function of the run."""
         return self.time_integrator.current[0]
+
+    @property
+    def history_quad_degree(self) -> int | None:
+        """The degree of the rule whose points hold the Quadrature history.
+
+        `history.degree` on the Quadrature family (`quad_degree` unless
+        `history_quad_degree` was given); `None` on the DG family, whose
+        history is a polynomial field.
+        """
+        return self.history.degree if self.family == "Quadrature" else None
 
     def field(self, name):
         """The UFL component `name` of the mixed solution, for forms and functionals."""

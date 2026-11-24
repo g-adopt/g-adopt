@@ -334,9 +334,8 @@ def mantle_functional(solver, u, sub):
     the rule of degree `solver.history.degree` on the Quadrature family, and
     such a Function can only be integrated with its own rule: the form
     compiler raises "Mismatch of quadrature points" for another degree. When
-    the history degree is 4 (the default) the two parts are one integral, as
-    the functional has always been written; otherwise each part takes its
-    own rule.
+    the history degree is 4 (the default) the two parts are one integral at
+    degree 4; otherwise each part takes its own rule.
 
     Args:
       solver: the GIA solver; its accepted history is integrated.
