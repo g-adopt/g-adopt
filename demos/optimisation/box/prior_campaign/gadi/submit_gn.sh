@@ -79,7 +79,9 @@ runs)
         T-N-R)  args=("${COMMON[@]}" "${NEWTON[@]}" "${T_N_R[@]}") ;;
         T-GN-R) args=("${COMMON[@]}" "${NEWTON[@]}" "${T_GN_R[@]}") ;;
         esac
-        echo "$arm: $(submit_arm "$arm" "${args[@]}")"
+        # The id first, so that a failed qsub stops the script (set -e).
+        job=$(submit_arm "$arm" "${args[@]}")
+        echo "$arm: $job"
     done
     ;;
 optional)
@@ -89,7 +91,8 @@ optional)
     T-GN-R-EW) args=("${COMMON[@]}" "${NEWTON[@]}" "${T_GN_R_EW[@]}") ;;
     *) echo "unknown optional arm $arm (T-GN or T-GN-R-EW)" >&2; exit 2 ;;
     esac
-    echo "$arm: $(submit_arm "$arm" "${args[@]}")"
+    job=$(submit_arm "$arm" "${args[@]}")
+    echo "$arm: $job"
     ;;
 *)
     echo "unknown phase $PHASE (gates, runs or optional)" >&2

@@ -11,11 +11,16 @@
 #       direction (targets 273.5 and 91.4) and one GN solve at radius 1e4, cap 8;
 #   (e) T-ROL to 2 iterations;
 #   (b) T-N to 2 iterations;
-#   (c) T-GN-R to 3 iterations;
-#   (d) T-GN-R-EW to 3 iterations.
+#   (d) T-GN-R-EW to 2 iterations, Krylov cap 5;
+#   (c) T-GN-R to 2 iterations, Krylov cap 5.
 # The flags of (b) to (e) are those of the runs (submit_gn.sh) with a smaller
-# iteration limit. Every part runs even when an earlier one fails; smoke.status
-# lists the exit status of each part.
+# iteration limit. Parts (c) and (d) also get a Krylov cap of 5: with the cap 100 of
+# the runs, the first Gauss-Newton solve at radius 12.8 can take tens of products
+# (about 50 s each), and the job would reach its wall limit. So (c) and (d) test the
+# command line, the product and the record at 64 cells, and not a full solve; the
+# argument parser keeps the last value of a repeated option. Every part runs even
+# when an earlier one fails; smoke.status lists the exit status of each part, and
+# the job exits with status 1 when a part failed.
 #
 # Usage (through submit_gn.sh gates):
 #   qsub -v CODE=<code copy>,OUT=<run directory> smoke_gn.pbs
@@ -32,6 +37,7 @@ source "$CODE/demos/optimisation/box/prior_campaign/gadi/run_flags.sh"
 record_provenance "$OUT"
 cd "$OUT"
 : > smoke.status
+failed=0
 part() {
     local name=$1; shift
     echo "### part $name: $* ($(date -u +%H:%M:%SZ))"
@@ -39,6 +45,7 @@ part() {
     local status=$?
     echo "$name $status" >> smoke.status
     echo "### part $name: exit status $status ($(date -u +%H:%M:%SZ))"
+    [ $status -eq 0 ] || failed=1
 }
 REF=(--checkpoint "$GN_REFERENCE")
 
@@ -63,8 +70,9 @@ part e-T-ROL python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${ROL[@]}" \
     "${T_ROL[@]}" --max-it 2 --output e-T-ROL.json
 part b-T-N python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
     "${T_N[@]}" --max-it 2 --output b-T-N.json
-part c-T-GN-R python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
-    "${T_GN_R[@]}" --max-it 3 --output c-T-GN-R.json
 part d-T-GN-R-EW python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
-    "${T_GN_R_EW[@]}" --max-it 3 --output d-T-GN-R-EW.json
+    "${T_GN_R_EW[@]}" --krylov-max-it 5 --max-it 2 --output d-T-GN-R-EW.json
+part c-T-GN-R python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
+    "${T_GN_R[@]}" --krylov-max-it 5 --max-it 2 --output c-T-GN-R.json
 echo "### status of each part"; cat smoke.status
+exit $failed

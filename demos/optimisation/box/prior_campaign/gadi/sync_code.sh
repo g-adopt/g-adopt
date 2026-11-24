@@ -43,7 +43,7 @@ cat > "$DEST/CODE_STATE" <<STATE
 Source: branch sghelichkhani/hessian, commit $COMMIT
 ("$SUBJECT"), copied with git archive on $(date -u +%Y-%m-%d) by
 demos/optimisation/box/prior_campaign/gadi/sync_code.sh.
-The tree holds the committed files only. NOTES/, .git and CLAUDE.md are not part of it.
+The tree holds the committed files only; untracked files are not part of it.
 STATE
 REMOTE
 

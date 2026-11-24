@@ -9,7 +9,8 @@
 #               holds the 5-step state of the gates (gates/run-t5) and the 125-step
 #               reference state (reference/s125-dt1.2e-5)
 #
-# set -e: a failed step ends the job, and step 1 is the gate of the other two.
+# set -e: a failed step ends the job, and step 1 is the gate of the other two. The
+# checks G3 and G13 ran before this job, in the serial job "gn-gate" at 2 steps.
 set -euo pipefail
 CODE_DIR=$1
 BASE=$2
@@ -17,9 +18,9 @@ D=$CODE_DIR/demos/optimisation/cylindrical
 T5=$BASE/gates/run-t5
 REF=$BASE/reference/s125-dt1.2e-5
 
-echo "### step 1: checks.py gn, 5 steps, serial ($(date -u +%H:%M:%SZ))"
+echo "### step 1: checks.py gn G1-G11, 5 steps, serial ($(date -u +%H:%M:%SZ))"
 srun -n 1 -c 1 python3 "$D/checks.py" gn --rundir "$T5" --timesteps 5 --delta-t 1.2e-5 \
-    --json "$PWD/gn-t5.json"
+    --gn-parts G1-G11 --json "$PWD/gn-t5.json"
 
 echo "### step 2: checks.py gn-curvature, 125 steps, $SLURM_NTASKS ranks ($(date -u +%H:%M:%SZ))"
 srun -n "$SLURM_NTASKS" -c 1 python3 "$D/checks.py" gn-curvature --rundir "$REF" \

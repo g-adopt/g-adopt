@@ -9,6 +9,7 @@
 #     submit.sh rolA        <code dir>   (deferred, see below)
 #     submit.sh radius      <code dir>   (conditional, see below)
 #     submit.sh metric      <code dir>   (conditional, see below)
+#     submit.sh gn-gate     <code dir>   (gate of the curvature job, see below)
 #     submit.sh gn-curv     <code dir>   (Gauss-Newton curvature job, see below)
 #     submit.sh gn-smoke    <code dir>   (only if P-GN uses the switch, see below)
 #     RADIUS=<r> submit.sh gn <code dir> (P-GN, see below)
@@ -46,10 +47,16 @@
 #             after a negative-curvature solve.
 #
 # The Gauss-Newton phases (NOTES/team/gauss-newton/PLAN.md sections 5.2 and 5.3):
+#   "gn-gate"  one serial job on work, 32 GB, 2.5 h: checks.py gn at 2 steps with
+#              --gn-parts G13 G3 (the three one-iteration TAO runs of G13 and the
+#              zero-residual comparison of G3 with the cylinder's data leaves), on a
+#              2-step reference state that the job writes. It must pass before
+#              "gn-curv" is submitted; "gn-curv" refuses to submit otherwise.
 #   "gn-curv"  one highmem job, 16 ranks, 120 GB, 9 h, of three steps
 #              (gn_curv_steps.sh, set -e, so a failed step ends the job):
-#              1. checks.py gn on the 5-step trajectory of the gates, serial: the
-#                 checks G1 to G7, G9, G11 and G13 in the image (the gate of the job);
+#              1. checks.py gn --gn-parts G1-G11 on the 5-step trajectory of the
+#                 gates, serial: G1, G2, G4 to G7, G9 and G11 in the image (G3 and
+#                 G13 ran in "gn-gate");
 #              2. checks.py gn-curvature at 125 steps on 16 ranks: pHp/pAp and
 #                 pH_GN p/pAp along p = A^-1 g at the first guess of P;
 #              3. compare.py, one Gauss-Newton BNLS iteration at 125 steps, Krylov
@@ -207,7 +214,21 @@ metric)
         --riesz regularisation --krylov-max-it 100 --output "$RUNS/tao-metric.json")
     echo "P-Newton, metric shift: $j"
     ;;
+gn-gate)
+    G=$BASE/gn-gate
+    mkdir -p "$G"
+    j=$(sbatch --parsable --job-name=cyl-gn-gate --partition=work --ntasks=1 \
+        --mem=32G --time=02:30:00 "$JOB" "$CODE" "$G" checks.py gn \
+        --rundir "$G/run-t2" --timesteps 2 --delta-t 1.2e-5 --make-reference \
+        --gn-parts G13 G3 --json "$G/gn-gate-t2.json")
+    echo "Gauss-Newton gate (G13, G3 at 2 steps): $j (output in $G)"
+    ;;
 gn-curv)
+    # The gate must have passed: its JSON holds the top-level "pass": true.
+    if ! grep -q '^ "pass": true' "$BASE/gn-gate/gn-gate-t2.json" 2>/dev/null; then
+        echo "gn-gate has not passed ($BASE/gn-gate/gn-gate-t2.json); submit it first" >&2
+        exit 1
+    fi
     C=$BASE/gn-curvature
     mkdir -p "$C"
     # The script name ends in .sh, so job.slurm runs it with bash and passes the code
@@ -238,7 +259,7 @@ gn)
     ;;
 *)
     echo "unknown phase $PHASE (gates, timing, runs, rolA, radius, metric, hessian20," \
-         "gn-curv, gn-smoke or gn)" >&2
+         "gn-gate, gn-curv, gn-smoke or gn)" >&2
     exit 2
     ;;
 esac
