@@ -47,7 +47,7 @@
 #             after a negative-curvature solve.
 #
 # The Gauss-Newton phases (NOTES/team/gauss-newton/PLAN.md sections 5.2 and 5.3):
-#   "gn-gate"  one serial job on work, 32 GB, 2.5 h: checks.py gn at 2 steps with
+#   "gn-gate"  one serial job on work, 48 GB, 2.5 h: checks.py gn at 2 steps with
 #              --gn-parts G13 G3 (the three one-iteration TAO runs of G13 and the
 #              zero-residual comparison of G3 with the cylinder's data leaves), on a
 #              2-step reference state that the job writes. It must pass before
@@ -218,7 +218,7 @@ gn-gate)
     G=$BASE/gn-gate
     mkdir -p "$G"
     j=$(sbatch --parsable --job-name=cyl-gn-gate --partition=work --ntasks=1 \
-        --mem=32G --time=02:30:00 "$JOB" "$CODE" "$G" checks.py gn \
+        --mem=48G --time=02:30:00 "$JOB" "$CODE" "$G" checks.py gn \
         --rundir "$G/run-t2" --timesteps 2 --delta-t 1.2e-5 --make-reference \
         --gn-parts G13 G3 --json "$G/gn-gate-t2.json")
     echo "Gauss-Newton gate (G13, G3 at 2 steps): $j (output in $G)"
