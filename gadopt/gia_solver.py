@@ -452,10 +452,13 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         100 Maxwell times 2.5 at degree 2, 0.56 at degree 3 and 0.08 at
         degree 4. Putting the whole deviatoric stress at the history degree
         (so that the elastic and the relaxed parts cancel point by point in
-        the fluid limit) was measured as an alternative and is less accurate
-        over a whole run: worse in the first Maxwell times, where the
-        elastic stiffness is then integrated with fewer points, and worse
-        again after about 60 Maxwell times. For a power-law rheology the fluidity is a non-polynomial
+        the fluid limit) was measured as an alternative. It is worse in the
+        first Maxwell times, where the elastic stiffness is then integrated
+        with fewer points. At degree 3 it is also worse after about 60
+        Maxwell times (0.78 against 0.56 times DG1 at 100). At degree 2 it
+        is closer than this split from about 10 Maxwell times on (1.15
+        against 2.5 times DG1 at 100), and it still does not reach DG1. For
+        a power-law rheology the fluidity is a non-polynomial
         function of the stress, so the relaxed stress is not a polynomial
         even on straight cells, and a lower degree sees the fluidity at
         fewer points per cell; that error is not measured. Degree 1 (one
