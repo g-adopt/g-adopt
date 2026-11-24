@@ -445,8 +445,17 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         history at degree 2 (which stores as many values as DG1), about 0.5
         times at degree 3 and 0.03 to 0.05 times at degree 4. The error
         falls with the cell curvature, by a factor of about 4 when the cell
-        size falls by 1.5; how it grows over many Maxwell times was not
-        measured. For a power-law rheology the fluidity is a non-polynomial
+        size falls by 1.5. Over many Maxwell times every reduced history,
+        DG1 included, moves further from the converged one (about 500 times
+        from 1 to 100 Maxwell times under a load that is kept constant, on
+        the 7000-cell shell), and the ratios to DG1 stay about the same: at
+        100 Maxwell times 2.5 at degree 2, 0.56 at degree 3 and 0.08 at
+        degree 4. Putting the whole deviatoric stress at the history degree
+        (so that the elastic and the relaxed parts cancel point by point in
+        the fluid limit) was measured as an alternative and is less accurate
+        over a whole run: worse in the first Maxwell times, where the
+        elastic stiffness is then integrated with fewer points, and worse
+        again after about 60 Maxwell times. For a power-law rheology the fluidity is a non-polynomial
         function of the stress, so the relaxed stress is not a polynomial
         even on straight cells, and a lower degree sees the fluidity at
         fewer points per cell; that error is not measured. Degree 1 (one
