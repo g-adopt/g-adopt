@@ -58,10 +58,13 @@ limit or a crash cut short. The rule treats the two kinds differently:
   part that needs that value is not evaluable, and the floor guard does not replace
   the level. For N*, one such Newton run is enough, because its J could have fallen
   below the other;
-- a converged arm that never reaches the value has ``S = 0``;
-- an arm that did not converge and ends at work ``W_end`` without reaching the value
-  has ``S <= W* / W_end``. When that bound is below the threshold the part fails;
-  otherwise it is not evaluable.
+- an arm that never reaches the value has ``S = 0``, as section 4.5 states, whatever
+  its stop reason: it reached the level, or it stopped by itself (the budget, the
+  iteration limit, a convergence or a failure of the optimiser). The convergence test
+  above applies to the references only;
+- an arm without a stop reason (cut by the wall limit or a crash) that ends at work
+  ``W_end`` below the level without reaching the value has ``S <= W* / W_end``. When
+  that bound is below the threshold the part fails; otherwise it is not evaluable.
 
 A test with a failed part fails. A test with a part that is not evaluable and no
 failed part is not evaluable. When any test of an arm is not evaluable, the verdict
@@ -373,12 +376,14 @@ def evaluate_part(run, reference, level, threshold, j_min):
         part["S"] = used / crossing[1]
         part["W_interval"] = crossing
         part["status"] = PASS if part["S"] >= threshold else FAIL
-    elif run.converged:
+    elif run.stop_reason or run.end_work >= used:
+        # The arm reached the level, or stopped by itself (budget, iteration limit,
+        # convergence, optimiser failure), and never reached the value: S = 0.
         part["S"] = 0.0
         part["status"] = FAIL
     else:
-        # Ended without converging and without reaching the value: any crossing that
-        # a longer run would have made is beyond end_work.
+        # Cut below the level without reaching the value: any crossing that the run
+        # would have made is beyond end_work.
         bound = used / run.end_work
         part["S_bound"] = bound
         if bound < threshold:

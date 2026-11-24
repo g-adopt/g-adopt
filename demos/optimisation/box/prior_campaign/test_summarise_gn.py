@@ -547,3 +547,43 @@ def test_different_window_or_weights_are_refused():
     records["T-GN-R"]["weights"]["alpha_d"] = 0.0
     with pytest.raises(sg.RuleError, match="weight alpha_d"):
         sg.summarise(records, UNIT_TIMING)
+
+
+# A stalled arm: fast to work 200, then flat at 0.15, above J_N*(600) = 0.14, up to the
+# end of its budget.
+STALLED = [(2, 1.0), (50, 0.5), (100, 0.35), (130, 0.25), (200, 0.17), (300, 0.16),
+           (400, 0.155), (600, 0.15), (800, 0.15)]
+
+
+@pytest.mark.parametrize("end", [800, 500])
+def test_stalled_arm_that_uses_its_budget_has_s_zero(end):
+    # The arm stopped on its work budget of 800 (in its own prices; at rule work 800,
+    # or at 500 when its own product price is higher than that of timing.json) and
+    # never reached J_N*(600): S = 0, test C fails, A and B pass, so the verdict is V1b.
+    records = records_with(upto(STALLED, end))
+    records["T-GN-R"]["stop_reason"] = "work budget of 800 forward-equivalents spent"
+    result = sg.apply_rule(records, 1.0, 1.0)
+    arm = result["arms"]["T-GN-R"]
+    part = arm["C"]["parts"][0]
+    assert part["S"] == 0.0
+    assert part["status"] == sg.FAIL
+    assert arm["C"]["status"] == sg.FAIL
+    assert result["verdict"]["code"] == "V1b"
+
+
+def test_slow_arm_that_uses_its_budget_gives_v5():
+    records = records_with(ARMS["V5"])
+    records["T-GN-R"]["stop_reason"] = "work budget of 800 forward-equivalents spent"
+    result = sg.apply_rule(records, 1.0, 1.0)
+    assert result["arms"]["T-GN-R"]["C"]["parts"][0]["S"] == 0.0
+    assert result["verdict"]["code"] == "V5"
+
+
+@pytest.mark.parametrize("reason", ["TAO converged reason -2", "TAO converged reason -6",
+                                    "TAO converged reason 5"])
+def test_arm_that_stopped_by_itself_below_the_level_has_s_zero(reason):
+    records = records_with(upto(STALLED, 500))
+    records["T-GN-R"]["stop_reason"] = reason
+    part = sg.apply_rule(records, 1.0, 1.0)["arms"]["T-GN-R"]["C"]["parts"][0]
+    assert part["S"] == 0.0
+    assert part["status"] == sg.FAIL
