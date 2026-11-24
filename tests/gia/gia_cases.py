@@ -97,6 +97,24 @@ def annulus_meshes(comm=fd.COMM_WORLD):
     return parent, sub
 
 
+def straight_annulus_meshes(comm=fd.COMM_WORLD):
+    """The parent annulus and its mantle submesh with straight (P1) cells.
+
+    The cells of `annulus_meshes` without the P2 curving: the circles are
+    polygons. On these cells the Jacobian of every cell is constant, so a
+    polynomial in reference coordinates is a polynomial of the same degree
+    in physical coordinates, which `annulus_meshes` does not give.
+
+    Args:
+      comm: the communicator of the meshes.
+    """
+    parent = fd.Mesh(str(MESH_FILE), comm=comm)
+    parent.cartesian = False
+    sub = fd.Submesh(parent, 2, CELL_MANTLE)
+    sub.cartesian = False
+    return parent, sub
+
+
 @dataclass(frozen=True)
 class Case:
     """One configuration of the coupled system.
@@ -305,6 +323,36 @@ def build_new(meshes, case, *, control=None, dt=None, sea=None, nullspace=None,
         solver_parameters=solver_parameters, solver_parameters_extra=options,
         **kwargs)
     return solver, u, psi
+
+
+def mantle_functional(solver, u, sub):
+    """`int_mantle (u . u + 0.1 h : h) dx`, the mantle part of the adjoint functional.
+
+    The functional of the adjoint case and of `test_gia_solver.py::march`.
+    The displacement is integrated at degree 4 (exact for `u . u` of a P2
+    field on straight cells). The history `h` is a Function at the points of
+    the rule of degree `solver.history.degree` on the Quadrature family, and
+    such a Function can only be integrated with its own rule: the form
+    compiler raises "Mismatch of quadrature points" for another degree. When
+    the history degree is 4 (the default) the two parts are one integral, as
+    the functional has always been written; otherwise each part takes its
+    own rule.
+
+    Args:
+      solver: the GIA solver; its accepted history is integrated.
+      u: the displacement on the mantle submesh.
+      sub: the mantle submesh.
+
+    Returns:
+      The assembled value (an `AdjFloat` on the tape).
+    """
+    history = solver.internal_variables
+    dx_m = fd.Measure("dx", domain=sub, metadata={"quadrature_degree": 4})
+    degree = solver.history.degree if solver.family == "Quadrature" else 4
+    if degree == 4:
+        return fd.assemble((fd.inner(u, u) + .1 * fd.inner(history, history)) * dx_m)
+    dx_h = fd.Measure("dx", domain=sub, metadata={"quadrature_degree": degree})
+    return fd.assemble(fd.inner(u, u) * dx_m + .1 * fd.inner(history, history) * dx_h)
 
 
 def _unit(seed, k):

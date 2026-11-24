@@ -350,8 +350,15 @@ class DirectConstitutiveBackend:
         # Each history Function may hold several Maxwell modes in one tensor.
         self.densities = [fd.Function(m.function_space()) for m in self.buffers]
         intersect = (fd.dx(domain=owner.potential_mesh),) if owner.mesh is not owner.potential_mesh else ()
+        # The pairing of the history seeds with the history updates, and the
+        # weights that convert a seed into a density, are integrals of
+        # history quantities: they take the rule at whose points the history
+        # is stored (`history.degree`, the solver's `history_quad_degree`).
+        # A Function at quadrature points can only be integrated with its
+        # own rule. The residual `F` carries the degree of each of its
+        # equations itself.
         dx = fd.Measure('dx', domain=owner.mesh, intersect_measures=intersect,
-                        metadata={'quadrature_degree': owner.quad_degree})
+                        metadata={'quadrature_degree': owner.history.degree})
         densities = history_slices(self.densities)
         self.H = sum(fd.inner(g, s)*dx for g, s in zip(self.sensitivity_updates, densities))
         # Convert coefficient-space seeds to integration densities. Assembling

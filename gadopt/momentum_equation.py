@@ -386,6 +386,37 @@ def rotational_potential(rotation, mesh, *, Omega_sq=1) -> Expr:
     return psi_rot
 
 
+def relaxed_stress_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
+    r"""The relaxed part of a viscoelastic stress, $\int_\Omega \nabla\phi : \sigma_r \, dx$.
+
+    `eq.relaxed_stress` is $\sigma_r$, the part of the stress that the
+    internal variables carry ($-\sum_i 2\mu_i m_i$ for a Maxwell rheology,
+    `InternalVariableApproximation.relaxed_stress`). `viscosity_term`
+    integrates the whole stress with the quadrature rule of its equation.
+    This term integrates the relaxed part alone, so that an `Equation` with
+    a quadrature degree of its own can carry it: a history stored at the
+    points of one quadrature rule can only be evaluated at those points, and
+    the other terms of the momentum equation keep their own rule
+    (`InternalVariableMechanics.set_equations`).
+
+    The term has no boundary part. It serves natural displacement boundaries
+    only; the weak displacement conditions of `viscosity_term` read the
+    whole stress on the facets, where a history at cell quadrature points
+    has no value.
+
+    Args:
+      eq: the equation; reads `test`, `dx` and `relaxed_stress`.
+      trial: not read: the displacement enters through the history
+        expressions in `relaxed_stress`.
+
+    Returns:
+      The UFL form of the term.
+    """
+    return inner(nabla_grad(eq.test), eq.relaxed_stress) * eq.dx
+
+
+relaxed_stress_term.required_attrs = {"relaxed_stress"}
+relaxed_stress_term.optional_attrs = set()
 viscosity_term.required_attrs = {"stress"}
 viscosity_term.optional_attrs = {"interior_penalty", "mu"}
 pressure_gradient_term.required_attrs = {"p"}

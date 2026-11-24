@@ -115,6 +115,20 @@ def test_each_multi_rank_entry_ran_on_its_ranks(entry, cores):
     assert ranks == cores, f"{entry}: ran on {ranks!r} rank(s), expected {cores!r}"
 
 
+@pytest.mark.parametrize("entry", E.EXACT_REPLAY_ENTRIES)
+def test_the_replay_is_the_recording_bit_for_bit(entry):
+    """In the entries of `EXACT_REPLAY_ENTRIES` the replay gives `J` exactly.
+
+    The step block starts each replayed step from the saved start of the
+    forward step, through the same solver with the same options, so the
+    Newton iterates and the functional repeat to the last bit; with the
+    degree-2 history as with the degree-4 one.
+    """
+    v = values(entry)
+    assert v["J_replay"] == v["J"], (
+        f"{entry}: replay {v['J_replay']!r}, recorded {v['J']!r}")
+
+
 @pytest.mark.parametrize("entry", list(entry_params("replay")))
 def test_replay_repeats_the_recording(entry):
     """The replay of the tape at the recorded control gives the recorded functional.

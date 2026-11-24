@@ -23,6 +23,7 @@ The test `test_gia_forward.py` reads the files; this script asserts nothing.
 """
 
 import argparse
+import math
 from dataclasses import replace
 
 import gadopt  # imported before firedrake
@@ -35,9 +36,12 @@ from gadopt.viscoelastic_checkpointing import written_rank_count
 
 import gia_cases as C
 import gia_march as M
-from gia_entries import (CASE_DIR, FORWARD, FORWARD_VALUES, REFERENCE_LABEL,
-                         RESTART_STEP, SPHERE, SPHERE_STEP_COUNT, forward_log,
-                         forward_ranks, forward_state, forward_values)
+import gia_time_convergence as T
+from gia_entries import (CASE_DIR, FORWARD, FORWARD_VALUES, HISTORY_DEGREE_MESHES,
+                         HISTORY_DEGREE_PAIRS, HISTORY_DEGREE_STEPS,
+                         HISTORY_DEGREE_VARIANTS, REFERENCE_LABEL, RESTART_STEP, SPHERE,
+                         SPHERE_STEP_COUNT, TC_END_TIME, forward_log, forward_ranks,
+                         forward_state, forward_values)
 
 BASES = {"SEA": M.SEA, "LOAD": M.LOAD}
 
@@ -59,7 +63,7 @@ def run_march(name):
     case = configuration(entry)
     options = dict(preset=entry["preset"],
                    default_options=entry.get("default_options", True),
-                   parameters=entry.get("parameters"))
+                   parameters=entry.get("parameters"), **entry.get("solver", {}))
     steps = M.FORWARD_STEPS
     if "restart_from" in entry:
         path = CASE_DIR / forward_state(entry["restart_from"])
@@ -424,8 +428,77 @@ def run_sphere():
     M.write_values(CASE_DIR / forward_ranks(SPHERE), {"ranks": mesh.comm.size})
 
 
+# -- history-degree --------------------------------------------------------------------
+
+def _history_degree_march(meshes, variant):
+    """March one variant of `HISTORY_DEGREE_VARIANTS` over the `history-degree` scenario.
+
+    Returns:
+      A dictionary: copies of `u` and `psi` at the end, the sea-level
+      coupling and the solver (for the sea level and the boundary measure),
+      the shift, the number of history values and the Newton iterations.
+    """
+    spec = HISTORY_DEGREE_VARIANTS[variant]
+    case = replace(M.SEA, family=spec["family"], scheme="bdf2")
+    run = M.build(meshes, case, preset="direct", **spec["solver"])
+    T.set_ice(run.sea)
+    newton = []
+    M.advance(run, [TC_END_TIME / HISTORY_DEGREE_STEPS] * HISTORY_DEGREE_STEPS,
+              ice=T.keep_ice,
+              on_step=lambda k, r: newton.append(r.solver.appctx["gia_last_solve_newton_its"]))
+    sea = M._coupling(run.solver, cp.SeaLevel)
+    return {"u": run.u.copy(deepcopy=True), "psi": run.psi.copy(deepcopy=True),
+            "sea": sea, "solver": run.solver, "shift": M._real(run.solver, "sea_level_shift"),
+            "history_dofs": run.solver.internal_variables.function_space().dim(),
+            "newton": sum(newton)}
+
+
+def _history_degree_differences(a, b):
+    """The relative differences of `HISTORY_DEGREE_QUANTITIES` between two marches.
+
+    `a` and `b` run on the same meshes, so their fields share spaces and
+    each difference is exact. The geoid is the potential on the sea-level
+    boundary and is compared there, as the sea level is.
+    """
+    ds = b["sea"].measure()
+    sl_a, sl_b = a["sea"].sea_level(), b["sea"].sea_level()
+    return {
+        "u": fd.errornorm(b["u"], a["u"]) / fd.norm(b["u"]),
+        "psi": fd.errornorm(b["psi"], a["psi"]) / fd.norm(b["psi"]),
+        "geoid": math.sqrt(fd.assemble((a["psi"] - b["psi"]) ** 2 * ds)
+                           / fd.assemble(b["psi"] ** 2 * ds)),
+        "sea_level": math.sqrt(fd.assemble((sl_a - sl_b) ** 2 * ds)
+                               / fd.assemble(sl_b ** 2 * ds)),
+        "shift": abs(a["shift"] - b["shift"]) / abs(b["shift"]),
+    }
+
+
+def run_history_degree():
+    """Compare the degree-2 history with the degree-4 and the DG1 histories.
+
+    Marches each variant of `HISTORY_DEGREE_MESHES` on the curved and the
+    straight annulus and writes the differences of `HISTORY_DEGREE_PAIRS`
+    (`gia_entries.HISTORY_DEGREE_STEPS` gives the names and the scenario).
+    """
+    out = {}
+    for mesh_name, builder in (("curved", C.annulus_meshes),
+                               ("straight", C.straight_annulus_meshes)):
+        meshes = builder()
+        runs = {}
+        for variant in HISTORY_DEGREE_MESHES[mesh_name]:
+            runs[variant] = _history_degree_march(meshes, variant)
+            out[f"{mesh_name}_{variant}_history_dofs"] = runs[variant]["history_dofs"]
+            out[f"{mesh_name}_{variant}_newton"] = runs[variant]["newton"]
+        for a, b in HISTORY_DEGREE_PAIRS[mesh_name]:
+            for quantity, value in _history_degree_differences(runs[a], runs[b]).items():
+                out[f"{mesh_name}_{a}_{b}_{quantity}"] = value
+        print({k: v for k, v in out.items() if k.startswith(mesh_name)}, flush=True)
+    M.write_values(CASE_DIR / forward_values("history-degree"), out)
+
+
 VALUE_ENTRIES = {"unreduced": run_unreduced, "reference-quadrature": run_reference,
-                 "convert-quadrature-bdf2": run_convert}
+                 "convert-quadrature-bdf2": run_convert,
+                 "history-degree": run_history_degree}
 assert set(VALUE_ENTRIES) == set(FORWARD_VALUES)
 
 

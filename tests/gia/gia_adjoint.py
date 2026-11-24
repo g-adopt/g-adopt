@@ -362,6 +362,8 @@ class Scenario:
         #: `(step, factor)` of a recorded change of the material field, or
         #: None (`gia_entries.ADJOINT`, `material_change`).
         self.material_change = spec.get("material_change")
+        #: Further arguments of the solver (`gia_entries.ADJOINT`, `solver`).
+        self.solver_options = dict(spec.get("solver", {}))
         if self.material_change is not None and self.kind != "viscosity":
             raise ValueError("material_change needs the viscosity control")
         with stop_annotating():
@@ -380,6 +382,7 @@ class Scenario:
             kwargs["control"] = control
         if self.frozen_datum:
             kwargs["solver_class"] = FrozenDatumSolver
+        kwargs = {**self.solver_options, **kwargs}
         return M.build(self.meshes, self.case, preset=self.preset,
                        default_options=self.default_options, sea=sea,
                        parameters=parameters or None, **kwargs)
@@ -475,9 +478,7 @@ class Scenario:
     def functional(self, run):
         """The functional of `test_gia_solver.py::march` on the fields of `run`."""
         parent, sub = self.meshes
-        dx_m = fd.Measure("dx", domain=sub, metadata={"quadrature_degree": 4})
-        history = run.solver.internal_variables
-        J = fd.assemble((fd.inner(run.u, run.u) + .1 * fd.inner(history, history)) * dx_m)
+        J = C.mantle_functional(run.solver, run.u, sub)
         J += fd.assemble(run.psi * run.psi * fd.dx(domain=parent))
         sea_level = [c for c in run.solver.couplings if isinstance(c, cp.SeaLevel)]
         if sea_level:
@@ -819,9 +820,7 @@ def unit_march(meshes, case, control, steps, **kwargs):
     for h in steps:
         dt.assign(h)
         solver.solve()
-    dx_m = fd.Measure("dx", domain=sub, metadata={"quadrature_degree": 4})
-    history = solver.internal_variables
-    J = fd.assemble((fd.inner(u, u) + .1 * fd.inner(history, history)) * dx_m)
+    J = C.mantle_functional(solver, u, sub)
     J += fd.assemble(psi * psi * fd.dx(domain=parent))
     return J, solver
 

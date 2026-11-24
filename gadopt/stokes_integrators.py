@@ -32,7 +32,11 @@ from .internal_variable_equation import (
     history_slices,
     internal_variable_history_terms,
 )
-from .momentum_equation import compressible_viscoelastic_terms, stokes_terms
+from .momentum_equation import (
+    compressible_viscoelastic_terms,
+    relaxed_stress_term,
+    stokes_terms,
+)
 from .solver_options_manager import SolverConfigurationMixin, ConfigType
 from .utility import (
     DEBUG,
@@ -1233,6 +1237,15 @@ class HistoryFormulation(abc.ABC):
 
     name: str
 
+    #: The quadrature degree of the rule at whose points the history is
+    #: stored, or `None` for a history that any rule can evaluate (an
+    #: expression of the displacement, or a polynomial field). When it is set
+    #: and differs from the solver's `quad_degree`,
+    #: `InternalVariableMechanics.set_equations` integrates the relaxed part
+    #: of the stress, the only term that reads the history, with this degree
+    #: in an equation of its own.
+    history_quad_degree: int | None = None
+
     def __init__(self) -> None:
         self._solver: StokesSolverBase | None = None
 
@@ -1556,6 +1569,14 @@ class InternalVariableMechanics:
     ) -> None:
         """Append the displacement equation, then the history equations.
 
+        A formulation whose history lives at the points of a quadrature rule
+        of another degree than `solver.quad_degree`
+        (`HistoryFormulation.history_quad_degree`) gets two displacement
+        equations: the elastic stress and the other momentum terms at
+        `solver.quad_degree`, then the relaxed stress at the degree of the
+        history. The solver sums the residuals of every equation in
+        `solver.equations` that has the displacement test function.
+
         Args:
           solver: the solver whose `equations` list receives the equations.
           extra_terms: momentum terms added after the viscoelastic ones, for
@@ -1576,9 +1597,25 @@ class InternalVariableMechanics:
         self.strain = solver.approximation.deviatoric_strain(self.displacement)
         self.internal_variables = formulation.history_values(self, solver)
 
-        stress = solver.approximation.stress(
-            self.displacement, internal_variables=self.internal_variables
-        )
+        # A history stored at the points of a quadrature rule can only be
+        # evaluated at those points (the form compiler refuses another rule
+        # with "Mismatch of quadrature points"). If that rule is not the one
+        # of the momentum equation, the stress is split into its elastic part
+        # (`elastic_stress`, at `quad_degree` with every other momentum term)
+        # and its relaxed part (`relaxed_stress`, the only part that reads
+        # the history), which becomes an equation of its own at the degree of
+        # the history. Both equations have the displacement test function;
+        # the solver adds their residuals. With one rule for both the stress
+        # stays one expression (`stress`), so the residual is the same
+        # expression as without this option.
+        history_degree = formulation.history_quad_degree
+        separate = history_degree is not None and history_degree != solver.quad_degree
+        if separate:
+            stress = solver.approximation.elastic_stress(self.displacement)
+        else:
+            stress = solver.approximation.stress(
+                self.displacement, internal_variables=self.internal_variables
+            )
         source = solver.approximation.buoyancy(self.displacement) * solver.k
         solver.equations.append(
             Equation(
@@ -1593,6 +1630,24 @@ class InternalVariableMechanics:
                 intersect_measures=intersect_measures,
             )
         )
+        if separate:
+            # The relaxed stress at the degree of the history. No boundary
+            # conditions: the term has no facet part, and a history at cell
+            # quadrature points has no value on a facet (the solvers that
+            # store such a history refuse weak displacement conditions).
+            solver.equations.append(
+                Equation(
+                    formulation.displacement_test(solver),
+                    formulation.displacement_space(solver),
+                    [relaxed_stress_term],
+                    eq_attrs={"relaxed_stress": solver.approximation.relaxed_stress(
+                        self.internal_variables)},
+                    approximation=solver.approximation,
+                    quad_degree=history_degree,
+                    scaling_factor=getattr(solver, "scaling_factor", 1),
+                    intersect_measures=intersect_measures,
+                )
+            )
         formulation.add_history_equations(self, solver)
 
     def free_surface_normal_stress(

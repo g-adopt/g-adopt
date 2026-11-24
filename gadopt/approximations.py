@@ -1157,6 +1157,51 @@ class InternalVariableApproximation(BaseGIAApproximation):
             dev_stress -= 2 * mu * m
         return dev_stress
 
+    def elastic_stress(self, u) -> ufl.core.expr.Expr:
+        r"""The part of the stress that does not read the internal variables.
+
+        $$ \sigma_e = \kappa_r\,\kappa\,(\nabla \cdot u)\,I
+           + 2\mu_0\,\mathrm{dev}\,\varepsilon(u), $$
+
+        the instantaneous (unrelaxed) response. Together with
+        `relaxed_stress` it is the stress of `stress`:
+        $\sigma = \sigma_e + \sigma_r$. The two parts exist separately for a
+        solver that integrates them with two quadrature rules: a history
+        stored at the points of one rule can only be evaluated at those
+        points (`gadopt.gia_solver.SelfGravitatingGIASolver`,
+        `history_quad_degree`). The sum is the same expression as `stress`
+        up to the order of the floating-point operations, so a solver that
+        integrates both parts with one rule uses `stress` itself.
+
+        Args:
+          u: the displacement.
+
+        Returns:
+          A UFL expression for the elastic stress.
+        """
+        div_u = div(u) * Identity(len(u))
+        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
+        stress += self.mu0 * self.deviatoric_tensor_from_grad(grad(u))
+        return stress
+
+    def relaxed_stress(self, internal_variables) -> ufl.core.expr.Expr:
+        r"""The part of the stress that the internal variables carry.
+
+        $$ \sigma_r = -\sum_i 2\mu_i m_i, $$
+
+        the relaxation away from the elastic response (`elastic_stress`). It
+        is linear in the internal variables and does not read the
+        displacement directly; on a history eliminated at quadrature points
+        the displacement enters through the updated $m_i$.
+
+        Args:
+          internal_variables: one `(d, d)` expression per Maxwell element.
+
+        Returns:
+          A UFL expression for the relaxed stress.
+        """
+        return -sum(2 * mu * m for mu, m in zip(self.shear_modulus, internal_variables))
+
     def second_stress_invariant(self, dev_stress):
         """Return the second deviatoric stress invariant sqrt(J2).
 

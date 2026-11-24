@@ -120,9 +120,17 @@ class QuadratureHistory(HistoryFormulation):
     shear coefficient `sum_i mu_i alpha / (alpha + dt / tau_i)`, which is the
     penalty coefficient here.
 
+    The history and the scalar fluidity of the local solve live at the
+    points of the quadrature rule of degree `degree`. When that is not the
+    solver's `quad_degree` (the solver's `history_quad_degree`),
+    `InternalVariableMechanics` integrates the relaxed part of the stress at
+    this degree and the rest of the momentum equation at `quad_degree`
+    (`history_quad_degree` below).
+
     Args:
       solver: the coupled solver.
-      degree: the quadrature degree, which is the solver's `quad_degree`.
+      degree: the quadrature degree of the history: the solver's
+        `history_quad_degree`, which is its `quad_degree` by default.
       order: 1 for backward Euler, 2 for variable-step BDF2.
     """
 
@@ -133,6 +141,9 @@ class QuadratureHistory(HistoryFormulation):
         approximation = solver.approximation
         #: The DG degree, or the quadrature degree.
         self.degree = degree
+        #: The history can be evaluated at the points of this rule only
+        #: (`HistoryFormulation.history_quad_degree`).
+        self.history_quad_degree = degree
         self.space = internal_variable_space(
             solver.mesh, approximation.n_history_tensors, degree,
             family="Quadrature")

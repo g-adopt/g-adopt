@@ -188,7 +188,7 @@ import itertools
 from collections import defaultdict
 from collections.abc import Mapping
 from copy import deepcopy
-from numbers import Number
+from numbers import Integral, Number
 from warnings import warn
 
 import numpy as np
@@ -413,11 +413,47 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         quadrature points by a local Newton solve; natural displacement
         boundaries only).
       internal_variable_degree: the DG degree, default 1. The Quadrature
-        history takes `quad_degree` and refuses another value here.
-      quad_degree: the volume quadrature degree and the degree of the
-        Quadrature history. `None` gives 6 on the DG family and 4 on the
-        Quadrature family, where a degree-6 rule stores 23 values per
-        tetrahedron and component.
+        history takes its degree from `history_quad_degree` (or
+        `quad_degree`) and refuses another value here.
+      quad_degree: the volume quadrature degree of the mechanics, and of the
+        Quadrature history unless `history_quad_degree` is given. `None`
+        gives 6 on the DG family and 4 on the Quadrature family, where a
+        degree-6 rule stores 23 values per tetrahedron and component.
+      history_quad_degree: Quadrature family only: the degree of the
+        quadrature rule at whose points the history (the internal variables)
+        and the scalar fluidity of the local constitutive solve are stored.
+        `None` (default) takes `quad_degree`, and the residual is then the
+        same expression as without this option. With another value the
+        relaxed part of the stress, `-sum_i 2 mu_i m_i` (`-2 mu0 p` for the
+        backstress rheology), which is the only term that reads the history,
+        is integrated with this rule, and the elastic stress and every other
+        term keep `quad_degree` (`InternalVariableMechanics.set_equations`);
+        the adjoint and tangent forms of the step integrate the history with
+        this rule too. Firedrake's default rules have these point counts per
+        cell: degree 2, 4 per tetrahedron and 3 per triangle; degree 3, 6
+        and 6; degree 4, 11 and 6. Degree 2 has the node count of the DG1
+        history, so it stores the history in 24 numbers per tetrahedron and
+        Maxwell element (a symmetric tensor has 6 components) against 66 at
+        degree 4, and the tape and the checkpoints shrink by the same
+        factor. Accuracy: on straight cells with cell-constant linear
+        Maxwell properties the relaxed stress of a P2 displacement is a
+        polynomial of degree 1, its integrand of degree 2, and degree 2
+        gives the degree-4 result to round-off. On the curved (P2) 2-D
+        annulus of `tests/gia`, degree 2 is about as accurate as the DG1
+        history (1.2 to 1.5 times its difference from a converged history
+        in the displacement, the potential, the geoid and the sea level),
+        and degree 4 is 15 to 50 times closer to a converged history than
+        either. The error goes to zero with the cell curvature; how large
+        it is against the spatial error of a 3-D mesh is not measured. For
+        a power-law rheology the fluidity (the scalar of the local solve) is
+        a non-polynomial function of the stress, so the relaxed stress is
+        not a polynomial even on straight cells: at a lower degree the local
+        solve and the integral of the relaxed stress see the fluidity at
+        fewer points per cell (3 against 6 per triangle at degree 2), and
+        degree 2 is no longer exact on straight cells. The size of that
+        error is not measured. A value above `quad_degree` is
+        refused: it stores more history values than `quad_degree` and makes
+        only the relaxed part more accurate; raise `quad_degree` instead.
       dtn_quad_degree: the boundary quadrature degree of the DtN rows and of
         every coupling facet integral; `None` takes the DtN form's
         calibrated default.
@@ -500,6 +536,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         internal_variable_family: str = "DG",
         internal_variable_degree: int | None = None,
         quad_degree: int | None = None,
+        history_quad_degree: int | None = None,
         dtn_quad_degree: int | None = None,
         dtn_alpha=None,
         bcs: dict | None = None,
@@ -528,20 +565,35 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         if quad_degree is None:
             quad_degree = 6 if self.family == "DG" else 4
         if self.family == "Quadrature":
-            if internal_variable_degree not in (None, quad_degree):
+            history_quad_degree = self._history_quad_degree(
+                history_quad_degree, quad_degree)
+            if internal_variable_degree not in (None, history_quad_degree):
                 raise ValueError(
-                    "The Quadrature history is stored at the volume quadrature "
-                    f"points, degree quad_degree={quad_degree}; got "
-                    f"internal_variable_degree={internal_variable_degree}.")
-            internal_variable_degree = quad_degree
-        elif internal_variable_degree is None:
-            internal_variable_degree = 1
+                    "The Quadrature history is stored at the points of the "
+                    f"quadrature rule of degree {history_quad_degree} "
+                    "(history_quad_degree, which defaults to quad_degree="
+                    f"{quad_degree}); got internal_variable_degree="
+                    f"{internal_variable_degree}. Set history_quad_degree "
+                    "for another degree of the history.")
+            internal_variable_degree = history_quad_degree
+        else:
+            if history_quad_degree is not None:
+                raise ValueError(
+                    "history_quad_degree applies to the Quadrature history "
+                    "only; the DG history is a polynomial field of degree "
+                    "internal_variable_degree, integrated with quad_degree.")
+            if internal_variable_degree is None:
+                internal_variable_degree = 1
         self.u = u
         self.psi = psi
         self.approximation = approximation
         self.dt = dt
         self.time_scheme = time_scheme
         self.quad_degree = quad_degree
+        #: The quadrature degree of the stored history on the Quadrature
+        #: family (`quad_degree` unless `history_quad_degree` was given);
+        #: `None` on the DG family, whose history is a polynomial field.
+        self.history_quad_degree = history_quad_degree
         self.scaling_factor = scaling_factor
         self.bcs = dict(bcs or {})
         self.near_nullspace_modes = near_nullspace
@@ -845,6 +897,12 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         unknowns = [self.solution_split[0]]
         if self.family == "DG":
             unknowns.append(self.solution_split[1])
+        if self.family == "Quadrature":
+            # Every equation of the Quadrature family is a part of the
+            # momentum row: the momentum equation, and with a history degree
+            # other than `quad_degree` the relaxed stress at that degree
+            # (`InternalVariableMechanics.set_equations`).
+            unknowns = unknowns * len(self.equations)
         F = sum(eq.residual(sol) for eq, sol in zip(self.equations, unknowns, strict=True))
         self._mechanics_form = F
         self._refuse_parent_coefficients_on_mechanics_facets(F)
@@ -862,6 +920,41 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         self.strong_bcs.extend(self.gravity.dirichlet_bcs(
             self.solution_space.sub(self.potential_index)))
         self._detect_solution_dependence()
+
+    @staticmethod
+    def _history_quad_degree(history_quad_degree, quad_degree) -> int:
+        """Return the quadrature degree of the Quadrature history, checked.
+
+        Args:
+          history_quad_degree: the argument of the solver, or `None` for
+            `quad_degree`.
+          quad_degree: the volume quadrature degree of the mechanics.
+
+        Returns:
+          The degree, a positive integer no larger than `quad_degree`.
+
+        Raises:
+          ValueError: for a value that is not a positive integer, or one
+            above `quad_degree`. A higher degree stores more history values
+            than the mechanics rule and makes only the relaxed part of the
+            stress more accurate, so the message asks for a higher
+            `quad_degree` instead.
+        """
+        if history_quad_degree is None:
+            return quad_degree
+        if (isinstance(history_quad_degree, bool)
+                or not isinstance(history_quad_degree, Integral)
+                or history_quad_degree < 1):
+            raise ValueError(
+                "history_quad_degree must be a positive integer; got "
+                f"{history_quad_degree!r}.")
+        if history_quad_degree > quad_degree:
+            raise ValueError(
+                f"history_quad_degree={history_quad_degree} is above "
+                f"quad_degree={quad_degree}. The option lowers the number of "
+                "stored history values; for a more accurate history raise "
+                "quad_degree, which sets the degree of every term.")
+        return int(history_quad_degree)
 
     def _check_row_scaling_meshes(self) -> None:
         """Refuse a row scaling (`c`, `B_mu`, `Lambda`) on a mesh other than the parent.

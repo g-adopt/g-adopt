@@ -136,9 +136,7 @@ def march(meshes, case, control, steps=STEPS[:2], *, checkpoint_dir=None,
             surface_ice(sea, k)
         solver.solve()
     parent = meshes[0]
-    dx_m = fd.Measure("dx", domain=sub, metadata={"quadrature_degree": 4})
-    history = solver.internal_variables
-    J = fd.assemble((fd.inner(u, u) + .1 * fd.inner(history, history)) * dx_m)
+    J = C.mantle_functional(solver, u, sub)
     J += fd.assemble(psi * psi * fd.dx(domain=parent))
     sea_level = [c for c in solver.couplings if isinstance(c, cp.SeaLevel)]
     if sea_level:
@@ -446,6 +444,114 @@ def test_a_file_tells_whether_it_holds_a_state_before_a_solver_reads_it(meshes, 
     with fd.CheckpointFile(written, "r") as chk:
         with pytest.raises(ValueError, match="time_scheme"):
             read_state(chk, b, idx=0)
+
+
+# -- History quadrature degree -----------------------------------------------------
+
+#: A Quadrature configuration without a displacement condition (the family
+#: refuses one), for the construction-only tests of `history_quad_degree`.
+HISTORY_DEGREE_CASE = Case(family="Quadrature", core="fluid")
+
+
+@pytest.mark.parametrize("family, kwargs, message", [
+    ("DG", dict(history_quad_degree=2), "Quadrature history only"),
+    ("Quadrature", dict(history_quad_degree=6), "above quad_degree=4"),
+    ("Quadrature", dict(history_quad_degree=0), "positive integer"),
+    ("Quadrature", dict(history_quad_degree=2.0), "positive integer"),
+    ("Quadrature", dict(history_quad_degree=2, internal_variable_degree=4),
+     "history_quad_degree"),
+    ("Quadrature", dict(internal_variable_degree=2), "history_quad_degree"),
+], ids=["dg", "above", "zero", "float", "degree-mismatch", "degree-without-option"])
+def test_a_history_quad_degree_that_does_not_apply_is_refused(meshes, family, kwargs,
+                                                              message):
+    """`history_quad_degree` is refused on the DG family, above `quad_degree`, below 1.
+
+    `internal_variable_degree` on the Quadrature family must equal the
+    history degree, and the message names `history_quad_degree`. No solve.
+    """
+    case = HISTORY_DEGREE_CASE.but(family=family)
+    with pytest.raises(ValueError, match=message):
+        C.build_new(meshes, case, **kwargs)
+
+
+def test_a_lower_history_degree_splits_the_relaxed_stress(meshes):
+    """The history degree sets the history space and the rule of the relaxed stress.
+
+    No solve. By default (and with `history_quad_degree` equal to
+    `quad_degree`) the momentum row is one equation at `quad_degree` and
+    the history has 6 points per triangle at degree 4. With degree 2 the
+    history and the fluidity fields of the local solve have 3 points per
+    triangle, the relaxed stress is a second equation at degree 2, and the
+    momentum equation keeps degree 4. `internal_variable_degree` equal to
+    the history degree is accepted.
+    """
+    sub = meshes[1]
+    cells = sub.num_cells()
+    tensors = C.approximation(HISTORY_DEGREE_CASE).n_history_tensors
+    for kwargs, degree, n_equations in [({}, 4, 1),
+                                        (dict(history_quad_degree=4), 4, 1),
+                                        (dict(history_quad_degree=2), 2, 2),
+                                        (dict(history_quad_degree=2,
+                                              internal_variable_degree=2), 2, 2)]:
+        solver, _, _ = C.build_new(meshes, HISTORY_DEGREE_CASE, **kwargs)
+        points = {4: 6, 2: 3}[degree]
+        assert solver.quad_degree == 4
+        assert solver.history_quad_degree == degree == solver.history.degree
+        history = solver.internal_variables
+        # A symmetric 2x2 tensor stores 3 numbers per point.
+        assert history.function_space().dim() == cells * points * tensors * 3, kwargs
+        assert solver.history.material.q.function_space().dim() == cells * points
+        assert len(solver.equations) == n_equations, kwargs
+        degrees = [eq.dx.metadata()["quadrature_degree"] for eq in solver.equations]
+        assert degrees == [4, 2][:n_equations], kwargs
+
+
+@pytest.mark.parametrize("model", ["maxwell2", "backstress"])
+def test_the_elastic_and_the_relaxed_stress_sum_to_the_stress(meshes, model):
+    """`elastic_stress(u) + relaxed_stress(m)` is `stress(u, m)` to round-off.
+
+    The two parts are what the solver integrates with two rules when the
+    history degree is not `quad_degree`; `stress` is what it integrates
+    with one rule. Evaluated at the points of a degree-4 rule for a smooth
+    displacement and smooth history tensors.
+    """
+    sub = meshes[1]
+    material = C.approximation(Case(model=model))
+    X = fd.SpatialCoordinate(sub)
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2)).interpolate(
+        fd.as_vector([fd.sin(2 * X[0]) * X[1], fd.cos(X[1]) + X[0] ** 2]))
+    tensors = [fd.as_matrix([[X[0] * (k + 1), X[1] - k], [X[1] - k, fd.sin(X[0] + k)]])
+               for k in range(material.n_history_tensors)]
+    space = fd.TensorFunctionSpace(sub, "Quadrature", 4)
+    whole = fd.Function(space).interpolate(material.stress(u, internal_variables=tensors))
+    parts = fd.Function(space).interpolate(
+        material.elastic_stress(u) + material.relaxed_stress(tensors))
+    scale = np.max(np.abs(whole.dat.data_ro))
+    assert np.max(np.abs(whole.dat.data_ro - parts.dat.data_ro)) <= 1e-14 * scale
+
+
+def test_a_state_of_another_history_degree_is_refused(meshes, tmp_path):
+    """A file written with the degree-2 history records it, and a degree-4 solver refuses it.
+
+    No time step: the state of a solver at construction is written. The
+    record holds `history_degree` 2; `read_state` with the default degree
+    refuses the file before it loads a field, with a message that names
+    `history_quad_degree=2`. The read of a degree-2 file into a degree-2
+    solver is the `restart-hq2` entry of the `forward` case.
+    """
+    from pathlib import Path
+    writer, _, _ = C.build_new(meshes, HISTORY_DEGREE_CASE, history_quad_degree=2)
+    directory = Path(meshes[0].comm.bcast(str(tmp_path), root=0))
+    path = str(directory / "state.h5")
+    with fd.CheckpointFile(path, "w") as chk:
+        chk.save_mesh(meshes[0])
+        write_state(chk, writer, idx=0)
+    assert stored_configuration(path)["history_degree"] == 2
+    assert stored_configuration(path) == configuration(writer)
+    reader, _, _ = C.build_new(meshes, HISTORY_DEGREE_CASE)
+    with fd.CheckpointFile(path, "r") as chk:
+        with pytest.raises(ValueError, match="history_quad_degree=2"):
+            read_state(chk, reader, idx=0)
 
 
 # -- Interface ----------------------------------------------------------------------

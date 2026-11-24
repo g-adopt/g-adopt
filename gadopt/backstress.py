@@ -50,6 +50,16 @@ class BackstressApproximation(CompressibleInternalVariableApproximation):
         p, _ = internal_variables
         return 2*self.mu0*(self.deviatoric_strain(u)-p)
 
+    def relaxed_stress(self, internal_variables):
+        """The part of the stress that the history carries, `-2 mu0 p`.
+
+        The creep strain `p` relaxes the elastic stress `2 mu0 e(u)`
+        (`elastic_stress`, inherited); the backstress `a` does not enter
+        the stress, only the creep rate.
+        """
+        p, _ = internal_variables
+        return -2*self.mu0*p
+
     def backstress(self, a):
         return 2*self.backstress_modulus*a
 

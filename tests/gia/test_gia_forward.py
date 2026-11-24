@@ -458,6 +458,68 @@ def test_a_checkpoint_of_the_earlier_solver_converts():
         "a conversion without the number of writer ranks was accepted")
 
 
+# -- history-degree -------------------------------------------------------------------
+
+@pytest.mark.parametrize("quantity", E.HISTORY_DEGREE_QUANTITIES)
+def test_the_degree_two_history_is_exact_on_straight_cells(quantity):
+    """On straight cells the degree-2 history gives the degree-4 result.
+
+    With cell-constant Maxwell properties the relaxed stress of a P2
+    displacement is a polynomial of degree 1, so both rules integrate it
+    exactly; the difference is round-off (`HISTORY_DEGREE_STRAIGHT_RTOL`).
+    """
+    value = load_values("history-degree")[f"straight_Q2_Q4_{quantity}"]
+    assert value <= E.HISTORY_DEGREE_STRAIGHT_RTOL, (
+        f"straight cells, Q2 - Q4 in {quantity}: {value!r}, expected at most "
+        f"{E.HISTORY_DEGREE_STRAIGHT_RTOL!r}")
+
+
+@pytest.mark.parametrize("quantity", E.HISTORY_DEGREE_CURVED_QUANTITIES)
+def test_the_degree_two_history_differs_on_curved_cells_by_the_history_error(quantity):
+    """On the curved annulus Q2 - Q4 lies in `HISTORY_DEGREE_CURVED_BAND`.
+
+    Above the lower bound the option reaches the residual (a history degree
+    that the solver ignored would give round-off); below the upper bound
+    the difference has the size of the error of the history representation.
+    """
+    value = load_values("history-degree")[f"curved_Q2_Q4_{quantity}"]
+    low, high = E.HISTORY_DEGREE_CURVED_BAND
+    assert low <= value <= high, (
+        f"curved cells, Q2 - Q4 in {quantity}: {value!r}, expected in [{low!r}, {high!r}]")
+
+
+@pytest.mark.parametrize("quantity", E.HISTORY_DEGREE_CURVED_QUANTITIES)
+def test_the_degree_two_history_is_as_accurate_as_dg1(quantity):
+    """On the curved annulus Q2 and DG1 are at the same distance from Q4.
+
+    The ratio `curved_Q2_Q4 / curved_DG1_Q4` lies in
+    `HISTORY_DEGREE_RATIO_BAND`, with the degree-4 history as the reference.
+    """
+    values = load_values("history-degree")
+    ratio = values[f"curved_Q2_Q4_{quantity}"] / values[f"curved_DG1_Q4_{quantity}"]
+    low, high = E.HISTORY_DEGREE_RATIO_BAND
+    assert low <= ratio <= high, (
+        f"curved cells, (Q2 - Q4) / (DG1 - Q4) in {quantity}: {ratio!r}, expected in "
+        f"[{low!r}, {high!r}]")
+
+
+@pytest.mark.parametrize("mesh", list(E.HISTORY_DEGREE_MESHES))
+def test_the_degree_two_history_has_the_size_of_dg1(mesh):
+    """The degree-2 history stores half the values of the degree-4 one in 2-D.
+
+    3 points per triangle against 6, and 3 is the node count of DG1: the
+    two histories have the same number of values. All variants take the
+    same Newton iterations.
+    """
+    values = load_values("history-degree")
+    q2, q4 = values[f"{mesh}_Q2_history_dofs"], values[f"{mesh}_Q4_history_dofs"]
+    assert 2 * q2 == q4, f"{mesh}: Q2 {q2!r} values, Q4 {q4!r}"
+    if f"{mesh}_DG1_history_dofs" in values:
+        assert q2 == values[f"{mesh}_DG1_history_dofs"], f"{mesh}: Q2 {q2!r}, DG1 {values}"
+    newton = {v: values[f"{mesh}_{v}_newton"] for v in E.HISTORY_DEGREE_MESHES[mesh]}
+    assert len(set(newton.values())) == 1, f"{mesh}: Newton iterations {newton!r}"
+
+
 # -- 3-D entry -----------------------------------------------------------------------
 
 def sphere_table():

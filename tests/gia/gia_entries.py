@@ -79,6 +79,9 @@ RESTART_STEP = 4
 #: - `save_state`: write the state after `RESTART_STEP` steps;
 #: - `restart_from`: read the state that this entry wrote and march the
 #:   steps after `RESTART_STEP`;
+#: - `solver`: further arguments of the solver, for example
+#:   `{"history_quad_degree": 2}`; a restart entry passes the same ones as
+#:   the entry it reads;
 #: - `local`: False for an entry that the development machine does not run
 #:   (more than 2 ranks); it runs on CI only.
 FORWARD = {
@@ -101,6 +104,13 @@ FORWARD = {
     "restart-np2": dict(base="SEA", preset="direct", cores=2, restart_from="sea-direct"),
     "restart-from-np2": dict(base="SEA", preset="direct",
                              restart_from="sea-direct-np2"),
+    # The history at the points of the degree-2 rule (3 per triangle) with
+    # the mechanics at degree 4, written after `RESTART_STEP` steps and read
+    # back: the `write_state` / `read_state` round trip of that history.
+    "sea-direct-hq2": dict(base="SEA", preset="direct", save_state=True,
+                           solver={"history_quad_degree": 2}),
+    "restart-hq2": dict(base="SEA", preset="direct", restart_from="sea-direct-hq2",
+                        solver={"history_quad_degree": 2}),
 }
 
 #: The entries of the forward case that are not a march of `FORWARD`, each
@@ -112,8 +122,12 @@ FORWARD = {
 #: - `reference-quadrature`: three steps against the stored states of the
 #:   earlier solver (`gadopt.gia_gravity` at `2f4b1397`);
 #: - `convert-quadrature-bdf2`: a checkpoint file of the earlier solver
-#:   restores this one, which then continues as a run from rest does.
-FORWARD_VALUES = ["unreduced", "reference-quadrature", "convert-quadrature-bdf2"]
+#:   restores this one, which then continues as a run from rest does;
+#: - `history-degree`: the history at the points of the degree-2 rule
+#:   (`history_quad_degree=2`) against the degree-4 history and the DG1
+#:   history, on the curved and on the straight annulus (`HISTORY_DEGREE_*`).
+FORWARD_VALUES = ["unreduced", "reference-quadrature", "convert-quadrature-bdf2",
+                  "history-degree"]
 
 #: The 3-D entry of the forward case, run by `gia_forward.run_sphere`: the
 #: 24-column radially extruded cubed sphere of
@@ -140,7 +154,7 @@ SPHERE_COUPLING_COLUMNS = ("m1", "m2", "m3", "core_pressure")
 #: and multi-rank entries are compared with `sea-direct` instead.
 FORWARD_RECORDED = ["sea-direct", "sea-iterative", "sea-multiplier", "sea-fixed",
                     "sea-fixed-iterative", "load-direct", "load-iterative",
-                    "power-direct"]
+                    "power-direct", "sea-direct-hq2"]
 
 #: The relations between entries: `(entry, reference, rtol, first row)`.
 #: Every value column of `entry` agrees with the same column of `reference`
@@ -156,6 +170,7 @@ RELATIONS = [
     ("restart-np2", "sea-direct", 1e-8, RESTART_STEP),
     ("restart-from-np2", "sea-direct", 1e-8, RESTART_STEP),
     ("sea-iterative-np3", "sea-direct", 1e-5, 0),
+    ("restart-hq2", "sea-direct-hq2", 1e-10, RESTART_STEP),
 ]
 
 #: Entries with the direct preset; the others are iterative.
@@ -323,6 +338,60 @@ SOLVED_RTOL = 1e-10
 #: step of the file, 0.13.
 CONVERT_RTOL = 1e-11
 CONVERT_PREVIOUS_DT = .13
+
+#: `history-degree`: the scenario of the `time_convergence` case (`SEA`,
+#: Maxwell, the ice of `gia_time_convergence.set_ice` applied at `t = 0` and
+#: kept), marched with BDF2 in `HISTORY_DEGREE_STEPS` equal steps to
+#: `TC_END_TIME` by each variant of `HISTORY_DEGREE_VARIANTS`, on the
+#: P2-curved annulus (`curved`) and on the same cells with straight edges
+#: (`straight`). The driver writes the relative difference of each pair of
+#: `HISTORY_DEGREE_PAIRS` in each quantity of `HISTORY_DEGREE_QUANTITIES`
+#: as `<mesh>_<a>_<b>_<quantity>`: `u` and `psi` as `errornorm(a, b) /
+#: norm(b)`, `geoid` the same for `psi` on the sea-level boundary,
+#: `sea_level` for the sea level there, `shift` as `|a - b| / |b|`. It also
+#: writes `<mesh>_<variant>_history_dofs` and `<mesh>_<variant>_newton`
+#: (the Newton iterations of the march).
+#:
+#: The variants: `Q4`, the Quadrature history at the mechanics degree 4
+#: (the default); `Q2`, the same with `history_quad_degree=2`; `DG1`, the
+#: DG history of degree 1 (with that family's volume degree 6).
+#: Eight steps give the same differences between the variants as the 32
+#: steps of the study in which the option was measured (Q2 - Q4 in `u`:
+#: 9.50e-5 at 8 steps, 9.46e-5 at 32), at a quarter of the cost.
+HISTORY_DEGREE_STEPS = 8
+HISTORY_DEGREE_VARIANTS = {
+    "Q4": dict(family="Quadrature", solver={}),
+    "Q2": dict(family="Quadrature", solver={"history_quad_degree": 2}),
+    "DG1": dict(family="DG", solver={}),
+}
+HISTORY_DEGREE_MESHES = {"curved": ("Q4", "Q2", "DG1"), "straight": ("Q4", "Q2")}
+HISTORY_DEGREE_PAIRS = {"curved": (("Q2", "Q4"), ("DG1", "Q4"), ("Q2", "DG1")),
+                        "straight": (("Q2", "Q4"),)}
+HISTORY_DEGREE_QUANTITIES = ("u", "psi", "geoid", "sea_level", "shift")
+
+#: On straight cells with cell-constant Maxwell properties the relaxed
+#: stress of a P2 displacement is a polynomial of degree 1 at every step, so
+#: its integrand has degree 2 and the degree-2 history gives the degree-4
+#: result: every quantity of `straight_Q2_Q4` is below this bound, which is
+#: round-off of the direct solves (the study measured 1.5e-14 at most).
+HISTORY_DEGREE_STRAIGHT_RTOL = 1e-11
+
+#: On the curved annulus the degree-2 history differs from the degree-4 one
+#: (every cell is curved, so the integrand is not a polynomial): the
+#: differences of `curved_Q2_Q4` in `u`, `psi`, `geoid` and `sea_level` lie
+#: in this band. The lower bound shows that the option reaches the residual;
+#: the upper bound that the difference stays at the size of the error of
+#: the history representation (the study measured 1e-5 to 1.2e-3 against a
+#: converged history).
+HISTORY_DEGREE_CURVED_BAND = (1e-6, 3e-3)
+HISTORY_DEGREE_CURVED_QUANTITIES = ("u", "psi", "geoid", "sea_level")
+
+#: The degree-2 history is about as accurate as the DG1 history: on the
+#: curved annulus `curved_Q2_Q4 / curved_DG1_Q4` lies in this band for the
+#: quantities of `HISTORY_DEGREE_CURVED_QUANTITIES` (the degree-4 history
+#: is 15 to 50 times closer to a converged history than either, so it
+#: serves as the reference here).
+HISTORY_DEGREE_RATIO_BAND = (0.5, 2.5)
 
 
 def forward_log(entry):
@@ -791,7 +860,8 @@ def _time_convergence_entries():
 #:   change of a material field between two steps at one `dt`
 #:   (`gia_adjoint.Scenario.march`; viscosity control only);
 #: - `repeat_sweep`: True writes `dJ_repeat`, the derivative of a second
-#:   adjoint sweep directly after the one of `dJ`.
+#:   adjoint sweep directly after the one of `dJ`;
+#: - `solver`: further arguments of the solver, as in `FORWARD`.
 #:
 #: Each entry writes the values of `ADJOINT_VALUES` to
 #: `out/adjoint-<entry>.dat` and the counts (`adjoint_count_names`) to
@@ -821,7 +891,18 @@ ADJOINT = {
                                       changes={"load": "sea_fixed"},
                                       steps=(.08,) * 6, material_change=(4, .05),
                                       repeat_sweep=True),
+    # The history at the points of the degree-2 rule: the adjoint and
+    # tangent forms of the step integrate the history with that rule, and
+    # the functional integrates it with that rule (`gia_cases.mantle_functional`).
+    "sea-direct-viscosity-hq2": dict(base="SEA", preset="direct", control="viscosity",
+                                     solver={"history_quad_degree": 2}),
 }
+
+#: The entries whose replay at the recorded control must give the recorded
+#: functional bit for bit: the step block replays each step from the start
+#: of the forward step with the same solver and the same options, so the
+#: Newton iterates repeat exactly. `REPLAY_RTOL` holds for every entry.
+EXACT_REPLAY_ENTRIES = ("sea-direct-viscosity", "sea-direct-viscosity-hq2")
 
 #: The steps at which the cached operators of `sea-fixed-material-change`
 #: rebuild, by phase (1-based). The entry marches a linear problem (fixed

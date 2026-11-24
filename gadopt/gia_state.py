@@ -214,8 +214,12 @@ def stored_configuration(checkpoint, prefix: str = "") -> dict | None:
 def configuration(solver) -> dict:
     """What a state is only valid for: scheme, history family and degree, DtN.
 
-    The history degree is the DG degree or the quadrature degree; a state of
-    another degree has other degrees of freedom. The DtN representation
+    The history degree is the DG degree, or on the Quadrature family the
+    degree of the rule whose points hold the history (the solver's
+    `history_quad_degree`, which is `quad_degree` unless given); a state of
+    another degree has other degrees of freedom. The mechanics degree
+    `quad_degree` is not part of it: a state is defined at the history
+    points whatever rule integrates the other terms. The DtN representation
     decides whether the state holds multiplier fields.
     """
     return {"time_scheme": solver.time_scheme,
@@ -276,8 +280,7 @@ def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
                              "written by gadopt.gia_state.write_state.")
         stored = record[key]
         if stored != value:
-            raise ValueError(f"The checkpoint was written with {key}={stored!r}; "
-                             f"this solver has {value!r}.")
+            raise ValueError(_mismatch_message(key, stored, value, solver))
     parent = solver.potential_mesh
     kwargs = {} if idx is None else {"idx": idx}
     state = {}
@@ -293,6 +296,22 @@ def read_state(checkpoint, solver, *, idx=None, prefix: str = "") -> dict:
             else:
                 state[name] = checkpoint.load_function(parent, prefix + name, **kwargs)
     return state
+
+
+def _mismatch_message(key, stored, value, solver) -> str:
+    """The message of `read_state` for a configuration key that differs.
+
+    A Quadrature history of another degree has its values at other points,
+    and the solver option that sets the degree is `history_quad_degree`
+    (which defaults to `quad_degree`), so the message names it.
+    """
+    message = f"The checkpoint was written with {key}={stored!r}; this solver has {value!r}."
+    if key == "history_degree" and solver.family == "Quadrature":
+        message += (f" The Quadrature history of the file is stored at the points of "
+                    f"the quadrature rule of degree {stored}; build the solver with "
+                    f"history_quad_degree={stored} (it defaults to quad_degree="
+                    f"{solver.quad_degree}) to read it.")
+    return message
 
 
 def _is_quadrature(target) -> bool:
@@ -343,9 +362,15 @@ def state_from_checkpoint(solver, fields: Mapping, metadata: Mapping | None = No
     if quadrature != (solver.family == "Quadrature"):
         raise ValueError("The checkpoint's history family does not match the "
                          f"solver's {solver.family!r} family.")
-    if quadrature and float(metadata.get(MATERIAL_QUAD_DEGREE_KEY, -1)) != solver.quad_degree:
-        raise ValueError("The checkpoint's quadrature degree does not match "
-                         "the solver's quad_degree.")
+    # The earlier solver stored its history at the points of its one
+    # volume rule, so the stored degree is the degree of the history.
+    written_degree = float(metadata.get(MATERIAL_QUAD_DEGREE_KEY, -1))
+    if quadrature and written_degree != solver.history.degree:
+        raise ValueError(
+            f"The checkpoint's history is stored at quadrature degree "
+            f"{written_degree:g}; this solver stores it at degree "
+            f"{solver.history.degree}. Build the solver with "
+            f"history_quad_degree={written_degree:g} to read it.")
     state = {}
     # The earlier mixed solution, by index; its field order is this solver's.
     for i, name in enumerate(solver.field_names):
