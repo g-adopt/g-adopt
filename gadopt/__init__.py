@@ -22,7 +22,10 @@ from .level_set_tools import (
 )
 from .limiter import VertexBasedP1DGLimiter
 from .nullspaces import create_stokes_nullspace, rigid_body_modes
-from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
+from .preconditioners import (
+    FreeSurfaceMassInvPC, SPDAssembledPC,
+    VerticallyLumpedPC, VerticallyLumpedHMGPC,
+)
 from .richards_solver import RichardsSolver
 from .soil_curves import (
     SoilCurve,
