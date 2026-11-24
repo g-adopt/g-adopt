@@ -64,7 +64,6 @@ import gc
 import time
 from dataclasses import dataclass
 
-import numpy as np
 from firedrake import Cofunction, Function, TestFunction, assemble, derivative
 from firedrake.adjoint_utils.blocks.assembly import AssembleBlock
 from petsc4py import PETSc
@@ -367,6 +366,23 @@ def add_gauss_newton_arguments(parser):
                              "preconditioned)")
 
 
+def gauss_newton_record(settings):
+    """The settings of ``gauss_newton_settings`` under the keys of the run record.
+
+    The record of a run is the metadata plus the recorder's summary, and the summary
+    holds ``hessian``, the count of full products. So the choice of ``--hessian`` goes
+    into the record as ``hessian_choice``; every other key keeps its name.
+
+    Args:
+        settings: the dict of ``gauss_newton_settings``.
+
+    Returns:
+        dict
+    """
+    return {("hessian_choice" if key == "hessian" else key): value
+            for key, value in settings.items()}
+
+
 def gauss_newton_settings(args):
     """The keyword arguments of ``run_tao`` for the options of the Hessian product.
 
@@ -388,7 +404,6 @@ def gauss_newton_settings(args):
             "krylov_ew": bool(args.krylov_ew), "tr_norm": args.tr_norm}
 
 
-
 class GaussNewtonOperator:
     """The Gauss-Newton product ``v -> H_GN v`` on the tape of a reduced functional.
 
@@ -400,8 +415,8 @@ class GaussNewtonOperator:
         terms: the list of ``find_quadratic_terms``, or None to find them here.
         expected_count: passed to ``find_quadratic_terms`` when ``terms`` is None.
         recorder: the ``Recorder`` of ``optimisers.py``, or None. When it is set,
-            every product calls ``recorder.start_gn()`` and ``recorder.end_gn()``,
-            which count it and time it.
+            every product calls ``recorder.end_gn(elapsed)``, which counts it and
+            stores its time.
 
     Attributes:
         terms: the quadratic terms.
@@ -571,8 +586,6 @@ class GaussNewtonOperator:
         Returns:
             Cofunction.
         """
-        if self.recorder is not None:
-            self.recorder.start_gn()
         start = time.perf_counter()
         selected = self.terms if terms is None else terms
         try:

@@ -69,7 +69,8 @@ from cylindrical_problem import BOX_DIR, CYLINDRICAL_DIR, HERE, build_problem, p
 from gadopt import log  # noqa: E402
 import optimisers  # noqa: E402 -- demos/optimisation/box
 from gauss_newton import (add_gauss_newton_arguments,  # noqa: E402 -- demos/optimisation/box
-                          expected_term_count_cylinder, gauss_newton_settings)
+                          expected_term_count_cylinder, gauss_newton_record,
+                          gauss_newton_settings)
 from optimisers import Recorder, VARIANTS, run  # noqa: E402
 
 # The nodal trust radius of the box runs whose evidence selected the zero shift: Z-d
@@ -389,7 +390,7 @@ def optimiser_settings(args, problem):
                         initial_radius_rule=(f"{BOX_RADIUS} * sqrt({dofs} / {BOX_NODES})"
                                              if args.initial_radius is None else "given"),
                         krylov_max_it=krylov, tao_options=extra,
-                        bnk_shift=args.bnk_shift, **gn_settings)
+                        bnk_shift=args.bnk_shift, **gauss_newton_record(gn_settings))
     return kwargs, settings
 
 

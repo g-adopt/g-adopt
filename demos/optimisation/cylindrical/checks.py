@@ -70,7 +70,7 @@ from mpi4py import MPI
 import cylindrical_problem as cp  # sets the import paths; must come first
 from cylindrical_problem import build_problem, prepare_reference
 
-from firedrake import (Cofunction, Function, TestFunction, TrialFunction, assemble,
+from firedrake import (Function, TestFunction, TrialFunction, assemble,
                        dot, dx, grad)
 from petsc4py import PETSc
 from pyadjoint import MinimizationProblem, stop_annotating
@@ -611,8 +611,12 @@ def check_timing(args, results):
     times = {"functional": [], "gradient": [], "hessian": []}
     with stop_annotating():
         for _ in range(2):
-            t = time.perf_counter(); J = float(rf(m)); times["functional"].append(time.perf_counter() - t)
-            t = time.perf_counter(); rf.derivative(apply_riesz=False); times["gradient"].append(time.perf_counter() - t)
+            t = time.perf_counter()
+            J = float(rf(m))
+            times["functional"].append(time.perf_counter() - t)
+            t = time.perf_counter()
+            rf.derivative(apply_riesz=False)
+            times["gradient"].append(time.perf_counter() - t)
         for _ in range(2):
             t = time.perf_counter()
             Hh = rf.hessian(h, apply_riesz=False)

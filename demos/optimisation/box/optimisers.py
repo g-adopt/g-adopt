@@ -69,6 +69,7 @@ from recording import PETSC_LIBRARY, KrylovRecorder, gradient_norms, tao_view_te
 from gauss_newton import HESSIAN_CHOICES, LINEAR_DEFECT_TOLERANCE, build_gauss_newton_hessian
 import ROL
 
+
 class WorkBudgetReached(Exception):
     """Raised inside the TAO monitor when the work budget is spent.
 
@@ -143,7 +144,7 @@ class Recorder:
         hessian: number of Hessian-vector products so far (pyadjoint's full product,
             counted through ``hessian_cb_post``).
         gn_hessian: number of Gauss-Newton products so far. The operator calls
-            ``start_gn`` and ``end_gn`` around each one; the reduced-functional
+            ``end_gn`` after each one; the reduced-functional
             callbacks never fire for it, so the two counts never overlap.
         gradients: list of dict, one per gradient evaluation.
         iterations: list of dict, one per optimiser iteration.
@@ -263,23 +264,15 @@ class Recorder:
             "gn_hessian_per_forward": None if not (f and gn) else gn / f,
         }
 
-    def start_gn(self):
-        """Mark the start of one Gauss-Newton product. Called by the operator."""
-        self._call_start["gn_hessian"] = time.perf_counter()
-
-    def end_gn(self, elapsed=None):
+    def end_gn(self, elapsed):
         """Count one Gauss-Newton product and store its wall time.
 
         Args:
-            elapsed: the time the operator measured around its sweeps, or None to
-                take the time since ``start_gn``.
+            elapsed: the time the operator measured around its three sweeps and its
+                release step, before its garbage collection.
         """
-        start = self._call_start.pop("gn_hessian", None)
-        if elapsed is None and start is not None:
-            elapsed = time.perf_counter() - start
         self.gn_hessian += 1
-        if elapsed is not None:
-            self.gn_hessian_times.append(float(elapsed))
+        self.gn_hessian_times.append(float(elapsed))
 
     def _eval_cb(self, J, values):
         self.forward += 1
@@ -413,8 +406,8 @@ class Recorder:
             gn_price = costs["gn_hessian_per_forward"]
         work = self.forward + self.adjoint + price * self.hessian
         if self.gn_hessian:
-            # Only added when there is a Gauss-Newton product, so that the work of a
-            # run without one is the same float as before this term existed.
+            # A run without a Gauss-Newton product adds no term, so its work is
+            # ``forward + adjoint + price * hessian`` exactly.
             work += gn_price * self.gn_hessian
         return work
 
@@ -706,6 +699,11 @@ def run_rol(problem, variant, max_it=20, output=None, metadata=None,
 
     with stop_annotating():
         algorithm.run(solver.rolvector, solver.rolobjective, solver.bounds)
+    if not recorder.stop_reason:
+        # ROL's own status test ended the run (its iteration limit or its own
+        # tolerances). A complete run always carries a stop reason, so that a record
+        # without one is known to be cut by a wall limit or a crash.
+        recorder.stop_reason = "ROL status test"
     return recorder
 
 
@@ -806,7 +804,8 @@ def check_newton_options(params, variant, hessian="full", krylov_ew=False,
     - ``hessian`` other than ``"full"`` needs a ``-riesz`` variant (the metric that
       preconditions the Krylov solve), BNK's shift at zero (``tao_bnk_imax`` equal to
       0) and no metric shift. A positive-semi-definite product never needs a shift,
-      and a nodal shift is what stalled the earlier runs.
+      and a nodal shift ``pert * I`` is far larger than the Hessian of a CG1 control
+      (``riesz_hessian.ShiftedHessianMat``).
     - ``krylov_ew`` needs ``tao_ksp_ew`` true and the two tolerances of
       ``KRYLOV_EW_OPTIONS`` at their values, also after ``--tao-opt`` has been merged.
 
@@ -875,7 +874,7 @@ def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
             (``bnk.c:69-72``). Those two differ by a mesh-dependent factor, near 150
             on a 150-cell mesh, so one ``tao_gatol`` would mean two different things.
         krylov_rtol: the fixed relative tolerance of BNK's Krylov solve,
-            ``tao_bnk_ksp_rtol``. The value 1e-2 is the one of every earlier run.
+            ``tao_bnk_ksp_rtol``. The default is 1e-2.
         krylov_ew: add ``KRYLOV_EW_OPTIONS``, so that PETSc sets the tolerance of
             each solve by the Eisenstat-Walker rule. The fixed tolerance stays in the
             options; the forcing term overwrites it before each solve, and a solve
@@ -951,8 +950,8 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
             ``pert`` shifts by ``pert * A`` with ``A`` the metric of the control.
             Needs a ``-riesz`` variant, which supplies ``A``.
         hessian: the product of BNK's Krylov solve. ``"full"`` is pyadjoint's
-            Hessian and installs nothing, so the run is the same as before this
-            option existed. ``"gn"`` installs ``gauss_newton.GaussNewtonHessianMat``
+            Hessian and installs nothing: the TAO object keeps pyadjoint's Hessian
+            matrix. ``"gn"`` installs ``gauss_newton.GaussNewtonHessianMat``
             with the Gauss-Newton product for the whole run. ``"gn-then-full"``
             starts with Gauss-Newton and switches to the full Hessian at iteration
             ``gn_switch_it``, with the fall-back to Gauss-Newton after a full solve
@@ -1114,7 +1113,7 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
         except WorkBudgetReached as e:
             # Kept for the case where petsc4py ever passes the exception through.
             log(f"TAO stopped: {e}")
-        except PETSc.Error as e:
+        except PETSc.Error:
             # petsc4py reports a Python exception from a callback as error code 101.
             # The flag says whether that exception was the budget stop.
             if not recorder.budget_hit:

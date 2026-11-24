@@ -24,7 +24,7 @@ import time
 
 import numpy as np
 from mpi4py import MPI
-from firedrake import Cofunction, Function, TestFunction, assemble
+from firedrake import Cofunction, Function, assemble
 from petsc4py import PETSc
 from pyadjoint import MinimizationProblem, stop_annotating
 
@@ -274,8 +274,12 @@ def check_products(operator, metric_context, v, w, results, has_regularisation,
     ds_v = [ds.copy(deepcopy=True) for ds in operator.tlm_states(v)]
     ds_w = [ds.copy(deepcopy=True) for ds in operator.tlm_states(w)]
     operator.tape.reset_tlm_values()
-    curvature = float(sum(operator.term_curvatures(ds_v, ds_w)))
-    results["G7_values"] = {"<w,H_GN v>": wGv, "sum_k w_k f_k''[ds_k(v), ds_k(w)]": curvature}
+    per_term = operator.term_curvatures(ds_v, ds_w)
+    curvature = float(sum(per_term))
+    # The share of each term, so that the record shows which terms the comparison
+    # rests on (the velocity terms of the cylinder among them).
+    results["G7_values"] = {"<w,H_GN v>": wGv, "sum_k w_k f_k''[ds_k(v), ds_k(w)]": curvature,
+                            "per_term": {t.label: c for t, c in zip(operator.terms, per_term)}}
     ok &= verdict(results, "G7", "|<w,H_GN v> - sum_k w_k f_k''[ds_k(v),ds_k(w)]| / |..|",
                   abs(wGv - curvature) / abs(curvature), tolerance)
     return ok
@@ -624,7 +628,11 @@ def check_stale_guard(problem, operator, v, results):
     raised = None
     try:
         rf.hessian(v, apply_riesz=False)
-    except Exception as error:  # noqa: BLE001 -- any refusal counts, the type is recorded
+    except (TypeError, AttributeError, RuntimeError) as error:
+        # pyadjoint meets the cleared adjoint value of J first (TypeError, or
+        # AttributeError when J is one assembly); Firedrake's guard on the cleared
+        # adjoint state of a solve block raises RuntimeError. Any other error is a
+        # defect of the check and propagates.
         raised = f"{type(error).__name__}: {error}"
     results["G9_pyadjoint_error"] = raised
     ok &= verdict(results, "G9", "(b) rf.hessian after a GN product raises",

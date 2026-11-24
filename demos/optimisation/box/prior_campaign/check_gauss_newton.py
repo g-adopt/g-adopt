@@ -245,10 +245,9 @@ def check_ew(state, workdir, results):
     solves = all_solves(record)
     rtols = [s["rtol"] for s in solves]
     expected = ew_expected(solves)
-    results["G12_solves"] = [{k: s.get(k) for k in ("tao_iteration", "rtol", "rhs_norm",
-                                                     "iterations", "reason_name",
-                                                     "hessian_product")}
-                             for s in solves]
+    keys = ("tao_iteration", "rtol", "rhs_norm", "iterations", "reason_name",
+            "hessian_product")
+    results["G12_solves"] = [{k: s.get(k) for k in keys} for s in solves]
     results["G12_expected_rtol"] = expected
     ok &= verdict(results, "G12", "number of solves", len(solves), 2, mode="above")
     ok &= verdict(results, "G12", "rtol of solve 0", rtols[0], 0.5, mode="equal")
@@ -257,6 +256,22 @@ def check_ew(state, workdir, results):
                   worst, 1e-12)
     ok &= verdict(results, "G12", "solves with rtol 1e-2",
                   sum(1 for r in rtols if r == 1e-2), 0, mode="equal")
+    # The direct proof that STCG obeys the tolerance: each solve stops at the first
+    # residual ratio at or below its rtol (the KSP monitor records the residual
+    # norms, the first being that of the start). A solve at its cap is exempt.
+    obeyed = True
+    for solve in solves:
+        norms = solve.get("residual_norms") or []
+        if len(norms) < 2 or solve.get("at_cap"):
+            continue
+        ratios = [r / norms[0] for r in norms[1:]]
+        if ratios[-1] > solve["rtol"] or any(r <= solve["rtol"] for r in ratios[:-1]):
+            obeyed = False
+    results["G12_residual_ratios"] = [
+        [r / s["residual_norms"][0] for r in s["residual_norms"][1:]]
+        for s in solves if len(s.get("residual_norms") or []) > 1]
+    ok &= verdict(results, "G12", "each solve stops at the first residual ratio at or "
+                  "below its rtol", obeyed, True, mode="true")
     unused = unused_petsc_options(text)
     results["G12_unused_options"] = unused
     ok &= verdict(results, "G12", "PETSc options left unused", len(unused), 0,
@@ -317,6 +332,8 @@ def check_switch_smoke(state, workdir, results):
             expected.append("full")
     ok &= verdict(results, "smoke", "solve modes", str(modes), str(expected), mode="equal")
     ok &= verdict(results, "smoke", "number of solves", len(solves), 3, mode="equal")
+    ok &= verdict(results, "smoke", "hessian_choice in the record",
+                  record.get("hessian_choice"), "gn-then-full", mode="equal")
     ok &= verdict(results, "smoke", "switch entries in hessian_switches",
                   len(record.get("hessian_switches") or []), 0, mode="above")
     ok &= verdict(results, "smoke", "recording_errors", len(record["recording_errors"]), 0,
@@ -385,9 +402,9 @@ def check_g11(state, workdir, results):
                "adjoint": recorder.adjoint, "recording_errors":
                recorder.final_diagnostics.get("recording_errors")}
     if solve is not None:
-        summary.update({k: solve.get(k) for k in ("iterations", "reason_name",
-                                                   "ritz_values", "rtol", "step_norm",
-                                                   "rhs_dot_sol", "cg_objective")})
+        keys = ("iterations", "reason_name", "ritz_values", "rtol", "step_norm",
+                "rhs_dot_sol", "cg_objective")
+        summary.update({k: solve.get(k) for k in keys})
     results["G11_solve"] = summary
     say(f"    {json.dumps(summary, default=str)}")
     ok &= verdict(results, "G11", "the GN solve ran without recording errors",
@@ -395,16 +412,19 @@ def check_g11(state, workdir, results):
     return ok
 
 
-def run_timing(state, results, products=5, config=None):
+def run_timing(state, results, products=5, config=None, pairs=4):
     """The prices of the box rule, measured in one process on one node.
 
-    Taping, two forward calls, two gradients, ``products`` full products and
+    Taping, ``pairs`` forward calls each followed by a gradient, ``products`` full
+    products and
     ``products`` Gauss-Newton products at the first guess, in that order, in the
     smooth direction ``v``. The times are those of the ``Recorder`` of the runs,
     taken by the same callbacks, so that the prices measure what a run's work
     counter measures (the garbage collection after a product is outside both
     times). The first call of each kind builds solvers and kernels, so the medians
-    over the calls after the first are the prices:
+    over the calls after the first are the prices. With four pairs the forward time
+    is the median of three samples; the two extra pairs cost about four
+    forward-equivalents:
 
     - ``full_per_forward = median(full product) / median(forward)``, the price of a
       full product in the work of the rule;
@@ -424,7 +444,7 @@ def run_timing(state, results, products=5, config=None):
     recorder.attach()
     m = problem.control.tape_value()
     with stop_annotating():
-        for _ in range(2):
+        for _ in range(pairs):
             rf(m)
             rf.derivative(apply_riesz=False)
         for _ in range(products):

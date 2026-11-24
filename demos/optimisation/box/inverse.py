@@ -27,7 +27,7 @@ from mpi4py import MPI
 
 from gadopt import *
 from gauss_newton import (add_gauss_newton_arguments, expected_term_count_box,
-                          gauss_newton_settings)
+                          gauss_newton_record, gauss_newton_settings)
 from optimisers import VARIANTS, run
 from problem import build_problem
 
@@ -359,8 +359,9 @@ def main(argv=None):
         "prior": prior_record(problem, args.riesz),
     }
     if not args.optimiser.startswith("rol"):
-        # The product of the Krylov solve and its tolerance, for the TAO types.
-        record.update(gn_settings)
+        # The product of the Krylov solve and its tolerance, for the TAO types; the
+        # choice of --hessian under ``hessian_choice``.
+        record.update(gauss_newton_record(gn_settings))
 
     kwargs = {"max_it": args.max_it, "initial_radius": args.initial_radius,
               "output": output, "metadata": record,
