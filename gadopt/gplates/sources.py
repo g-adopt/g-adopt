@@ -66,7 +66,7 @@ class Source(ABC):
     _cached_dict: dict[str, np.ndarray] | None = None
 
     # kNN interpolation-geometry cache. Keyed on
-    # (target_coords content hash, id(interpolation_config)); the value is the
+    # (target_coords content hash, interpolation config by value); the value is the
     # geometry bundle produced by the connector for that (source cloud, mesh,
     # cfg) triple. Siblings sharing this source at the same age reuse one
     # cKDTree build + query. Lazily created (a class-level dict default would
@@ -129,7 +129,7 @@ class Source(ABC):
         it via ``build_fn()`` on a miss.
 
         The cache is rank-local and keyed on
-        ``(target_coords content hash, id(interpolation_config))``; the
+        ``(target_coords content hash, interpolation config by value)``; the
         connector owns the geometry math (``build_fn``) while the source owns
         the cache so siblings sharing this source reuse one build. Cleared by
         ``prepare`` whenever the source cloud advances to a new age.
