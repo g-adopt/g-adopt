@@ -1419,9 +1419,20 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         X = SpatialCoordinate(self.mesh)
         moments = self._density_moment_measure() if self.check_nullspace else None
 
+        # The two Jacobian products are built once, on one probe Function,
+        # and every direction is copied into the probe. Firedrake keeps the
+        # assembler of a 1-form on the form object, so the later assemblies
+        # of the same form reuse its parallel loops and only run the kernels.
+        # A new `action(J, direction)` per direction would be a new form each
+        # time, and on the pyop3 Firedrake the setup of the loops of a new
+        # form costs far more than running them (the probe of three modes
+        # assembles eight products).
+        probe = Function(self.solution_space)
+        products = {False: action(J, probe), True: action(adjoint(J), probe)}
+
         def size(direction, transpose=False):
-            form = action(adjoint(J) if transpose else J, direction)
-            with assemble(form).dat.vec_ro as r:
+            probe.assign(direction)
+            with assemble(products[transpose]).dat.vec_ro as r:
                 return r.norm()
 
         def unit(field_expression=None, vector=None):
