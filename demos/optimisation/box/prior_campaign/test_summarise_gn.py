@@ -18,6 +18,10 @@ The three references are the same in most tests:
   against 0.2), so ``N*`` takes its value from a different run at each level;
 - both Newton runs fall to 0.03 at the end, so ``J_min`` is far below ``J_N*(600) =
   0.14`` and the floor guard leaves every level valid.
+
+Every record carries the metadata that ``check_records`` reads (the flags of its run
+name and the shared window, reference state, budget and weights) and a stop reason,
+so that it is a complete run unless a test removes the stop reason.
 """
 
 import json
@@ -63,7 +67,14 @@ ARMS = {
 }
 
 
-def record(points, split=None, **extra):
+SHARED_META = {"window": 80, "checkpoint": "reference-state.h5",
+               "work_budget_requested": 800.0,
+               "weights": {"alpha_d": 1e-3, "alpha_s": 1e-3, "c_d": 1.0e-3,
+                           "c_s": 2.5e-4}}
+
+
+def record(points, split=None, name="T-GN-R", stop_reason="TAO converged reason 3",
+           **extra):
     """A synthetic run record.
 
     Args:
@@ -71,6 +82,8 @@ def record(points, split=None, **extra):
         split: None to put the whole work into ``forward``, or ``(f, a, h, g)``,
             the fractions of the work at unit prices that are forward runs, adjoint
             sweeps, full products and Gauss-Newton products.
+        name: the run name, whose flags of ``EXPECTED_FLAGS`` go into the record.
+        stop_reason: the stop reason; empty for a run that a wall limit cut.
         **extra: top-level entries (``krylov_ew``, the time lists).
     """
     rows = []
@@ -83,15 +96,29 @@ def record(points, split=None, **extra):
                       "gn_hessian": g * work}
         rows.append(dict(iteration=k, J=J, misfit_term=0.9 * J, prior_term=0.1 * J,
                          **counts))
-    out = {"iterations": rows}
+    last = rows[-1]
+    out = {"iterations": rows, "stop_reason": stop_reason,
+           **{k: last[k] for k in ("forward", "adjoint", "hessian", "gn_hessian")}}
+    out.update(json.loads(json.dumps(SHARED_META)))
+    out.update(sg.EXPECTED_FLAGS.get(name, sg.EXPECTED_FLAGS["T-GN-R"]))
+    if name not in ("T-ROL", "T-N", "T-N-R") and not out["gn_hessian"]:
+        # A Gauss-Newton arm made products; the rows put its work into forward runs.
+        out["gn_hessian"] = 1
     out.update(extra)
     return out
 
 
-def records_with(arm_points, rol=ROL, tn=TN, tnr=TNR, name="T-GN-R"):
-    """The four records of the rule with one Gauss-Newton arm."""
-    return {"T-ROL": record(rol), "T-N": record(tn), "T-N-R": record(tnr),
-            name: record(arm_points)}
+def records_with(arm_points, rol=ROL, tn=TN, tnr=TNR, name="T-GN-R", cut=()):
+    """The four records of the rule with one Gauss-Newton arm.
+
+    Args:
+        cut: the names of the runs whose stop reason is removed (cut by a wall limit).
+    """
+    out = {"T-ROL": record(rol, name="T-ROL"), "T-N": record(tn, name="T-N"),
+           "T-N-R": record(tnr, name="T-N-R"), name: record(arm_points, name=name)}
+    for key in cut:
+        out[key]["stop_reason"] = ""
+    return out
 
 
 # ---------------------------------------------------------------------------------
@@ -150,16 +177,17 @@ def test_floor_guard_replaces_600_by_400():
     assert any("600 is not valid" in note and "400 replaces it" in note for note in notes)
 
 
-def test_floor_guard_unevaluable_counts_as_failed_and_says_so():
+def test_floor_guard_without_a_valid_level_is_not_evaluable():
     # Every run reaches the floor 0.1 before work 150: no level is valid for N*.
     tn = [(2, 1.0), (100, 0.1001), (800, 0.1)]
     tnr = [(2, 1.0), (100, 0.1002), (800, 0.1)]
     arm = [(2, 1.0), (50, 0.5), (100, 0.2), (140, 0.1), (800, 0.1)]
     result = sg.apply_rule(records_with(arm, tn=tn, tnr=tnr), 1.0, 1.0)
     arm = result["arms"]["T-GN-R"]
-    assert not arm["C"]["pass"]
+    assert arm["C"]["status"] == sg.NOT_EVALUABLE
     assert arm["C"]["parts"][0]["S"] is None
-    assert any("needs a decision by a person" in note for note in arm["notes"])
+    assert any("no level of" in note for note in arm["notes"])
+    assert result["verdict"]["code"] == "NE"
 
 
 # ---------------------------------------------------------------------------------
@@ -205,9 +233,9 @@ def test_newton_runs_get_test_a():
 
 def test_several_arms_choose_the_largest_s400():
     records = records_with(ARMS["V4"], name="T-GN-R")
-    records["T-GN-R-EW"] = record(ARMS["V1"])
+    records["T-GN"] = record(ARMS["V1"], name="T-GN")
     result = sg.apply_rule(records, 1.0, 1.0)
-    assert result["chosen"] == "T-GN-R-EW"
+    assert result["chosen"] == "T-GN"
     assert result["verdict"]["code"] == "V1"
 
 
@@ -227,9 +255,9 @@ def priced_records(gn_times=None):
     times = {"forward_times": [1.0, 1.0, 1.0], "hessian_times": [1.0, 1.0, 1.0]}
     gn_extra = {"forward_times": [1.0, 1.0, 1.0],
                 "gn_hessian_times": gn_times or [1.0, 1.0, 1.0]}
-    return {"T-ROL": record(ROL, forward_times=[1.0]),
-            "T-N": record(TN, split=newton_split, **times),
-            "T-N-R": record(TNR, split=newton_split, **times),
+    return {"T-ROL": record(ROL, name="T-ROL", forward_times=[1.0]),
+            "T-N": record(TN, split=newton_split, name="T-N", **times),
+            "T-N-R": record(TNR, split=newton_split, name="T-N-R", **times),
             "T-GN-R": record(ARMS["V1"], split=gn_split, **gn_extra)}
 
 
@@ -301,17 +329,23 @@ def krylov_row(rtols):
     return rows
 
 
+def ew_record(rtols):
+    """A T-GN-R-EW record whose solves have the given tolerances."""
+    rec = record(ARMS["V1"], name="T-GN-R-EW")
+    rec["iterations"] = krylov_row(rtols)
+    return rec
+
+
 def test_ew_record_with_every_rtol_1e2_is_an_error():
     records = records_with(ARMS["V4"])
-    records["T-GN-R-EW"] = {"iterations": krylov_row([1e-2] * 8), "krylov_ew": True}
+    records["T-GN-R-EW"] = ew_record([1e-2] * 8)
     with pytest.raises(sg.RuleError, match="Eisenstat-Walker rule did not act"):
         sg.summarise(records, UNIT_TIMING)
 
 
 def test_ew_record_with_ew_tolerances_is_accepted():
     records = records_with(ARMS["V4"])
-    records["T-GN-R-EW"] = {"iterations": krylov_row([0.5, 0.4, 0.3, 0.2, 0.2, 0.2,
-                                                      0.2, 0.2]), "krylov_ew": True}
+    records["T-GN-R-EW"] = ew_record([0.5, 0.4, 0.3, 0.2, 0.2, 0.2, 0.2, 0.2])
     lines, result = sg.summarise(records, UNIT_TIMING)
     assert result["rule"]["chosen"] == "T-GN-R-EW"
 
@@ -319,7 +353,9 @@ def test_ew_record_with_ew_tolerances_is_accepted():
 def test_main_exits_with_an_error(tmp_path, capsys):
     paths = {}
     for name, rec in records_with(ARMS["V1"]).items():
-        paths[name] = tmp_path / f"{name}.json"
+        # The layout of submit_gn.sh: <run>/record.json.
+        (tmp_path / name).mkdir()
+        paths[name] = tmp_path / name / "record.json"
         paths[name].write_text(json.dumps(rec))
     argv = ["--rol", str(paths["T-ROL"]), "--newton-small", str(paths["T-N"]),
             "--newton-large", str(paths["T-N-R"]), "--gn", str(paths["T-GN-R"])]
@@ -332,3 +368,145 @@ def test_main_exits_with_an_error(tmp_path, capsys):
     printed = capsys.readouterr().out
     assert "VERDICT (rule): V1" in printed
     assert json.loads(out_json.read_text())["rule"]["verdict"]["code"] == "V1"
+
+
+def test_ew_record_without_solves_is_an_error():
+    records = records_with(ARMS["V4"])
+    records["T-GN-R-EW"] = record(ARMS["V1"], name="T-GN-R-EW")
+    with pytest.raises(sg.RuleError, match="holds no Krylov solve"):
+        sg.summarise(records, UNIT_TIMING)
+
+
+# ---------------------------------------------------------------------------------
+# Runs that a wall limit or a crash cut short
+# ---------------------------------------------------------------------------------
+
+def upto(points, work):
+    """The rows of a run up to and including the given work."""
+    return [p for p in points if p[0] <= work]
+
+
+def test_both_newton_runs_cut_at_400():
+    # The reviewer's case: both Newton records end at work 400 with no stop reason.
+    # Read as complete, C would test J_N*(400) = 0.19 instead of J_N*(600) and turn
+    # V1b into V1. Cut, J_N*(600) is unknown: test C is not evaluable, and so is the
+    # verdict.
+    records = records_with(ARMS["V1b"], tn=upto(TN, 400), tnr=upto(TNR, 400),
+                           cut=("T-N", "T-N-R"))
+    result = sg.apply_rule(records, 1.0, 1.0)
+    arm = result["arms"]["T-GN-R"]
+    assert arm["A"]["status"] == sg.PASS
+    assert arm["B"]["status"] == sg.PASS           # its levels 200 and 400 are reached
+    assert arm["C"]["status"] == sg.NOT_EVALUABLE
+    assert arm["C"]["parts"][0]["level_used"] is None
+    assert result["verdict"]["code"] == "NE"
+    assert "test C" in result["verdict"]["label"]
+    assert any("cut at rule work 400.0" in note for note in arm["notes"])
+    lines, _ = sg.summarise(records, UNIT_TIMING)
+    text = "\n".join(lines)
+    assert "VERDICT (rule): NE" in text
+    assert "T-N: final rule work 400.0, no stop reason" in text
+
+
+def test_one_cut_newton_run_is_enough():
+    records = records_with(ARMS["V1b"], tn=upto(TN, 400), cut=("T-N",))
+    arm = sg.apply_rule(records, 1.0, 1.0)["arms"]["T-GN-R"]
+    assert arm["C"]["status"] == sg.NOT_EVALUABLE
+
+
+def test_complete_newton_runs_ending_at_400_keep_their_last_j():
+    # Both Newton runs stopped by themselves at work 400: their last J holds at 600,
+    # J_N*(600) = 0.19, and the output says so.
+    records = records_with(ARMS["V1b"], tn=upto(TN, 400), tnr=upto(TNR, 400))
+    result = sg.apply_rule(records, 1.0, 1.0)
+    arm = result["arms"]["T-GN-R"]
+    assert arm["C"]["parts"][0]["J_ref"] == 0.19
+    assert result["verdict"]["code"] == "V1"
+    assert any("stopped by itself" in note for note in arm["notes"])
+
+
+def test_cut_rol_with_a_failed_part_decides_the_test():
+    # T-ROL cut at 300: the part at 400 is not evaluable, but the part at 200 fails
+    # (V3 reaches 0.3 at work 300, S = 0.67), so test A fails and V3 stands.
+    records = records_with(ARMS["V3"], rol=upto(ROL, 300), cut=("T-ROL",))
+    result = sg.apply_rule(records, 1.0, 1.0)
+    arm = result["arms"]["T-GN-R"]
+    assert arm["A"]["parts"][1]["status"] == sg.NOT_EVALUABLE
+    assert arm["A"]["status"] == sg.FAIL
+    assert result["verdict"]["code"] == "V3"
+
+
+def test_cut_rol_without_a_failed_part_is_not_evaluable():
+    records = records_with(ARMS["V1"], rol=upto(ROL, 300), cut=("T-ROL",))
+    result = sg.apply_rule(records, 1.0, 1.0)
+    assert result["arms"]["T-GN-R"]["A"]["status"] == sg.NOT_EVALUABLE
+    assert result["verdict"]["code"] == "NE"
+
+
+def test_cut_arm_that_could_still_pass_is_not_evaluable():
+    # V1 cut at work 200 (J 0.15) never reached J_N*(600) = 0.14; S <= 600 / 200 = 3,
+    # above 0.67, so C is not evaluable.
+    records = records_with(upto(ARMS["V1"], 250), cut=("T-GN-R",))
+    arm = sg.apply_rule(records, 1.0, 1.0)["arms"]["T-GN-R"]
+    part = arm["C"]["parts"][0]
+    assert part["status"] == sg.NOT_EVALUABLE
+    assert part["S_bound"] == pytest.approx(3.0)
+
+
+def test_cut_arm_that_cannot_pass_fails():
+    # V3 cut at work 300 never reached J_ROL(400) = 0.18; S <= 400 / 300 < 1.5.
+    records = records_with(upto(ARMS["V3"], 300), cut=("T-GN-R",))
+    arm = sg.apply_rule(records, 1.0, 1.0)["arms"]["T-GN-R"]
+    part = arm["A"]["parts"][1]
+    assert part["status"] == sg.FAIL
+    assert part["S_bound"] == pytest.approx(400.0 / 300.0)
+
+
+def test_complete_arm_that_never_reaches_has_s_zero():
+    records = records_with(upto(ARMS["V1"], 250))
+    part = sg.apply_rule(records, 1.0, 1.0)["arms"]["T-GN-R"]["C"]["parts"][0]
+    assert part["S"] == 0.0
+    assert part["status"] == sg.FAIL
+
+
+# ---------------------------------------------------------------------------------
+# Records that are not the run they are given as
+# ---------------------------------------------------------------------------------
+
+def test_gn_record_as_newton_large_is_refused():
+    records = records_with(ARMS["V1"])
+    records["T-N-R"] = record(TNR, name="T-GN-R")
+    with pytest.raises(sg.RuleError, match="T-N-R has hessian_choice = 'gn'"):
+        sg.summarise(records, UNIT_TIMING)
+
+
+def test_wrong_radius_is_refused():
+    records = records_with(ARMS["V1"])
+    records["T-N"]["initial_radius"] = 12.8
+    with pytest.raises(sg.RuleError, match="T-N has initial_radius"):
+        sg.summarise(records, UNIT_TIMING)
+
+
+def test_arm_without_gn_products_is_refused():
+    records = records_with(ARMS["V1"])
+    records["T-GN-R"]["gn_hessian"] = 0
+    with pytest.raises(sg.RuleError, match="made no Gauss-Newton product"):
+        sg.summarise(records, UNIT_TIMING)
+
+
+def test_missing_hessian_choice_is_refused():
+    records = records_with(ARMS["V1"])
+    del records["T-GN-R"]["hessian_choice"]
+    with pytest.raises(sg.RuleError, match="lacks 'hessian_choice'"):
+        sg.summarise(records, UNIT_TIMING)
+
+
+def test_different_window_or_weights_are_refused():
+    records = records_with(ARMS["V1"])
+    records["T-N"]["window"] = 40
+    with pytest.raises(sg.RuleError, match="window"):
+        sg.summarise(records, UNIT_TIMING)
+    records = records_with(ARMS["V1"])
+    records["T-GN-R"]["weights"]["alpha_d"] = 0.0
+    with pytest.raises(sg.RuleError, match="weight alpha_d"):
+        sg.summarise(records, UNIT_TIMING)

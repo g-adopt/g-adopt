@@ -40,8 +40,28 @@ Floor guard: ``J_min`` is the lowest J of any run. A level W* is valid for a
 reference Y when ``J_Y(W*) - J_min >= 0.05 (J_0 - J_min)``, with ``J_0`` the first J
 of Y. If 400 or 600 is not valid, the largest valid level below it from 150, 200,
 300, 400 replaces it, and the output says so. If no level is valid, that part of the
-test cannot be evaluated; it counts as failed, and the output says that the verdict
-needs a decision by a person.
+test is not evaluable.
+
+Runs that end early. A run whose record holds a non-empty ``stop_reason`` is
+complete: TAO or ROL stopped it (convergence, a failed line search, the iteration
+limit or the work budget), and the inverse driver wrote its final record. A run
+without one was cut by the wall limit or by a crash; its record is the dump after
+its last iteration. The rule treats the two cases differently:
+
+- a complete reference that ends below a level keeps its last J at that level (it
+  would not have changed), and the output gives its final work and stop reason;
+- a cut reference that ends below a level has no value there. The part that needs
+  that value is not evaluable, and the floor guard does not replace the level. For
+  N*, one cut Newton run is enough, because its J could have fallen below the other;
+- a complete arm that never reaches the value has ``S = 0``;
+- a cut arm that ends at work ``W_end`` without reaching the value has
+  ``S <= W* / W_end``. When that bound is below the threshold the part fails;
+  otherwise it is not evaluable.
+
+A test with a failed part fails. A test with a part that is not evaluable and no
+failed part is not evaluable. When any test of an arm is not evaluable, the verdict
+table is not applied: the verdict is ``NE`` (not evaluable), and a person decides.
+The output lists the final rule work and the stop reason of every run.
 
 Verdicts: (A, B, C) = (pass, pass, pass) V1; (pass, pass, fail) V1b; (pass, fail,
 pass) V2; (fail, pass, pass) V3; (fail, fail, pass) V4; any other case with C failed
@@ -56,13 +76,17 @@ the misfit term and the prior term at fixed levels of work, the Krylov record of
 run, the line-search step lengths, ``initial_misfit`` with the wall split, and
 ``gn_linear_defect_max``.
 
-Errors: the script exits with an error when no ``timing.json`` is given, and when a
-record made with ``--krylov-ew`` has every Krylov solve at ``rtol`` 1e-2 (the
+Errors: the script exits with an error when no ``timing.json`` is given; when a
+record is not the run it is given as (optimiser, ``hessian_choice``, initial radius,
+``krylov_ew`` and the product counts against the run name, and the window, the
+weights, the reference state and the budget shared by every run); and when a record
+made with ``--krylov-ew`` has no Krylov solve or every solve at ``rtol`` 1e-2 (the
 Eisenstat-Walker rule did not act).
 """
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from statistics import median
@@ -195,92 +219,181 @@ def speedup(rows, target, level):
 # The rule
 # ---------------------------------------------------------------------------------
 
+PASS, FAIL, NOT_EVALUABLE = "pass", "fail", "not evaluable"
+NE_VERDICT = ("NE", "not evaluable",
+              "the verdict table cannot be applied (a run was cut before a level that a "
+              "test needs, or the floor guard left no valid level); a person decides")
+
+
+class Run:
+    """The priced rows of one run and how the run ended.
+
+    Args:
+        name: the run name.
+        rows: the rows of ``priced_rows``.
+        stop_reason: the ``stop_reason`` of the record; empty for a run that a wall
+            limit or a crash cut short.
+
+    Attributes:
+        end_work: the rule work of the last row.
+        complete: whether the run ended by itself.
+    """
+
+    def __init__(self, name, rows, stop_reason):
+        self.name = name
+        self.rows = rows
+        self.stop_reason = stop_reason or ""
+        self.complete = bool(self.stop_reason)
+        self.end_work = rows[-1]["work_rule"]
+
+    def describe(self):
+        """One line: final work and how the run ended."""
+        how = (f"stop reason '{self.stop_reason}'" if self.complete
+               else "no stop reason: cut by a wall limit or a crash")
+        return f"{self.name}: final rule work {self.end_work:.1f}, {how}"
+
+
 class Reference:
     """A reference of the rule: one run (T-ROL) or the pointwise better of two (N*).
 
     Args:
         name: for the output.
-        runs: list of priced row lists. ``J(W)`` is the minimum over them of the J
-            of the last row at or below ``W``.
+        runs: list of ``Run``. ``J(W)`` is the minimum over them of the J of the last
+            row at or below ``W``.
     """
 
     def __init__(self, name, runs):
         self.name = name
         self.runs = runs
 
-    def J(self, level):
-        """``J_Y(W)``, or None when no run has a row at or below the level."""
-        values = [value_at(rows, level)[0] for rows in self.runs]
+    def value(self, level):
+        """``(J_Y(W), notes)``; J is None when a cut run ends below the level."""
+        values, notes = [], []
+        for run in self.runs:
+            if run.end_work < level:
+                if not run.complete:
+                    return None, [f"{run.name} was cut at rule work {run.end_work:.1f}, "
+                                  f"before {level:g}: J of {self.name} at {level:g} is "
+                                  f"unknown"]
+                notes.append(f"{run.name} stopped by itself at rule work "
+                             f"{run.end_work:.1f} ('{run.stop_reason}'); its last J is "
+                             f"its J at {level:g}")
+            values.append(value_at(run.rows, level)[0])
         values = [v for v in values if v is not None]
-        return min(values) if values else None
+        return (min(values) if values else None), notes
+
+    def J(self, level):
+        """``J_Y(W)`` alone, or None."""
+        return self.value(level)[0]
 
     def J0(self):
         """The first J of the reference."""
-        return min(rows[0]["J"] for rows in self.runs)
+        return min(run.rows[0]["J"] for run in self.runs)
 
 
 def effective_level(reference, level, j_min):
-    """The level that the floor guard allows in place of ``level``.
+    """The level of a part after the checks for cut runs and the floor guard.
 
     Returns:
-        ``(level or None, note or None)``.
+        ``(level or None, notes)``. None means that the part is not evaluable.
     """
+    j, notes = reference.value(level)
+    if j is None:
+        return None, notes + ["this part is not evaluable; the floor guard does not "
+                              "replace a level that a cut run did not reach"]
+
     def valid(w):
-        j = reference.J(w)
-        return j is not None and j - j_min >= FLOOR_FRACTION * (reference.J0() - j_min)
+        value = reference.J(w)
+        return (value is not None
+                and value - j_min >= FLOOR_FRACTION * (reference.J0() - j_min))
 
     if level not in GUARDED_LEVELS or valid(level):
-        return level, None
+        return level, notes
     candidates = [w for w in REPLACEMENT_LEVELS if w < level and valid(w)]
     if not candidates:
-        return None, (f"floor guard: {level:g} is not valid for {reference.name} and no "
-                      f"level of {REPLACEMENT_LEVELS} below it is; this part cannot be "
-                      f"evaluated and counts as failed. The verdict needs a decision by a "
-                      f"person.")
-    return candidates[-1], (f"floor guard: {level:g} is not valid for {reference.name} "
-                            f"(J within {FLOOR_FRACTION:g} of the floor); {candidates[-1]:g} "
-                            f"replaces it")
+        return None, notes + [f"floor guard: {level:g} is not valid for {reference.name} "
+                              f"and no level of {REPLACEMENT_LEVELS} below it is; this "
+                              f"part is not evaluable"]
+    used = candidates[-1]
+    return used, reference.value(used)[1] + [
+        f"floor guard: {level:g} is not valid for {reference.name} (J within "
+        f"{FLOOR_FRACTION:g} of the floor); {used:g} replaces it"]
 
 
-def evaluate_arm(rows, references, j_min):
+def evaluate_part(run, reference, level, threshold, j_min):
+    """One part ``S(X, Y, level) >= threshold`` of a test.
+
+    Returns:
+        ``(dict of the part, notes)``.
+    """
+    used, notes = effective_level(reference, level, j_min)
+    part = {"reference": reference.name, "level": level, "level_used": used,
+            "threshold": threshold, "S": None, "S_bound": None, "W_interval": None,
+            "J_ref": None, "status": NOT_EVALUABLE}
+    if used is None:
+        return part, notes
+    target = reference.J(used)
+    part["J_ref"] = target
+    crossing = work_to_reach(run.rows, target)
+    if crossing is not None:
+        part["S"] = used / crossing[1]
+        part["W_interval"] = crossing
+        part["status"] = PASS if part["S"] >= threshold else FAIL
+    elif run.complete:
+        part["S"] = 0.0
+        part["status"] = FAIL
+    else:
+        # Cut without reaching the value: any later crossing is beyond end_work.
+        bound = used / run.end_work
+        part["S_bound"] = bound
+        if bound < threshold:
+            part["status"] = FAIL
+            notes.append(f"{run.name} was cut at rule work {run.end_work:.1f} without "
+                         f"reaching {target:.6e}; S <= {bound:.3f} < {threshold:g}, so "
+                         f"this part fails")
+        else:
+            notes.append(f"{run.name} was cut at rule work {run.end_work:.1f} without "
+                         f"reaching {target:.6e}; S could still reach {threshold:g} "
+                         f"(bound {bound:.3f}), so this part is not evaluable")
+    return part, notes
+
+
+def evaluate_arm(run, references, j_min):
     """Tests A, B and C for one arm.
 
     Args:
-        rows: the priced rows of the arm.
+        run: the ``Run`` of the arm.
         references: ``{"rol": Reference, "nstar": Reference}``.
         j_min: the lowest J of any run.
 
     Returns:
-        dict with one entry per test (``pass``, the parts) and the verdict.
+        dict with one entry per test (``status``, ``pass``, the parts), the notes and
+        the verdict.
     """
     out = {"notes": []}
-    passes = {}
+    status = {}
     for test, parts in TESTS.items():
         details = []
-        ok = True
         for ref_key, level, threshold in parts:
-            reference = references[ref_key]
-            used, note = effective_level(reference, level, j_min)
-            if note:
-                out["notes"].append(f"test {test}: {note}")
-            if used is None:
-                details.append({"reference": reference.name, "level": level,
-                                "level_used": None, "threshold": threshold,
-                                "S": None, "pass": False})
-                ok = False
-                continue
-            target = reference.J(used)
-            s, crossing = speedup(rows, target, used)
-            part_ok = s >= threshold
-            details.append({"reference": reference.name, "level": level,
-                            "level_used": used, "J_ref": target, "threshold": threshold,
-                            "S": s, "W_interval": crossing, "pass": part_ok})
-            ok &= part_ok
-        out[test] = {"pass": ok, "parts": details}
-        passes[test] = ok
-    key = (passes["A"], passes["B"], passes["C"])
-    # (pass, pass, fail) is V1b; every other combination with C failed is V5.
-    code, label, consequence = VERDICTS.get(key, V5)
+            part, notes = evaluate_part(run, references[ref_key], level, threshold, j_min)
+            details.append(part)
+            out["notes"] += [f"test {test}: {note}" for note in notes]
+        states = [p["status"] for p in details]
+        if FAIL in states:
+            state = FAIL
+        elif NOT_EVALUABLE in states:
+            state = NOT_EVALUABLE
+        else:
+            state = PASS
+        out[test] = {"status": state, "pass": state == PASS, "parts": details}
+        status[test] = state
+    if NOT_EVALUABLE in status.values():
+        code, label, consequence = NE_VERDICT
+        label += ": test " + ", ".join(t for t, v in status.items() if v == NOT_EVALUABLE)
+    else:
+        key = (status["A"] == PASS, status["B"] == PASS, status["C"] == PASS)
+        # (pass, pass, fail) is V1b; every other combination with C failed is V5.
+        code, label, consequence = VERDICTS.get(key, V5)
     out["verdict"] = {"code": code, "label": label, "consequence": consequence}
     return out
 
@@ -295,33 +408,39 @@ def apply_rule(records, p_full, r_gn, own=False):
         own: price each run with its own per-call ratios instead.
 
     Returns:
-        dict with the arms, test A of T-N and T-N-R, ``J_min`` and the chosen arm.
+        dict with the arms, test A of T-N and T-N-R, ``J_min``, the chosen arm, the
+        end of every run and the priced rows.
     """
-    rows = {}
+    runs = {}
     for name, record in records.items():
         full, gn = ((p_full, p_full * r_gn) if not own
                     else own_prices(record, p_full, p_full * r_gn))
-        rows[name] = priced_rows(record, full, gn)
-    j_min = min(r["J"] for rr in rows.values() for r in rr)
-    references = {"rol": Reference("T-ROL", [rows["T-ROL"]]),
-                  "nstar": Reference("N* = min(T-N, T-N-R)", [rows["T-N"], rows["T-N-R"]])}
+        runs[name] = Run(name, priced_rows(record, full, gn), record.get("stop_reason"))
+    j_min = min(r["J"] for run in runs.values() for r in run.rows)
+    references = {"rol": Reference("T-ROL", [runs["T-ROL"]]),
+                  "nstar": Reference("N* = min(T-N, T-N-R)", [runs["T-N"], runs["T-N-R"]])}
     arms = [name for name in records if name not in ("T-ROL", "T-N", "T-N-R")]
     if not arms:
         raise RuleError("no Gauss-Newton arm given")
-    out = {"J_min": j_min, "arms": {}, "newton_test_A": {}}
+    out = {"J_min": j_min, "arms": {}, "newton_test_A": {},
+           "ends": {name: {"end_work": run.end_work, "stop_reason": run.stop_reason,
+                           "complete": run.complete} for name, run in runs.items()},
+           "end_lines": [run.describe() for run in runs.values()]}
     for name in arms:
-        out["arms"][name] = evaluate_arm(rows[name], references, j_min)
+        out["arms"][name] = evaluate_arm(runs[name], references, j_min)
     for name in ("T-N", "T-N-R"):
-        result = evaluate_arm(rows[name], references, j_min)
+        result = evaluate_arm(runs[name], references, j_min)
         out["newton_test_A"][name] = result["A"]
-    # The arm with the largest S(X, T-ROL, 400), the second part of test A.
+
     def s400(name):
+        """S(X, T-ROL, 400), the second part of test A; -1 when it is not known."""
         part = out["arms"][name]["A"]["parts"][1]
         return part["S"] if part["S"] is not None else -1.0
+
     chosen = max(arms, key=s400)
     out["chosen"] = chosen
     out["verdict"] = out["arms"][chosen]["verdict"]
-    out["rows"] = rows
+    out["rows"] = {name: run.rows for name, run in runs.items()}
     return out
 
 
@@ -339,16 +458,79 @@ def solves(record):
     return out
 
 
+# The flags of each run name (PLAN.md section 4.2). ``initial_radius`` is that of
+# the arm; ROL's 1.0 is part of its command and is checked as well.
+EXPECTED_FLAGS = {
+    "T-ROL": {"optimiser": "rol-lbfgs", "riesz": "L2", "initial_radius": 1.0},
+    "T-N": {"optimiser": "tao-bnls-riesz", "hessian_choice": "full",
+            "initial_radius": 0.2, "krylov_ew": False},
+    "T-N-R": {"optimiser": "tao-bnls-riesz", "hessian_choice": "full",
+              "initial_radius": 12.8, "krylov_ew": False},
+    "T-GN-R": {"optimiser": "tao-bnls-riesz", "hessian_choice": "gn",
+               "initial_radius": 12.8, "krylov_ew": False},
+    "T-GN": {"optimiser": "tao-bnls-riesz", "hessian_choice": "gn",
+             "initial_radius": 0.2, "krylov_ew": False},
+    "T-GN-R-EW": {"optimiser": "tao-bnls-riesz", "hessian_choice": "gn",
+                  "initial_radius": 12.8, "krylov_ew": True},
+}
+# The entries that every run of the rule must share.
+SHARED = ("window", "checkpoint", "work_budget_requested")
+SHARED_WEIGHTS = ("alpha_d", "alpha_s", "c_d", "c_s")
+
+
 def check_records(records):
-    """Refuse a ``--krylov-ew`` record whose solves all have ``rtol`` 1e-2.
+    """Refuse records that are not the runs they are given as.
+
+    - Each record holds the flags of ``EXPECTED_FLAGS`` for its name. A Gauss-Newton
+      arm with another name needs ``optimiser tao-bnls-riesz`` and a
+      ``hessian_choice`` other than ``full``.
+    - The full-Hessian references made no Gauss-Newton product; every arm made at
+      least one.
+    - Every record has the window, the reference state, the budget and the objective
+      weights of T-ROL.
+    - A ``--krylov-ew`` record has at least one Krylov solve, and not every solve at
+      ``rtol`` 1e-2.
 
     Raises:
         RuleError
     """
+    reference = records.get("T-ROL", {})
     for name, record in records.items():
+        expected = EXPECTED_FLAGS.get(name)
+        if expected is None:
+            expected = {"optimiser": "tao-bnls-riesz"}
+            if record.get("hessian_choice") in (None, "full"):
+                raise RuleError(f"{name} is given as a Gauss-Newton arm and has "
+                                f"hessian_choice {record.get('hessian_choice')!r}")
+        for key, value in expected.items():
+            if key not in record:
+                raise RuleError(f"{name} lacks '{key}' in its record")
+            got = record[key]
+            same = (abs(float(got) - value) <= 1e-12 * abs(value)
+                    if isinstance(value, float) and not isinstance(value, bool)
+                    else got == value)
+            if not same:
+                raise RuleError(f"{name} has {key} = {got!r}, the run needs {value!r}")
+        if name in ("T-N", "T-N-R") and record.get("gn_hessian", 0) != 0:
+            raise RuleError(f"{name} made {record.get('gn_hessian')} Gauss-Newton products")
+        if name not in ("T-ROL", "T-N", "T-N-R") and not record.get("gn_hessian", 0) > 0:
+            raise RuleError(f"{name} is given as a Gauss-Newton arm and made no "
+                            f"Gauss-Newton product")
+        for key in SHARED:
+            if record.get(key) != reference.get(key):
+                raise RuleError(f"{name} has {key} = {record.get(key)!r}, T-ROL has "
+                                f"{reference.get(key)!r}")
+        for key in SHARED_WEIGHTS:
+            mine = (record.get("weights") or {}).get(key)
+            theirs = (reference.get("weights") or {}).get(key)
+            if mine != theirs:
+                raise RuleError(f"{name} has weight {key} = {mine!r}, T-ROL has {theirs!r}")
         if record.get("krylov_ew"):
             all_solves = solves(record)
-            if all_solves and all(s.get("rtol") == 1e-2 for s in all_solves):
+            if not all_solves:
+                raise RuleError(f"{name} was run with --krylov-ew and holds no Krylov "
+                                f"solve")
+            if all(s.get("rtol") == 1e-2 for s in all_solves):
                 raise RuleError(f"{name} was run with --krylov-ew and every Krylov solve "
                                 f"has rtol 1e-2: the Eisenstat-Walker rule did not act")
 
@@ -361,7 +543,10 @@ def format_result(name, result):
         parts = []
         for p in result[test]["parts"]:
             if p["S"] is None:
-                parts.append(f"S({name}, {p['reference']}, {p['level']:g}) not evaluable")
+                bound = (f", S <= {p['S_bound']:.3f}" if p.get("S_bound") is not None
+                         else "")
+                parts.append(f"S({name}, {p['reference']}, {p['level']:g}): "
+                             f"{p['status']}{bound}")
                 continue
             at = (f"{p['level_used']:g}" if p["level_used"] == p["level"]
                   else f"{p['level_used']:g} for {p['level']:g}")
@@ -369,7 +554,7 @@ def format_result(name, result):
                         else f"W in [{p['W_interval'][0]:.1f}, {p['W_interval'][1]:.1f}]")
             parts.append(f"S({name}, {p['reference']}, {at}) = {p['S']:.3f} "
                          f"(J_ref {p['J_ref']:.6e}, {interval}, need >= {p['threshold']:g})")
-        lines.append(f"  test {test}: {'pass' if result[test]['pass'] else 'fail'}")
+        lines.append(f"  test {test}: {result[test]['status']}")
         lines += [f"    {text}" for text in parts]
     lines += [f"  NOTE {note}" for note in result["notes"]]
     return lines
@@ -462,15 +647,17 @@ def summarise(records, timing, side_ratio=2.4822, context=None):
     lines = [f"prices of the rule (timing.json): p_full = full_per_forward = {p_full:.4f}, "
              f"r_GN = gn_over_full = {r_gn:.4f}, so a GN product costs "
              f"{p_full * r_gn:.4f} forward-equivalents",
-             f"J_min (lowest J of any run) = {rule['J_min']:.6e}", ""]
+             f"J_min (lowest J of any run) = {rule['J_min']:.6e}", "",
+             "end of each run, in the work of the rule:"]
+    lines += [f"  {line}" for line in rule["end_lines"]]
+    lines.append("")
     for name in rule["arms"]:
         lines += format_result(name, rule["arms"][name])
     lines.append("")
     for name, test in rule["newton_test_A"].items():
         parts = ", ".join(f"S at {p['level_used']}: {p['S']:.3f}" if p["S"] is not None
                           else "not evaluable" for p in test["parts"])
-        lines.append(f"test A for {name} against T-ROL: {'pass' if test['pass'] else 'fail'} "
-                     f"({parts})")
+        lines.append(f"test A for {name} against T-ROL: {test['status']} ({parts})")
     lines += ["", f"VERDICT (rule): {rule['verdict']['code']} from arm {rule['chosen']}: "
               f"{rule['verdict']['label']}. Consequence: {rule['verdict']['consequence']}."]
 
@@ -523,9 +710,12 @@ def main(argv=None):
     records = {"T-ROL": load(args.rol), "T-N": load(args.newton_small),
                "T-N-R": load(args.newton_large)}
     for path in args.gn:
-        name = path
-        record = load(path)
-        records[name] = record
+        # The run name is the name of the run directory (<run>/record.json, as
+        # submit_gn.sh writes it); check_records reads the flags of that name.
+        name = os.path.basename(os.path.dirname(os.path.abspath(path)))
+        if name in records:
+            raise SystemExit(f"summarise_gn.py: two records named {name}")
+        records[name] = load(path)
     timing = load(args.timing_json) if args.timing_json else None
     context = {path: load(path) for path in args.context}
     try:

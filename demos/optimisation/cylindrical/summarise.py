@@ -95,7 +95,7 @@ def priced_rows(record, gradient_price, hessian_price, gn_hessian_price=None):
 
     ``forward + p_G adjoint + p_full hessian + p_gn gn_hessian``; a count that is
     zero or absent adds nothing, so a record without Gauss-Newton products is priced
-    as before the Gauss-Newton term existed.
+    ``forward + p_G adjoint + p_full hessian`` exactly.
     """
     rows = []
     for row in record["iterations"]:
@@ -222,12 +222,55 @@ def price_pair(records, names):
     return gp, hp, gn_price(medians), medians
 
 
+def check_gn_records(records):
+    """Refuse records that are not the runs they are given as, in the ``--gn`` mode.
+
+    P-ROL-L2: ``rol-lbfgs`` with the L2 inner product. P-GN: ``tao-bnls-riesz`` with a
+    ``hessian_choice`` other than ``full`` and at least one Gauss-Newton product.
+    P-Newton: ``tao-bnls-riesz`` with no Gauss-Newton product; its record was made
+    before ``hessian_choice`` existed, so the key is checked only when present. All
+    records share the trajectory and the objective weights.
+
+    Raises:
+        SystemExit: with the reason.
+    """
+    def need(name, key, ok, what):
+        if not ok(records[name].get(key)):
+            raise SystemExit(f"summarise.py: {name} has {key} = "
+                             f"{records[name].get(key)!r}; the run needs {what}")
+
+    need("P-ROL-L2", "optimiser", lambda v: v == "rol-lbfgs", "rol-lbfgs")
+    need("P-ROL-L2", "riesz", lambda v: v == "L2", "L2")
+    need("P-GN", "optimiser", lambda v: v == "tao-bnls-riesz", "tao-bnls-riesz")
+    need("P-GN", "hessian_choice", lambda v: v in ("gn", "gn-then-full"),
+         "gn or gn-then-full")
+    need("P-GN", "gn_hessian", lambda v: bool(v) and v > 0, "at least one GN product")
+    if "P-Newton" in records:
+        need("P-Newton", "optimiser", lambda v: v == "tao-bnls-riesz", "tao-bnls-riesz")
+        need("P-Newton", "gn_hessian", lambda v: not v, "no GN product")
+        if "hessian_choice" in records["P-Newton"]:
+            need("P-Newton", "hessian_choice", lambda v: v == "full", "full")
+    first = records["P-ROL-L2"]
+    for name, record in records.items():
+        for key in ("timesteps", "delta_t"):
+            if record.get(key) != first.get(key):
+                raise SystemExit(f"summarise.py: {name} has {key} = {record.get(key)!r}, "
+                                 f"P-ROL-L2 has {first.get(key)!r}")
+        for key in ("alpha_T", "alpha_u", "alpha_d", "alpha_s"):
+            mine = (record.get("weights") or {}).get(key)
+            theirs = (first.get("weights") or {}).get(key)
+            if mine != theirs:
+                raise SystemExit(f"summarise.py: {name} has weight {key} = {mine!r}, "
+                                 f"P-ROL-L2 has {theirs!r}")
+
+
 def main_gn(args):
     """The rule with P-GN as the challenger, and its readings."""
     paths = {"P-ROL-L2": args.reference, "P-GN": args.gn}
     if args.newton:
         paths["P-Newton"] = args.newton
     records = {name: load(path) for name, path in paths.items()}
+    check_gn_records(records)
     out = {}
 
     # The rule: prices pooled over the two records compared.

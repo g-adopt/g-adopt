@@ -33,7 +33,9 @@ def record(points, counts, times, radius=None):
     for k, (J, (f, a, h, g)) in enumerate(zip(points, counts)):
         rows.append({"iteration": k, "J": J, "forward": f, "adjoint": a, "hessian": h,
                      "gn_hessian": g, "initial_misfit": 0.1 * J})
-    out = {"iterations": rows, **times}
+    out = {"iterations": rows, **times, "timesteps": 125, "delta_t": 1.2e-5,
+           "weights": {"alpha_T": 1.0, "alpha_u": 0.1, "alpha_d": 0.01, "alpha_s": 0.1},
+           **{k: rows[-1][k] for k in ("forward", "adjoint", "hessian", "gn_hessian")}}
     if radius is not None:
         out["initial_radius"] = radius
     return out
@@ -46,8 +48,10 @@ ROL_TIMES = {"forward_times": [1.0] * 5, "gradient_times": [0.5] * 5}
 def rol_record():
     """P-ROL-L2: J falls by 0.02 per 1.5 work units, to 0.6 at work 30."""
     n = 101
-    return record([1.0 - 0.02 * min(k, 20) - 0.001 * max(k - 20, 0) for k in range(n)],
-                  [(k + 1, k + 1, 0, 0) for k in range(n)], ROL_TIMES)
+    out = record([1.0 - 0.02 * min(k, 20) - 0.001 * max(k - 20, 0) for k in range(n)],
+                 [(k + 1, k + 1, 0, 0) for k in range(n)], ROL_TIMES)
+    out.update(optimiser="rol-lbfgs", riesz="L2")
+    return out
 
 
 def gn_record(gn_time=2.0, speed=1.0, radius=50.6):
@@ -56,7 +60,9 @@ def gn_record(gn_time=2.0, speed=1.0, radius=50.6):
     J = [1.0 - min(0.08 * speed * k, 0.5) for k in range(n)]
     times = {"forward_times": [1.0] * 5, "gradient_times": [0.5] * 5,
              "gn_hessian_times": [gn_time] * 5}
-    return record(J, [(k + 1, k + 1, 0, 4 * k) for k in range(n)], times, radius=radius)
+    out = record(J, [(k + 1, k + 1, 0, 4 * k) for k in range(n)], times, radius=radius)
+    out.update(optimiser="tao-bnls-riesz", hessian_choice="gn")
+    return out
 
 
 def newton_record(radius=0.79):
@@ -65,7 +71,10 @@ def newton_record(radius=0.79):
     J = [1.0 - min(0.03 * k, 0.5) for k in range(n)]
     times = {"forward_times": [1.0] * 5, "gradient_times": [0.5] * 5,
              "hessian_times": [1.25] * 5}
-    return record(J, [(k + 1, k + 1, 2 * k, 0) for k in range(n)], times, radius=radius)
+    out = record(J, [(k + 1, k + 1, 2 * k, 0) for k in range(n)], times, radius=radius)
+    # The P-Newton record was made before hessian_choice existed.
+    out.update(optimiser="tao-bnls-riesz")
+    return out
 
 
 def write(tmp_path, name, rec):
@@ -171,3 +180,13 @@ def test_against_newton_states_the_radius(tmp_path, capsys):
     printed = capsys.readouterr().out
     assert "changes the product and the radius together" not in printed
     assert "P-GN against P-Newton" in printed
+
+
+def test_gn_mode_refuses_a_record_that_is_not_its_run(tmp_path):
+    newton_as_gn = newton_record()
+    with pytest.raises(SystemExit, match="P-GN has optimiser|P-GN has hessian_choice"):
+        run_gn(tmp_path, newton_as_gn)
+    gn = gn_record()
+    gn["timesteps"] = 5
+    with pytest.raises(SystemExit, match="timesteps"):
+        run_gn(tmp_path, gn)
