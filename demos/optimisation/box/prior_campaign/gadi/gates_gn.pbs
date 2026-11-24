@@ -1,0 +1,54 @@
+#!/bin/bash
+# The gates of the Gauss-Newton box runs on Gadi (NOTES/team/gauss-newton/PLAN.md
+# section 4.3, job gates_gn.pbs), on the tiny case:
+#   1. the tiny reference state (forward.py, 10 steps, 16 cells);
+#   2. G0: the gate-1 TAO command with the parent commit and with this commit
+#      (--hessian full); compare_records.py must report every row and every Krylov
+#      solve bitwise equal (exit status 0);
+#   3. check_gauss_newton.py: G1 to G10, G12, G13 and the switch smoke;
+#   4. check_box_hessian.py: the Taylor and central-difference test of the full
+#      Hessian of this tape.
+# Every part runs even when an earlier part fails; the job exits with status 1 when
+# any part failed, and gates.status lists the status of each part.
+#
+# Usage (on a Gadi login node, through submit_gn.sh gates):
+#   qsub -v CODE=<code copy>,PARENT=<parent code copy>,OUT=<run directory> gates_gn.pbs
+#PBS -P nm03
+#PBS -q normal
+#PBS -l ncpus=1,mem=16GB,walltime=01:00:00,jobfs=10GB
+#PBS -l storage=gdata/nm03+scratch/nm03+gdata/fp50
+#PBS -l wd
+#PBS -j oe
+#PBS -N gn-gates
+set -uo pipefail
+source "$CODE/demos/optimisation/box/prior_campaign/gadi/job_env.sh"
+record_provenance "$OUT"
+cd "$OUT"
+: > gates.status
+failed=0
+part() {
+    # $1: name, then the command. Logs to <name>.log, appends the status.
+    local name=$1; shift
+    echo "### part $name: $* ($(date -u +%H:%M:%SZ))"
+    "$@" > "$name.log" 2>&1
+    local status=$?
+    echo "$name $status" >> gates.status
+    echo "### part $name: exit status $status"
+    [ $status -eq 0 ] || failed=1
+}
+GATE1=(--checkpoint tiny-state.h5 --optimiser tao-bnls-riesz --riesz regularisation
+       --window 5 --max-it 4 --alpha-d 0 --alpha-s 0 --metric-alpha-d 1e-3
+       --metric-alpha-s 1e-3 --initial-guess observed --initial-radius 1.0)
+
+part forward python3 "$BOX/forward.py" --steps 10 --resolution 16 --output tiny-state.h5
+md5sum tiny-state.h5
+# G0: the parent commit runs with its own code on PYTHONPATH.
+part g0-parent env PYTHONPATH="$PARENT" python3 "$PARENT/demos/optimisation/box/inverse.py" \
+    "${GATE1[@]}" --output g0-parent.json
+part g0-new python3 "$BOX/inverse.py" "${GATE1[@]}" --hessian full --output g0-new.json
+part g0-compare python3 "$JOBS/compare_records.py" g0-parent.json g0-new.json \
+    --rows both --solves
+part check-gn python3 "$JOBS/check_gauss_newton.py" tiny-state.h5 --json box-gn.json
+part box-hessian python3 "$JOBS/check_box_hessian.py" tiny-state.h5
+echo "### status of each part"; cat gates.status
+exit $failed

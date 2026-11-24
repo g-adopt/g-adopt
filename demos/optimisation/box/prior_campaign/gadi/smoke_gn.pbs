@@ -1,0 +1,70 @@
+#!/bin/bash
+# The 64-cell smoke of the Gauss-Newton box runs on Gadi (PLAN.md section 4.3, job
+# smoke_gn.pbs), on the S0 reference state. The parts that the rule needs come first,
+# so that a job that reaches its wall limit has written them:
+#   (g) check_gauss_newton.py --timing: taping, gradients, 5 full and 5 GN products
+#       at the first guess in one process; writes timing.json with full_per_forward
+#       (p_full), gn_over_full (r_GN) and the forward time;
+#   (a) case (c) of smoke_pinned.slurm, 2 iterations, full Hessian, to compare with
+#       the Setonix record R/V2/pinned/c/smoke.json (a container gate, as E4);
+#   (f) check_gauss_newton.py --g11: pH_GN p/pAp and pHp/pAp along the first CG
+#       direction (targets 273.5 and 91.4) and one GN solve at radius 1e4, cap 8;
+#   (e) T-ROL to 2 iterations;
+#   (b) T-N to 2 iterations;
+#   (c) T-GN-R to 3 iterations;
+#   (d) T-GN-R-EW to 3 iterations.
+# The flags of (b) to (e) are those of the runs (submit_gn.sh) with a smaller
+# iteration limit. Every part runs even when an earlier one fails; smoke.status
+# lists the exit status of each part.
+#
+# Usage (through submit_gn.sh gates):
+#   qsub -v CODE=<code copy>,OUT=<run directory> smoke_gn.pbs
+#PBS -P nm03
+#PBS -q normal
+#PBS -l ncpus=1,mem=24GB,walltime=03:00:00,jobfs=10GB
+#PBS -l storage=gdata/nm03+scratch/nm03+gdata/fp50
+#PBS -l wd
+#PBS -j oe
+#PBS -N gn-smoke
+set -uo pipefail
+source "$CODE/demos/optimisation/box/prior_campaign/gadi/job_env.sh"
+source "$CODE/demos/optimisation/box/prior_campaign/gadi/run_flags.sh"
+record_provenance "$OUT"
+cd "$OUT"
+: > smoke.status
+part() {
+    local name=$1; shift
+    echo "### part $name: $* ($(date -u +%H:%M:%SZ))"
+    "$@" > "$name.log" 2>&1
+    local status=$?
+    echo "$name $status" >> smoke.status
+    echo "### part $name: exit status $status ($(date -u +%H:%M:%SZ))"
+}
+REF=(--checkpoint "$GN_REFERENCE")
+
+part g-timing python3 "$JOBS/check_gauss_newton.py" --timing "$GN_REFERENCE" \
+    --json timing.json
+# The S2 smoke command of submit_v2.sh, case (c): the September operator as a prior,
+# objective weights zero, pinned walls, Dirichlet operator, radius 0.2, 2 iterations.
+part a-pinned-c python3 "$BOX/inverse.py" "${REF[@]}" --window 80 --alpha-d 0 \
+    --alpha-s 0 --prior-sigma 31.594026758304967 --prior-L 0.22071129807892717 \
+    --initial-guess observed --gradient-rtol 1e-6 --optimiser tao-bnls-riesz \
+    --riesz regularisation --krylov-max-it 100 --max-it 2 --initial-radius 0.2 \
+    --wall-treatment pinned --prior-wall-bc dirichlet --output a-pinned-c.json
+# Against the Setonix record of the same command, which step 2G copied to Gadi. The
+# pass criterion is that of E4: J and the gradient of iteration 0 within 1e-8
+# relative, later rows within 1e-6, equal Krylov counts; the person who writes
+# GATES.md reads it from this output.
+SMOKE_REF=${SMOKE_REF:-$GN_BASE/env/setonix-ref/pinned/c/smoke.json}
+part a-compare python3 "$JOBS/compare_records.py" "$SMOKE_REF" a-pinned-c.json \
+    --rows both --all-fields --solves
+part f-g11 python3 "$JOBS/check_gauss_newton.py" --g11 "$GN_REFERENCE" --json g11.json
+part e-T-ROL python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${ROL[@]}" \
+    "${T_ROL[@]}" --max-it 2 --output e-T-ROL.json
+part b-T-N python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
+    "${T_N[@]}" --max-it 2 --output b-T-N.json
+part c-T-GN-R python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
+    "${T_GN_R[@]}" --max-it 3 --output c-T-GN-R.json
+part d-T-GN-R-EW python3 "$BOX/inverse.py" "${REF[@]}" "${COMMON[@]}" "${NEWTON[@]}" \
+    "${T_GN_R_EW[@]}" --max-it 3 --output d-T-GN-R-EW.json
+echo "### status of each part"; cat smoke.status

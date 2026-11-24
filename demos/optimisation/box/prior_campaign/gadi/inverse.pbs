@@ -1,0 +1,31 @@
+#!/bin/bash
+# One Gauss-Newton box run on Gadi: inverse.py, serial, with the arguments of the
+# file <run directory>/args (one argument per line), which submit_gn.sh writes. The
+# record is <run directory>/record.json, rewritten after every iteration, so a run
+# that reaches the wall limit keeps its history.
+#
+# Usage (through submit_gn.sh runs|optional):
+#   qsub -v CODE=<code copy>,OUT=<run directory> -N <name> inverse.pbs
+#
+# Memory 24 GB, the value of the Setonix inverse.slurm; on Gadi normal that bills 6
+# cores, 12 SU per hour. 20 h wall limit; the Setonix runs of the same budget took
+# 8 to 10.3 h.
+#PBS -P nm03
+#PBS -q normal
+#PBS -l ncpus=1,mem=24GB,walltime=20:00:00,jobfs=10GB
+#PBS -l storage=gdata/nm03+scratch/nm03+gdata/fp50
+#PBS -l wd
+#PBS -j oe
+#PBS -N gn-run
+# No -e while the environment loads (the module command of Gadi can return a non-zero
+# status for a warning); -e for the run itself.
+set -uo pipefail
+source "$CODE/demos/optimisation/box/prior_campaign/gadi/job_env.sh"
+set -e
+record_provenance "$OUT"
+cd "$OUT"
+mapfile -t ARGS < args
+echo "### inverse.py ${ARGS[*]}"
+python3 "$BOX/inverse.py" --checkpoint "$GN_REFERENCE" "${ARGS[@]}" --output record.json
+echo "### done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+qstat -f "$PBS_JOBID" 2>/dev/null | grep -E "resources_used|exec_host" || true
