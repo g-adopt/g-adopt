@@ -13,8 +13,10 @@ script prints, beside the rule and without changing it:
 - the work to reach 50, 90 and 99 percent of ``J0 - J_min``, with ``J_min`` the lowest
   J that any run reached;
 - the fall of J over the last 50 work units of each run;
-- the Krylov record of the Newton run: iterations per solve, solves at the cap, solves
-  that stop on the trust radius, negative-curvature stops with ``pHp/pAp``, shifts;
+- the Krylov record of the Newton run (and of the Gauss-Newton run with ``--gn``):
+  iterations per solve, solves at the cap, solves that stop on the trust radius,
+  negative-curvature stops with ``pHp/pAp``, shifts, the product of each solve
+  (``gn`` or ``full``) and its relative tolerance, with the counts split by product;
 - ``initial_misfit`` at the end, as support only (the minimiser of P is not the truth);
 - the final state of each run (sweep counts, stop reason).
 
@@ -121,14 +123,26 @@ def krylov_summary(record):
     its = [s.get("iterations", 0) for s in all_solves]
     lines = [f"{len(all_solves)} Krylov solves, {sum(its)} Krylov iterations "
              f"(each one Hessian-vector product). Reasons: {dict(reasons)}. At the cap: "
-             f"{caps}. Stopped on the trust radius: {radius}. Shifts seen: {shifts}.", "",
-             "| iteration | Krylov its | reason | at cap | step norm | trust radius | "
-             "ritz min | ritz max | active |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             f"{caps}. Stopped on the trust radius: {radius}. Shifts seen: {shifts}."]
+    # The same counts split by the product of each solve. Records made before the
+    # Gauss-Newton option hold no ``hessian_product``; their solves are "full".
+    products = sorted({s.get("hessian_product") or "full" for s in all_solves})
+    if len(products) > 1 or products != ["full"]:
+        lines.append("")
+        for product in products:
+            group = [s for s in all_solves if (s.get("hessian_product") or "full") == product]
+            lines.append(f"Product {product}: {len(group)} solves, "
+                         f"{sum(s.get('iterations', 0) for s in group)} iterations, reasons "
+                         f"{dict(Counter(s.get('reason_name') for s in group))}, at the cap "
+                         f"{sum(1 for s in group if s.get('at_cap'))}.")
+    lines += ["", "| iteration | product | rtol | Krylov its | reason | at cap | step norm | "
+              "trust radius | ritz min | ritz max | active |",
+              "|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in all_solves:
         def fmt(value, spec):
             return format(value, spec) if isinstance(value, (int, float)) else str(value)
-        lines.append(f"| {s.get('iteration')} | {s.get('iterations')} | "
+        lines.append(f"| {s.get('iteration')} | {s.get('hessian_product') or 'full'} | "
+                     f"{fmt(s.get('rtol'), '.3g')} | {s.get('iterations')} | "
                      f"{s.get('reason_name')} | {s.get('at_cap')} | "
                      f"{fmt(s.get('step_norm'), '.4g')} | {fmt(s.get('trust_radius'), '.4g')} | "
                      f"{fmt(s.get('ritz_min'), '.4g')} | {fmt(s.get('ritz_max'), '.4g')} | "
@@ -150,14 +164,15 @@ def krylov_summary(record):
 def final_table(records, rows):
     """Final state of each run."""
     lines = ["| run | iterations | J | initial_misfit (support only) | work (own) | "
-             "work (pooled) | fwd / adj / HVP | wall (h) | stop |",
+             "work (pooled) | fwd / adj / HVP / GN | wall (h) | stop |",
              "|---|---|---|---|---|---|---|---|---|"]
     for name, record in records.items():
         r = record["iterations"][-1]
         lines.append(f"| {name} | {r['iteration']} | {r['J']:.6e} | "
                      f"{r['initial_misfit']:.4e} | {r['work']:.1f} | "
                      f"{rows[name][-1]['work_priced']:.1f} | {record['forward']} / "
-                     f"{record['adjoint']} / {record['hessian']} | "
+                     f"{record['adjoint']} / {record['hessian']} / "
+                     f"{record.get('gn_hessian', 0)} | "
                      f"{record.get('wall_time', 0.0) / 3600:.1f} | "
                      f"{record.get('stop_reason', '')} |")
     return "\n".join(lines)
@@ -168,6 +183,11 @@ def main(argv=None):
     parser.add_argument("--reference", required=True)
     parser.add_argument("--newton", required=True)
     parser.add_argument("--rol-metric", default=None)
+    parser.add_argument("--gn", default=None,
+                        help="P-GN record: its tables and Krylov record are added, and "
+                             "the verdict section runs summarise.py --gn")
+    parser.add_argument("--prices-json", default=None,
+                        help="with --gn: passed on to summarise.py")
     parser.add_argument("--levels", type=float, nargs="+",
                         default=list(summarise.LEVELS))
     args = parser.parse_args(argv)
@@ -175,9 +195,12 @@ def main(argv=None):
     paths = {"P-ROL-L2": args.reference, "P-Newton": args.newton}
     if args.rol_metric:
         paths["P-ROL-A"] = args.rol_metric
+    if args.gn:
+        paths["P-GN"] = args.gn
     records = {name: summarise.load(path) for name, path in paths.items()}
     gp, hp, medians = summarise.pooled_prices(list(records.values()))
-    rows = {name: summarise.priced_rows(r, gp, hp) for name, r in records.items()}
+    gnp = summarise.gn_price(medians)
+    rows = {name: summarise.priced_rows(r, gp, hp, gnp) for name, r in records.items()}
     reached = min(rr[-1]["work_priced"] for rr in rows.values())
     candidates = [level for level in sorted(args.levels) if level <= reached]
     w_star = candidates[-1] if candidates else None
@@ -191,6 +214,16 @@ def main(argv=None):
     with redirect_stdout(buffer):
         summarise.main(summary_argv)
     print("```\n" + buffer.getvalue().rstrip() + "\n```")
+    if args.gn:
+        gn_argv = ["--reference", args.reference, "--gn", args.gn, "--newton", args.newton,
+                   "--levels", *map(str, args.levels)]
+        if args.prices_json:
+            gn_argv += ["--prices-json", args.prices_json]
+        buffer = io.StringIO()
+        with redirect_stdout(buffer):
+            summarise.main(gn_argv)
+        print("\n### P-GN (summarise.py --gn)\n")
+        print("```\n" + buffer.getvalue().rstrip() + "\n```")
 
     print(f"\n## Beside the rule\n\nPooled medians: forward {medians['forward']:.1f} s, "
           f"gradient {medians['gradient']:.1f} s, product "
@@ -210,6 +243,9 @@ def main(argv=None):
     print(last_fall(rows))
     print("\n### Krylov record of P-Newton\n")
     print(krylov_summary(records["P-Newton"]))
+    if "P-GN" in records:
+        print("\n### Krylov record of P-GN\n")
+        print(krylov_summary(records["P-GN"]))
 
 
 if __name__ == "__main__":

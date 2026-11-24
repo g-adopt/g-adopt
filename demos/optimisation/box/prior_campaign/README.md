@@ -32,6 +32,7 @@ The run outputs are not in git.
 | `summarise_shift.py` | Prints the S2b tables: work to reach values of `J`, `initial_misfit` there, negative-curvature solves, `ritz_min` and the shift per solve. |
 | `fetch.sh` | Copies the records of one step from Setonix to reunion. Runs on reunion. |
 | `compare_records.py` | Compares two JSON records row by row. |
+| `check_gauss_newton.py` | Checks G1 to G13 of the Gauss-Newton product on the tiny case, G11 on the 64-cell state (`--g11`), and the product prices of the box rule (`--timing`). |
 
 ## Locations
 

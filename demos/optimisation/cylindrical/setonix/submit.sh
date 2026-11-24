@@ -9,6 +9,9 @@
 #     submit.sh rolA        <code dir>   (deferred, see below)
 #     submit.sh radius      <code dir>   (conditional, see below)
 #     submit.sh metric      <code dir>   (conditional, see below)
+#     submit.sh gn-curv     <code dir>   (Gauss-Newton curvature job, see below)
+#     submit.sh gn-smoke    <code dir>   (only if P-GN uses the switch, see below)
+#     RADIUS=<r> submit.sh gn <code dir> (P-GN, see below)
 #
 # The plan, the costs and the decision rule are in NOTES/team/cylindrical-newton/PLAN.md
 # of the reunion worktree. Every phase waits for a person to read the results of the
@@ -41,6 +44,30 @@
 #             gives "undecided";
 #   "metric"  P-Newton with the metric shift (cap 100), only if the zero-shift run stalls
 #             after a negative-curvature solve.
+#
+# The Gauss-Newton phases (NOTES/team/gauss-newton/PLAN.md sections 5.2 and 5.3):
+#   "gn-curv"  one highmem job, 16 ranks, 120 GB, 9 h, of three steps
+#              (gn_curv_steps.sh, set -e, so a failed step ends the job):
+#              1. checks.py gn on the 5-step trajectory of the gates, serial: the
+#                 checks G1 to G7, G9, G11 and G13 in the image (the gate of the job);
+#              2. checks.py gn-curvature at 125 steps on 16 ranks: pHp/pAp and
+#                 pH_GN p/pAp along p = A^-1 g at the first guess of P;
+#              3. compare.py, one Gauss-Newton BNLS iteration at 125 steps, Krylov
+#                 cap 20, radius 50.6 (the cylinder value of the box radius 12.8),
+#                 control saved: CG iterations, stop reason, Ritz values, step norm,
+#                 b.d and the STCG model value, line-search step, J before and after.
+#              Stop condition for P-GN: step 1 passes and the actual fall of J is at
+#              least 0.1 of the predicted fall (section 5.2 of the plan).
+#   "gn-smoke" a 16-rank smoke at 5 steps, 2 iterations, gn-then-full with switch
+#              iteration 1; only when Sia asks for the switch in P-GN.
+#   "gn"       P-GN: tao-bnls-riesz, inner product A, zero shift, Krylov cap 100,
+#              Gauss-Newton product, budget 400, into runs-GN-b<budget>-n<ranks>/.
+#              Runs only after box test C and the curvature job pass, and after
+#              the P-GN settings section of the plan is written and reviewed. The
+#              settings come from the environment, with no default for the radius:
+#                RADIUS     initial radius (0.79, 50.6 or the value of CYL-CURV.md)
+#                HESSIAN    gn (default) or gn-then-full (only if Sia asks)
+#                KRYLOV_EW  1 for the Eisenstat-Walker tolerance, else 1e-2
 #
 # The resources of the runs are environment variables with the values of the plan,
 # so that the timing phase can change them without an edit:
@@ -180,8 +207,38 @@ metric)
         --riesz regularisation --krylov-max-it 100 --output "$RUNS/tao-metric.json")
     echo "P-Newton, metric shift: $j"
     ;;
+gn-curv)
+    C=$BASE/gn-curvature
+    mkdir -p "$C"
+    # The script name ends in .sh, so job.slurm runs it with bash and passes the code
+    # directory first; the script runs the three steps with their own srun counts.
+    j=$(sbatch --parsable --job-name=cyl-gn-curv --partition=highmem --ntasks=16 \
+        --mem=120G --time=09:00:00 "$JOB" "$CODE" "$C" gn_curv_steps.sh "$BASE")
+    echo "Gauss-Newton curvature job: $j (output in $C)"
+    ;;
+gn-smoke)
+    s=$BASE/gn-smoke-n16
+    t5=(--rundir "$BASE/gates/run-t5" --timesteps 5 --delta-t 1.2e-5)
+    j=$(sbatch --parsable --job-name=cyl-gn-smoke --partition=highmem --ntasks=16 \
+        --mem=64G --time=01:30:00 "$JOB" "$CODE" "$s" compare.py "${t5[@]}" --max-it 2 \
+        --optimiser tao-bnls-riesz --bnk-shift zero --riesz regularisation \
+        --hessian gn-then-full --gn-switch-it 1 --output "$s/tao-gn-then-full.json")
+    echo "16-rank switch smoke: $j"
+    ;;
+gn)
+    : "${RADIUS:?set RADIUS to the initial radius of the P-GN settings section}"
+    HESSIAN=${HESSIAN:-gn}
+    KRYLOV=()
+    if [ "${KRYLOV_EW:-0}" = 1 ]; then KRYLOV=(--krylov-ew); fi
+    RUNS=$BASE/runs-GN-b$BUDGET-n$RANKS
+    j=$(submit_run cyl-P-gn --optimiser tao-bnls-riesz --bnk-shift zero \
+        --riesz regularisation --krylov-max-it 100 --hessian "$HESSIAN" \
+        --initial-radius "$RADIUS" "${KRYLOV[@]}" --output "$RUNS/tao-gn.json")
+    echo "P-GN ($HESSIAN, radius $RADIUS, ${KRYLOV[*]:-rtol 1e-2}): $j"
+    ;;
 *)
-    echo "unknown phase $PHASE (gates, timing, runs, rolA, radius, metric or hessian20)" >&2
+    echo "unknown phase $PHASE (gates, timing, runs, rolA, radius, metric, hessian20," \
+         "gn-curv, gn-smoke or gn)" >&2
     exit 2
     ;;
 esac

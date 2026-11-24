@@ -410,6 +410,22 @@ class KrylovRecorder:
             records the curvature of its last direction (see below).
         shifted_hessian: the ``ShiftedHessianMat`` of ``riesz_hessian.py`` when the
             run takes BNK's shift in the metric, or None for the identity shift.
+        hessian_mode: a callable that returns the product of the next solve,
+            ``"gn"`` or ``"full"`` (``gauss_newton.GaussNewtonHessianMat.mode``), or
+            None. Each solve record holds its value as ``hessian_product``.
+
+    The tolerance and the quadratic model of each solve. Every record also holds the
+    relative tolerance that the solve used (``rtol``, read in the pre-solve hook,
+    which runs after the Eisenstat-Walker hook has set it), the TAO iteration of the
+    solve (``tao_iteration``, which is the iteration count that the
+    Eisenstat-Walker rule reads), the Euclidean norm of the right-hand side ``b``
+    (``rhs_norm``), the dot product ``b . d`` of the right-hand side and the solution
+    ``d`` (``rhs_dot_sol``), and STCG's value of its quadratic model at ``d``
+    (``cg_objective``, from ``KSPCGGetObjFcn``). BNK solves ``H d = g`` on the
+    inactive set and steps along ``-d``, and STCG's model value is
+    ``q(d) = 0.5 d^T H d - b . d``. So ``d^T H d = 2 (cg_objective + rhs_dot_sol)``,
+    and the predicted fall of J for a line-search step ``alpha`` along ``-d`` is
+    ``alpha (b . d) - 0.5 alpha^2 d^T H d``, with no extra Hessian product.
 
     The curvature at a negative-curvature stop. STCG stops with
     ``CONVERGED_NEG_CURVE`` right after it applies the operator to its search
@@ -431,8 +447,9 @@ class KrylovRecorder:
     """
 
     def __init__(self, tao, pmat_context=None, comm=MPI.COMM_WORLD, wall_nodes=None,
-                 hessian_context=None, shifted_hessian=None):
+                 hessian_context=None, shifted_hessian=None, hessian_mode=None):
         self.tao = tao
+        self.hessian_mode = hessian_mode
         self.hessian_context = hessian_context
         self.shifted_hessian = shifted_hessian
         # The last Hessian action: (copy of x, copy of y, shift of pyadjoint's matrix).
@@ -522,6 +539,17 @@ class KrylovRecorder:
         shifts, self._pending_shifts = self._pending_shifts, []
         record["hessian_shift"] = float(sum(shifts)) if shifts else 0.0
         record["hessian_shift_calls"] = len(shifts)
+        # The product, the tolerance and the size of the right-hand side of this
+        # solve. KSPSolve calls the Eisenstat-Walker pre-solve before this hook
+        # (itcreate.c, ``presolve_ew`` before ``presolve``), so ``rtol`` is the value
+        # the solve uses. Reading the norm caches it on the vector, and any later
+        # VecNorm of the same unchanged vector returns the same number, so the solve
+        # is unchanged.
+        record["hessian_product"] = (self.hessian_mode() if self.hessian_mode is not None
+                                     else None)
+        record["rtol"] = float(ksp.getTolerances()[0])
+        record["tao_iteration"] = int(self.tao.getIterationNumber())
+        record["rhs_norm"] = float(rhs.norm(PETSc.NormType.NORM_2))
         self._current = {"record": record, "rz": [], "z": [], "d": [], "rnorm": []}
         self._solve_index += 1
 
@@ -567,6 +595,9 @@ class KrylovRecorder:
             "step_norm": PETSC_LIBRARY.step_norm(ksp),
             "step_norm_metric": self._metric_step_norm(ksp, x),
             "residual_norms": current["rnorm"],
+            # b . d, before BNK negates d into the step direction.
+            "rhs_dot_sol": float(rhs.dot(x)),
+            "cg_objective": self._cg_objective(ksp),
         })
         ritz = (lanczos_ritz_values(current["rz"], current["z"], current["d"], self.comm)
                 if current["z"] else np.array([]))
@@ -582,6 +613,19 @@ class KrylovRecorder:
         self.solves.append(record)
 
     # -- helpers -------------------------------------------------------------------
+
+    @staticmethod
+    def _cg_objective(ksp):
+        """STCG's value of its quadratic model at the solution, or None.
+
+        ``KSPCGGetObjFcn`` exists for the trust-region conjugate gradient types
+        only; for another KSP type PETSc raises, and the value is recorded as None
+        without disabling the recorder.
+        """
+        try:
+            return float(ksp.getCGObjectiveValue())
+        except Exception:  # noqa: BLE001 -- a missing value must not stop a run
+            return None
 
     def _metric_step_norm(self, ksp, x):
         """``sqrt(s^T A s)`` of the Krylov solution ``s``, with ``A`` the metric.

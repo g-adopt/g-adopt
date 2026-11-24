@@ -7,7 +7,10 @@
 #
 #   <code dir>  a code copy made by sync_code.sh
 #   <work dir>  where the job runs; relative paths in the arguments start here
-#   <script>    compare.py or checks.py
+#   <script>    compare.py or checks.py, run under srun on all tasks; or a shell
+#               script of setonix/ (a name that ends in .sh), run with bash after the
+#               environment is set, with the code directory as its first argument,
+#               for a job of several steps with their own srun counts
 #
 # The resources are given on the sbatch command line by submit.sh, because they
 # differ between the gates and the runs. The defaults below are those of a gate.
@@ -68,8 +71,16 @@ PY
 mkdir -p "$WORK_DIR"; cd "$WORK_DIR"
 cp "$CODE_DIR/CODE_STATE" . 2>/dev/null || true
 echo "### $SCRIPT $*"
-# The demo directory first on the path, so that its modules import by name.
-srun -n "$SLURM_NTASKS" -c 1 python3 "$CODE_DIR/demos/optimisation/cylindrical/$SCRIPT" "$@"
+case $SCRIPT in
+*.sh)
+    # A job of several steps; the script calls srun itself.
+    bash "$CODE_DIR/demos/optimisation/cylindrical/setonix/$SCRIPT" "$CODE_DIR" "$@"
+    ;;
+*)
+    # The demo directory first on the path, so that its modules import by name.
+    srun -n "$SLURM_NTASKS" -c 1 python3 "$CODE_DIR/demos/optimisation/cylindrical/$SCRIPT" "$@"
+    ;;
+esac
 echo "### done $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # The peak memory of every step of this job, for the plan's memory column.
 sacct -j "$SLURM_JOB_ID" --format=JobID,Elapsed,MaxRSS,MaxVMSize,NTasks -P || true

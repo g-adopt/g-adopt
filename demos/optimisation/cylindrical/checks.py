@@ -6,6 +6,8 @@ Usage:
     python checks.py hvp       --rundir RUN --timesteps 5 --delta-t 1.2e-5
     python checks.py spd       --rundir RUN --timesteps 5 --delta-t 1.2e-5
     python checks.py timing    --rundir RUN --timesteps 125 --delta-t 1.2e-5
+    python checks.py gn        --rundir RUN --timesteps 2 --delta-t 1.2e-5 [--make-reference]
+    python checks.py gn-curvature --rundir RUN --timesteps 125 --delta-t 1.2e-5
 
 Every check prints its numbers, a PASS or FAIL line against a threshold that is fixed
 in this file, and writes a JSON file of its results with ``--json``. The process
@@ -40,6 +42,20 @@ against a central difference of the gradient.
 size BNK sees. Symmetry of ``Z^T A Z`` and of ``Z^T A^{-1} Z`` on random vectors;
 the smallest eigenvalue of each, which must be positive; ``A^{-1} A = I`` through
 the Riesz map; and ``A`` against the Hessian of the taped regularisation terms.
+
+``gn``. The checks G1 to G7, G9, G11 (values only) and G13 of the Gauss-Newton
+product (NOTES/team/gauss-newton/PLAN.md section 2.2) on the production objective, at
+the given step count: the term list and the weights against the normalisations
+computed from the data, the seeded gradient, the zero-residual comparison, symmetry,
+positivity against the metric, the tangent-linear half, the stale-adjoint guard, the
+curvature along the first CG direction, and the predicted-fall bookkeeping of three
+one-iteration TAO runs. Serial. The routines are those of ``box/gn_checks.py``.
+
+``gn-curvature``. The curvature of the production objective at the first guess along
+``p = A^{-1} g``, the first CG direction: one gradient, one full product and one
+Gauss-Newton product, with ``pHp/pAp``, ``pH_GN p/pAp``, the dropped term, the
+per-call times and the peak memory per rank. Step 2 of the curvature job of section
+5.2 of the plan, on any number of ranks. Fails only if a number is not finite.
 """
 
 import argparse
@@ -630,10 +646,244 @@ def check_timing(args, results):
 
 
 # ---------------------------------------------------------------------------------
+# gn and gn-curvature
+# ---------------------------------------------------------------------------------
+
+def gn_directions(Q1):
+    """``v``: the smooth-stable field with seed 1; ``w``: a random field with seed 2.
+
+    ``w`` is scaled to a maximum of 0.1. It is drawn per rank, so it is the same
+    field only on the same number of ranks; ``gn`` runs in serial.
+    """
+    from taylor_diagnostics import make_perturbation
+    v = make_perturbation(Q1, "smooth-stable", 1)
+    w = Function(Q1, name="Random_Direction")
+    rng = np.random.default_rng(2)
+    w.dat.data[:] = rng.standard_normal(w.dat.data.shape)
+    scale = COMM.allreduce(float(np.max(np.abs(w.dat.data_ro))), op=MPI.MAX)
+    w.dat.data[:] *= 0.1 / scale
+    return v, w
+
+
+def cylinder_weights(problem, timesteps, Tobs=None, u_last=None):
+    """The outer weights of the cylindrical terms, computed from the data alone.
+
+    In ``generate_inverse_problem`` the alpha weights are Real coefficients inside the
+    forms, and the outer factors are ``norm_obs / norm_u_surface`` (velocity, one per
+    step), 1 (temperature), ``norm_obs / norm_damping`` and ``norm_obs /
+    norm_smoothing``, with
+
+        norm_obs       = int Tobs^2 dx,
+        norm_u_surface = int_top |uobs_{N-1}|^2 ds,
+        norm_damping   = int (Tobs - Taverage)^2 dx,
+        norm_smoothing = int |grad(Tobs - Taverage)|^2 dx.
+
+    Args:
+        problem: the ``CylindricalProblem``; the process is in its run directory.
+        timesteps: the number of steps of the tape.
+        Tobs: the observed temperature to use, default the reference state.
+        u_last: the observed surface velocity of the last step, default the
+            reference state.
+
+    Returns:
+        list of ``(description, weight)`` in tape order: the velocity terms of the
+        time loop, then the temperature, damping and smoothing terms.
+    """
+    from firedrake import CheckpointFile
+    from gadopt import ds_t
+    weights = problem.weights
+    with stop_annotating():
+        if Tobs is None:
+            Tobs = problem.Tobs
+        if u_last is None:
+            with CheckpointFile("Checkpoint_State.h5", "r") as f:
+                u_last = f.load_function(problem.mesh, "Velocity", idx=timesteps - 1)
+        Tav = problem.Taverage
+        norm_obs = float(assemble(Tobs ** 2 * dx))
+        norm_u = float(assemble(dot(u_last, u_last) * ds_t))
+        norm_damping = float(assemble((Tobs - Tav) ** 2 * dx))
+        norm_smoothing = float(assemble(dot(grad(Tobs - Tav), grad(Tobs - Tav)) * dx))
+    out = []
+    if weights["alpha_u"] > 0:
+        out += [(f"velocity step {n}, norm_obs / norm_u_surface", norm_obs / norm_u)
+                for n in range(timesteps)]
+    if weights["alpha_T"] > 0:
+        out.append(("temperature, 1", 1.0))
+    if weights["alpha_d"] > 0:
+        out.append(("damping, norm_obs / norm_damping", norm_obs / norm_damping))
+    if weights["alpha_s"] > 0:
+        out.append(("smoothing, norm_obs / norm_smoothing", norm_obs / norm_smoothing))
+    return out
+
+
+def build_gn_problem(args):
+    """The production problem and its expected number of quadratic terms."""
+    from gauss_newton import expected_term_count_cylinder
+    problem = build_problem(args.rundir, timesteps=args.timesteps, delta_t=args.delta_t,
+                            alpha_T=args.alpha_T, alpha_u=args.alpha_u,
+                            alpha_d=args.alpha_d, alpha_s=args.alpha_s,
+                            make_reference=args.make_reference)
+    return problem, expected_term_count_cylinder(problem.weights, args.timesteps)
+
+
+def check_gn(args, results):
+    """G1 to G7, G9, G11 (values) and G13 of the Gauss-Newton product."""
+    import gn_checks
+    from gauss_newton import GaussNewtonOperator
+
+    if COMM.size != 1:
+        raise SystemExit("gn runs in serial")
+    t0 = time.perf_counter()
+    problem, count = build_gn_problem(args)
+    results["time_taping"] = time.perf_counter() - t0
+    # The reference state exists now; the second tape of G3 reads it.
+    args.make_reference = False
+    rf = problem.reduced_functional
+    Q1 = problem.Tic.function_space()
+    v, w = gn_directions(Q1)
+    m0 = Function(Q1).assign(problem.Tic)
+    parts = set(args.gn_parts)
+    ok = True
+    if parts == {"G3"}:
+        # The first tape is the tape of G3.
+        return check_gn_zero_residual(args, results, problem, count)
+    if "G1-G11" not in parts:
+        if "G13" in parts:
+            ok &= check_gn_predicted_fall(results, problem, count, m0)
+        if "G3" in parts:
+            problem, count = build_gn_problem(args)
+            ok &= check_gn_zero_residual(args, results, problem, count)
+        return ok
+    with stop_annotating():
+        rf(m0)
+        operator = GaussNewtonOperator(rf, expected_count=count)
+        say("## G1")
+        ok &= gn_checks.check_terms(operator, cylinder_weights(problem, args.timesteps),
+                                    results)
+        say("## G2")
+        ok &= gn_checks.check_first_variation(operator, problem.inner_product, results)
+        say("## G4 to G7")
+        _, metric = build_preconditioner_matrix(problem)
+        regularisation = [t for t in operator.terms
+                          if t.state.output.function_space()
+                          == problem.Tic_true.function_space()
+                          and t.state.output.name() == "T_0"]
+        ok &= gn_checks.check_products(operator, metric, v, w, results,
+                                       has_regularisation=True,
+                                       regularisation_terms=regularisation)
+        say("## G9")
+        ok &= gn_checks.check_stale_guard(problem, operator, v, results)
+        say("## G11 (values only)")
+        rf(m0)
+        values = gn_checks.first_direction_curvature(problem, operator)
+        results["G11"] = values
+        say(f"    J {values['J']:.10e}, pAp {values['pAp']:.6e}, pHp/pAp "
+            f"{values['pHp_over_pAp']:.6g}, pH_GN p/pAp {values['pHGNp_over_pAp']:.6g}, "
+            f"dropped {values['dropped_over_pAp']:.6g}")
+        ok &= verdict("G11 numbers finite (0 = yes)",
+                      0.0 if all(np.isfinite(list(values.values()))) else 1.0, 0.0, results)
+
+    if "G13" in parts:
+        ok &= check_gn_predicted_fall(results, problem, count, m0)
+    if "G3" in parts:
+        problem, count = build_gn_problem(args)
+        ok &= check_gn_zero_residual(args, results, problem, count)
+    return ok
+
+
+def check_gn_predicted_fall(results, problem, count, m0):
+    """G13 on the cylinder: three one-iteration TAO runs from the first guess."""
+    import gn_checks
+    rf = problem.reduced_functional
+    say("## G13")
+
+    def build_again():
+        # One tape for the three runs: each starts at the first guess again.
+        with stop_annotating():
+            rf(m0)
+        return problem, count
+    # The cylinder cases: the converged Gauss-Newton solve with a tolerance of 0.5
+    # (a product costs about 1.6 forward runs here, and the box already tests the
+    # tolerance 1e-2), the solve cut at a small radius, and a full solve of at most
+    # three products.
+    cases = (("gn, inside the radius", "gn", 1e4, 20, "CONVERGED_RTOL",
+              {"tao_bnk_ksp_rtol": 0.5}),
+             ("gn, on the radius", "gn", 1e-3, 20, "CONVERGED_STEP_LENGTH"),
+             ("full", "full", 0.79, 3, None))
+    return gn_checks.check_predicted_fall(build_again, results, cases=cases)
+
+
+def check_gn_zero_residual(args, results, problem, count):
+    """G3 on the cylinder, on a tape of its own, because the data change for good."""
+    import gn_checks
+    from gauss_newton import GaussNewtonOperator
+    say("## G3 (on a new tape, the data change for good)")
+    ok = True
+    rf = problem.reduced_functional
+    Q1 = problem.Tic.function_space()
+    v, w = gn_directions(Q1)
+    with stop_annotating():
+        rf(Function(Q1).assign(problem.Tic))
+        first = GaussNewtonOperator(rf, expected_count=count)
+        labels, data_terms = gn_checks.zero_residual_cylinder(problem, first)
+        operator = GaussNewtonOperator(rf, expected_count=count)
+        # The weights after the change, against the data after the change: the new
+        # observed temperature is the final temperature, and the new surface
+        # velocity of the last step is that of the last mixed state.
+        velocity_terms = [t for t in operator.terms if len(t.state.output.function_space()) > 1]
+        T_final = problem.T.block_variable.saved_output
+        u_final = (velocity_terms[-1].state.saved_output.subfunctions[0]
+                   if velocity_terms else None)
+        changed = cylinder_weights(problem, args.timesteps, Tobs=T_final, u_last=u_final)
+        sub = {}
+        ok &= gn_checks.check_terms(operator, changed, sub, check_id="G3-weights")
+        results["G3_weights"] = sub
+        results.setdefault("tests", []).extend(sub.get("tests", []))
+        ok &= gn_checks.check_zero_residual(operator, data_terms, v, w, results)
+    return ok
+
+
+def check_gn_curvature(args, results):
+    """Curvature along the first CG direction at the first guess, on any rank count."""
+    import gn_checks
+    from gauss_newton import GaussNewtonOperator
+
+    t0 = time.perf_counter()
+    problem, count = build_gn_problem(args)
+    results["time_taping"] = time.perf_counter() - t0
+    rss_tape = peak_rss_gb()
+    rf = problem.reduced_functional
+    with stop_annotating():
+        rf(Function(problem.Tic.function_space()).assign(problem.Tic))
+        t0 = time.perf_counter()
+        operator = GaussNewtonOperator(rf, expected_count=count)
+        results["time_operator"] = time.perf_counter() - t0
+        values = gn_checks.first_direction_curvature(problem, operator)
+    rss = peak_rss_gb()
+    results.update(values)
+    results.update(gn_terms=operator.describe(), weights=problem.weights,
+                   linear_defect=operator.linear_defects,
+                   peak_rss_after_tape_gb={"rank0": rss_tape[0], "max": rss_tape[1],
+                                           "sum": rss_tape[2]},
+                   peak_rss_gb={"rank0": rss[0], "max": rss[1], "sum": rss[2]},
+                   control_dofs=problem.Tic.function_space().dim())
+    say(f"  J {values['J']:.10e}; pAp {values['pAp']:.6e}; pHp/pAp "
+        f"{values['pHp_over_pAp']:.6g}; pH_GN p/pAp {values['pHGNp_over_pAp']:.6g}; "
+        f"dropped (pHp - pH_GN p)/pAp {values['dropped_over_pAp']:.6g}")
+    say(f"  times: forward {values['time_forward']:.1f} s, gradient "
+        f"{values['time_gradient']:.1f} s, full product {values['time_full_product']:.1f} s, "
+        f"GN product {values['time_gn_product']:.1f} s; peak RSS per rank max "
+        f"{rss[1]:.2f} GB, sum {rss[2]:.2f} GB")
+    finite = all(np.isfinite([values[k] for k in ("J", "pAp", "pHp", "pHGNp")]))
+    return verdict("all numbers finite (0 = yes)", 0.0 if finite else 1.0, 0.0, results)
+
+
+# ---------------------------------------------------------------------------------
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("check", choices=("rol-params", "objective", "hvp", "spd", "timing"))
+    parser.add_argument("check", choices=("rol-params", "objective", "hvp", "spd", "timing",
+                                          "gn", "gn-curvature"))
     parser.add_argument("--rundir", default=None)
     parser.add_argument("--timesteps", type=int, default=5)
     parser.add_argument("--delta-t", type=float, default=1.2e-5)
@@ -647,6 +897,11 @@ def main(argv=None):
                              "difference of the gradient")
     parser.add_argument("--fd-eps", type=float, nargs="+", default=[1e-3, 1e-4])
     parser.add_argument("--json", default=None, help="write the results here")
+    parser.add_argument("--gn-parts", nargs="+", default=["G1-G11", "G13", "G3"],
+                        choices=("G1-G11", "G13", "G3"),
+                        help="gn: the parts to run (default all). G1-G11 is G1, G2, G4 "
+                             "to G7, G9 and G11 on one tape; G13 the three TAO runs on "
+                             "the same tape; G3 a tape of its own")
     args = parser.parse_args(argv)
     if args.check != "rol-params" and args.rundir is None:
         parser.error("--rundir is needed for this check")
@@ -658,12 +913,13 @@ def main(argv=None):
     t0 = time.perf_counter()
     say(f"### check {args.check}")
     ok = {"rol-params": check_rol_params, "objective": check_objective,
-          "hvp": check_hvp, "spd": check_spd, "timing": check_timing}[args.check](args, results)
+          "hvp": check_hvp, "spd": check_spd, "timing": check_timing,
+          "gn": check_gn, "gn-curvature": check_gn_curvature}[args.check](args, results)
     results["pass"] = bool(ok)
     results["wall_time"] = time.perf_counter() - t0
     say(f"### {args.check}: {'PASS' if ok else 'FAIL'} in {results['wall_time']:.1f} s")
     if json_path is not None and COMM.rank == 0:
-        json_path.write_text(json.dumps(results, indent=1))
+        json_path.write_text(json.dumps(results, indent=1, default=str))
     sys.exit(0 if ok else 1)
 
 

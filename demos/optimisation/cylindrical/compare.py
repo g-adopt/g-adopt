@@ -68,6 +68,8 @@ from cylindrical_problem import BOX_DIR, CYLINDRICAL_DIR, HERE, build_problem, p
 
 from gadopt import log  # noqa: E402
 import optimisers  # noqa: E402 -- demos/optimisation/box
+from gauss_newton import (add_gauss_newton_arguments,  # noqa: E402 -- demos/optimisation/box
+                          expected_term_count_cylinder, gauss_newton_settings)
 from optimisers import Recorder, VARIANTS, run  # noqa: E402
 
 # The nodal trust radius of the box runs whose evidence selected the zero shift: Z-d
@@ -264,6 +266,9 @@ def parse_args(argv=None):
                              "fraction of its first value; 0 leaves it to the budget")
     parser.add_argument("--tao-opt", action="append", default=[], metavar="KEY=VALUE",
                         help="extra PETSc option for TAO, repeatable")
+    # --hessian, --gn-switch-it, --gn-switch-gtol, --krylov-rtol, --krylov-ew and
+    # --tr-norm, the same options as the box driver.
+    add_gauss_newton_arguments(parser)
     parser.add_argument("--output", default=None, help="JSON record")
     parser.add_argument("--save-control", action="store_true",
                         help="write the control of every iteration to <output stem>.control.h5 and the final control to <output stem>.h5")
@@ -346,6 +351,11 @@ def optimiser_settings(args, problem):
     kwargs = {"max_it": args.max_it, "gradient_rtol": args.gradient_rtol,
               "work_budget": args.work_budget}
     settings = {}
+    gn_settings = gauss_newton_settings(args)
+    if args.optimiser.startswith("rol") and (args.hessian != "full" or args.krylov_ew
+                                             or args.krylov_rtol is not None):
+        raise SystemExit("--hessian, --krylov-ew and --krylov-rtol apply to the TAO "
+                         "types only")
     if args.optimiser.startswith("rol"):
         radius = GADOPT_ROL_RADIUS if args.initial_radius is None else args.initial_radius
         krylov = (GADOPT_ROL_KRYLOV_MAX_IT if args.krylov_max_it is None
@@ -369,11 +379,17 @@ def optimiser_settings(args, problem):
         extra.update(parse_tao_options(args.tao_opt))
         kwargs.update(initial_radius=radius, extra_options=extra,
                       bnk_shift="metric" if args.bnk_shift == "metric" else "identity")
+        # The product of the Krylov solve and its tolerance. run_tao refuses a
+        # Gauss-Newton run without the zero shift, so --bnk-shift zero (the default)
+        # is what makes these legal.
+        kwargs.update(gn_settings)
+        kwargs["gn_expected_terms"] = expected_term_count_cylinder(problem.weights,
+                                                                   problem.timesteps)
         settings.update(initial_radius=radius,
                         initial_radius_rule=(f"{BOX_RADIUS} * sqrt({dofs} / {BOX_NODES})"
                                              if args.initial_radius is None else "given"),
                         krylov_max_it=krylov, tao_options=extra,
-                        bnk_shift=args.bnk_shift)
+                        bnk_shift=args.bnk_shift, **gn_settings)
     return kwargs, settings
 
 

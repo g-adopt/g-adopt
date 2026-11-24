@@ -26,6 +26,8 @@ from pathlib import Path
 from mpi4py import MPI
 
 from gadopt import *
+from gauss_newton import (add_gauss_newton_arguments, expected_term_count_box,
+                          gauss_newton_settings)
 from optimisers import VARIANTS, run
 from problem import build_problem
 
@@ -108,6 +110,7 @@ def parse_args(argv=None):
                              "optimiser)")
     parser.add_argument("--tao-opt", action="append", default=[], metavar="KEY=VALUE",
                         help="extra PETSc option for TAO, repeatable; KEY alone sets a flag")
+    add_gauss_newton_arguments(parser)
     parser.add_argument("--rol-shift", type=float, default=0.0, metavar="FACTOR",
                         help="ROL only: shift the Hessian action by FACTOR times the "
                              "gradient norm, as PETSc BNK does "
@@ -307,6 +310,13 @@ def parse_rol_options(items):
 def main(argv=None):
     args = parse_args(argv)
     output = Path(args.output or f"{args.optimiser}_{args.riesz}.json")
+    # The options of the Hessian product are checked before the tape is built, so
+    # that a wrong combination fails in seconds and not after the taping.
+    gn_settings = gauss_newton_settings(args)
+    if args.optimiser.startswith("rol") and (args.hessian != "full" or args.krylov_ew
+                                             or args.krylov_rtol is not None):
+        raise SystemExit("--hessian, --krylov-ew and --krylov-rtol apply to the TAO "
+                         "types only")
 
     problem = build_problem(
         args.checkpoint, window=args.window,
@@ -348,6 +358,9 @@ def main(argv=None):
         "bnk_shift": args.bnk_shift,
         "prior": prior_record(problem, args.riesz),
     }
+    if not args.optimiser.startswith("rol"):
+        # The product of the Krylov solve and its tolerance, for the TAO types.
+        record.update(gn_settings)
 
     kwargs = {"max_it": args.max_it, "initial_radius": args.initial_radius,
               "output": output, "metadata": record,
@@ -363,6 +376,8 @@ def main(argv=None):
         kwargs["extra_options"] = extra
         kwargs["riesz_initial_hessian"] = not args.no_riesz_j0
         kwargs["bnk_shift"] = args.bnk_shift
+        kwargs.update(gn_settings)
+        kwargs["gn_expected_terms"] = expected_term_count_box(problem.weights)
 
     recorder = run(problem, args.optimiser, **kwargs)
 

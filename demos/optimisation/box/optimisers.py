@@ -66,6 +66,7 @@ from pyadjoint.enlisting import Enlist
 from pyadjoint.optimization.tao_solver import PETScVecInterface, RieszMapMat, TAOConvergenceError, TAOSolver
 from riesz_hessian import build_preconditioner_matrix, build_shifted_hessian
 from recording import PETSC_LIBRARY, KrylovRecorder, gradient_norms, tao_view_text
+from gauss_newton import HESSIAN_CHOICES, LINEAR_DEFECT_TOLERANCE, build_gauss_newton_hessian
 import ROL
 
 class WorkBudgetReached(Exception):
@@ -126,12 +127,24 @@ class Recorder:
         hessian_price: cost of one Hessian-vector product in forward calls, used to
             convert the counts into work. It is replaced by this run's own measured
             value as soon as there is one.
+        gn_hessian_price: the same for one Gauss-Newton product
+            (``gauss_newton.GaussNewtonOperator.action``). The default 2.0 is used
+            only before the first Gauss-Newton product of the run ends: a product is
+            one tangent-linear and one adjoint sweep, about the cost of a gradient
+            plus a forward run. Afterwards the measured ratio replaces it.
         forward_times: wall time of every call to the reduced functional.
         gradient_times: wall time of every adjoint sweep.
         hessian_times: wall time of every Hessian-vector product.
+        gn_hessian_times: wall time of every Gauss-Newton product, measured by the
+            operator around its three sweeps and the release step, before the
+            garbage collection that follows.
         forward: number of forward replays so far.
         adjoint: number of adjoint sweeps so far.
-        hessian: number of Hessian-vector products so far.
+        hessian: number of Hessian-vector products so far (pyadjoint's full product,
+            counted through ``hessian_cb_post``).
+        gn_hessian: number of Gauss-Newton products so far. The operator calls
+            ``start_gn`` and ``end_gn`` around each one; the reduced-functional
+            callbacks never fire for it, so the two counts never overlap.
         gradients: list of dict, one per gradient evaluation.
         iterations: list of dict, one per optimiser iteration.
         last_dual_gradient: local entries of the most recent gradient, when the
@@ -147,6 +160,7 @@ class Recorder:
     forward: int = 0
     adjoint: int = 0
     hessian: int = 0
+    gn_hessian: int = 0
     gradients: list = field(default_factory=list)
     iterations: list = field(default_factory=list)
     t0: float = field(default_factory=time.perf_counter)
@@ -156,10 +170,12 @@ class Recorder:
     stop_reason: str = ""
     work_budget: float = 0.0
     hessian_price: float = 1.96
+    gn_hessian_price: float = 2.0
     budget_hit: bool = False
     forward_times: list = field(default_factory=list)
     gradient_times: list = field(default_factory=list)
     hessian_times: list = field(default_factory=list)
+    gn_hessian_times: list = field(default_factory=list)
     _call_start: dict = field(default_factory=dict)
     last_dual_gradient: object = None
     final_diagnostics: dict = field(default_factory=dict)
@@ -236,13 +252,34 @@ class Recorder:
             return float(sum(values) / len(values)) if values else None
 
         f, g, h = mean(self.forward_times), mean(self.gradient_times), mean(self.hessian_times)
+        gn = mean(self.gn_hessian_times)
         return {
             "mean_forward_time": f,
             "mean_gradient_time": g,
             "mean_hessian_time": h,
+            "mean_gn_hessian_time": gn,
             "gradient_per_forward": None if not (f and g) else g / f,
             "hessian_per_forward": None if not (f and h) else h / f,
+            "gn_hessian_per_forward": None if not (f and gn) else gn / f,
         }
+
+    def start_gn(self):
+        """Mark the start of one Gauss-Newton product. Called by the operator."""
+        self._call_start["gn_hessian"] = time.perf_counter()
+
+    def end_gn(self, elapsed=None):
+        """Count one Gauss-Newton product and store its wall time.
+
+        Args:
+            elapsed: the time the operator measured around its sweeps, or None to
+                take the time since ``start_gn``.
+        """
+        start = self._call_start.pop("gn_hessian", None)
+        if elapsed is None and start is not None:
+            elapsed = time.perf_counter() - start
+        self.gn_hessian += 1
+        if elapsed is not None:
+            self.gn_hessian_times.append(float(elapsed))
 
     def _eval_cb(self, J, values):
         self.forward += 1
@@ -294,6 +331,7 @@ class Recorder:
             "forward": self.forward,
             "adjoint": self.adjoint,
             "hessian": self.hessian,
+            "gn_hessian": self.gn_hessian,
             "cost": self.forward + self.adjoint,
             "time": time.perf_counter() - self.t0,
         }
@@ -311,7 +349,8 @@ class Recorder:
     def mark_iteration(self, k, **extra):
         """Record one optimiser iteration. Called by the optimiser's monitor."""
         row = {"iteration": int(k), "forward": self.forward, "adjoint": self.adjoint,
-               "hessian": self.hessian, "cost": self.forward + self.adjoint,
+               "hessian": self.hessian, "gn_hessian": self.gn_hessian,
+               "cost": self.forward + self.adjoint,
                "work": self.work(),
                "time": time.perf_counter() - self.t0}
         if self.gradients:
@@ -334,7 +373,8 @@ class Recorder:
                 f"IC {row.get('initial_misfit', float('nan')):.4e}  "
                 f"FIN {row.get('final_misfit', float('nan')):.4e}  "
                 f"err {row.get('control_error', float('nan')):.4e}  "
-                f"fwd {self.forward} adj {self.adjoint} hvp {self.hessian}")
+                f"fwd {self.forward} adj {self.adjoint} hvp {self.hessian}"
+                + (f" gn {self.gn_hessian}" if self.gn_hessian else ""))
 
     def write(self):
         """Write the record to ``self.output``, if there is one. Rank 0 only.
@@ -355,17 +395,28 @@ class Recorder:
     def work(self):
         """Forward-equivalent work spent so far.
 
-        A Hessian-vector product is priced at its measured cost, so the number is
-        what the run has actually paid and not a count of sweeps.
+        ``forward + adjoint + p_full hessian + p_gn gn_hessian``. Each product is
+        priced at its measured cost in forward calls (mean product time over mean
+        forward time of this run), so the number is what the run has actually paid
+        and not a count of sweeps. Before the first product of a kind ends, its
+        default price applies.
 
         Returns:
             float
         """
+        costs = self.call_cost_summary()
         price = self.hessian_price
-        measured = self.call_cost_summary()["hessian_per_forward"]
-        if measured:
-            price = measured
-        return self.forward + self.adjoint + price * self.hessian
+        if costs["hessian_per_forward"]:
+            price = costs["hessian_per_forward"]
+        gn_price = self.gn_hessian_price
+        if costs["gn_hessian_per_forward"]:
+            gn_price = costs["gn_hessian_per_forward"]
+        work = self.forward + self.adjoint + price * self.hessian
+        if self.gn_hessian:
+            # Only added when there is a Gauss-Newton product, so that the work of a
+            # run without one is the same float as before this term existed.
+            work += gn_price * self.gn_hessian
+        return work
 
     def over_budget(self):
         """Whether the work budget is set and has been passed."""
@@ -377,10 +428,12 @@ class Recorder:
             "forward": self.forward,
             "adjoint": self.adjoint,
             "hessian": self.hessian,
+            "gn_hessian": self.gn_hessian,
             "wall_time": time.perf_counter() - self.t0,
             "forward_times": self.forward_times,
             "gradient_times": self.gradient_times,
             "hessian_times": self.hessian_times,
+            "gn_hessian_times": self.gn_hessian_times,
             "call_cost": self.call_cost_summary(),
             "work": self.work(),
             "work_budget": self.work_budget,
@@ -725,8 +778,85 @@ def _set_lmvm_initial_hessian(tao, problem):
     return (J0, Minv, pc, ksp)
 
 
+# The Eisenstat-Walker settings of ``--krylov-ew``. ``tao_ksp_ew`` turns the forcing
+# term on (``TaoKSPSetUseEW``). The two tolerances are read with the prefix of BNK's
+# KSP, ``tao_bnk_``: the tolerance of the first solve and the upper cap of every later
+# one. Both are 0.5, the coarse tolerance that hIPPYlib pairs with Gauss-Newton far
+# from the solution. The rule between them is PETSc's version 2,
+# ``rtol_k = (|b_k| / |b_{k-1}|)^1.618``, with the safeguard
+# ``rtol_k >= rtol_{k-1}^1.618`` while that bound is above 0.1, where ``b`` is the
+# right-hand side of the solve (the inactive gradient in nodal coordinates).
+KRYLOV_EW_OPTIONS = {"tao_ksp_ew": True, "tao_bnk_ksp_ew_rtol0": 0.5,
+                     "tao_bnk_ksp_ew_rtolmax": 0.5}
+
+# The values of a PETSc boolean option that mean true. A flag given with no value
+# (``--tao-opt tao_ksp_ew``) arrives as None and means true as well.
+_PETSC_TRUE = (None, True, "true", "True", "TRUE", "1", "yes", "on")
+
+
+def check_newton_options(params, variant, hessian="full", krylov_ew=False,
+                         bnk_shift="identity"):
+    """Refuse option sets that would run something other than what was asked for.
+
+    A misspelt or overridden PETSc option is ignored by PETSc without an error, so a
+    run asked to use the Gauss-Newton product or the Eisenstat-Walker tolerance could
+    run with neither and still look valid. This function runs before the solver is
+    built and raises instead.
+
+    - ``hessian`` other than ``"full"`` needs a ``-riesz`` variant (the metric that
+      preconditions the Krylov solve), BNK's shift at zero (``tao_bnk_imax`` equal to
+      0) and no metric shift. A positive-semi-definite product never needs a shift,
+      and a nodal shift is what stalled the earlier runs.
+    - ``krylov_ew`` needs ``tao_ksp_ew`` true and the two tolerances of
+      ``KRYLOV_EW_OPTIONS`` at their values, also after ``--tao-opt`` has been merged.
+
+    Args:
+        params: the merged TAO options of ``tao_parameters``.
+        variant: the optimiser variant.
+        hessian: one of ``gauss_newton.HESSIAN_CHOICES``.
+        krylov_ew: whether ``--krylov-ew`` was given.
+        bnk_shift: ``"identity"`` or ``"metric"``.
+
+    Raises:
+        ValueError
+    """
+    if hessian not in HESSIAN_CHOICES:
+        raise ValueError(f"hessian must be one of {HESSIAN_CHOICES}, got {hessian!r}")
+    if hessian != "full":
+        if not variant.endswith("-riesz"):
+            raise ValueError(f"hessian={hessian!r} needs a tao-*-riesz variant, got "
+                             f"{variant!r}")
+        if bnk_shift == "metric":
+            raise ValueError(f"hessian={hessian!r} needs the zero shift, not the metric "
+                             f"shift")
+        imax = params.get("tao_bnk_imax", "absent")
+        try:
+            imax_zero = imax is not None and float(imax) == 0.0
+        except (TypeError, ValueError):
+            imax_zero = False
+        if not imax_zero:
+            raise ValueError(f"hessian={hessian!r} needs tao_bnk_imax=0 (the zero shift), "
+                             f"and the options hold tao_bnk_imax={imax!r}")
+    if krylov_ew:
+        if params.get("tao_ksp_ew", "absent") not in _PETSC_TRUE:
+            raise ValueError(f"krylov_ew needs tao_ksp_ew true, and the options hold "
+                             f"{params.get('tao_ksp_ew', 'absent')!r}")
+        for key, value in KRYLOV_EW_OPTIONS.items():
+            if key == "tao_ksp_ew":
+                continue
+            given = params.get(key, "absent")
+            try:
+                same = float(given) == value
+            except (TypeError, ValueError):
+                same = False
+            if not same:
+                raise ValueError(f"krylov_ew needs {key}={value}, and the options hold "
+                                 f"{given!r}")
+
+
 def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
-                   gradient_rtol=0.0):
+                   gradient_rtol=0.0, krylov_rtol=1e-2, krylov_ew=False,
+                   tr_norm="nodal"):
     """TAO options dictionary for one variant.
 
     Args:
@@ -744,10 +874,23 @@ def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
             residual of the bound-constrained conditions in the plain Euclidean norm
             (``bnk.c:69-72``). Those two differ by a mesh-dependent factor, near 150
             on a 150-cell mesh, so one ``tao_gatol`` would mean two different things.
+        krylov_rtol: the fixed relative tolerance of BNK's Krylov solve,
+            ``tao_bnk_ksp_rtol``. The value 1e-2 is the one of every earlier run.
+        krylov_ew: add ``KRYLOV_EW_OPTIONS``, so that PETSc sets the tolerance of
+            each solve by the Eisenstat-Walker rule. The fixed tolerance stays in the
+            options; the forcing term overwrites it before each solve, and a solve
+            that still shows 1e-2 in the record shows that the rule did not act.
+        tr_norm: ``"nodal"`` leaves STCG's trust-region norm at its default, the
+            Euclidean norm of the nodal values, and sets no option. ``"metric"`` sets
+            ``tao_bnk_ksp_cg_dtype preconditioned``, the norm of the preconditioner
+            ``A^{-1}`` (the name that PETSc 3.26.0 knows; later releases accept it as
+            a deprecated alias of ``ksp_cg_tr_norm_type``).
 
     Returns:
         dict of PETSc options.
     """
+    if tr_norm not in ("nodal", "metric"):
+        raise ValueError(f"tr_norm must be 'nodal' or 'metric', got {tr_norm!r}")
     _, tao_type, *flags = variant.split("-")
     params = {
         "tao_type": tao_type,
@@ -763,7 +906,11 @@ def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
         # Newton and quasi-Newton-Krylov share the BNK options.
         params["tao_bnk_init_type"] = "constant"
         params["tao_bnk_ksp_max_it"] = 20
-        params["tao_bnk_ksp_rtol"] = 1e-2
+        params["tao_bnk_ksp_rtol"] = krylov_rtol
+        if krylov_ew:
+            params.update(KRYLOV_EW_OPTIONS)
+        if tr_norm == "metric":
+            params["tao_bnk_ksp_cg_dtype"] = "preconditioned"
     if "noprec" in flags:
         # The default BNK preconditioner is an LMVM matrix built from the gradient
         # history, with the identity as its initial guess. This variant removes it,
@@ -782,7 +929,9 @@ def tao_parameters(variant, max_it, initial_radius=1e-2, extra_options=None,
 
 def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None,
             riesz_initial_hessian=True, output=None, metadata=None,
-            gradient_rtol=0.0, work_budget=0.0, bnk_shift="identity"):
+            gradient_rtol=0.0, work_budget=0.0, bnk_shift="identity",
+            hessian="full", gn_switch_it=5, gn_switch_gtol=0.0, krylov_rtol=1e-2,
+            krylov_ew=False, tr_norm="nodal", gn_expected_terms=None):
     """Run one TAO variant on the problem.
 
     Args:
@@ -801,6 +950,23 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
             ``riesz_hessian.ShiftedHessianMat`` as the Hessian, so that the same
             ``pert`` shifts by ``pert * A`` with ``A`` the metric of the control.
             Needs a ``-riesz`` variant, which supplies ``A``.
+        hessian: the product of BNK's Krylov solve. ``"full"`` is pyadjoint's
+            Hessian and installs nothing, so the run is the same as before this
+            option existed. ``"gn"`` installs ``gauss_newton.GaussNewtonHessianMat``
+            with the Gauss-Newton product for the whole run. ``"gn-then-full"``
+            starts with Gauss-Newton and switches to the full Hessian at iteration
+            ``gn_switch_it``, with the fall-back to Gauss-Newton after a full solve
+            that stops on negative curvature. Both need a ``-riesz`` variant and the
+            zero shift (``check_newton_options``).
+        gn_switch_it: the iteration of the switch of ``gn-then-full``.
+        gn_switch_gtol: switch also when TAO's gradient norm, the
+            Fischer-Burmeister residual in nodal coordinates for BNK, falls to this
+            fraction of its first value; 0 turns the test off.
+        krylov_rtol: fixed relative tolerance of the Krylov solve.
+        krylov_ew: Eisenstat-Walker tolerance, see ``tao_parameters``.
+        tr_norm: the norm of the trust radius, see ``tao_parameters``.
+        gn_expected_terms: the number of quadratic terms of the objective, which the
+            Gauss-Newton operator checks at construction; None skips that check.
 
     Returns:
         Recorder
@@ -815,7 +981,10 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     recorder.attach()
 
     params = tao_parameters(variant, max_it, initial_radius, extra_options,
-                            gradient_rtol=gradient_rtol)
+                            gradient_rtol=gradient_rtol, krylov_rtol=krylov_rtol,
+                            krylov_ew=krylov_ew, tr_norm=tr_norm)
+    check_newton_options(params, variant, hessian=hessian, krylov_ew=krylov_ew,
+                         bnk_shift=bnk_shift)
     minimisation_problem = MinimizationProblem(problem.reduced_functional, bounds=problem.bounds)
 
     # The ``riesz`` variants precondition the Newton-Krylov solve with the control
@@ -835,6 +1004,25 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
     shifted_mat = shifted_context = None
     if bnk_shift == "metric":
         shifted_mat, shifted_context = build_shifted_hessian(tao, pmat_context)
+    # The Gauss-Newton matrix replaces pyadjoint's as the Hessian of TAO. The Krylov
+    # recorder then taps its ``mult``, so the curvature record of a negative-curvature
+    # stop is that of the product that the solve used, in either mode.
+    gn_mat = gn_context = None
+    if hessian != "full":
+        gn_mat, gn_context = build_gauss_newton_hessian(
+            tao, problem, recorder=recorder, choice=hessian, switch_it=gn_switch_it,
+            switch_gtol=gn_switch_gtol, expected_count=gn_expected_terms)
+        hessian_context = gn_context
+
+    def hessian_mode():
+        """The product of the next Krylov solve: ``"gn"`` or ``"full"``.
+
+        None for the quasi-Newton-Krylov types, whose Krylov operator is the LMVM
+        matrix and no Hessian product at all.
+        """
+        if gn_context is not None:
+            return gn_context.mode
+        return "full" if tao.getType() in ("bnls", "bntr", "bntl") else None
 
     j0_refs = None
     if riesz_initial_hessian and tao.getType() in ("bqnktr", "bqnkls", "bqnktl", "bqnls"):
@@ -847,7 +1035,8 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
                                 comm=problem.Tic.function_space().mesh().comm,
                                 wall_nodes=problem.wall_nodes,
                                 hessian_context=hessian_context,
-                                shifted_hessian=shifted_context)
+                                shifted_hessian=shifted_context,
+                                hessian_mode=hessian_mode)
         krylov.attach()
     diagnostic_errors = []
 
@@ -897,6 +1086,10 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
                     abs(norms["fischer_burmeister"] - gnorm) / abs(gnorm))
         except Exception as error:  # noqa: BLE001 -- see the docstring
             diagnostic_errors.append(f"iteration diagnostics: {type(error).__name__}: {error}")
+        # The product that the solves of the next iteration will use. The solves of
+        # this row carry their own ``hessian_product``, which is the record of what
+        # each solve used.
+        extra["hessian_product"] = hessian_mode()
         if krylov is not None:
             extra["krylov_solves"] = krylov.pop_solves()
         return extra
@@ -941,6 +1134,13 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
         recorder.final_diagnostics["tao_view"] = tao_view_text(tao, view_path)
     except Exception as error:  # noqa: BLE001 -- the view must never fail a run
         diagnostic_errors.append(f"tao_view: {type(error).__name__}: {error}")
+    if gn_context is not None:
+        recorder.final_diagnostics.update(gn_context.record())
+        worst = recorder.final_diagnostics["gn_linear_defect_max"]
+        if worst is not None and worst > LINEAR_DEFECT_TOLERANCE:
+            diagnostic_errors.append(
+                f"Gauss-Newton: sum_k w_k f_k differs from J by {worst:.3e} (relative) "
+                f"at a Hessian update, above {LINEAR_DEFECT_TOLERANCE:g}")
     recorder.final_diagnostics["recording_errors"] = (
         diagnostic_errors + (krylov.errors if krylov is not None else []))
     if krylov is not None and krylov.solves:
@@ -949,7 +1149,7 @@ def run_tao(problem, variant, max_it=20, initial_radius=1e-2, extra_options=None
         recorder.final_diagnostics["krylov_solves_unassigned"] = krylov.pop_solves()
     # Both references were only kept alive for the solve; a petsc4py TAO cannot hold
     # Python attributes, so the Python side has to own them until here.
-    del j0_refs, pmat, pmat_context, shifted_mat, shifted_context
+    del j0_refs, pmat, pmat_context, shifted_mat, shifted_context, gn_mat, gn_context
     return recorder
 
 

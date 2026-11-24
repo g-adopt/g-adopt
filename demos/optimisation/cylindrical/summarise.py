@@ -34,6 +34,18 @@ truth is not the measure. The measure is the work to reach a value of J:
 The same rule reads P-ROL-A against P-ROL-L2, the effect of the inner product alone.
 ``initial_misfit`` is printed beside it as supporting information only.
 
+With ``--gn`` the challenger is P-GN, the Gauss-Newton run (NOTES/team/gauss-newton/
+PLAN.md section 5.4): the same rule with P-GN in place of P-Newton, prices pooled
+over P-ROL-L2 and P-GN, and a Gauss-Newton product priced at the pooled median of
+the Gauss-Newton product times over the pooled forward median. Work of a row:
+``forward + p_G adjoint + p_full hessian + p_gn gn_hessian``. Beside the rule, in
+this mode: each run priced with its own per-call ratios; the prices of
+``--prices-json`` (the prices of cylindrical-newton/RESULT.md) for the forward,
+gradient and full-product costs, with the Gauss-Newton price measured in P-GN; and,
+with ``--newton``, the same rule with P-Newton as the reference (the Gauss-Newton
+effect alone). When the initial radius of P-GN differs from that of P-Newton, that
+last reading changes the product and the radius together, and the output says so.
+
 A second reading follows the rule, as a sensitivity check and not as the rule: every
 run priced with its own per-call ratios. The pooled product price divides a median
 taken from the Newton record alone by a forward median pooled over three nodes, so load
@@ -59,23 +71,39 @@ def pooled_prices(records):
 
     Returns:
         ``(gradient_price, hessian_price, medians)``. The Hessian price is None when
-        no record holds a product.
+        no record holds a product. ``medians`` also holds the pooled median of the
+        Gauss-Newton product times under ``gn_hessian`` (None when no record holds
+        one); ``gn_price`` gives its price.
     """
     forward = [t for r in records for t in r.get("forward_times", [])]
     gradient = [t for r in records for t in r.get("gradient_times", [])]
     hessian = [t for r in records for t in r.get("hessian_times", [])]
+    gn = [t for r in records for t in r.get("gn_hessian_times", []) or []]
     f, g = median(forward), median(gradient)
     h = median(hessian) if hessian else None
-    return g / f, (h / f if h else None), {"forward": f, "gradient": g, "hessian": h}
+    return g / f, (h / f if h else None), {"forward": f, "gradient": g, "hessian": h,
+                                           "gn_hessian": median(gn) if gn else None}
 
 
-def priced_rows(record, gradient_price, hessian_price):
-    """The iteration rows of a record with the re-priced work under ``work_priced``."""
+def gn_price(medians):
+    """The forward-equivalent price of a Gauss-Newton product from pooled medians, or None."""
+    return medians["gn_hessian"] / medians["forward"] if medians.get("gn_hessian") else None
+
+
+def priced_rows(record, gradient_price, hessian_price, gn_hessian_price=None):
+    """The iteration rows of a record with the re-priced work under ``work_priced``.
+
+    ``forward + p_G adjoint + p_full hessian + p_gn gn_hessian``; a count that is
+    zero or absent adds nothing, so a record without Gauss-Newton products is priced
+    as before the Gauss-Newton term existed.
+    """
     rows = []
     for row in record["iterations"]:
         work = row["forward"] + gradient_price * row["adjoint"]
         if row.get("hessian"):
             work += hessian_price * row["hessian"]
+        if row.get("gn_hessian"):
+            work += gn_hessian_price * row["gn_hessian"]
         rows.append(dict(row, work_priced=work))
     return rows
 
@@ -159,10 +187,124 @@ def apply_rule(records, rows, levels):
     return out
 
 
+def gn_rule(records, rows, levels, reference, label):
+    """W* over the two runs and the rule for P-GN against one reference.
+
+    Args:
+        records: the records by name; must hold ``P-GN`` and ``reference``.
+        rows: the priced rows by name.
+        levels: the candidate levels of W*.
+        reference: the name of the reference run.
+        label: the heading of the reading.
+
+    Returns:
+        dict with ``W_star`` and the result of ``compare``.
+    """
+    pair = {name: rows[name] for name in ("P-GN", reference)}
+    reached = min(r[-1]["work_priced"] for r in pair.values())
+    candidates = [level for level in sorted(levels) if level <= reached]
+    if not candidates:
+        raise SystemExit(f"no run reached work {min(levels):g} "
+                         f"(smallest final work {reached:.1f})")
+    w_star = candidates[-1]
+    print(f"W* = {w_star:.0f} (smallest final work of {reference} and P-GN {reached:.1f})")
+    result = compare(label, rows["P-GN"], rows[reference], w_star, newton=False)
+    if result["verdict"].startswith("undecided"):
+        result["verdict"] = ("undecided (a second P-GN run at the other radius, 0.79 or "
+                             "50.6, decides)")
+        print(f"  -> {result['verdict']}")
+    return {"W_star": w_star, "P-GN": result}
+
+
+def price_pair(records, names):
+    """Pooled prices over the named records: gradient, full product, GN product."""
+    gp, hp, medians = pooled_prices([records[n] for n in names])
+    return gp, hp, gn_price(medians), medians
+
+
+def main_gn(args):
+    """The rule with P-GN as the challenger, and its readings."""
+    paths = {"P-ROL-L2": args.reference, "P-GN": args.gn}
+    if args.newton:
+        paths["P-Newton"] = args.newton
+    records = {name: load(path) for name, path in paths.items()}
+    out = {}
+
+    # The rule: prices pooled over the two records compared.
+    gp, hp, gnp, medians = price_pair(records, ("P-ROL-L2", "P-GN"))
+    print(f"pooled medians over P-ROL-L2 and P-GN: forward {medians['forward']:.1f} s, "
+          f"gradient {medians['gradient']:.1f} s, GN product "
+          f"{medians['gn_hessian'] or float('nan'):.1f} s; prices: gradient {gp:.3f}, "
+          f"GN product {gnp or float('nan'):.3f}")
+    rows = {n: priced_rows(r, gp, hp or 0.0, gnp) for n, r in records.items()}
+    out["prices"] = {"gradient": gp, "hessian": hp, "gn_hessian": gnp}
+    out["pooled"] = gn_rule(records, rows, args.levels, "P-ROL-L2",
+                            "P-GN (Gauss-Newton) against P-ROL-L2")
+
+    # Reading: each run with its own per-call ratios.
+    print("\n--- sensitivity: each run priced with its own per-call ratios ---")
+    own_rows = {}
+    for name, record in records.items():
+        own_gp, own_hp, own_medians = pooled_prices([record])
+        own_gnp = gn_price(own_medians)
+        own_rows[name] = priced_rows(record, own_gp, own_hp if own_hp else (hp or 0.0),
+                                     own_gnp if own_gnp else gnp)
+        print(f"{name}: gradient {own_gp:.3f}, product "
+              f"{(own_hp if own_hp else float('nan')):.3f}, GN product "
+              f"{(own_gnp if own_gnp else float('nan')):.3f}")
+    out["own"] = gn_rule(records, own_rows, args.levels, "P-ROL-L2",
+                         "P-GN against P-ROL-L2, own ratios")
+
+    # Reading: the prices of cylindrical-newton/RESULT.md, with the GN price of P-GN.
+    if args.prices_json:
+        fixed = load(args.prices_json)
+        _, _, gn_medians = pooled_prices([records["P-GN"]])
+        p_gn = gn_price(gn_medians)
+        print(f"\n--- prices of {args.prices_json}: gradient {fixed['gradient']:.3f}, "
+              f"product {fixed.get('hessian') or float('nan'):.3f}; GN product measured "
+              f"in P-GN {p_gn or float('nan'):.3f} ---")
+        fixed_rows = {n: priced_rows(r, fixed["gradient"], fixed.get("hessian") or 0.0,
+                                     p_gn) for n, r in records.items()}
+        out["fixed_prices"] = gn_rule(records, fixed_rows, args.levels, "P-ROL-L2",
+                                      "P-GN against P-ROL-L2, RESULT.md prices")
+
+    # Reading: P-Newton as the reference, the Gauss-Newton effect alone.
+    if "P-Newton" in records:
+        gp_n, hp_n, gnp_n, _ = price_pair(records, ("P-Newton", "P-GN"))
+        newton_rows = {n: priced_rows(r, gp_n, hp_n or 0.0, gnp_n)
+                       for n, r in records.items()}
+        print("\n--- P-GN against P-Newton (prices pooled over the two) ---")
+        r_gn = records["P-GN"].get("initial_radius")
+        r_n = records["P-Newton"].get("initial_radius")
+        if r_gn is None or r_n is None or abs(r_gn - r_n) > 1e-12 * max(abs(r_n or 1), 1):
+            print(f"NOTE: P-GN starts at radius {r_gn} and P-Newton at {r_n}: this "
+                  "reading changes the product and the radius together, so it is not "
+                  "the Gauss-Newton effect alone.")
+        out["against_newton"] = gn_rule(records, newton_rows, args.levels, "P-Newton",
+                                        "P-GN against P-Newton")
+
+    for key in ("own", "fixed_prices", "against_newton"):
+        if key in out and out[key]["P-GN"]["verdict"] != out["pooled"]["P-GN"]["verdict"]:
+            print(f"\nNOTE: the verdict for P-GN differs between the rule "
+                  f"({out['pooled']['P-GN']['verdict']}) and the reading {key} "
+                  f"({out[key]['P-GN']['verdict']}).")
+    if args.json:
+        with open(args.json, "w") as f:
+            json.dump(out, f, indent=1)
+    return out
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--reference", required=True, help="P-ROL-L2 record")
-    parser.add_argument("--newton", required=True, help="P-Newton zero-shift record")
+    parser.add_argument("--newton", default=None,
+                        help="P-Newton zero-shift record; required without --gn")
+    parser.add_argument("--gn", default=None,
+                        help="P-GN record: the Gauss-Newton run as the challenger")
+    parser.add_argument("--prices-json", default=None,
+                        help="with --gn: fixed prices {\"gradient\": .., \"hessian\": ..} "
+                             "(those of cylindrical-newton/RESULT.md) for a reading "
+                             "beside the rule")
     parser.add_argument("--rol-metric", default=None,
                         help="P-ROL-A record; deferred in the budget-400 run set")
     parser.add_argument("--extra", nargs="*", default=[],
@@ -172,6 +314,10 @@ def main(argv=None):
                         help="candidate levels of W*; the rule uses 50 100 150 200, "
                              "other values are for testing the script on short runs")
     args = parser.parse_args(argv)
+    if args.gn:
+        return main_gn(args)
+    if args.newton is None:
+        parser.error("--newton is required without --gn")
 
     paths = {"P-ROL-L2": args.reference, "P-Newton": args.newton}
     if args.rol_metric:
