@@ -33,6 +33,8 @@ The run outputs are not in git.
 | `fetch.sh` | Copies the records of one step from Setonix to reunion. Runs on reunion. |
 | `compare_records.py` | Compares two JSON records row by row. |
 | `check_gauss_newton.py` | Checks G1 to G13 of the Gauss-Newton product on the tiny case, G11 on the 64-cell state (`--g11`), and the product prices of the box rule (`--timing`). |
+| `summarise_gn.py` | The decision rule of the Gauss-Newton box runs (tests A, B, C, the floor guard and the side readings). |
+| `test_summarise_gn.py` | Tests of `summarise_gn.py` on synthetic records. Pure Python, not part of CI. |
 
 ## Locations
 
