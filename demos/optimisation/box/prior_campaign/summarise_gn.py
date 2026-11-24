@@ -42,20 +42,25 @@ of Y. If 400 or 600 is not valid, the largest valid level below it from 150, 200
 300, 400 replaces it, and the output says so. If no level is valid, that part of the
 test is not evaluable.
 
-Runs that end early. A run whose record holds a non-empty ``stop_reason`` is
-complete: TAO or ROL stopped it (convergence, a failed line search, the iteration
-limit or the work budget), and the inverse driver wrote its final record. A run
-without one was cut by the wall limit or by a crash; its record is the dump after
-its last iteration. The rule treats the two cases differently:
+Runs that end early. A run converged when its ``stop_reason`` is a convergence: a
+positive TAO converged reason ("TAO converged reason N", N > 0, which includes the
+relative gradient test ``tao_gttol``), or ROL's relative gradient test ("gradient
+fell to ..."). Only a converged run would have kept its J beyond its final work. A
+run that stopped for any other reason did not converge: the work budget (counted in
+the run's own prices, so it can end below a level of the rule's prices), the
+iteration limit (TAO reason -2), ROL's own status test, a failed line search or
+another negative TAO reason, and a run with no stop reason at all, which the wall
+limit or a crash cut short. The rule treats the two kinds differently:
 
-- a complete reference that ends below a level keeps its last J at that level (it
-  would not have changed), and the output gives its final work and stop reason;
-- a cut reference that ends below a level has no value there. The part that needs
-  that value is not evaluable, and the floor guard does not replace the level. For
-  N*, one cut Newton run is enough, because its J could have fallen below the other;
-- a complete arm that never reaches the value has ``S = 0``;
-- a cut arm that ends at work ``W_end`` without reaching the value has
-  ``S <= W* / W_end``. When that bound is below the threshold the part fails;
+- a converged reference that ends below a level keeps its last J at that level, and
+  the output gives its final work and stop reason;
+- a reference that did not converge and ends below a level has no value there. The
+  part that needs that value is not evaluable, and the floor guard does not replace
+  the level. For N*, one such Newton run is enough, because its J could have fallen
+  below the other;
+- a converged arm that never reaches the value has ``S = 0``;
+- an arm that did not converge and ends at work ``W_end`` without reaching the value
+  has ``S <= W* / W_end``. When that bound is below the threshold the part fails;
   otherwise it is not evaluable.
 
 A test with a failed part fails. A test with a part that is not evaluable and no
@@ -87,6 +92,7 @@ Eisenstat-Walker rule did not act).
 import argparse
 import json
 import os
+import re
 import sys
 from collections import Counter
 from statistics import median
@@ -225,6 +231,28 @@ NE_VERDICT = ("NE", "not evaluable",
               "test needs, or the floor guard left no valid level); a person decides")
 
 
+def stopped_by_convergence(stop_reason):
+    """Whether a stop reason is a convergence (see the module docstring).
+
+    ``run_tao`` writes "TAO converged reason N" with TAO's reason code, positive for
+    a convergence test (gradient, relative gradient, step, function value) and
+    negative for a stop without convergence. ``run_rol`` writes "gradient fell to ..."
+    for its relative gradient test, and "work budget ..." or "ROL status test"
+    otherwise.
+
+    Args:
+        stop_reason: the ``stop_reason`` of a record.
+
+    Returns:
+        bool
+    """
+    reason = stop_reason or ""
+    if reason.startswith("gradient fell to"):
+        return True
+    match = re.fullmatch(r"TAO converged reason (-?\d+)", reason.strip())
+    return bool(match) and int(match.group(1)) > 0
+
+
 class Run:
     """The priced rows of one run and how the run ended.
 
@@ -236,21 +264,26 @@ class Run:
 
     Attributes:
         end_work: the rule work of the last row.
-        complete: whether the run ended by itself.
+        converged: whether the run stopped by a convergence test.
     """
 
     def __init__(self, name, rows, stop_reason):
         self.name = name
         self.rows = rows
         self.stop_reason = stop_reason or ""
-        self.complete = bool(self.stop_reason)
+        self.converged = stopped_by_convergence(self.stop_reason)
         self.end_work = rows[-1]["work_rule"]
+
+    def how(self):
+        """How the run ended, in words."""
+        if not self.stop_reason:
+            return "no stop reason: cut by a wall limit or a crash"
+        kind = "converged" if self.converged else "did not converge"
+        return f"stop reason '{self.stop_reason}' ({kind})"
 
     def describe(self):
         """One line: final work and how the run ended."""
-        how = (f"stop reason '{self.stop_reason}'" if self.complete
-               else "no stop reason: cut by a wall limit or a crash")
-        return f"{self.name}: final rule work {self.end_work:.1f}, {how}"
+        return f"{self.name}: final rule work {self.end_work:.1f}, {self.how()}"
 
 
 class Reference:
@@ -267,17 +300,17 @@ class Reference:
         self.runs = runs
 
     def value(self, level):
-        """``(J_Y(W), notes)``; J is None when a cut run ends below the level."""
+        """``(J_Y(W), notes)``; J is None when a run that did not converge ends below
+        the level."""
         values, notes = [], []
         for run in self.runs:
             if run.end_work < level:
-                if not run.complete:
-                    return None, [f"{run.name} was cut at rule work {run.end_work:.1f}, "
-                                  f"before {level:g}: J of {self.name} at {level:g} is "
-                                  f"unknown"]
-                notes.append(f"{run.name} stopped by itself at rule work "
-                             f"{run.end_work:.1f} ('{run.stop_reason}'); its last J is "
-                             f"its J at {level:g}")
+                if not run.converged:
+                    return None, [f"{run.name} ended at rule work {run.end_work:.1f}, "
+                                  f"before {level:g}, with {run.how()}: J of "
+                                  f"{self.name} at {level:g} is unknown"]
+                notes.append(f"{run.name} converged at rule work {run.end_work:.1f} "
+                             f"('{run.stop_reason}'); its last J is its J at {level:g}")
             values.append(value_at(run.rows, level)[0])
         values = [v for v in values if v is not None]
         return (min(values) if values else None), notes
@@ -300,7 +333,8 @@ def effective_level(reference, level, j_min):
     j, notes = reference.value(level)
     if j is None:
         return None, notes + ["this part is not evaluable; the floor guard does not "
-                              "replace a level that a cut run did not reach"]
+                              "replace a level that a run ended before without "
+                              "converging"]
 
     def valid(w):
         value = reference.J(w)
@@ -339,22 +373,24 @@ def evaluate_part(run, reference, level, threshold, j_min):
         part["S"] = used / crossing[1]
         part["W_interval"] = crossing
         part["status"] = PASS if part["S"] >= threshold else FAIL
-    elif run.complete:
+    elif run.converged:
         part["S"] = 0.0
         part["status"] = FAIL
     else:
-        # Cut without reaching the value: any later crossing is beyond end_work.
+        # Ended without converging and without reaching the value: any crossing that
+        # a longer run would have made is beyond end_work.
         bound = used / run.end_work
         part["S_bound"] = bound
         if bound < threshold:
             part["status"] = FAIL
-            notes.append(f"{run.name} was cut at rule work {run.end_work:.1f} without "
-                         f"reaching {target:.6e}; S <= {bound:.3f} < {threshold:g}, so "
-                         f"this part fails")
+            notes.append(f"{run.name} ended at rule work {run.end_work:.1f} "
+                         f"({run.how()}) without reaching {target:.6e}; S <= "
+                         f"{bound:.3f} < {threshold:g}, so this part fails")
         else:
-            notes.append(f"{run.name} was cut at rule work {run.end_work:.1f} without "
-                         f"reaching {target:.6e}; S could still reach {threshold:g} "
-                         f"(bound {bound:.3f}), so this part is not evaluable")
+            notes.append(f"{run.name} ended at rule work {run.end_work:.1f} "
+                         f"({run.how()}) without reaching {target:.6e}; S could still "
+                         f"reach {threshold:g} (bound {bound:.3f}), so this part is not "
+                         f"evaluable")
     return part, notes
 
 
@@ -424,7 +460,7 @@ def apply_rule(records, p_full, r_gn, own=False):
         raise RuleError("no Gauss-Newton arm given")
     out = {"J_min": j_min, "arms": {}, "newton_test_A": {},
            "ends": {name: {"end_work": run.end_work, "stop_reason": run.stop_reason,
-                           "complete": run.complete} for name, run in runs.items()},
+                           "converged": run.converged} for name, run in runs.items()},
            "end_lines": [run.describe() for run in runs.values()]}
     for name in arms:
         out["arms"][name] = evaluate_arm(runs[name], references, j_min)
@@ -523,7 +559,14 @@ def check_records(records):
         for key in SHARED_WEIGHTS:
             mine = (record.get("weights") or {}).get(key)
             theirs = (reference.get("weights") or {}).get(key)
-            if mine != theirs:
+            if key in ("c_d", "c_s") and mine is not None and theirs is not None:
+                # Each process assembles c_d and c_s from the data, so two nodes can
+                # differ in the last bits; alpha_d and alpha_s are command-line
+                # values and must be equal.
+                same = abs(mine - theirs) <= 1e-12 * max(abs(mine), abs(theirs))
+            else:
+                same = mine == theirs
+            if not same:
                 raise RuleError(f"{name} has weight {key} = {mine!r}, T-ROL has {theirs!r}")
         if record.get("krylov_ew"):
             all_solves = solves(record)

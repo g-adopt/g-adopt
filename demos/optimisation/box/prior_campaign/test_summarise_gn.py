@@ -21,7 +21,7 @@ The three references are the same in most tests:
 
 Every record carries the metadata that ``check_records`` reads (the flags of its run
 name and the shared window, reference state, budget and weights) and a stop reason,
-so that it is a complete run unless a test removes the stop reason.
+so that it is a converged run unless a test changes the stop reason.
 """
 
 import json
@@ -387,9 +387,9 @@ def upto(points, work):
 
 
 def test_both_newton_runs_cut_at_400():
-    # The reviewer's case: both Newton records end at work 400 with no stop reason.
-    # Read as complete, C would test J_N*(400) = 0.19 instead of J_N*(600) and turn
-    # V1b into V1. Cut, J_N*(600) is unknown: test C is not evaluable, and so is the
+    # Both Newton records end at work 400 with no stop reason. Read as if they kept
+    # their last J, C would test J_N*(400) = 0.19 instead of J_N*(600) and turn V1b
+    # into V1. Cut, J_N*(600) is unknown: test C is not evaluable, and so is the
     # verdict.
     records = records_with(ARMS["V1b"], tn=upto(TN, 400), tnr=upto(TNR, 400),
                            cut=("T-N", "T-N-R"))
@@ -401,11 +401,48 @@ def test_both_newton_runs_cut_at_400():
     assert arm["C"]["parts"][0]["level_used"] is None
     assert result["verdict"]["code"] == "NE"
     assert "test C" in result["verdict"]["label"]
-    assert any("cut at rule work 400.0" in note for note in arm["notes"])
+    assert any("ended at rule work 400.0" in note and "no stop reason" in note
+               for note in arm["notes"])
     lines, _ = sg.summarise(records, UNIT_TIMING)
     text = "\n".join(lines)
     assert "VERDICT (rule): NE" in text
     assert "T-N: final rule work 400.0, no stop reason" in text
+
+
+@pytest.mark.parametrize("reason", ["work budget of 800 forward-equivalents spent",
+                                    "TAO converged reason -2", "ROL status test",
+                                    "TAO converged reason -6"])
+def test_newton_runs_stopped_without_converging_at_500(reason):
+    # Both Newton records end at rule work 500 with a stop reason that is not a
+    # convergence (the budget, counted in the run's own prices; the iteration
+    # limit; ROL's status test; a failed line search). Their J would have kept
+    # falling, so J_N*(600) is unknown and test C is not evaluable. Read as if they
+    # kept their last J, the floor guard would replace 600 by 400 and give V1.
+    records = records_with(ARMS["V1b"], tn=upto(TN, 500), tnr=upto(TNR, 500))
+    for name in ("T-N", "T-N-R"):
+        records[name]["stop_reason"] = reason
+    result = sg.apply_rule(records, 1.0, 1.0)
+    arm = result["arms"]["T-GN-R"]
+    assert arm["C"]["status"] == sg.NOT_EVALUABLE
+    assert result["verdict"]["code"] == "NE"
+    assert any("did not converge" in note for note in arm["notes"])
+
+
+def test_convergence_reasons():
+    assert sg.stopped_by_convergence("TAO converged reason 5")
+    assert sg.stopped_by_convergence("gradient fell to 9.9e-07 of its starting value")
+    for reason in ("", "TAO converged reason -2", "TAO converged reason -6",
+                   "work budget of 800 forward-equivalents spent", "ROL status test"):
+        assert not sg.stopped_by_convergence(reason)
+
+
+def test_c_d_differing_in_the_last_bits_is_accepted():
+    records = records_with(ARMS["V1"])
+    records["T-N"]["weights"]["c_d"] *= 1.0 + 4e-16
+    sg.check_records(records)
+    records["T-N"]["weights"]["c_d"] *= 1.0 + 1e-9
+    with pytest.raises(sg.RuleError, match="weight c_d"):
+        sg.check_records(records)
 
 
 def test_one_cut_newton_run_is_enough():
@@ -414,15 +451,15 @@ def test_one_cut_newton_run_is_enough():
     assert arm["C"]["status"] == sg.NOT_EVALUABLE
 
 
-def test_complete_newton_runs_ending_at_400_keep_their_last_j():
-    # Both Newton runs stopped by themselves at work 400: their last J holds at 600,
-    # J_N*(600) = 0.19, and the output says so.
+def test_converged_newton_runs_ending_at_400_keep_their_last_j():
+    # Both Newton runs converged at work 400 (TAO reason 3): their last J holds at
+    # 600, J_N*(600) = 0.19, and the output says so.
     records = records_with(ARMS["V1b"], tn=upto(TN, 400), tnr=upto(TNR, 400))
     result = sg.apply_rule(records, 1.0, 1.0)
     arm = result["arms"]["T-GN-R"]
     assert arm["C"]["parts"][0]["J_ref"] == 0.19
     assert result["verdict"]["code"] == "V1"
-    assert any("stopped by itself" in note for note in arm["notes"])
+    assert any("converged at rule work 400.0" in note for note in arm["notes"])
 
 
 def test_cut_rol_with_a_failed_part_decides_the_test():
@@ -462,7 +499,7 @@ def test_cut_arm_that_cannot_pass_fails():
     assert part["S_bound"] == pytest.approx(400.0 / 300.0)
 
 
-def test_complete_arm_that_never_reaches_has_s_zero():
+def test_converged_arm_that_never_reaches_has_s_zero():
     records = records_with(upto(ARMS["V1"], 250))
     part = sg.apply_rule(records, 1.0, 1.0)["arms"]["T-GN-R"]["C"]["parts"][0]
     assert part["S"] == 0.0
