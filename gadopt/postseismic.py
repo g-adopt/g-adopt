@@ -8,7 +8,10 @@ nondimensionalisation explicit.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
+from numpy.polynomial.legendre import leggauss
 
 from firedrake import Function, FunctionSpace, SpatialCoordinate, assemble, dx, exp, pi
 
@@ -119,6 +122,137 @@ def spherical_point_ecef(
     )
 
 
+def build_rectangular_fault_patches(
+    *,
+    centre_latitude_deg: float,
+    centre_longitude_deg: float,
+    strike_deg: float,
+    dip_deg: float,
+    vertical_extent_m: float,
+    sections: Sequence[tuple[float, float, float]],
+    shear_modulus_Pa: float,
+    target_moment_Nm: float | None,
+    strike_spacing_m: float = 12_000.0,
+    down_dip_order: int = 5,
+    radius_m: float = 6_371_000.0,
+) -> list[dict]:
+    """Build moment-tensor patches for a surface-breaking rectangular fault.
+
+    Args:
+      centre_latitude_deg:
+        Latitude in degrees of the surface projection of the fault centre.
+        Uses geographic latitude as the angle on the model sphere.
+      centre_longitude_deg:
+        Longitude in degrees east of the same point.
+      strike_deg:
+        Strike measured clockwise from north, in degrees.
+      dip_deg:
+        Dip measured down from horizontal, in degrees.
+      vertical_extent_m:
+        Vertical distance in metres from the surface to the bottom of the fault.
+      sections:
+        Tuples of length in metres, slip in metres and rake in degrees,
+        ordered along strike. Each section spans the full down-dip width.
+      shear_modulus_Pa:
+        Uniform shear modulus in pascals used to compute moment from slip.
+      target_moment_Nm:
+        Target scalar moment sum in N m. Use None for the moments derived
+        from slip, area and shear modulus. A target scales all moments uniformly.
+      strike_spacing_m:
+        Length scale in metres used to choose the number of Gauss points
+        along strike. The number is rounded up from section length over this scale.
+      down_dip_order:
+        Number of Gauss points down dip per section.
+      radius_m:
+        Radius of the model sphere in metres.
+
+    Returns:
+        Patch records ordered by section, then along strike, then down dip.
+        Each record gives angular location in degrees, depth in kilometres,
+        Earth-centred Cartesian position in metres, and scalar moment and
+        Cartesian moment tensor in N m.
+
+    Raises:
+        ValueError: If the geometry, material, quadrature or scalar moment is invalid.
+    """
+    if not 0 < dip_deg <= 90 or not 0 < vertical_extent_m < radius_m:
+        raise ValueError('Require a downward dip and a positive fault extent within the sphere')
+    if shear_modulus_Pa <= 0:
+        raise ValueError('shear_modulus_Pa must be positive')
+    if strike_spacing_m <= 0:
+        raise ValueError('strike_spacing_m must be positive')
+    if down_dip_order < 1:
+        raise ValueError('down_dip_order must be at least 1')
+    if not sections or any(length_m <= 0 or slip_m < 0 for length_m, slip_m, _ in sections):
+        raise ValueError('Provide sections with positive lengths and nonnegative slip')
+
+    strike, dip = np.deg2rad(strike_deg), np.deg2rad(dip_deg)
+    width_m = vertical_extent_m / np.sin(dip)
+    slip_moment_Nm = sum(
+        length_m * slip_m * width_m * shear_modulus_Pa
+        for length_m, slip_m, _ in sections
+    )
+    if not np.isfinite(slip_moment_Nm) or slip_moment_Nm <= 0:
+        raise ValueError('The prescribed slips must give a finite positive scalar moment')
+    if target_moment_Nm is not None and (not np.isfinite(target_moment_Nm) or target_moment_Nm <= 0):
+        raise ValueError('The target moment must be finite and positive')
+
+    north, east, down = ned_basis(centre_latitude_deg, centre_longitude_deg).T
+    up = -down
+    along_strike = north * np.cos(strike) + east * np.sin(strike)
+    across_strike = -north * np.sin(strike) + east * np.cos(strike)
+
+    dip_nodes, dip_weights = leggauss(down_dip_order)
+    down_dip_distances_m = 0.5 * width_m * (dip_nodes + 1)
+    down_dip_weights_m = 0.5 * width_m * dip_weights
+    section_start_m = -0.5 * sum(length_m for length_m, _, _ in sections)
+
+    patches = []
+    for length_m, slip_m, rake_deg in sections:
+        strike_nodes, strike_weights = leggauss(int(np.ceil(length_m / strike_spacing_m)))
+        strike_distances_m = section_start_m + 0.5 * length_m * (strike_nodes + 1)
+        strike_weights_m = 0.5 * length_m * strike_weights
+        for strike_m, strike_weight_m in zip(strike_distances_m, strike_weights_m):
+            for down_dip_m, dip_weight_m in zip(down_dip_distances_m, down_dip_weights_m):
+                # Map the horizontal offset along a great circle from the centre.
+                horizontal = (
+                    strike_m * along_strike
+                    + (down_dip_m - 0.5 * width_m) * np.cos(dip) * across_strike
+                )
+                distance_m = float(np.linalg.norm(horizontal))
+                direction = up
+                if distance_m > 0:
+                    angle = distance_m / radius_m
+                    direction = up * np.cos(angle) + horizontal / distance_m * np.sin(angle)
+                latitude_deg = float(np.rad2deg(np.arcsin(direction[2])))
+                longitude_deg = float(np.rad2deg(np.arctan2(direction[1], direction[0])))
+                depth_km = float(down_dip_m * np.sin(dip) / 1000)
+
+                # Each pair of quadrature weights represents a patch area.
+                moment_Nm = shear_modulus_Pa * slip_m * strike_weight_m * dip_weight_m
+                if target_moment_Nm is not None:
+                    moment_Nm = moment_Nm * target_moment_Nm / slip_moment_Nm
+                tensor = moment_tensor_ecef(
+                    moment_Nm, strike_deg, dip_deg, rake_deg, latitude_deg, longitude_deg,
+                )
+                position = spherical_point_ecef(latitude_deg, longitude_deg, radius_m - depth_km * 1000)
+                patches.append(dict(
+                    latitude_deg=latitude_deg,
+                    longitude_deg=longitude_deg,
+                    depth_km=depth_km,
+                    scalar_moment_Nm=float(moment_Nm),
+                    moment_ecef_Nm=tensor.tolist(),
+                    position_ecef_m=position.tolist(),
+                ))
+        section_start_m += length_m
+
+    expected_moment = slip_moment_Nm if target_moment_Nm is None else target_moment_Nm
+    scalar_sum_Nm = sum(patch['scalar_moment_Nm'] for patch in patches)
+    if abs(scalar_sum_Nm / expected_moment - 1) >= 1e-12:
+        raise ValueError('The patch moments do not sum to the expected scalar moment')
+    return patches
+
+
 def normalised_gaussian_delta(
     mesh,
     source_coordinates,
@@ -203,4 +337,3 @@ def ecef_vectors_to_enu(
         ),
         axis=-1,
     )
-
