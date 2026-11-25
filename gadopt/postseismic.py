@@ -12,8 +12,9 @@ from collections.abc import Sequence
 
 import numpy as np
 from numpy.polynomial.legendre import leggauss
+from numpy.typing import ArrayLike
 
-from firedrake import Function, FunctionSpace, SpatialCoordinate, assemble, dx, exp, pi
+from firedrake import Function, FunctionSpace, SpatialCoordinate, TensorFunctionSpace, assemble, dx, exp, pi
 
 
 def ned_basis(latitude_degrees: float, longitude_degrees: float) -> np.ndarray:
@@ -293,6 +294,61 @@ def normalised_gaussian_delta(
         )
     delta.assign(delta / unnormalised_integral)
     return delta, unnormalised_integral
+
+
+def build_stress_glut(
+    mesh,
+    centres: ArrayLike,
+    moment_tensors: ArrayLike,
+    standard_deviation: float,
+    *,
+    degree: int = 2,
+) -> tuple[Function, list[float]]:
+    """Assemble a fixed stress glut from Gaussian moment-tensor patches.
+
+    Args:
+        mesh: Three-dimensional volume mesh on which to represent the source.
+        centres: Patch positions with shape `(n, 3)` in mesh coordinates.
+        moment_tensors: Patch tensors with shape `(n, 3, 3)` in the mesh's
+            Cartesian basis. Divide dimensional moment tensors by the stress
+            scale times the length scale cubed for a nondimensional mesh.
+        standard_deviation: Common Gaussian width in the same units as the
+            mesh coordinates.
+        degree: Degree of the continuous Lagrange spaces for the Gaussians
+            and stress glut.
+
+    Returns:
+        The stress-glut field and the Gaussian integrals before normalisation,
+        in patch order. Integrating the assembled field over the mesh gives
+        the sum of the supplied tensors.
+
+    Raises:
+        ValueError: If the mesh, patch arrays, or Gaussian width is invalid.
+
+    The accumulation writes into the field's nodal data and is intended for
+    prescribed source tensors.
+    """
+    if mesh.topological_dimension != 3:
+        raise ValueError("The stress glut requires a three-dimensional volume mesh")
+    centres = np.asarray(centres, dtype=float)
+    moment_tensors = np.asarray(moment_tensors, dtype=float)
+    if centres.ndim != 2 or centres.shape[1] != 3 or not len(centres):
+        raise ValueError("centres must have shape (n, 3) with at least one patch")
+    if moment_tensors.shape != (len(centres), 3, 3):
+        raise ValueError("moment_tensors must have shape (n, 3, 3) with one tensor per centre")
+    if not np.isfinite(centres).all() or not np.isfinite(moment_tensors).all():
+        raise ValueError("Patch centres and moment tensors must be finite")
+    if not np.isfinite(standard_deviation) or standard_deviation <= 0:
+        raise ValueError("standard_deviation must be finite and positive")
+
+    glut = Function(TensorFunctionSpace(mesh, "CG", degree), name="stress glut")
+    values = glut.dat.data
+    integrals = []
+    for centre, tensor in zip(centres, moment_tensors, strict=True):
+        delta, integral = normalised_gaussian_delta(mesh, centre, standard_deviation, degree=degree)
+        values[:] += delta.dat.data_ro[:, None, None] * tensor
+        integrals.append(integral)
+    return glut, integrals
 
 
 def ecef_vectors_to_enu(
