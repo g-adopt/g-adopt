@@ -220,15 +220,9 @@ POTENTIAL_SPLIT_ROUTES = {
 
 
 class TestBlock0ChebyshevBounds:
-    """Both block-0 splits take a Lanczos estimate for their Chebyshev interval.
+    """Both block-0 splits take a 20-iteration CG eigenvalue estimate.
 
-    PETSc's default interval for the Chebyshev smoother of GAMG comes from ten
-    GMRES iterations from a random vector. On the potential block a low
-    estimate made the V-cycle indefinite on one rank count, and the column
-    build of `gadopt.LowRankPotentialPC` stopped with
-    `KSP_DIVERGED_INDEFINITE_PC`; on the displacement block of the 624-rank
-    Exp01 run the default estimate doubled the block-0 iteration count
-    (`gadopt.gia_presets.POTENTIAL_GAMG_ESTEIG`, `DISPLACEMENT_GAMG_ESTEIG`).
+    The reasons and measurements are at `gadopt.gia_presets.POTENTIAL_GAMG_ESTEIG`.
     """
 
     @pytest.mark.parametrize("route", list(POTENTIAL_SPLIT_ROUTES),
@@ -307,6 +301,7 @@ class TestBlock0ChebyshevBounds:
             assert smoother.getType() == "chebyshev"
             text = _view_to_string(smoother)
             assert "eigenvalues estimated using cg" in text, text
+            assert "maximum iterations=20" in text, text
             assert f"0. {factor}]" in text, text
         finally:
             for key in all_settings:

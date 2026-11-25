@@ -1716,8 +1716,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         `gia_solve_index`, the displacement parts of the nullspaces and the
         near-nullspace provider of the condensed displacement operator, and
         on the low-rank path `dtn_operator`. Also replaces a CG on the
-        condensed displacement split by a GMRES of the same length when the
-        material makes that operator nonsymmetric.
+        condensed displacement split, and the CG eigenvalue estimate of its
+        GAMG smoothers, by GMRES of the same length when the material makes
+        that operator nonsymmetric.
         """
         self._adjust_options(extras)
         ctx = self.appctx
@@ -1798,7 +1799,8 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         """Rebuild the variational solver after an options change.
 
         The rules that read the options run again first: the `ksponly`
-        refusal and the Krylov method of the condensed displacement split.
+        refusal, and the Krylov method and the smoother eigenvalue estimate of
+        the condensed displacement split.
         """
         self._refuse_ksponly_on_a_nonlinear_residual()
         self._adjust_options(self._solver_parameters_extra)

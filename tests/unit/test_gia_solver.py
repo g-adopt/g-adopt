@@ -1010,7 +1010,7 @@ def test_the_preset_options_and_the_derivative_cap(meshes):
                                                  ("power", "sea_fixed", "gmres")])
 def test_the_chebyshev_estimates_of_block_0_follow_the_symmetry(meshes, model, load,
                                                                 estimate):
-    """The Lanczos estimates reach every solve, and leave a nonsymmetric block.
+    """The CG eigenvalue estimates reach every solve, and leave a nonsymmetric block.
 
     The iterative preset estimates the Chebyshev interval of both block-0
     GAMG smoothers with CG (`gadopt.gia_presets.DISPLACEMENT_GAMG_ESTEIG`,

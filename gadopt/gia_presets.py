@@ -338,44 +338,29 @@ def resolve_dtn_representation(dtn_representation, *, condensed: bool) -> str:
 
 #: The Chebyshev bounds of the GAMG smoothers on the two splits of block 0.
 #:
-#: GAMG smooths every level with a Chebyshev polynomial whose interval comes
-#: from an estimate of the largest eigenvalue of the smoothed operator. PETSc's
-#: default estimate is ten GMRES iterations from a random vector, and the
-#: interval is `[0.1, 1.1]` times that estimate. The random start depends on the
-#: parallel layout, so the quality of the estimate does too, and both ways it
-#: can be wrong cost something:
+#: Each GAMG level is smoothed by a Chebyshev polynomial on `[0.1, f]` times an
+#: estimate of the largest eigenvalue. PETSc's default estimate is 10 Krylov
+#: iterations (CG where the matrix is flagged SPD, as the potential block is;
+#: GMRES otherwise, as for the displacement block) and `f = 1.1`.
 #:
-#: - An estimate below the true largest eigenvalue puts the top of the spectrum
-#:   where the Chebyshev polynomial grows, and the V-cycle is no longer
-#:   positive definite. On the potential block of the 200 km test sphere this
-#:   happens on 4 ranks and not on 8 or 16: the CG solves that build the columns
-#:   of `gadopt.LowRankPotentialPC` stop with `KSP_DIVERGED_INDEFINITE_PC` and
-#:   the solver raises at the first step.
-#: - An estimate far from the true one sets the interval where the smoother
-#:   does not damp the high-frequency error it is there for. On the
-#:   displacement block of GIAMIP Exp01 on 624 ranks the block-0 FGMRES takes
-#:   44-50 iterations with the default estimate and 22-32 with the settings
-#:   below, at the same outer counts and the same states, and a step takes
-#:   about 40 percent less time at 500 yr and at 100 yr
-#:   (`NOTES/design/gamg/REPORT.md`). On the test spheres of up to 1.6 M
-#:   unknowns on 8 and 16 ranks the default estimate is already close to the
-#:   Lanczos one, and the counts change by at most one outer iteration per
-#:   step.
+#: - Potential split: 10 CG iterations underestimated the largest eigenvalue on
+#:   the 200 km test sphere on 4 ranks, the V-cycle became indefinite and the
+#:   column build of `gadopt.LowRankPotentialPC` stopped with
+#:   `KSP_DIVERGED_INDEFINITE_PC`. 20 iterations run on every layout tested;
+#:   `f = 1.2` cost outer iterations on the 140 km test sphere, so `f` stays 1.1.
+#: - Displacement split: on GIAMIP Exp01 at 624 ranks, 20 CG iterations with
+#:   `f = 1.2` take the block-0 FGMRES from 44-50 to 22-32 iterations per solve
+#:   at unchanged outer counts and states, about 40 % less time per step at
+#:   500 yr and 100 yr (`NOTES/design/gamg/REPORT.md`). The Gadi runs changed
+#:   type, length and factor together; on the test spheres CG and GMRES of equal
+#:   length give the same estimate to three digits, so the gain is attributed
+#:   to the length and the factor. A 20-iteration estimate was at most 2 % low
+#:   on the test spheres; it was not compared with a converged one at 624 ranks.
 #:
-#: The settings make the estimate a Lanczos estimate (CG, 20 iterations), which
-#: for a symmetric operator approaches the extreme eigenvalues monotonically
-#: from inside the spectrum. Both are applied once per multigrid setup, so the
-#: cost of an application does not change.
-#:
-#: CG needs a symmetric smoothed operator. The potential block is symmetric
-#: positive definite for every rheology (it holds no material term), so its
-#: settings are fixed here. The displacement block is symmetric for a Newtonian
-#: rheology and not for a power law, so
-#: `SelfGravitatingGIASolver._adjust_options` replaces the CG estimate on the
-#: displacement split by GMRES of the same length when `rheology_nonlinear`
-#: says so. The upper factor is 1.1 on the potential split, as PETSc's default:
-#: 1.2 there takes the 140 km test sphere from 5 to 7 outer iterations per step.
-#: On the displacement split it is 1.2, the factor of the Exp01 measurement.
+#: The estimate runs once per multigrid setup, not per application. CG needs a
+#: symmetric operator: `SelfGravitatingGIASolver._adjust_options` switches the
+#: displacement estimate to GMRES of the same length under a power law, whose
+#: tangent is not symmetric.
 POTENTIAL_GAMG_ESTEIG = {
     "mg_levels_esteig_ksp_type": "cg",
     "mg_levels_esteig_ksp_max_it": 20,
@@ -403,8 +388,8 @@ def _potential_split(dtn_representation: str) -> dict:
     that Krylov solve itself.
 
     On both representations the GAMG smoother takes its Chebyshev interval
-    from a Lanczos estimate (`POTENTIAL_GAMG_ESTEIG`), which keeps the V-cycle
-    positive definite where PETSc's default estimate does not.
+    from a 20-iteration CG estimate (`POTENTIAL_GAMG_ESTEIG`), which keeps the
+    V-cycle positive definite where PETSc's 10-iteration default does not.
 
     Args:
       dtn_representation: `"multiplier"` or `"lowrank"`.
