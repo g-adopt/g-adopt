@@ -1,9 +1,15 @@
 """Utilities for constructing regularised earthquake stress-glut sources.
 
-Moment-tensor formulae commonly use a local north-east-down (NED) coordinate
-system, whereas a spherical G-ADOPT mesh uses Earth-centred Cartesian (ECEF)
-coordinates.  This module keeps that rotation and the source
-nondimensionalisation explicit.
+A finite fault is represented by patches, each with a position and a moment
+tensor. The fault helpers express the local north-east-down (NED) moment
+tensors in Earth-centred, Earth-fixed Cartesian coordinates (ECEF).
+`build_stress_glut` spreads the patches over a volume mesh using Gaussians,
+preserving their summed moment tensor.
+
+For a nondimensional mesh, divide physical positions and the Gaussian width
+by the reference length `L`. Divide the moment tensors, in N m, by
+`stress_scale * L**3`. The returned field is in the stress units used by
+the solver. The caller controls when the source is applied.
 """
 
 from __future__ import annotations
@@ -15,29 +21,7 @@ from numpy.polynomial.legendre import leggauss
 from numpy.typing import ArrayLike
 
 from firedrake import Function, FunctionSpace, SpatialCoordinate, TensorFunctionSpace, assemble, dx, exp, pi
-
-
-def ned_basis(latitude_degrees: float, longitude_degrees: float) -> np.ndarray:
-    """Return the local NED basis as columns of an ECEF rotation matrix."""
-    latitude = np.deg2rad(latitude_degrees)
-    longitude = np.deg2rad(longitude_degrees)
-
-    north = np.array(
-        [
-            -np.sin(latitude) * np.cos(longitude),
-            -np.sin(latitude) * np.sin(longitude),
-            np.cos(latitude),
-        ]
-    )
-    east = np.array([-np.sin(longitude), np.cos(longitude), 0.0])
-    down = -np.array(
-        [
-            np.cos(latitude) * np.cos(longitude),
-            np.cos(latitude) * np.sin(longitude),
-            np.sin(latitude),
-        ]
-    )
-    return np.column_stack((north, east, down))
+from gdrift import ecef_to_ned_matrix, geodetic_to_cartesian
 
 
 def moment_tensor_ned(
@@ -48,9 +32,19 @@ def moment_tensor_ned(
 ) -> np.ndarray:
     """Construct a double-couple moment tensor in north-east-down coordinates.
 
-    Strike is clockwise from north, dip is measured down from horizontal, and
-    rake is measured within the fault plane.  The component formulae follow
-    Bock (2012), NMSOP-2 Information Sheet IS 3.8, equation (5).
+    The component formulae follow Bock (2012), NMSOP-2 Information Sheet
+    IS 3.8, equation (5).
+
+    Args:
+        scalar_moment: Scalar seismic moment, typically in N m.
+        strike_degrees: Strike measured clockwise from north, in degrees.
+        dip_degrees: Dip measured down from horizontal, in degrees.
+        rake_degrees: Slip angle in the fault plane, in degrees, with zero
+            along strike.
+
+    Returns:
+        A symmetric 3-by-3 moment tensor with rows and columns ordered north,
+        east and down. Its components have the units of `scalar_moment`.
     """
     strike = np.deg2rad(strike_degrees)
     dip = np.deg2rad(dip_degrees)
@@ -95,32 +89,28 @@ def moment_tensor_ecef(
     latitude_degrees: float,
     longitude_degrees: float,
 ) -> np.ndarray:
-    """Construct a double-couple moment tensor in ECEF coordinates."""
+    """Construct a double-couple moment tensor in ECEF coordinates.
+
+    Args:
+        scalar_moment: Scalar seismic moment, typically in N m.
+        strike_degrees: Strike measured clockwise from north, in degrees.
+        dip_degrees: Dip measured down from horizontal, in degrees.
+        rake_degrees: Slip angle in the fault plane, in degrees.
+        latitude_degrees: Latitude at which the local fault angles are defined.
+        longitude_degrees: Longitude of the local frame, in degrees east.
+
+    Returns:
+        A 3-by-3 Cartesian moment tensor in the units of `scalar_moment`.
+        With `R` the ECEF-to-NED rotation, the tensor is `R.T @ M_ned @ R`.
+    """
     moment_ned = moment_tensor_ned(
         scalar_moment,
         strike_degrees,
         dip_degrees,
         rake_degrees,
     )
-    rotation = ned_basis(latitude_degrees, longitude_degrees)
-    return rotation @ moment_ned @ rotation.T
-
-
-def spherical_point_ecef(
-    latitude_degrees: float,
-    longitude_degrees: float,
-    radius: float,
-) -> np.ndarray:
-    """Return ECEF coordinates on a sphere with the supplied radius."""
-    latitude = np.deg2rad(latitude_degrees)
-    longitude = np.deg2rad(longitude_degrees)
-    return radius * np.array(
-        [
-            np.cos(latitude) * np.cos(longitude),
-            np.cos(latitude) * np.sin(longitude),
-            np.sin(latitude),
-        ]
-    )
+    ecef_to_ned = ecef_to_ned_matrix(latitude_degrees, longitude_degrees)
+    return ecef_to_ned.T @ moment_ned @ ecef_to_ned
 
 
 def build_rectangular_fault_patches(
@@ -139,39 +129,42 @@ def build_rectangular_fault_patches(
 ) -> list[dict]:
     """Build moment-tensor patches for a surface-breaking rectangular fault.
 
+    Each along-strike section has uniform slip and rake. The shared down-dip
+    width is the vertical extent divided by the sine of the dip. The product
+    of the along-strike and down-dip Gauss–Legendre weights gives the area
+    represented by each point on the rectangle. The scalar patch moment is
+    shear modulus times slip times that area.
+
+    The horizontal offset from the fault centre is mapped onto the sphere
+    along a great circle. The point's radius is then reduced by its depth.
+    The area weights are those of the original rectangle.
+
     Args:
-      centre_latitude_deg:
-        Latitude in degrees of the surface projection of the fault centre.
-        Uses geographic latitude as the angle on the model sphere.
-      centre_longitude_deg:
-        Longitude in degrees east of the same point.
-      strike_deg:
-        Strike measured clockwise from north, in degrees.
-      dip_deg:
-        Dip measured down from horizontal, in degrees.
-      vertical_extent_m:
-        Vertical distance in metres from the surface to the bottom of the fault.
-      sections:
-        Tuples of length in metres, slip in metres and rake in degrees,
-        ordered along strike. Each section spans the full down-dip width.
-      shear_modulus_Pa:
-        Uniform shear modulus in pascals used to compute moment from slip.
-      target_moment_Nm:
-        Target scalar moment sum in N m. Use None for the moments derived
-        from slip, area and shear modulus. A target scales all moments uniformly.
-      strike_spacing_m:
-        Length scale in metres used to choose the number of Gauss points
-        along strike. The number is rounded up from section length over this scale.
-      down_dip_order:
-        Number of Gauss points down dip per section.
-      radius_m:
-        Radius of the model sphere in metres.
+        centre_latitude_deg: Spherical latitude in degrees of the surface
+            projection of the rectangle's midpoint.
+        centre_longitude_deg: Longitude of that midpoint in degrees east.
+        strike_deg: Strike measured clockwise from north, in degrees.
+        dip_deg: Dip measured down from horizontal, in degrees, in the range
+            `(0, 90]`.
+        vertical_extent_m: Depth of the bottom edge below the surface in metres.
+        sections: Tuples of length in metres, slip in metres and rake in
+            degrees, ordered in the direction of strike. Each section spans
+            the full down-dip width.
+        shear_modulus_Pa: Uniform shear modulus in pascals used to compute
+            moment from slip.
+        target_moment_Nm: Target scalar moment sum in N m. A target scales all
+            moments uniformly. With `None`, moments follow from slip, area
+            and shear modulus.
+        strike_spacing_m: Length scale in metres for choosing the along-strike
+            quadrature order. Each order is the section length divided by this
+            scale and rounded up.
+        down_dip_order: Number of Gauss points down dip in each section.
+        radius_m: Radius of the model sphere in metres.
 
     Returns:
         Patch records ordered by section, then along strike, then down dip.
-        Each record gives angular location in degrees, depth in kilometres,
-        Earth-centred Cartesian position in metres, and scalar moment and
-        Cartesian moment tensor in N m.
+        Each record contains `latitude_deg`, `longitude_deg`, `depth_km`,
+        `position_ecef_m`, `scalar_moment_Nm` and `moment_ecef_Nm`.
 
     Raises:
         ValueError: If the geometry, material, quadrature or scalar moment is invalid.
@@ -198,7 +191,7 @@ def build_rectangular_fault_patches(
     if target_moment_Nm is not None and (not np.isfinite(target_moment_Nm) or target_moment_Nm <= 0):
         raise ValueError('The target moment must be finite and positive')
 
-    north, east, down = ned_basis(centre_latitude_deg, centre_longitude_deg).T
+    north, east, down = ecef_to_ned_matrix(centre_latitude_deg, centre_longitude_deg)
     up = -down
     along_strike = north * np.cos(strike) + east * np.sin(strike)
     across_strike = -north * np.sin(strike) + east * np.cos(strike)
@@ -236,7 +229,9 @@ def build_rectangular_fault_patches(
                 tensor = moment_tensor_ecef(
                     moment_Nm, strike_deg, dip_deg, rake_deg, latitude_deg, longitude_deg,
                 )
-                position = spherical_point_ecef(latitude_deg, longitude_deg, radius_m - depth_km * 1000)
+                position = geodetic_to_cartesian(
+                    latitude_deg, longitude_deg, depth=depth_km * 1000, earth_radius=radius_m,
+                )[0]
                 patches.append(dict(
                     latitude_deg=latitude_deg,
                     longitude_deg=longitude_deg,
@@ -264,10 +259,28 @@ def normalised_gaussian_delta(
 ) -> tuple[Function, float]:
     """Interpolate and discretely normalise a three-dimensional Gaussian.
 
-    The returned Function integrates to one on the actual mesh.  The second
-    return value is the integral before discrete normalisation and is a useful
-    source-resolution diagnostic: it should converge towards one as the mesh
-    resolves the Gaussian and as boundary truncation becomes negligible.
+    The Gaussian has unit integral in unbounded space. Interpolation onto
+    the mesh and truncation at its boundaries change that integral. We divide
+    by the assembled integral over the mesh so the regularised delta has
+    unit integral on the model domain.
+
+    Args:
+        mesh: Three-dimensional volume mesh used to represent the source.
+        source_coordinates: Three Cartesian coordinates of the Gaussian
+            centre in mesh units.
+        standard_deviation: Gaussian standard deviation in mesh units.
+        degree: Degree of the continuous Lagrange space for the Gaussian.
+        name: Name of the returned Firedrake field.
+
+    Returns:
+        The normalised scalar field and its integral before normalisation.
+        The latter approaches one for a well-resolved Gaussian whose centre
+        is far enough from the boundary for truncation to be negligible.
+        Near a boundary, a resolved Gaussian can have a smaller integral.
+
+    Raises:
+        ValueError: If the width is nonpositive, the centre has the wrong
+            number of coordinates, or the integral is nonpositive or nonfinite.
     """
     if standard_deviation <= 0:
         raise ValueError("standard_deviation must be positive")
@@ -306,14 +319,17 @@ def build_stress_glut(
 ) -> tuple[Function, list[float]]:
     """Assemble a fixed stress glut from Gaussian moment-tensor patches.
 
+    Each patch contributes its moment tensor multiplied by a separately
+    normalised Gaussian. The accumulation writes directly into the field's
+    nodal values and is intended for prescribed source tensors.
+
     Args:
         mesh: Three-dimensional volume mesh on which to represent the source.
         centres: Patch positions with shape `(n, 3)` in mesh coordinates.
         moment_tensors: Patch tensors with shape `(n, 3, 3)` in the mesh's
             Cartesian basis. Divide dimensional moment tensors by the stress
             scale times the length scale cubed for a nondimensional mesh.
-        standard_deviation: Common Gaussian width in the same units as the
-            mesh coordinates.
+        standard_deviation: Common Gaussian standard deviation in mesh units.
         degree: Degree of the continuous Lagrange spaces for the Gaussians
             and stress glut.
 
@@ -324,9 +340,6 @@ def build_stress_glut(
 
     Raises:
         ValueError: If the mesh, patch arrays, or Gaussian width is invalid.
-
-    The accumulation writes into the field's nodal data and is intended for
-    prescribed source tensors.
     """
     if mesh.topological_dimension != 3:
         raise ValueError("The stress glut requires a three-dimensional volume mesh")
@@ -349,47 +362,3 @@ def build_stress_glut(
         values[:] += delta.dat.data_ro[:, None, None] * tensor
         integrals.append(integral)
     return glut, integrals
-
-
-def ecef_vectors_to_enu(
-    vectors,
-    latitudes_degrees,
-    longitudes_degrees,
-) -> np.ndarray:
-    """Rotate one or more ECEF vectors into local east-north-up components."""
-    vectors = np.asarray(vectors, dtype=float)
-    latitudes = np.broadcast_to(np.asarray(latitudes_degrees, dtype=float), vectors.shape[:-1])
-    longitudes = np.broadcast_to(np.asarray(longitudes_degrees, dtype=float), vectors.shape[:-1])
-    if vectors.shape[-1] != 3:
-        raise ValueError("vectors must have final dimension three")
-
-    latitude = np.deg2rad(latitudes)
-    longitude = np.deg2rad(longitudes)
-    east = np.stack(
-        (-np.sin(longitude), np.cos(longitude), np.zeros_like(longitude)),
-        axis=-1,
-    )
-    north = np.stack(
-        (
-            -np.sin(latitude) * np.cos(longitude),
-            -np.sin(latitude) * np.sin(longitude),
-            np.cos(latitude),
-        ),
-        axis=-1,
-    )
-    up = np.stack(
-        (
-            np.cos(latitude) * np.cos(longitude),
-            np.cos(latitude) * np.sin(longitude),
-            np.sin(latitude),
-        ),
-        axis=-1,
-    )
-    return np.stack(
-        (
-            np.sum(vectors * east, axis=-1),
-            np.sum(vectors * north, axis=-1),
-            np.sum(vectors * up, axis=-1),
-        ),
-        axis=-1,
-    )

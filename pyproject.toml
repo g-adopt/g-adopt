@@ -20,6 +20,7 @@ dependencies = [
   "pandas",
   "shapely",
   "vtk",
+  "gdrift @ git+https://github.com/g-adopt/g-drift.git@7f8fd6288cfcc324ccda4d6bcc68c73581270684",
   "irksome @ git+https://github.com/firedrakeproject/Irksome",
 ]
 
