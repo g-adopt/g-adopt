@@ -485,23 +485,28 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         update and the space does not grow with the truncation) or
         `"multiplier"` (one `Real` unknown per mode).
       nullspace: `None`, `"rigid_rotation"`, or a `VectorSpaceBasis` on the
-        displacement space. Each mode is checked at construction
-        (`_check_kernel`) and the measured numbers are logged. The same basis
-        is the transpose nullspace.
+        displacement space. Each mode must be zero on the strong displacement
+        conditions; with `check_nullspace=True` it is also measured as a
+        kernel at construction (`_check_kernel`) and the numbers are logged.
+        The same basis is the transpose nullspace.
       nullspace_rtol: the largest change `L` of a density moment of degree
-        up to 4 that a declared mode may cause (`_check_kernel`). The
+        up to 4 that a declared mode may cause (`_check_kernel`, with
+        `check_nullspace=True` only). The
         default 1e-2 refuses a lateral variation `1 + a x` with `a = 0.01`
         and warns from `a = 0.001`.
       nullspace_jacobian_rtol: the largest `|J e| / |J s|` of a declared
         mode against a shear of the same size; it refuses only gross errors
         such as `un` on a surface that is not a sphere about the origin (see
-        `_check_kernel`). A mode that does not meet a strong displacement
-        condition is refused separately.
-      check_nullspace: `True` (default) runs the density and Jacobian
-        measures of `_check_kernel` on every declared mode at construction;
-        `False` skips them (a restart of a configuration that was checked
-        before). The strong-condition check runs in both cases, as it costs
-        one copy of the mode per condition.
+        `_check_kernel`, with `check_nullspace=True` only). A mode that does
+        not meet a strong displacement condition is refused separately.
+      check_nullspace: `False` (default) skips the density and Jacobian
+        measures of `_check_kernel`; `True` runs them on every declared mode
+        at construction. The check is opt-in because its first Jacobian
+        assemblies cost 89 to 405 s at the production size of GIAMIP Exp01,
+        while a configuration needs the check once, when it is
+        new: a lateral density, a pinned boundary or a declared translation
+        is then refused before any solve. The strong-condition check runs
+        in both cases, as it costs one copy of the mode per condition.
       near_nullspace: the modes GAMG is given on the condensed displacement
         operator: `"incompressible"` (default), `"rigid"` or `"none"`.
       scaling_factor: `c`, a factor of the whole momentum residual. Like
@@ -560,7 +565,7 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         nullspace=None,
         nullspace_rtol: float = 1e-2,
         nullspace_jacobian_rtol: float = 0.5,
-        check_nullspace: bool = True,
+        check_nullspace: bool = False,
         near_nullspace: str = "incompressible",
         scaling_factor=1,
         solver_parameters=None,
@@ -1187,8 +1192,9 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         A declared mode that is not a kernel would be projected out of the
         answer after every solve with no error, so each mode is checked here
         (`_check_kernel`): it must meet the strong displacement conditions,
-        leave the density moments up to degree 4 unchanged, and the Jacobian
-        must nearly annihilate it.
+        and with `check_nullspace=True` it must also leave the density
+        moments up to degree 4 unchanged, and the Jacobian must nearly
+        annihilate it.
         """
         self.nullspace = self.transpose_nullspace = None
         #: The PETSc object of the transpose nullspace on the whole mixed
@@ -1410,10 +1416,12 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
         positive at construction (a driver that assigns the first step
         later), the probe runs at a unit step, because the DG history
         equation divides by the step; the caller's value is put back.
-        `check_nullspace=False` skips the moments and the Jacobian probe.
+        `check_nullspace=False`, the default, skips the moments and the
+        Jacobian probe.
 
-        All numbers are logged at every construction and kept in
-        `kernel_residuals` as `(L, |J e|/|J s|, |J^T e|/|J^T s|)`.
+        With the check on, all numbers are logged at every construction and
+        kept in `kernel_residuals` as `(L, |J e|/|J s|, |J^T e|/|J^T s|)`;
+        with the check off, `kernel_residuals` is empty.
         """
         J = derivative(self.F, self.solution)
         X = SpatialCoordinate(self.mesh)

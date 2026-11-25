@@ -17,6 +17,7 @@ the `forward` and `adjoint` cases in `tests/gia` (`reference-quadrature`,
 """
 
 import gc
+import inspect
 import warnings
 import weakref
 
@@ -663,12 +664,16 @@ def _density(sub, kind):
 def _solver_with_density(meshes, kind, K, **kwargs):
     """A fluid-core solver with the density `kind` and bulk modulus `K`.
 
+    The nullspace check is opt-in in the solver; these tests are about the
+    check, so it is on unless `kwargs` says otherwise.
+
     Args:
       meshes: the parent annulus and its mantle submesh.
       kind: the density of `_density`.
       K: the bulk modulus.
       kwargs: further constructor arguments, for example `check_nullspace`.
     """
+    kwargs.setdefault("check_nullspace", True)
     parent, sub = meshes
     material = gadopt.CompressibleInternalVariableApproximation(
         bulk_modulus=K, density=_density(sub, kind), g=1.0, B_mu=C.B_MU,
@@ -715,11 +720,16 @@ def test_a_lateral_density_of_degree_three_and_four_is_refused(meshes, degree):
                   fd.Function(fd.FunctionSpace(parent, "CG", 2)), material,
                   dt=C.dt_function(sub), gravity_bcs=C.gravity_bcs(parent),
                   couplings=[cp.FluidCore(boundary=C.CURVE_RC, rho_core=1.2, g=1.)],
-                  nullspace="rigid_rotation", internal_variable_family="Quadrature", solver_parameters="direct")
+                  nullspace="rigid_rotation", internal_variable_family="Quadrature", solver_parameters="direct",
+                  check_nullspace=True)
 
 
 def test_a_mode_that_violates_a_strong_condition_is_refused(meshes):
-    """N2: `u = 0` on the CMB and the rotation given as a basis."""
+    """N2: `u = 0` on the CMB and the rotation given as a basis.
+
+    The strong-condition check runs also with the default
+    `check_nullspace=False`, so the solver is built with the default here.
+    """
     parent, sub = meshes
     V = fd.VectorFunctionSpace(sub, "CG", 2)
     X = fd.SpatialCoordinate(sub)
@@ -735,7 +745,7 @@ def test_a_mode_that_violates_a_strong_condition_is_refused(meshes):
 @pytest.mark.longtest
 def test_a_symmetric_configuration_passes_the_nullspace_check(meshes):
     solver, _, _ = C.build_new(meshes, Case(family="Quadrature", core="fluid", load=None),
-                               nullspace="rigid_rotation")
+                               nullspace="rigid_rotation", check_nullspace=True)
     lateral, ratio, ratio_t = solver.kernel_residuals[0]
     # Round-off of the degree-4 moments: about 1e-12.
     assert lateral < 1e-10 and max(ratio, ratio_t) < 1e-3
@@ -751,8 +761,10 @@ def test_a_zero_time_step_at_construction_gives_a_finite_probe(meshes):
     """
     case = Case(family="Quadrature", core="fluid", load=None)
     dt = C.dt_function(meshes[1], 0.0)
-    solver, _, _ = C.build_new(meshes, case, dt=dt, nullspace="rigid_rotation")
-    reference, _, _ = C.build_new(meshes, case, nullspace="rigid_rotation")
+    solver, _, _ = C.build_new(meshes, case, dt=dt, nullspace="rigid_rotation",
+                               check_nullspace=True)
+    reference, _, _ = C.build_new(meshes, case, nullspace="rigid_rotation",
+                                  check_nullspace=True)
     assert float(dt) == 0.0
     assert all(np.isfinite(solver.kernel_residuals[0]))
     np.testing.assert_allclose(solver.kernel_residuals[0],
@@ -760,11 +772,13 @@ def test_a_zero_time_step_at_construction_gives_a_finite_probe(meshes):
 
 
 def test_the_nullspace_check_can_be_skipped(meshes):
-    """`check_nullspace=False` skips the density and Jacobian measures.
+    """`check_nullspace=False`, the default, skips the density and Jacobian measures.
 
-    A lateral density that the check refuses is accepted, the measures are
-    not taken, and a mode that violates a strong condition is still refused.
+    The check is opt-in. A lateral density that the check refuses is
+    accepted without it, the measures are not taken, and a mode that
+    violates a strong condition is still refused.
     """
+    assert inspect.signature(NewSolver).parameters["check_nullspace"].default is False
     with pytest.raises(ValueError, match="moves density"):
         _solver_with_density(meshes, "0.01", 1.0)
     solver = _solver_with_density(meshes, "0.01", 1.0, check_nullspace=False)
