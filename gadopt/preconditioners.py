@@ -4620,13 +4620,18 @@ class _TranslationDeflation:
 
         `E` is scaled to `E_ij / sqrt(s_i s_j)` with the operator scale `s_k`
         of `build`, so that its singular values are the stiffness of the
-        deflation directions as fractions of the operator scale. Each entry is
-        a sum of `n` products, whose round-off grows like `eps sqrt(n)`. A
-        smallest scaled singular value at or below `COARSE_ROUNDOFF_FACTOR`
-        times that level holds no information: one translation, or a
-        combination of them, is then an exact kernel of `A` to working
-        precision, and the inverse of `E` would amplify round-off. Above that
-        level `E` is used as it is, however small: the near-null case is the
+        deflation directions as fractions of the operator scale. The floor is
+        `COARSE_ROUNDOFF_FACTOR * eps`, independent of the vector length `n`.
+        A floor that grows like `eps sqrt(n)` (the worst-case round-off of a
+        sum of `n` products) would refuse healthy deflations on fine meshes:
+        the scaled stiffness of a translation falls with the cell size like
+        `h^2`, while `sqrt(n)` grows, and the measured round-off of `E` on a
+        1000 km test sphere was about 7e6 times below the `eps sqrt(n)`
+        level. A smallest scaled singular value at or below the floor holds
+        no information: one translation, or a combination of them, is then an
+        exact kernel of `A` to working precision, and the inverse of `E` would
+        amplify round-off. Above it `E` is used as it is, however small: the
+        near-null case is the
         purpose of the deflation (an `E` of 4e-10 on the stand-in system of
         the unit tests gives a true residual of 9e-7).
 
@@ -4638,7 +4643,9 @@ class _TranslationDeflation:
             not finite.
         """
         E = self.E
-        floor = COARSE_ROUNDOFF_FACTOR * np.finfo(float).eps * np.sqrt(self._size)
+        # A fixed floor relative to the operator scale (see the docstring for
+        # why it does not grow with the vector length).
+        floor = COARSE_ROUNDOFF_FACTOR * np.finfo(float).eps
         smallest = 0.0
         if np.all(np.isfinite(E)) and np.all(self._scale > 0.0):
             root = np.sqrt(self._scale)
@@ -4653,9 +4660,9 @@ class _TranslationDeflation:
                 f"level {floor:.3e}; E = {E.tolist()}). A rigid translation is "
                 "then an exact kernel of the retained (u, psi) block, and the "
                 "deflation cannot invert it. The likely cause is a translation "
-                "in the nullspace that the solver was given, in a basis that "
-                "mixes it with other modes so that it is not recognised as "
-                "declared (a declared translation is also refused by the "
+                "in the nullspace that the solver was given, along a direction "
+                "that is not a coordinate axis, so that it is not recognised "
+                "as declared (a declared translation is also refused by the "
                 "nullspace check, check_nullspace=True). Switch the deflation "
                 f"off with the option -{self.option} 0, or in solver_parameters "
                 "with the key dtn_fieldsplit_0_condensed_deflate_translations "
