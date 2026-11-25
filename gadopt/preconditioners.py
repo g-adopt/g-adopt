@@ -27,7 +27,7 @@ from firedrake import dmhooks
 from firedrake.slate import AssembledVector
 from firedrake.slate.static_condensation.la_utils import LAContext
 from .nullspaces import near_incompressible_modes, rigid_body_modes
-from .utility import InteriorBC
+from .utility import InteriorBC, log
 
 
 class FreeSurfaceMassInvPC(fd.MassInvPC):
@@ -3394,9 +3394,12 @@ def single_domain_slate_form(form):
     The result is used only to build a preconditioner, so leaving a term out
     changes the convergence rate and not the solution. For the sea-level load
     the missing term is the weight of the ocean column,
-    `c B_mu g rho_w B C (u.n)(w.n)`, on the surface facets only. The internal
-    variable block and its couplings contain no such integral, so the
-    back-substitution is exact.
+    `c B_mu g rho_w B C (u.n)(w.n)`, on the surface facets only. That term
+    belongs to the consistent tangent, so the filtered complement is the
+    approximation, and it is stiffer than the exact block along a rigid
+    translation in proportion to the ocean area (`CondensedBlockPC`, "The
+    rigid translations"). The internal variable block and its couplings
+    contain no such integral, so the back-substitution is exact.
 
     Args:
       form: a bilinear form.
@@ -3827,6 +3830,25 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
       coarsens onto, the rigid-body modes plus the low-degree divergence-free
       fields by default.
 
+    ## The rigid translations
+
+    With a fluid core, a rigid translation of the mantle together with the
+    potential it induces is a near-null direction of block 0. The `Real`
+    rows of `CentreOfMass` fix the translation in the full system, and
+    block 0 does not see them. The exact block 0 (`ReducedGIABlockPC`) keeps
+    this property at every ocean area. The complement here leaves out the
+    weight of the ocean column of the sea-level load, because Slate cannot
+    compile that term (`single_domain_slate_form`). That omission makes the
+    complement an approximation of block 0, and it stiffens the translation
+    in proportion to the ocean area: the fraction of the translation
+    stiffness that is left after the potential responds is 0.003 to 0.014
+    at 5 percent ocean and 0.15 at 95 percent ocean, against 6e-4 to 7e-4
+    in the exact block (1000 km test sphere, NOTES/design/block0/). With a
+    small ocean the translations are therefore near-null directions of this
+    complement too, and the inner Krylov solve can stall on a right-hand
+    side that holds a translation. This class has no translation deflation
+    (`_TranslationDeflation` serves `ReducedGIABlockPC` only).
+
     ## What is refused
 
     A block-0 space that does not have exactly three fields (the Quadrature
@@ -3984,7 +4006,8 @@ class CondensedBlockPC(fd.preconditioners.base.PCBase):
         # inside a pytest process arrives as a segmentation fault. Everything
         # this class computes is preconditioner work, so dropping that one term
         # changes the convergence rate and not the solution; see the filter's
-        # own docstring.
+        # own docstring, and the class docstring for its effect on the rigid
+        # translations.
         self._pair_form = single_domain_slate_form(
             _restrict_to_mesh(
                 _split_mixed_coefficients(
@@ -4381,37 +4404,53 @@ class _ProjectedRetainedOperator:
         _remove_declared_space(mat.getNullSpace(), y)
 
 
+#: A rigid translation counts as part of a declared nullspace of block 0 when
+#: the part of it outside that space is below this fraction of its norm
+#: (`ReducedGIABlockPC._undeclared_translations`). A translation inside the
+#: declared space differs from its projection only by round-off (about 1e-15);
+#: a translation outside it keeps a part of order one.
+DECLARED_TRANSLATION_RTOL = 1e-6
+
+#: The factor on `eps sqrt(n)` that sets the round-off level of the scaled
+#: coarse matrix of `_TranslationDeflation` (`_TranslationDeflation.check`).
+COARSE_ROUNDOFF_FACTOR = 10.0
+
+
 class _TranslationDeflation:
     r"""Galerkin deflation of the rigid translations of the retained `(u, psi)` system.
 
     The retained block of `ReducedGIABlockPC` is the exact displacement and
-    potential block of the Jacobian, the sea-level load included. With a
-    sea level, that block has `d` eigenvalues close to zero: a rigid
-    translation of the mantle together with the potential it induces. The
-    translation moves the geoid with the solid surface, so it leaves the sea
-    level `SL = N - u_r + ...` unchanged, and the weight of the ocean column
-    in the displacement row (`-c B_mu g rho_w (dsigma/dSL) (u.n)(w.n)`, a
-    negative stiffness) cancels the restoring force that the potential
-    coupling leaves. The `Real` rows of `CentreOfMass` fix this translation in
-    the full system, but the block-0 solve inside the Schur factorisation does
-    not see those rows, so it must resolve the near-singular directions with
-    Krylov iterations alone.
+    potential block of the Jacobian. With a fluid core, a rigid translation
+    of the mantle together with the potential it induces is a near-null
+    direction of that block at every ocean area, and also without a sea
+    level: the self-gravitating problem does not change under a translation
+    of the whole body, and only the `Real` rows of `CentreOfMass` fix the
+    translation in the full system. The block-0 solve inside the Schur
+    factorisation does not see those rows, so without deflation it must
+    resolve the near-singular directions with Krylov iterations alone.
 
-    Measured on the 1000 km test sphere of the GIAMIP drivers with 95 percent
-    ocean (NOTES/design/block0/REPORT.md): for `z_k = (e_k, psi_k)` the energy
-    left after the potential responds is `z_k^T A z_k / e_k^T S_uu e_k = 7e-4`
-    with the sea-level term and 0.15 without it. The inner FGMRES then finds
-    two or three Ritz values near `2e-4` (the others are above `3e-2`), and
-    every block-0 solve whose right-hand side has a component along a
-    translation stagnates for 10 to 25 iterations before it converges. On
-    GIAMIP Exp01 at 624 ranks most of these solves stop at their cap.
+    Measured on the 1000 km test sphere of the GIAMIP drivers
+    (NOTES/design/block0/REPORT.md and REVIEW-FABLE.md): for
+    `z_k = (e_k, psi_k)` the fraction of the translation stiffness that is
+    left after the potential responds, `z_k^T A z_k / e_k^T S_uu e_k`, is
+    6e-4 to 7e-4, with 5 percent and with 95 percent ocean. The weight of the
+    ocean column of the sea-level load, `-c B_mu g rho_w (dsigma/dSL)
+    (u.n)(w.n)` in the displacement row, is part of this exact block, because
+    the sea level depends on `u` through `-u.n`. The ocean couplings in the
+    potential rows and columns stiffen the translation, and this displacement
+    term cancels that stiffening. Without the term (the Slate complement of
+    `CondensedBlockPC`) the fraction is 0.003 to 0.014 at 5 percent ocean and
+    0.15 at 95 percent ocean. In the exact block the inner FGMRES finds two
+    or three Ritz values near `2e-4` (the others are above `3e-2`), and a
+    block-0 solve whose right-hand side has a component along a translation
+    stagnates for 10 to 25 iterations before it converges.
 
     The deflation removes these directions from the Krylov solve exactly.
-    With the deflation space `Z = [z_0, ..., z_{d-1}]`,
+    With the deflation space `Z = [z_0, ..., z_{m-1}]`,
 
         z_k = (e_k, psi_k),   psi_k = -(A_psipsi + B)^-1 A_psiu e_k,
 
-    `E = Z^T A Z` (`d` by `d`), the left projector `P = I - A Z E^-1 Z^T` and
+    `E = Z^T A Z` (`m` by `m`), the left projector `P = I - A Z E^-1 Z^T` and
     `Q = Z E^-1 Z^T`, the solution of `A x = b` is
 
         x = Q b + (I - Q A) x~,   P A x~ = P b,
@@ -4421,39 +4460,50 @@ class _TranslationDeflation:
     zero, so the near-null eigenvalues are gone from its spectrum. The space
     is a choice of the preconditioner; the identity itself is exact, so the
     converged block-0 solution is the same with or without deflation to the
-    inner tolerance.
+    inner tolerance. The residual of the returned `x` against `b` is the
+    residual `P b - P A x~` of the Krylov solve.
+
+    `m` is the dimension `d` minus the translations that lie in a declared
+    nullspace of block 0 (`ReducedGIABlockPC._undeclared_translations`): a
+    declared translation is removed by the projection already, and its `E`
+    entry would hold only the residual of the potential solve.
 
     `A` is the operator of the inner Krylov solve: the projected operator of
     `CondensedBlockPC._initialise_projected_operator` when rigid rotations
     are declared, so `A Z` holds no component along the declared left kernel
     and the projection keeps the right-hand side free of it.
 
-    Cost. A build solves the `d` potential systems for `psi_k` with the
+    `E` is checked at every refresh (`check`). A near-singular `E` is the
+    purpose of the deflation and is accepted: the loss of accuracy is
+    round-off times the inverse of `E`, which is the conditioning of `A`
+    itself along the translations. An `E` that is singular to working
+    precision raises an error that names the switch of the deflation.
+
+    Cost. A build solves the `m` potential systems for `psi_k` with the
     potential split's own preconditioner (GMRES with `LowRankPotentialPC`) and
-    applies `A` `d` times; `refresh` applies `A` `d` times. One block-0
+    applies `A` `m` times; `refresh` applies `A` `m` times. One block-0
     application adds one application of `A` (the correction `Q A x~`) and,
-    per inner iteration, one reduction of `d` dot products and `d` vector
-    updates. Memory: `2 d + 3` vectors of the retained system.
+    per inner iteration, one reduction of `m` dot products and `m` vector
+    updates. Memory: `2 m + 3` vectors of the retained system.
 
     Args:
       pc: the `ReducedGIABlockPC` whose retained solve is deflated.
       operator: the operator of its inner Krylov solve (`A` above).
+      translations: the displacement Functions `e_k` to deflate, each a
+        constant unit vector field.
+      option: the full name of the option that switches the deflation, for
+        the error message of `check`.
     """
 
-    def __init__(self, pc, operator):
+    def __init__(self, pc, operator, translations, option):
         self.pc = pc
         self.operator = operator
+        self.option = option
         comm = operator.getComm()
-        V = pc.displacement_space
-        dim = V.value_size
         # The rigid translations as Firedrake Functions, so that the
         # component layout of the displacement vector is Firedrake's and not
         # an assumption about interlacing.
-        self._translations = []
-        for k in range(dim):
-            direction = [0.0] * dim
-            direction[k] = 1.0
-            self._translations.append(fd.Function(V).assign(fd.Constant(direction)))
+        self._translations = list(translations)
         self.Z = []
         for translation in self._translations:
             u = pc.S_uu.petscmat.createVecRight()
@@ -4481,6 +4531,13 @@ class _TranslationDeflation:
         # split's PC must keep the options of its own prefix.
         self.psi_ksp.setFromOptions()
         self._potential_pc = None
+        #: The global size of the retained system, which sets the round-off
+        #: level of the scaled `E` in `check`.
+        self._size = operator.getSize()[0]
+        #: The smallest singular value of the scaled `E` at the last refresh
+        #: (`check`); 1 is a translation as stiff as the operator scale, 0 a
+        #: singular `E`.
+        self.scaled_smallest_singular_value = None
         self.build_count = 0
         self.build()
 
@@ -4511,7 +4568,29 @@ class _TranslationDeflation:
             self._psi_rhs.scale(-1.0)
             psi.set(0.0)
             self.psi_ksp.solve(self._psi_rhs, psi)
+            reason = self.psi_ksp.getConvergedReason()
+            if reason <= 0:
+                # A potential solve that stops early gives a poorer `psi_k`.
+                # The deflation stays exact for any `Z`, so this costs inner
+                # iterations only; the line says where they went.
+                log(f"gadopt.ReducedGIABlockPC: the potential solve of the "
+                    f"translation deflation stopped with reason {reason} after "
+                    f"{self.psi_ksp.getIterationNumber()} iterations "
+                    f"(options {self.psi_ksp.getOptionsPrefix()}ksp_*); the "
+                    "deflation stays exact and removes the translation less "
+                    "completely.")
             z.assemble()
+        # The scale of `A` along each `z_k`, from the infinity norms of the
+        # two assembled diagonal blocks: `|z^T A z| <= |A| |z|^2`, so `E_kk`
+        # divided by this scale is the stiffness of `z_k` as a fraction of
+        # the stiffest direction the operator can have. The norms change
+        # only at a reassembly, which is when `build` runs.
+        norm_type = PETSc.NormType.INFINITY
+        scale_uu = pc.S_uu.petscmat.norm(norm_type)
+        scale_psi = pc.A_psipsi.petscmat.norm(norm_type)
+        self._scale = np.array([
+            scale_uu * u.norm() ** 2 + scale_psi * psi.norm() ** 2
+            for u, psi in (z.getNestSubVecs() for z in self.Z)])
         self.build_count += 1
         self.refresh()
 
@@ -4522,7 +4601,7 @@ class _TranslationDeflation:
         of the Krylov solve. The assembled blocks change at a reassembly, and
         the low-rank DtN prefactor of the potential block is read at every
         application, so `ReducedGIABlockPC.update` calls this at every update
-        (`d` applications of `A`).
+        (`m` applications of `A`).
         """
         for z, az in zip(self.Z, self.AZ):
             self.operator.mult(z, az)
@@ -4531,11 +4610,59 @@ class _TranslationDeflation:
         for i, z in enumerate(self.Z):
             E[i, :] = z.mDot(self.AZ)
         self.E = E
-        # `d` is 2 or 3, so the explicit inverse is the cheapest form to apply.
+        self.check()
+        # `m` is at most 3, so the explicit inverse is the cheapest form to
+        # apply.
         self._E_inverse = np.linalg.inv(E)
 
+    def check(self):
+        """Refuse an `E` that is singular to working precision.
+
+        `E` is scaled to `E_ij / sqrt(s_i s_j)` with the operator scale `s_k`
+        of `build`, so that its singular values are the stiffness of the
+        deflation directions as fractions of the operator scale. Each entry is
+        a sum of `n` products, whose round-off grows like `eps sqrt(n)`. A
+        smallest scaled singular value at or below `COARSE_ROUNDOFF_FACTOR`
+        times that level holds no information: one translation, or a
+        combination of them, is then an exact kernel of `A` to working
+        precision, and the inverse of `E` would amplify round-off. Above that
+        level `E` is used as it is, however small: the near-null case is the
+        purpose of the deflation (an `E` of 4e-10 on the stand-in system of
+        the unit tests gives a true residual of 9e-7).
+
+        All inputs are global reductions, so every rank takes the same
+        decision.
+
+        Raises:
+          RuntimeError: if the scaled `E` is singular to working precision or
+            not finite.
+        """
+        E = self.E
+        floor = COARSE_ROUNDOFF_FACTOR * np.finfo(float).eps * np.sqrt(self._size)
+        smallest = 0.0
+        if np.all(np.isfinite(E)) and np.all(self._scale > 0.0):
+            root = np.sqrt(self._scale)
+            scaled = E / np.outer(root, root)
+            smallest = float(np.linalg.svd(scaled, compute_uv=False).min())
+        self.scaled_smallest_singular_value = smallest
+        if not smallest > floor:
+            raise RuntimeError(
+                "gadopt.ReducedGIABlockPC: the coarse matrix E = Z^T A Z of the "
+                "translation deflation is singular to working precision "
+                f"(smallest scaled singular value {smallest:.3e}, round-off "
+                f"level {floor:.3e}; E = {E.tolist()}). A rigid translation is "
+                "then an exact kernel of the retained (u, psi) block, and the "
+                "deflation cannot invert it. The likely cause is a translation "
+                "in the nullspace that the solver was given, in a basis that "
+                "mixes it with other modes so that it is not recognised as "
+                "declared (a declared translation is also refused by the "
+                "nullspace check, check_nullspace=True). Switch the deflation "
+                f"off with the option -{self.option} 0, or in solver_parameters "
+                "with the key dtn_fieldsplit_0_condensed_deflate_translations "
+                "(the name under the shipped iterative preset) set to False.")
+
     def _coefficients(self, vec):
-        """`E^-1 Z^T vec`, with one reduction for the `d` dot products."""
+        """`E^-1 Z^T vec`, with one reduction for the `m` dot products."""
         return self._E_inverse @ np.asarray(vec.mDot(self.Z))
 
     def project(self, vec):
@@ -4575,20 +4702,45 @@ class ReducedGIABlockPC(CondensedBlockPC):
     Adjoint solves supply the transposed UFL form and use this forward apply.
 
     The displacement block holds the whole consistent tangent, the weight of
-    the ocean column of the sea-level load included. `CondensedBlockPC`
-    leaves that one term out of its Slate complement (`single_domain_slate_form`),
-    and it is the term that makes the rigid translations near-null
-    directions of the retained system (`_TranslationDeflation`). The inner
-    solve therefore deflates the translations by default. Without the
-    deflation, a block-0 solve whose right-hand side holds a translation
-    stagnates; with the term left out instead, the inner solve converges but
-    the block-0 preconditioner no longer describes the translation, and the
-    outer solve takes more iterations (2 against 4 per step on the 1000 km
-    test sphere; NOTES/design/block0/REPORT.md).
+    the ocean column of the sea-level load included, so this is the exact
+    block 0. With a fluid core a rigid translation of the mantle with its
+    induced potential is a near-null direction of block 0, because only the
+    `Real` rows of `CentreOfMass` hold it and block 0 does not see them
+    (`_TranslationDeflation`). The inner solve therefore deflates the
+    translations by default. Without the deflation, a block-0 solve whose
+    right-hand side holds a translation stagnates. `CondensedBlockPC` leaves
+    the ocean-column term out (`single_domain_slate_form`), which stiffens
+    the translation in proportion to the ocean area; with that term left out
+    of this block instead, the inner solve converges but the block-0
+    preconditioner no longer matches the Jacobian along the translation, and
+    the outer solve takes 4 iterations per step against 2 on the 1000 km
+    test sphere with 95 percent ocean (NOTES/design/block0/REPORT.md).
+
+    The inner tolerance keeps its meaning with the deflation. The Krylov
+    solve works on `P b`, and `|P b|` can exceed `|b|` (`P` is an oblique
+    projector; 3.6 times was measured), so its `rtol` is scaled by
+    `|b| / |P b|` at every application. The solve then stops when the
+    residual of the returned `x` against `b`, which is the Krylov residual
+    `P b - P A x~`, is below `rtol |b|`, as without the deflation. The
+    scaling is exact for the unpreconditioned residual norm of the shipped
+    FGMRES. When `P b` already meets the tolerance, the Krylov solve is
+    skipped and `x = Q b`.
 
     Options under this preconditioner's prefix plus `condensed_`:
     `deflate_translations` (default true) switches the deflation, and
     `deflation_psi_ksp_*` configure the potential solves of its build.
+    Under the shipped iterative preset the keys are
+    `dtn_fieldsplit_0_condensed_deflate_translations` and
+    `dtn_fieldsplit_0_condensed_deflation_psi_ksp_*`. The adjoint and the
+    tangent solves of the Quadrature step build their own instance of this
+    class from the same `solver_parameters` dictionary as the forward solve,
+    under the options prefixes `<name>_quadrature_adj_` and
+    `<name>_quadrature_tlm_` (`gadopt.constitutive_integrators`). A key in
+    `solver_parameters` or `solver_parameters_extra` therefore reaches the
+    forward, adjoint and tangent solves. A command-line option reaches only
+    the solve whose prefix it names, as every other option of these solves
+    does: to switch the deflation off on the command line for all three, give
+    it under each of the three prefixes.
     """
 
     DISPLACEMENT, POTENTIAL = 0, 1
@@ -4642,6 +4794,57 @@ class ReducedGIABlockPC(CondensedBlockPC):
         return (self.projected_operator if self.projected_operator is not None
                 else self.condensed_operator)
 
+    def _undeclared_translations(self):
+        """The rigid translations that no declared nullspace of block 0 holds.
+
+        A translation inside the declared nullspace or transpose nullspace of
+        the displacement (`condensed_field_nullspace`,
+        `condensed_field_transpose_nullspace`) is removed by the projection of
+        the retained solve already. Its deflation entry `z^T A z` would then
+        hold only the residual of the potential solve of `build`, and the
+        inverse of that noise would enter every application. Such a
+        translation is left out, with a log line.
+
+        The test removes the declared space from the translation and compares
+        the part that is left with `DECLARED_TRANSLATION_RTOL`. The PETSc
+        nullspace objects hold orthonormal vectors (the GIA solver
+        orthonormalises every basis it declares), so the removal is the
+        orthogonal projection.
+
+        Returns:
+          A list of displacement Functions, one constant unit field per
+          translation that is not declared, in the order of the components.
+        """
+        V = self.displacement_space
+        dim = V.value_size
+        spaces = [self._displacement_nullspaces[key][1]
+                  for key in ("condensed_field_nullspace",
+                              "condensed_field_transpose_nullspace")
+                  if key in self._displacement_nullspaces]
+        kept, declared = [], []
+        for k in range(dim):
+            direction = [0.0] * dim
+            direction[k] = 1.0
+            translation = fd.Function(V).assign(fd.Constant(direction))
+            inside = False
+            with translation.dat.vec_ro as vec:
+                norm = vec.norm()
+                for space in spaces:
+                    rest = vec.copy()
+                    space.remove(rest)
+                    inside = inside or rest.norm() <= DECLARED_TRANSLATION_RTOL * norm
+                    rest.destroy()
+            if inside:
+                declared.append(k)
+            else:
+                kept.append(translation)
+        if declared:
+            log(f"gadopt.ReducedGIABlockPC: the translation(s) along axis "
+                f"{', '.join(str(k) for k in declared)} lie in a declared "
+                "nullspace of block 0; the translation deflation leaves them out"
+                + ("." if kept else " and is skipped."))
+        return kept
+
     def _initialise_deflation(self, pc, prefix):
         """Build the translation deflation and hand its operator to the inner KSP.
 
@@ -4651,10 +4854,14 @@ class ReducedGIABlockPC(CondensedBlockPC):
         nullspace from the preconditioned vectors.
         """
         self.deflation = None
-        if not PETSc.Options().getBool(prefix + "deflate_translations", True):
+        option = prefix + "deflate_translations"
+        if not PETSc.Options().getBool(option, True):
+            return
+        translations = self._undeclared_translations()
+        if not translations:
             return
         operator = self._retained_operator()
-        self.deflation = _TranslationDeflation(self, operator)
+        self.deflation = _TranslationDeflation(self, operator, translations, option)
         deflated = PETSc.Mat().createPython(
             operator.getSizes(), _DeflatedRetainedOperator(operator, self.deflation),
             comm=pc.comm)
@@ -4669,6 +4876,9 @@ class ReducedGIABlockPC(CondensedBlockPC):
         self.deflated_operator = deflated
         self.condensed_ksp.setOperators(deflated, self.condensed_operator)
         self._deflation_assembly = self.assembly_count
+        #: The relative tolerance of the inner solve as the options give it,
+        #: against `|b|`; `apply` scales it to the deflated right-hand side.
+        self._inner_rtol = self.condensed_ksp.getTolerances()[0]
         work = self._rhs.duplicate()
         self._deflation_work = (work, work.duplicate(), work.duplicate())
 
@@ -4697,7 +4907,8 @@ class ReducedGIABlockPC(CondensedBlockPC):
 
         Without deflation this is one inner Krylov solve on the retained nest.
         With it, the solve is split as in `_TranslationDeflation`:
-        `x = Q b + (I - Q A) x~` with `P A x~ = P b`.
+        `x = Q b + (I - Q A) x~` with `P A x~ = P b`, and the inner `rtol` is
+        scaled so that it stays relative to `|b|` (class docstring).
 
         Args:
           pc: the PETSc preconditioner object.
@@ -4724,11 +4935,20 @@ class ReducedGIABlockPC(CondensedBlockPC):
             self.deflation.coarse(self._rhs, coarse)
             self._rhs.copy(projected)
             self.deflation.project(projected)
-            self.condensed_ksp.solve(projected, self._solution_vec)
-            # x = Q b + x~ - Q A x~.
-            operator.mult(self._solution_vec, work)
-            self.deflation.coarse(work, projected)
-            self._solution_vec.axpy(-1.0, projected)
+            # The residual of the returned x against b is P b - P A x~, so a
+            # stop at `rtol |b|` needs `rtol |b| / |P b|` against the initial
+            # residual `|P b|` of the zero start. When `|P b|` is already
+            # below `rtol |b|`, the zero start meets the tolerance and the
+            # solve is skipped (PETSc refuses an `rtol` of 1 or more).
+            stop = self._inner_rtol * self._rhs.norm()
+            projected_norm = projected.norm()
+            if projected_norm > stop:
+                self.condensed_ksp.setTolerances(rtol=stop / projected_norm)
+                self.condensed_ksp.solve(projected, self._solution_vec)
+                # x = x~ - Q A x~ + Q b.
+                operator.mult(self._solution_vec, work)
+                self.deflation.coarse(work, projected)
+                self._solution_vec.axpy(-1.0, projected)
             self._solution_vec.axpy(1.0, coarse)
         for source, target in zip(self._solution_blocks, self.solution.subfunctions):
             with target.dat.vec_wo as vector:

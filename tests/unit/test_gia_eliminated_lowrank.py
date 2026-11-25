@@ -87,6 +87,9 @@ def test_lowrank_matches_multipliers(meshes, model, exponent, moving=False):
     block = low.solver.snes.getKSP().getPC().getPythonContext()
     reduced = block.pc.getFieldSplitSchurGetSubKSP()[0].getPC().getPythonContext()
     assert reduced.projected_operator is not None
+    # The translation deflation is on by default and the declared rotations
+    # leave both translations to it.
+    assert reduced.deflation is not None and len(reduced.deflation.Z) == 2
     # Check the actual retained residual, independently of the KSP recurrence.
     # A declared curved-mesh kernel must be projected on both RHS and action.
     # The operator is the retained one and not the KSP's: the KSP solves the

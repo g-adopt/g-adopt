@@ -49,18 +49,36 @@ Merely attaching the basis to the displacement diagonal left the two-rank
 moving-coastline solve stagnating; matching the outer projection resolved it.
 
 The displacement block of `ReducedGIABlockPC` holds the whole consistent
-tangent, the weight of the ocean column of the sea-level load included. That
-term cancels the restoring force on a rigid translation of the mantle with its
-induced potential, so with a large ocean the retained system has $d$
-eigenvalues close to zero. The `Real` rows of `CentreOfMass` fix the
-translation in the full system, but the retained solve does not see them. The
-retained solve therefore deflates the translations: with
+tangent, so the retained system is the exact block 0. With a fluid core, a
+rigid translation of the mantle with its induced potential is a near-null
+direction of this block at every ocean area. The `Real` rows of
+`CentreOfMass` fix the translation in the full system, and the retained solve
+does not see them. On the 1000 km test sphere, the fraction of the
+translation stiffness that is left after the potential responds is
+$6\times10^{-4}$ to $7\times10^{-4}$, at 5 % and at 95 % ocean. The weight of
+the ocean column of the sea-level load is part of this block, because the sea
+level depends on $u$ through $-u\cdot n$. The Slate complement of the DG
+family (`CondensedBlockPC`) leaves that term out, because Slate cannot
+compile it. That complement is therefore the approximation, and it stiffens
+the translation in proportion to the ocean area: the fraction is 0.003 to
+0.014 at 5 % ocean and 0.15 at 95 % ocean. `CondensedBlockPC` has no
+deflation, so its inner solve can stall in the same way when the ocean is
+small.
+
+The retained solve of `ReducedGIABlockPC` deflates the translations: with
 $Z=[(e_k,\psi_k)]$, $\psi_k=-(A_{\psi\psi}+B)^{-1}A_{\psi u}e_k$ and
 $E=Z^TAZ$, it solves $PA\tilde x=Pb$ with $P=I-AZE^{-1}Z^T$ and returns
 $x=Qb+(I-QA)\tilde x$, $Q=ZE^{-1}Z^T$. This identity is exact, so the
-converged block-0 solution does not change; the Krylov method no longer
-sees the near-null directions. The option `condensed_deflate_translations`
-(default true) switches it off.
+converged block-0 solution does not change, and the Krylov method no longer
+sees the near-null directions. The residual of $x$ against $b$ is the Krylov
+residual $Pb-PA\tilde x$. The inner `rtol` is scaled by $|b|/|Pb|$ at every
+application, so the inner solve stops at the same residual against $|b|$ as
+without the deflation. A translation in a declared nullspace is left out of
+$Z$. An $E$ that is singular to working precision raises an error. The option
+`condensed_deflate_translations` (default true) switches the deflation off,
+and `condensed_deflation_psi_ksp_*` configure the potential solves. A key in
+`solver_parameters` reaches the forward, adjoint and tangent solves. A
+command-line option reaches only the solve whose options prefix it names.
 
 The direct constitutive block owns forward/replay and the first reverse solve.
 Its transpose matrix receives the same symmetric DtN correction. Because that
