@@ -3,7 +3,7 @@
 import firedrake as fd
 import numpy as np
 
-from gadopt.postseismic import build_stress_glut, normalised_gaussian_delta
+from gadopt.earthquake_sources import build_stress_glut, normalised_gaussian_delta
 
 
 def test_stress_glut_conserves_moment_and_keeps_patch_locations():
