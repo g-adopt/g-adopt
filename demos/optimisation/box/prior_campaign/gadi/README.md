@@ -12,7 +12,7 @@ worktree (revision 3, sections 3 and 4). The run outputs are not in git.
 | `job_env.sh` | The environment block of every job. It sets `ENV_FILE`, sources it after `MY_GADOPT`, and prints the code, the versions and the node. |
 | `run_flags.sh` | The flags of the runs: `COMMON`, `NEWTON`, `ROL` and one array per arm. |
 | `gates_gn.pbs` | The tiny-case gates: G0 against the parent commit, `check_gauss_newton.py` and `check_box_hessian.py`. 16 GB, 1 h. |
-| `smoke_gn.pbs` | The 64-cell smoke: `timing.json`, case (c) against Setonix, G11, and short runs of T-ROL and T-N (2 iterations) and of T-GN-R-EW and T-GN-R (2 iterations, Krylov cap 5). 24 GB, 3 h. |
+| `smoke_gn.pbs` | The 64-cell smoke: `timing.json`, case (c) against Setonix, G11, and short runs of T-ROL and T-N (2 iterations) and of T-GN-R-EW and T-GN-R (2 iterations, Krylov cap 5). 24 GB, 4 h. |
 | `inverse.pbs` | One run of `inverse.py` with the arguments of `<run directory>/args`. 24 GB, 20 h. |
 | `submit_gn.sh` | Submits phase `gates`, `runs` or `optional <arm>`. Runs on a Gadi login node. The header holds the decision rule in words. |
 | `sync_code.sh` | Copies one commit to Gadi and compares the md5 of every tracked file under `gadopt/` and `demos/optimisation/box/`. Runs on reunion. |
@@ -56,7 +56,7 @@ find `qsub`, `qstat` or `module`.
 
 The smoke job runs the parts that the rule needs first (timing, the container gate,
 G11). The Gauss-Newton smoke runs have a Krylov cap of 5, so the job ends inside its
-3 h limit. Each job exits with status 1 when one of its parts failed.
+4 h limit. Each job exits with status 1 when one of its parts failed.
 
 CAUTION: do not change a code copy while a job uses it. `sync_code.sh` refuses an
 existing directory for this reason.

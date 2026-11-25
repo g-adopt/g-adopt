@@ -12,7 +12,7 @@
 # results of a phase, writes GATES.md, and only then submits the next.
 #
 # Phase "gates": gates_gn.pbs (the tiny-case checks, 16 GB, 1 h) and smoke_gn.pbs
-#   (the 64-cell smoke, timing.json and G11, 24 GB, 3 h). GATES.md must hold r_GN,
+#   (the 64-cell smoke, timing.json and G11, 24 GB, 4 h). GATES.md must hold r_GN,
 #   full_per_forward and the forward time of timing.json before phase "runs".
 # Phase "runs": the four required runs, 24 GB, 20 h each:
 #   T-ROL   rol-lbfgs, L2, free walls, radius 1.0      the g-adopt baseline

@@ -26,7 +26,7 @@
 #   qsub -v CODE=<code copy>,OUT=<run directory> smoke_gn.pbs
 #PBS -P nm03
 #PBS -q normal
-#PBS -l ncpus=1,mem=24GB,walltime=03:00:00,jobfs=10GB
+#PBS -l ncpus=1,mem=24GB,walltime=04:00:00,jobfs=10GB
 #PBS -l storage=gdata/nm03+scratch/nm03+gdata/fp50
 #PBS -l wd
 #PBS -j oe
