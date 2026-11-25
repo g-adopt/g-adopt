@@ -1747,7 +1747,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
 
         A CG on the condensed displacement split becomes a GMRES of the same
         length when the material makes that operator nonsymmetric, unless
-        the caller named the Krylov method in `extras`.
+        the caller named the Krylov method in `extras`. For the same reason
+        the CG eigenvalue estimate of the Chebyshev smoother of the
+        displacement GAMG (`gadopt.gia_presets.DISPLACEMENT_GAMG_ESTEIG`)
+        becomes a GMRES estimate of the same length: Lanczos gives the
+        extreme eigenvalues of a symmetric operator only.
 
         The rebuild rule of the cached preconditioner pieces is not set
         here. Every family and DtN representation uses the rule of
@@ -1769,6 +1773,11 @@ class SelfGravitatingGIASolver(SolverConfigurationMixin):
                     key: "gmres",
                     prefix + "ksp_gmres_restart":
                         self.solver_parameters.get(prefix + "ksp_max_it", 50)})
+            key = prefix + "mg_levels_esteig_ksp_type"
+            user_named = bool(extras) and key in extras
+            if (self.solver_parameters.get(key) == "cg" and not user_named
+                    and self.rheology_nonlinear):
+                self.add_to_solver_config({key: "gmres"})
 
     def set_solver(self) -> None:
         """Build the step variant: stock, low-rank or quadrature."""

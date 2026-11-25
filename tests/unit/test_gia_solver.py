@@ -1006,6 +1006,43 @@ def test_the_preset_options_and_the_derivative_cap(meshes):
                     default_options=False)
 
 
+@pytest.mark.parametrize("model,load,estimate", [("maxwell2", "sea_moving", "cg"),
+                                                 ("power", "sea_fixed", "gmres")])
+def test_the_chebyshev_estimates_of_block_0_follow_the_symmetry(meshes, model, load,
+                                                                estimate):
+    """The Lanczos estimates reach every solve, and leave a nonsymmetric block.
+
+    The iterative preset estimates the Chebyshev interval of both block-0
+    GAMG smoothers with CG (`gadopt.gia_presets.DISPLACEMENT_GAMG_ESTEIG`,
+    `POTENTIAL_GAMG_ESTEIG`). CG is valid for a symmetric smoothed operator
+    only, so under a power law the displacement split must fall back to
+    GMRES of the same length, while the potential split, which holds no
+    material term, keeps CG. The derivative solves read the same dictionary
+    (`adjoint_solver_parameters`), so they must carry the same keys.
+    """
+    from gadopt.gia_presets import (DISPLACEMENT_GAMG_ESTEIG,
+                                    POTENTIAL_GAMG_ESTEIG)
+    case = Case(family="Quadrature", scheme="bdf2", representation="lowrank",
+                model=model, core="fluid", centre=True, load=load)
+    solver, _, _ = C.build_new(
+        meshes, case, solver_parameters="iterative", nullspace="rigid_rotation",
+        default_options=False)
+    displacement = "dtn_fieldsplit_0_condensed_fieldsplit_0_"
+    potential = "dtn_fieldsplit_0_condensed_fieldsplit_1_lowrank_"
+    for parameters in (solver.solver_parameters, solver.adjoint_solver_parameters()):
+        assert parameters[displacement + "mg_levels_esteig_ksp_type"] == estimate
+        for key in ("mg_levels_esteig_ksp_max_it", "mg_levels_ksp_chebyshev_esteig"):
+            assert parameters[displacement + key] == DISPLACEMENT_GAMG_ESTEIG[key]
+        for key, value in POTENTIAL_GAMG_ESTEIG.items():
+            assert parameters[potential + key] == value
+    # A caller who names the estimate keeps it, also under a power law.
+    named = {displacement + "mg_levels_esteig_ksp_type": "cg"}
+    solver, _, _ = C.build_new(
+        meshes, case, solver_parameters="iterative", nullspace="rigid_rotation",
+        default_options=False, extra=named)
+    assert solver.solver_parameters[displacement + "mg_levels_esteig_ksp_type"] == "cg"
+
+
 @pytest.mark.parametrize("model,load", [("maxwell2", "sea_moving"),
                                         ("power", "sea_fixed")])
 def test_the_lag_options_are_accepted_on_the_quadrature_lowrank_path(meshes, model, load):

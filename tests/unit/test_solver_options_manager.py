@@ -14,7 +14,8 @@ literal that disagrees fails here rather than in a benchmark six weeks later.
 """
 import pytest
 
-from gadopt.gia_presets import selfgrav_dtn_iterative_solver_parameters
+from gadopt.gia_presets import (DISPLACEMENT_GAMG_ESTEIG, POTENTIAL_GAMG_ESTEIG,
+                                selfgrav_dtn_iterative_solver_parameters)
 from gadopt.gravity_solver import (iterative_gravity_solver_parameters,
                                    lowrank_gravity_solver_parameters)
 from gadopt.solver_options_manager import GAMG_PARAMETERS, gamg_parameters
@@ -195,3 +196,136 @@ class TestGamgParameters:
         """
         assert GAMG_PARAMETERS["pc_gamg_square_graph"] == 100
         assert not isinstance(GAMG_PARAMETERS["pc_gamg_square_graph"], bool)
+
+
+#: route name -> (preset keyword arguments, the GAMG prefix of the potential
+#: split, the GAMG prefix of the displacement split) for every route whose
+#: block 0 is the nested `(u, psi)` sweep of `gadopt.CondensedBlockPC` or
+#: `gadopt.ReducedGIABlockPC`. The first route is the one the Quadrature
+#: history runs in production (`ReducedGIABlockPC` with the low-rank DtN).
+POTENTIAL_SPLIT_ROUTES = {
+    "condensed-lowrank": (
+        dict(condensed=True, dtn_representation="lowrank"),
+        "dtn_fieldsplit_0_condensed_fieldsplit_1_lowrank_",
+        "dtn_fieldsplit_0_condensed_fieldsplit_0_"),
+    "uncondensed-default-lowrank": (
+        dict(condensed=False),
+        "dtn_fieldsplit_0_condensed_fieldsplit_1_lowrank_",
+        "dtn_fieldsplit_0_condensed_fieldsplit_0_"),
+    "uncondensed-condensed-block0": (
+        dict(condensed=False, dtn_representation="multiplier"),
+        "dtn_fieldsplit_0_condensed_fieldsplit_1_",
+        "dtn_fieldsplit_0_condensed_fieldsplit_0_"),
+}
+
+
+class TestBlock0ChebyshevBounds:
+    """Both block-0 splits take a Lanczos estimate for their Chebyshev interval.
+
+    PETSc's default interval for the Chebyshev smoother of GAMG comes from ten
+    GMRES iterations from a random vector. On the potential block a low
+    estimate made the V-cycle indefinite on one rank count, and the column
+    build of `gadopt.LowRankPotentialPC` stopped with
+    `KSP_DIVERGED_INDEFINITE_PC`; on the displacement block of the 624-rank
+    Exp01 run the default estimate doubled the block-0 iteration count
+    (`gadopt.gia_presets.POTENTIAL_GAMG_ESTEIG`, `DISPLACEMENT_GAMG_ESTEIG`).
+    """
+
+    @pytest.mark.parametrize("route", list(POTENTIAL_SPLIT_ROUTES),
+                             ids=list(POTENTIAL_SPLIT_ROUTES))
+    def test_each_split_carries_its_own_bounds(self, route):
+        """The settings sit at the GAMG prefix of each split, each its own.
+
+        The upper factors differ (1.1 on the potential split, 1.2 on the
+        displacement split), so a dictionary that applied one set to both
+        prefixes fails one of the two comparisons.
+        """
+        keywords, potential, displacement = POTENTIAL_SPLIT_ROUTES[route]
+        parameters = selfgrav_dtn_iterative_solver_parameters(**keywords)
+        for prefix, expected in ((potential, POTENTIAL_GAMG_ESTEIG),
+                                 (displacement, DISPLACEMENT_GAMG_ESTEIG)):
+            assert uses_gamg(parameters, prefix)
+            for key, value in expected.items():
+                assert parameters[prefix + key] == value, (route, prefix, key)
+        assert (POTENTIAL_GAMG_ESTEIG["mg_levels_ksp_chebyshev_esteig"]
+                != DISPLACEMENT_GAMG_ESTEIG["mg_levels_ksp_chebyshev_esteig"])
+
+    def test_the_other_gamg_blocks_keep_the_default_estimate(self):
+        """Only block 0 of the iterative preset changes.
+
+        The condensed route that hands both splits to `AssembledPC` and the
+        gravity presets are not part of the measurement and must keep
+        PETSc's default estimate.
+        """
+        parameters = selfgrav_dtn_iterative_solver_parameters(condensed=True)
+        for prefix in SWEEP_ROUTES["condensed"][1]:
+            assert not any(key.startswith(prefix + "mg_levels_esteig")
+                           for key in parameters)
+        for _, preset, prefix in SHIPPED:
+            assert not any(key.startswith(prefix + "mg_levels_esteig")
+                           for key in preset)
+
+    @pytest.mark.parametrize("settings,factor",
+                             [(POTENTIAL_GAMG_ESTEIG, "1.1"),
+                              (DISPLACEMENT_GAMG_ESTEIG, "1.2")],
+                             ids=["potential", "displacement"])
+    def test_petsc_applies_the_bounds(self, settings, factor):
+        """PETSc reads the three settings: CG estimate and the upper factor.
+
+        A misspelt option is silently ignored by PETSc, so the test builds
+        GAMG with the settings on an SPD matrix and reads the smoother back
+        from the viewer of the set-up preconditioner.
+        """
+        from firedrake.petsc import PETSc
+
+        # A 1-D Laplacian with Dirichlet ends: SPD and large enough for GAMG
+        # to build a level below the finest.
+        n = 4000
+        A = PETSc.Mat().createAIJ([n, n], nnz=3, comm=PETSc.COMM_SELF)
+        for i in range(n):
+            A.setValue(i, i, 2.0)
+            if i > 0:
+                A.setValue(i, i - 1, -1.0)
+            if i < n - 1:
+                A.setValue(i, i + 1, -1.0)
+        A.assemble()
+        options = PETSc.Options()
+        prefix = "test_block0_esteig_"
+        all_settings = {"ksp_type": "preonly", "pc_type": "gamg",
+                        **gamg_parameters(), **settings}
+        for key, value in all_settings.items():
+            options[prefix + key] = value
+        try:
+            ksp = PETSc.KSP().create(comm=PETSc.COMM_SELF)
+            ksp.setOptionsPrefix(prefix)
+            ksp.setOperators(A)
+            ksp.setFromOptions()
+            ksp.setUp()
+            levels = ksp.getPC().getMGLevels()
+            assert levels > 1
+            smoother = ksp.getPC().getMGSmoother(levels - 1)
+            assert smoother.getType() == "chebyshev"
+            text = _view_to_string(smoother)
+            assert "eigenvalues estimated using cg" in text, text
+            assert f"0. {factor}]" in text, text
+        finally:
+            for key in all_settings:
+                options.delValue(prefix + key)
+
+
+def _view_to_string(ksp):
+    """The ASCII view of a KSP, as a string."""
+    import os
+    import tempfile
+    from firedrake.petsc import PETSc
+
+    fd, path = tempfile.mkstemp(suffix=".txt")
+    os.close(fd)
+    try:
+        viewer = PETSc.Viewer().createASCII(path, comm=ksp.getComm())
+        ksp.view(viewer)
+        viewer.destroy()
+        with open(path) as handle:
+            return handle.read()
+    finally:
+        os.remove(path)
