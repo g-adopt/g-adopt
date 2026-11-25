@@ -1,0 +1,10 @@
+# g-adopt commit: 0020b1f0af4db346f3a54c950f85a803ac0633c2
+# Firedrake commit: 22168dc98214e053f086f4b9688f5ee8b0297142
+# PETSc version: 3.26.0
+# host: reunion
+# date: 2026-11-24T11:59:39
+# command: python gia_record_expected.py --case adjoint --entry sea-direct-viscosity-hq2
+blocks_step_1 16
+blocks_step_2 16
+blocks_step_3 16
+blocks_step_4 16

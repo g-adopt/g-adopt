@@ -11,7 +11,27 @@ from .approximations import (
     QuasiCompressibleInternalVariableApproximation,
     TruncatedAnelasticLiquidApproximation,
 )
+from .backstress import BackstressApproximation
 from .diagnostics import *
+from .dtn_form import DtNGravityForm
+from .gia_couplings import (
+    CentreOfMass,
+    FluidCore,
+    Rotation,
+    SeaLevel,
+    SurfaceLoad,
+)
+from .gia_presets import (
+    selfgrav_dtn_iterative_solver_parameters,
+    selfgrav_dtn_lowrank_direct_solver_parameters,
+)
+from .gia_solver import SelfGravitatingGIASolver
+from .preconditioners import RigidBodyAssembledPC
+from .dtn_coupled_adjoint import (
+    CoupledLowRankDtNSolveBlock,
+    adopt_coupled_lowrank_block,
+)
+from .gravity_solver import CylindricalDtN, GravitySolver, SphericalDtN
 from .level_set_tools import (
     LevelSetSolver,
     assign_level_set_values,
@@ -21,9 +41,22 @@ from .level_set_tools import (
     min_max_height,
 )
 from .limiter import VertexBasedP1DGLimiter
-from .nullspaces import create_stokes_nullspace, rigid_body_modes
-from .preconditioners import FreeSurfaceMassInvPC, SPDAssembledPC
-from .solver_options_manager import DeleteParam
+from .nullspaces import (KernelProjectionBlock, apply_kernel_projection,
+                         check_kernel_basis, create_stokes_nullspace,
+                         near_incompressible_modes, project_out_kernel,
+                         rigid_body_modes, solenoidal_modes)
+from .internal_variable_equation import internal_variable_space
+from .preconditioners import (CondensedBlockPC, ReducedGIABlockPC,  # noqa: F401
+                              DtNMultiplierDenseSchurPC,
+                              DtNMultiplierDiagPC,
+                              DtNTwoBlockSchurPC, FreeSurfaceMassInvPC,
+                              InternalVariableSCPC,
+                              LowRankPotentialPC,
+                              NearlyIncompressibleAssembledPC, SPDAssembledPC,
+                              SubstitutedDisplacementPC)
+from .solver_options_manager import (GAMG_PARAMETERS, DeleteParam,
+                                     gamg_parameters,
+                                     nearly_incompressible_mg_parameters)
 from .stokes_integrators import (
     BoundaryNormalStressSolver,
     CoupledInternalVariableSolver,

@@ -7,6 +7,7 @@ G-ADOPT queries variables and methods from the approximation.
 """
 
 import abc
+from dataclasses import dataclass
 from numbers import Number
 from typing import Optional
 from warnings import warn
@@ -14,7 +15,7 @@ from warnings import warn
 from firedrake import Function, Identity, div, grad, inner, sqrt, sym, tr
 import ufl
 
-from .utility import ensure_constant, vertical_component
+from .utility import ensure_constant, upward_normal, vertical_component
 
 __all__ = [
     "BoussinesqApproximation",
@@ -25,7 +26,42 @@ __all__ = [
     "QuasiCompressibleInternalVariableApproximation",
     "CompressibleInternalVariableApproximation",
     "MaxwellApproximation",
+    "Gravity",
 ]
+
+
+def _is_zero_number(value) -> bool:
+    """True when `value` is the plain number zero (a Python or NumPy scalar).
+
+    A `Function` or `Constant` is never treated as zero, because its value
+    can change after the forms are built.
+    """
+    return isinstance(value, Number) and value == 0
+
+
+@dataclass(frozen=True)
+class Gravity:
+    """The gravitational acceleration, split into the parts a diagnostic asks for.
+
+    Returned by `BaseGIAApproximation.gravity`. The split exists so that
+    diagnostics, the geoid and the body force all read the same expression
+    rather than each reassembling it from `grad(psi)` and a background term
+    with a sign chosen locally.
+
+    Attributes:
+      background:   $-nabla Phi_0$, the gravity of the reference state.
+      perturbation: $nabla psi + nabla psi_"rot"$, the first-order change. The
+                    plus signs are not a slip; they follow from the sign
+                    convention documented on `BaseGIAApproximation`.
+      total:        the sum of the two.
+    """
+
+    background: ufl.core.expr.Expr
+    perturbation: ufl.core.expr.Expr
+
+    @property
+    def total(self) -> ufl.core.expr.Expr:
+        return self.background + self.perturbation
 
 
 class DeviatoricStressMixin:
@@ -103,7 +139,9 @@ class DeviatoricStressMixin:
             deviatoric_tensor -= 2 / 3 * tr(gradient) * Identity(gradient.ufl_shape[0])
         return deviatoric_tensor
 
-    def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def stress_from_grad(
+        self, gradient: ufl.core.expr.Expr, mu: ufl.core.expr.Expr | None = None
+    ) -> ufl.core.expr.Expr:
         r"""The stress a gradient-like tensor produces, including any bulk part.
 
         For a gradient-like tensor $G$ this returns $\mu\,A(G)$, with
@@ -116,11 +154,19 @@ class DeviatoricStressMixin:
         penalty term pairs against the test function, which is how the penalty
         picks up the same material coefficients as the stress it penalises.
 
+        Args:
+          gradient: the gradient-like tensor $G$.
+          mu: the shear coefficient. `None` takes `self.mu`. A solver that
+            passes its own coefficient through the equation attribute `mu`
+            (`gadopt.momentum_equation.viscosity_term`) passes it on here, so
+            the approximation is never written.
+
         Returns:
           A UFL expression for the stress produced by `gradient`.
 
         """
-        return self.mu * self.deviatoric_tensor_from_grad(gradient)
+        mu = self.mu if mu is None else mu
+        return mu * self.deviatoric_tensor_from_grad(gradient)
 
 
 class BaseApproximation(DeviatoricStressMixin, abc.ABC):
@@ -543,6 +589,44 @@ class BaseGIAApproximation(DeviatoricStressMixin):
                      $\bar{g}$ is a characteristic gravity scale (m / s^2),
                      $L$ is a characteristic length scale, often Mantle depth (m),
                      $\\mu$ is a characteristic shear modulus (Pa).
+      self_gravity_number:
+                     Nondimensional number $\\Lambda$ scaling the gravitational
+                     Poisson equation once the potential is scaled by
+                     $\\bar{g} L$,
+                     $$ \\Lambda = \\frac{4 \\pi G \\bar{\\rho} L}{\\bar{g}}$,
+                     which is 1.1116 for the Earth values above. `None`, the
+                     default, means this system carries no gravitational
+                     potential at all and the coupling terms must not be
+                     assembled; every approximation that predates self-gravity
+                     therefore keeps its present behaviour untouched.
+
+    The sign convention for the potential, which every self-gravity term and the
+    geoid depend on and which is *not* the Newtonian one:
+
+    > $\\psi$ is `GravitySolver`'s potential, i.e. minus the Newtonian potential.
+    > $\\nabla^2 \\psi = -4 \\pi G \\rho$, the perturbation gravity is
+    > $g_1 = +\\nabla \\psi$, and a positive point mass has $\\psi = +GM/r$.
+
+    The convention is forced rather than chosen: the whole boundary treatment of
+    `gadopt/gravity_solver.py` (the monopole datum, the DtN rows, the mass sheets)
+    is anchored to it and is not sign-symmetric in $\\psi$. The consequence that
+    has been got wrong before is that both body-force terms in
+    `momentum_equation.py` carry a MINUS; the geoid, whose sign is the other
+    place this convention bites, is derived in `geoid`.
+
+    Two further non-dimensional numbers belong with $\\Lambda$ and are recorded
+    here because they are written down nowhere else. The rotation rate enters the
+    centrifugal potential as $\\Omega^2$, made dimensionless by $\\bar{g}/L$:
+
+    $$ \\tilde{\\Omega}^2 = \\Omega^2 L / \\bar{g} \\approx 1.6 \\times 10^{-3} $$
+
+    for $\\Omega = 7.29 \\times 10^{-5}$ rad/s, $L = 2871$ km and
+    $\\bar{g} = 9.81$ m/s^2. And the scaling that symmetrises the coupled
+    Jacobian is $\\theta_{\\psi} = B_{\\mu} / \\Lambda$ for the potential rows --
+    but *not* for the rotation rows, whose scaling is a third, independent
+    constant containing $\\Omega^2$, which $\\theta_{\\psi}$ does not. It is
+    derived where the rotation rows are written, not here; the point of saying so
+    is that nobody should assume the two are the same constant.
     """
 
     def __init__(
@@ -553,12 +637,97 @@ class BaseGIAApproximation(DeviatoricStressMixin):
         *,
         g: Function | Number = 1,
         B_mu: Function | Number = 1,
+        self_gravity_number: Function | Number | None = None,
     ):
         self.density = ensure_constant(density)
         self.shear_modulus = ensure_constant(shear_modulus)
         self.viscosity = ensure_constant(viscosity)
         self.g = ensure_constant(g)
         self.B_mu = ensure_constant(B_mu)
+        # `None` and not a default of zero: zero would be a legitimate physical
+        # limit (a fixed potential), whereas `None` says the system has no
+        # potential field to couple to, which is what every existing caller means.
+        self.self_gravity_number = (
+            None if self_gravity_number is None else ensure_constant(self_gravity_number)
+        )
+
+    def gravity(self, psi=None, psi_rot=None, *, mesh=None) -> Gravity:
+        r"""Gravitational acceleration, background and perturbation, as UFL.
+
+        Under the sign convention documented on this class the perturbation
+        gravity is $+\nabla \psi$, so the rotational contribution enters with the
+        same sign provided $\psi_{rot}$ is the *negated* centrifugal potential
+        produced by `momentum_equation.rotational_potential`.
+
+        The background part is $-\nabla \Phi_0 = -g_0 \hat{r}$, taken from the
+        `g` supplied to this approximation. Computing $\Phi_0$ from the reference
+        density instead -- so that the background and the perturbation come from
+        one Poisson solve -- is a deliberate omission: the enclosed-mass argument
+        it rests on is a three-dimensional one and is simply false for a disc, so
+        it must not be switched on for the 2-D prototype. The switch belongs here
+        when a 3-D model needs it.
+
+        Arguments:
+          psi:     the gravitational potential perturbation, or None for a
+                   background-only result.
+          psi_rot: the negated centrifugal potential, or None when the model does
+                   not carry rotational feedback.
+          mesh:    mesh on which to build the background direction. Defaults to
+                   the domain of `psi`. Pass it explicitly when the potential
+                   lives on a parent mesh and the diagnostic is wanted on a
+                   submesh.
+
+        Returns:
+          A `Gravity` with `background`, `perturbation` and `total`.
+        """
+        if mesh is None:
+            if psi is None:
+                raise ValueError(
+                    "gravity() needs either a potential or an explicit mesh."
+                )
+            mesh = ufl.domain.extract_unique_domain(psi)
+
+        background = -self.g * upward_normal(mesh)
+
+        perturbation = ufl.zero(background.ufl_shape)
+        if psi is not None:
+            perturbation = perturbation + grad(psi)
+        if psi_rot is not None:
+            perturbation = perturbation + grad(psi_rot)
+
+        return Gravity(background=background, perturbation=perturbation)
+
+    def geoid(self, psi) -> ufl.core.expr.Expr:
+        r"""Geoid height from the potential, via Bruns' relation.
+
+        $$ N = + \psi / g_0 $$
+
+        Evaluate at the surface for the geoid proper.
+
+        **The plus sign is derived here rather than quoted, because this is the
+        sign that reaches the science and nothing else in the test suite sees
+        it.** The geoid is the surface on which the total potential keeps its
+        reference value. Writing $\Phi$ for the Newtonian potential in the
+        physicists' convention ($\nabla^2 \Phi = +4 \pi G \rho$,
+        $\bf g = -\nabla \Phi$, so $d\Phi_0/dr = +g_0$ with $g_0 > 0$),
+
+        $$ \Phi_0(R + N) + \Phi_1 = \Phi_0(R) \implies g_0 N + \Phi_1 = 0 $$
+
+        so $N = -\Phi_1/g_0$, and since this class' $\psi$ is $-\Phi$ (see the
+        class docstring), $N = +\psi/g_0$. A mass excess has $\Phi_1 < 0$, hence
+        $\psi > 0$ and $N > 0$: the geoid bulges *towards* the mass, which is the
+        standard result and the thing to assert in a test.
+
+        Beware of Bruns' relation quoted as $N = T/g_0$ "with $T$ the Newtonian
+        disturbing potential". Geodesy takes the potential positive towards mass,
+        the opposite of the physicists' sign, so the $T$ in that formula is
+        $-\Phi_1$, i.e. $+\psi$ and not $-\psi$. Substituting the physicists'
+        sign into the geodetic formula flips the geoid, and a flipped geoid does
+        not make anything fail: it feeds `SL = SL_0 + dphi - du_r` in the sea
+        level equation and inverts self-attraction and loading while leaving the
+        magnitude entirely plausible.
+        """
+        return psi / self.g
 
     def buoyancy(self, displacement):
         # Buoyancy term due to the advection of the background density field
@@ -774,6 +943,86 @@ class InternalVariableApproximation(BaseGIAApproximation):
         self.transition_stress = transition_stress
         self.background_stress = background_stress
 
+    def internal_variable_space(
+        self, mesh, degree: int = 1, symmetric: bool = True
+    ):
+        r"""The discontinuous tensor space that holds every internal variable.
+
+        One field of shape `(n, d, d)` for the `n` Maxwell elements of this
+        rheology, built by `gadopt.internal_variable_equation.internal_variable_space`
+        with `n = len(self.maxwell_times)`. The solvers slice it per element;
+        `stress` and `deviatoric_stress` keep taking the list of slices.
+
+        Args:
+          mesh: the mesh to build the space on.
+          degree: polynomial degree of the discontinuous element (default 1).
+          symmetric: store only the independent components of each
+            `(d, d)` block (default True).
+
+        Returns:
+          A Firedrake `TensorFunctionSpace`.
+
+        """
+        # Imported here: `internal_variable_equation` imports `equations`,
+        # which imports this module.
+        from .internal_variable_equation import internal_variable_space
+
+        return internal_variable_space(
+            mesh, len(self.maxwell_times), degree=degree, symmetric=symmetric
+        )
+
+    @property
+    def n_history_tensors(self) -> int:
+        """The number of `(d, d)` history tensors this rheology carries.
+
+        One internal variable per Maxwell element. A rheology with another
+        history, such as `gadopt.BackstressApproximation`, overrides this.
+        """
+        return len(self.maxwell_times)
+
+    def history_terms(self) -> list:
+        """The residual terms of the weak history equation of this rheology.
+
+        A solver that keeps the history as a discontinuous unknown builds one
+        `Equation` from these terms. The approximation supplies them, so a
+        solver does not test for the type of the rheology: the Maxwell
+        relaxation of `gadopt.internal_variable_equation` here, the creep and
+        backstress equation of `gadopt.BackstressApproximation` there.
+
+        Returns:
+          A list of term functions.
+        """
+        # Imported here: `internal_variable_equation` imports `equations`,
+        # which imports this module.
+        from .internal_variable_equation import internal_variable_history_terms
+
+        return internal_variable_history_terms
+
+    #: Whether `history_terms` carries the boundary part that keeps the
+    #: coupled Jacobian symmetric under a `"u"` or `"un"` displacement
+    #: condition (`history_strain_term`). A rheology without it supports
+    #: natural displacement boundaries only.
+    history_supports_displacement_conditions = True
+
+    def quadrature_update(self, owner):
+        """The local constitutive update of this rheology at quadrature points.
+
+        A solver that eliminates the history at quadrature points solves one
+        scalar equation per point (`gadopt.constitutive_integrators`). Which
+        equation is a property of the rheology, so the approximation builds
+        the update object.
+
+        Args:
+          owner: the solver that owns the mixed solution, the time step and
+            the `BDF2History` of the stored history.
+
+        Returns:
+          A `gadopt.constitutive_integrators.MaxwellQuadratureUpdate`.
+        """
+        from .constitutive_integrators import MaxwellQuadratureUpdate
+
+        return MaxwellQuadratureUpdate(owner)
+
     def deviatoric_strain(self, u: Function) -> ufl.core.expr.Expr:
         r"""The deviatoric strain $\mathrm{dev}(\mathrm{sym}(\nabla u))$.
 
@@ -822,7 +1071,9 @@ class InternalVariableApproximation(BaseGIAApproximation):
             eta_eff += eta / (maxwell_time + dt)
         return eta_eff
 
-    def stress_from_grad(self, gradient: ufl.core.expr.Expr) -> ufl.core.expr.Expr:
+    def stress_from_grad(
+        self, gradient: ufl.core.expr.Expr, mu: ufl.core.expr.Expr | None = None
+    ) -> ufl.core.expr.Expr:
         r"""The stress a gradient-like tensor produces, deviatoric plus bulk.
 
         This approximation is compressible with a finite bulk modulus, so the
@@ -838,10 +1089,16 @@ class InternalVariableApproximation(BaseGIAApproximation):
         normal displacement must feel for the same reason the interior
         divergence does.
 
-        The solver assigns $\mu$ before assembly. `InternalVariableSolver` uses
-        the effective shear coefficient of its substituted problem.
-        `CoupledInternalVariableSolver` uses $\mu_0$ to match its elastic
-        displacement block.
+        The solver chooses $\mu$: either it assigns `self.mu` before
+        assembly, or it passes the coefficient as `mu`.
+        `InternalVariableSolver` uses the effective shear coefficient of its
+        substituted problem. `CoupledInternalVariableSolver` uses $\mu_0$ to
+        match its elastic displacement block. `gadopt.gia_solver` passes its
+        coefficient and does not write the approximation.
+
+        Args:
+          gradient: the gradient-like tensor $G$.
+          mu: the shear coefficient $\mu$; `None` takes `self.mu`.
 
         Returns:
           A UFL expression for the stress produced by `gradient`.
@@ -849,7 +1106,7 @@ class InternalVariableApproximation(BaseGIAApproximation):
         """
         volumetric = self.bulk_shear_ratio * self.bulk_modulus * tr(gradient)
         return (
-            super().stress_from_grad(gradient)
+            super().stress_from_grad(gradient, mu=mu)
             + volumetric * Identity(gradient.ufl_shape[0])
         )
 
@@ -900,6 +1157,51 @@ class InternalVariableApproximation(BaseGIAApproximation):
             dev_stress -= 2 * mu * m
         return dev_stress
 
+    def elastic_stress(self, u) -> ufl.core.expr.Expr:
+        r"""The part of the stress that does not read the internal variables.
+
+        $$ \sigma_e = \kappa_r\,\kappa\,(\nabla \cdot u)\,I
+           + 2\mu_0\,\mathrm{dev}\,\varepsilon(u), $$
+
+        the instantaneous (unrelaxed) response. Together with
+        `relaxed_stress` it is the stress of `stress`:
+        $\sigma = \sigma_e + \sigma_r$. The two parts exist separately for a
+        solver that integrates them with two quadrature rules: a history
+        stored at the points of one rule can only be evaluated at those
+        points (`gadopt.gia_solver.SelfGravitatingGIASolver`,
+        `history_quad_degree`). The sum is the same expression as `stress`
+        up to the order of the floating-point operations, so a solver that
+        integrates both parts with one rule uses `stress` itself.
+
+        Args:
+          u: the displacement.
+
+        Returns:
+          A UFL expression for the elastic stress.
+        """
+        div_u = div(u) * Identity(len(u))
+        stress = self.bulk_shear_ratio * self.bulk_modulus * div_u
+        stress += self.mu0 * self.deviatoric_tensor_from_grad(grad(u))
+        return stress
+
+    def relaxed_stress(self, internal_variables) -> ufl.core.expr.Expr:
+        r"""The part of the stress that the internal variables carry.
+
+        $$ \sigma_r = -\sum_i 2\mu_i m_i, $$
+
+        the relaxation away from the elastic response (`elastic_stress`). It
+        is linear in the internal variables and does not read the
+        displacement directly; on a history eliminated at quadrature points
+        the displacement enters through the updated $m_i$.
+
+        Args:
+          internal_variables: one `(d, d)` expression per Maxwell element.
+
+        Returns:
+          A UFL expression for the relaxed stress.
+        """
+        return -sum(2 * mu * m for mu, m in zip(self.shear_modulus, internal_variables))
+
     def second_stress_invariant(self, dev_stress):
         """Return the second deviatoric stress invariant sqrt(J2).
 
@@ -946,8 +1248,26 @@ class InternalVariableApproximation(BaseGIAApproximation):
         # raised to a positive power correctly evaluates to 0. Conditioning
         # on the exponent rather than the base avoids incorrectly setting
         # a^(n-1) = 1 for n>1 when background_stress = 0.
-        a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), a ** (n - 1))
         b_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1), b ** (n - 1))
+        # With no background stress (a plain number 0, the GIAMIP case) the
+        # background term is 1 where n = 1 and 0 where n > 1, written without
+        # `a ** (n - 1)`. The values are the same; the reason is the
+        # derivative. When the exponent is a `Function` it is a coefficient of
+        # the residual, and a solve block that differentiates the residual with
+        # respect to every dependency (the cached solver blocks of Firedrake
+        # PR 4638) forms d(a ** (n - 1)) / dn = a ** (n - 1) ln(a). UFL folds
+        # a = 0 / sigma* to the literal 0 and evaluates ln(0) at form
+        # construction, which raises "math domain error".
+        # A background stress given as a `Function` or `Constant` keeps the
+        # general form; where it is 0 and n > 1, the derivatives in n and in
+        # sigma* (for n < 2) of `a ** (n - 1)` are NaN, which matters only if
+        # the adjoint of the exponent or the transition stress is evaluated.
+        if _is_zero_number(self.background_stress):
+            a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1),
+                                    ufl.as_ufl(0))
+        else:
+            a_pow = ufl.conditional(ufl.eq(n - 1, 0), ufl.as_ufl(1),
+                                    a ** (n - 1))
         return (1 + a_pow) / (1 + b_pow)
 
 

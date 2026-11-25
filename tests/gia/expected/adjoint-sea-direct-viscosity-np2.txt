@@ -1,0 +1,10 @@
+# g-adopt commit: 43b73925ad13b52eb9d52ef8e81c86e81608c2c8
+# Firedrake commit: 22168dc98214e053f086f4b9688f5ee8b0297142
+# PETSc version: 3.26.0
+# host: phoenix
+# date: 2026-11-24T00:26:10
+# command: python gia_record_expected.py --case adjoint
+blocks_step_1 16
+blocks_step_2 16
+blocks_step_3 16
+blocks_step_4 16

@@ -10,6 +10,7 @@ $$
 """
 
 from firedrake import *
+from ufl.core.expr import Expr
 from ufl.algorithms import expand_derivatives, extract_coefficients
 from ufl.indexed import Indexed
 
@@ -44,7 +45,12 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     Estimation of penalty parameters for symmetric interior penalty Galerkin methods.
     Journal of Computational and Applied Mathematics, 206(2), 843-872.
     """
-    mu = eq.approximation.mu
+    # The shear coefficient of the penalty and symmetrising terms. A solver
+    # that must not write `approximation.mu` (two solvers can share one
+    # approximation) passes its own coefficient as the equation attribute
+    # `mu`; every other solver leaves it out and the approximation's value
+    # is used.
+    mu = eq.mu if hasattr(eq, "mu") else eq.approximation.mu
     stress = eq.stress
     F = inner(nabla_grad(eq.test), stress) * eq.dx
 
@@ -53,8 +59,17 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
     # Spatial variation alone does not make `mu` solution-dependent.
     mu_nonlinear = any(depends_on(mu, c) for c in extract_coefficients(trial))
 
+    # The SIPG penalty carries the facet-to-cell size ratio, which is the
+    # 1/h of the Nitsche penalty. On an interior facet the cell volume is the
+    # average of the two cells; on an exterior facet there is one cell, and
+    # its volume is written without `avg`. Standard assembly evaluates
+    # `avg(CellVolume)` on an exterior facet as that one cell's volume, but
+    # Slate evaluates it as half of it, which doubles the boundary penalty in
+    # a statically condensed operator. Writing the exterior coefficient
+    # without `avg` gives the same matrix under both assembly paths.
     sigma = interior_penalty_factor(eq)
-    sigma *= FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
+    sigma_interior = sigma * FacetArea(eq.mesh) / avg(CellVolume(eq.mesh))
+    sigma_exterior = sigma * FacetArea(eq.mesh) / CellVolume(eq.mesh)
     if not is_continuous(eq.trial_space):
         if mu_nonlinear:
             raise NotImplementedError(
@@ -66,7 +81,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
         )
 
         F += (
-            sigma
+            sigma_interior
             * inner(tensor_jump(eq.n, eq.test), avg(mu) * trial_tensor_jump)
             * eq.dS
         )
@@ -118,10 +133,10 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # constrains, volumetric part included.
             F += (
                 2
-                * sigma
+                * sigma_exterior
                 * inner(
                     outer(eq.n, eq.test),
-                    eq.approximation.stress_from_grad(jump_gradient),
+                    eq.approximation.stress_from_grad(jump_gradient, mu=mu),
                 )
                 * eq.ds(bc_id)
             )
@@ -139,7 +154,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 jump_tensor = eq.approximation.deviatoric_tensor_from_grad(jump_gradient)
-                F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
+                F += sigma_exterior * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "un" in bc:
             un_jump = dot(eq.n, trial) - bc["un"]
@@ -151,10 +166,10 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             # normal jump volumetrically as well as deviatorically.
             F += (
                 2
-                * sigma
+                * sigma_exterior
                 * inner(
                     outer(eq.n, eq.test),
-                    eq.approximation.stress_from_grad(jump_gradient),
+                    eq.approximation.stress_from_grad(jump_gradient, mu=mu),
                 )
                 * eq.ds(bc_id)
             )
@@ -169,7 +184,7 @@ def viscosity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
             if mu_nonlinear:
                 dmu = expand_derivatives(derivative(mu, trial, eq.test))
                 jump_tensor = eq.approximation.deviatoric_tensor_from_grad(jump_gradient)
-                F += sigma * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
+                F += sigma_exterior * dmu * inner(jump_gradient, jump_tensor) * eq.ds(bc_id)
 
         if "stress" in bc:  # a momentum flux, a.k.a. "force"
             # Here we need only the third term because we assume jump_u = 0
@@ -244,8 +259,166 @@ def hydrostatic_prestress_advection_and_buoyancy_term(
     return F
 
 
+def self_gravity_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
+    r"""Self-gravitational body force $-rho_0 nabla psi$ in the momentum equation.
+
+    The perturbed gravitational potential exerts a body force $rho_0 bb g_1$ on
+    the reference density, and with every term written as if on the left-hand
+    side the residual contribution is
+
+    $$
+      int_Omega -B_mu rho_0 (grad psi) * bb w dx
+    $$
+
+    **The sign is a MINUS, and that is the convention rather than an oversight.**
+    The coupled $psi$ is `GravitySolver`'s potential, which is *minus* the
+    Newtonian one: $nabla^2 psi = -4 pi G rho$, the perturbation gravity is
+    $bb g_1 = + grad psi$, and a positive point mass has $psi = + G M \/ r$, whose
+    gradient points towards the mass. The attraction of a mass excess is
+    therefore $+ rho_0 grad psi$ and the residual carries its negative. The same
+    minus is what makes the coupled Jacobian symmetric: the $(bb u, psi)$ and
+    $(psi, bb u)$ blocks must carry the *same* constant, not opposite ones, and
+    with this sign both are $-B_mu$ once the potential rows are scaled by
+    $theta_psi = B_mu \/ Lambda$.
+
+    Takes the potential through `eq_attrs` as `psi`, so that the coupled solver
+    can hand in a field living on a different (parent) mesh; the volume measure
+    then has to be an intersected one, which `Equation` accepts through
+    `intersect_measures`.
+    """
+    B_mu = eq.approximation.B_mu
+    rho0 = eq.approximation.density
+
+    return -B_mu * rho0 * dot(grad(eq.psi), eq.test) * eq.dx
+
+
+def rotational_potential_term(
+    eq: Equation, trial: Argument | Indexed | Function
+) -> Form:
+    r"""Rotational body force $-rho_0 nabla psi_"rot"$ in the momentum equation.
+
+    A perturbation of the rotation vector changes the centrifugal potential, and
+    that change acts on the reference density exactly as the self-gravitational
+    one does:
+
+    $$
+      int_Omega -B_mu rho_0 (grad psi_"rot") * bb w dx
+    $$
+
+    **The sign is a MINUS, matching `self_gravity_term`, and it is a minus
+    because $psi_"rot"$ is the *negated* centrifugal potential** -- see
+    `rotational_potential`, which is the only thing that should ever build it.
+    Writing the two adjacent body forces with opposite signs, as the ordinary
+    Newtonian convention for the centrifugal potential would require, is how the
+    pair gets "fixed" into agreement by the next reader.
+
+    Unlike $psi$, $psi_"rot"$ is not a solved field: it is an explicit low-order
+    polynomial in the coordinates times the rotation scalars, so this term is
+    linear in those scalars and its transpose is the inertia-perturbation row.
+    It never enters the Dirichlet-to-Neumann treatment, because it is not a
+    solution of Laplace's equation ($nabla^2 psi_"rot" = +4 Omega^2 m_3$).
+    """
+    B_mu = eq.approximation.B_mu
+    rho0 = eq.approximation.density
+
+    return -B_mu * rho0 * dot(grad(eq.psi_rot), eq.test) * eq.dx
+
+
+def rotational_potential(rotation, mesh, *, Omega_sq=1) -> Expr:
+    r"""The negated centrifugal potential perturbation, as UFL.
+
+    With the rotation vector perturbed to $bb omega = Omega (m_1, m_2, 1 + m_3)$,
+    the centrifugal potential $Phi_c = -1/2 [|bb omega|^2 r^2 - (bb omega * bb x)^2]$
+    changes to first order by $Omega^2 [m_1 x z + m_2 y z - m_3 (x^2 + y^2)]$.
+    What is returned is its *negative*,
+
+    $$
+      psi_"rot" = -Omega^2 [m_1 x z + m_2 y z - m_3 (x^2 + y^2)]
+    $$
+
+    so that it shares the sign convention of the gravitational potential $psi$
+    (minus the Newtonian potential) and both body forces read
+    $-B_mu int rho_0 grad(\cdot) * bb w$. This is the single expression the
+    momentum term, the rotation rows and any geoid diagnostic should share.
+
+    In two dimensions a disc has no polar wander: $m_1$ and $m_2$ describe a tilt
+    of the rotation axis out of a plane that has no third direction, and the only
+    surviving mode is the rotation-rate change $m_3$, giving
+    $psi_"rot" = +Omega^2 m_3 (x^2 + y^2)$. That is a genuine physical statement
+    and not a degenerate case: $m_3$ is angular-momentum conservation of the
+    disc, $delta Omega \/ Omega = -Delta I_(3 3) \/ C$.
+
+    Arguments:
+      rotation: sequence of rotation scalars. Length 1 in 2-D, holding $m_3$
+                alone; length 3 in 3-D, holding $(m_1, m_2, m_3)$. Each entry may
+                be a number, a `Constant`, or a `Real`-space function, which is
+                what the coupled solver hands in.
+      mesh:     mesh supplying the spatial coordinates. Note that the polynomial
+                is written about the coordinate origin, so the mesh must be
+                centred on the rotation axis' intersection with the equator --
+                true of the annulus and sphere meshes used here.
+      Omega_sq: the squared rotation rate, non-dimensionalised by $bar g \/ L$.
+                For the Earth $Omega^2 L \/ bar g approx 1.6 xx 10^-3$; the
+                default of 1 exists to match the module's other non-dimensional
+                numbers and is not a physical value.
+
+    Returns:
+      A scalar UFL expression.
+    """
+    dim = mesh.geometric_dimension
+    n_rot = 1 if dim == 2 else 3
+    if len(rotation) != n_rot:
+        raise ValueError(
+            f"A {dim}-dimensional mesh takes {n_rot} rotation "
+            f"scalar(s); got {len(rotation)}."
+        )
+
+    X = SpatialCoordinate(mesh)
+    # Index from the end so that the one 2-D scalar is m_3, the rotation-rate
+    # change, and the same line reads correctly for both dimensions.
+    m_3 = rotation[-1]
+
+    psi_rot = Omega_sq * m_3 * (X[0] ** 2 + X[1] ** 2)
+    if n_rot == 3:
+        m_1, m_2 = rotation[0], rotation[1]
+        psi_rot -= Omega_sq * (m_1 * X[0] * X[2] + m_2 * X[1] * X[2])
+
+    return psi_rot
+
+
+def relaxed_stress_term(eq: Equation, trial: Argument | Indexed | Function) -> Form:
+    r"""The relaxed part of a viscoelastic stress, $\int_\Omega \nabla\phi : \sigma_r \, dx$.
+
+    `eq.relaxed_stress` is $\sigma_r$, the part of the stress that the
+    internal variables carry ($-\sum_i 2\mu_i m_i$ for a Maxwell rheology,
+    `InternalVariableApproximation.relaxed_stress`). `viscosity_term`
+    integrates the whole stress with the quadrature rule of its equation.
+    This term integrates the relaxed part alone, so that an `Equation` with
+    a quadrature degree of its own can carry it: a history stored at the
+    points of one quadrature rule can only be evaluated at those points, and
+    the other terms of the momentum equation keep their own rule
+    (`InternalVariableMechanics.set_equations`).
+
+    The term has no boundary part. It serves natural displacement boundaries
+    only; the weak displacement conditions of `viscosity_term` read the
+    whole stress on the facets, where a history at cell quadrature points
+    has no value.
+
+    Args:
+      eq: the equation; reads `test`, `dx` and `relaxed_stress`.
+      trial: not read: the displacement enters through the history
+        expressions in `relaxed_stress`.
+
+    Returns:
+      The UFL form of the term.
+    """
+    return inner(nabla_grad(eq.test), eq.relaxed_stress) * eq.dx
+
+
+relaxed_stress_term.required_attrs = {"relaxed_stress"}
+relaxed_stress_term.optional_attrs = set()
 viscosity_term.required_attrs = {"stress"}
-viscosity_term.optional_attrs = {"interior_penalty"}
+viscosity_term.optional_attrs = {"interior_penalty", "mu"}
 pressure_gradient_term.required_attrs = {"p"}
 pressure_gradient_term.optional_attrs = set()
 divergence_term.required_attrs = {"u", "rho_continuity"}
@@ -254,6 +427,10 @@ momentum_source_term.required_attrs = {"source"}
 momentum_source_term.optional_attrs = set()
 hydrostatic_prestress_advection_and_buoyancy_term.required_attrs = set()
 hydrostatic_prestress_advection_and_buoyancy_term.optional_attrs = set()
+self_gravity_term.required_attrs = {"psi"}
+self_gravity_term.optional_attrs = set()
+rotational_potential_term.required_attrs = {"psi_rot"}
+rotational_potential_term.optional_attrs = set()
 
 momentum_terms = [momentum_source_term, pressure_gradient_term, viscosity_term]
 mass_terms = divergence_term

@@ -1,0 +1,15 @@
+# g-adopt commit: 66ca3cde3e807f45efaa87d051840379cd1ad67c (with local changes)
+# Firedrake commit: 22168dc98214e053f086f4b9688f5ee8b0297142
+# PETSc version: 3.26.0
+# host: phoenix
+# date: 2026-11-21T11:29:44
+# command: python gia_record_expected.py --case gravity --entry counts
+closed-2d-multiplier_cg_0 9
+closed-2d-multiplier_cg_1 11
+closed-2d-multiplier_cg_2 12
+closed-2d-lowrank_cg_0 13
+closed-2d-lowrank_cg_1 15
+closed-2d-lowrank_cg_2 18
+closed-2d-lowrank_sheet_top2_cg_direct_0 2
+closed-2d-lowrank_sheet_top2_cg_direct_1 2
+closed-2d-lowrank_sheet_top2_cg_direct_2 2

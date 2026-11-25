@@ -51,4 +51,34 @@ steps["iterative_preset"] = {
     "outputs": ["iterative_preset.dat"],
 }
 
+# The coupled internal-variable solver under its static-condensation preset.
+# Each entry is one process, so the three compile in parallel under
+# `doit run_case`. "preset" runs the solves that compare the preset with a
+# direct solve and the history layouts with each other, "operator" measures
+# the symmetry and the reuse of the condensed operator, and "pc" runs the
+# near-incompressible preconditioners and the taped solve.
+CONDENSATION_ENTRIES = ["preset", "operator", "pc"]
+
+# The (number of Maxwell elements, boundary conditions) pairs of the preset
+# rows. Three elements is the case that Firedrake's `SCPC` refuses in a layout
+# with one field per element. "weak" puts `un` on three sides, "strong" puts a
+# component-wise Dirichlet condition there.
+CONDENSATION_PRESET_CASES = [
+    (n_elements, bc_kind)
+    for bc_kind in ("weak", "strong")
+    for n_elements in (1, 2, 3)
+]
+
+# The dimensions of the divergence-free mode rows and the coarse solvers of
+# the patch multigrid rows.
+CONDENSATION_SOLENOIDAL_DIMS = [2, 3]
+CONDENSATION_MG_COARSE = ["gamg", "lu"]
+
+for entry in CONDENSATION_ENTRIES:
+    steps[f"condensation-{entry}"] = {
+        "entrypoint": "gia_condensation.py",
+        "args": f"--entry {entry}",
+        "outputs": [f"condensation-{entry}.dat"],
+    }
+
 pytest = "local"

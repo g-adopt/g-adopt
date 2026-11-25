@@ -1,0 +1,1745 @@
+r"""Gate for the two-block apply that caches `Z = A00^{-1} A01`.
+
+Design: `NOTES/team/rotation-pc/11-DESIGN-AINVB.md`. `DtNTwoBlockSchurPC` gains
+one boolean option, `dtn_schur_ainvb`. With the option on the class owns the
+apply instead of delegating to its inner `PCFIELDSPLIT`: at every operator
+change it runs `n` block-0 solves, one per `Real` row, and keeps from those
+same solves both the columns `Z = A00^{-1} A01` and the exact `n x n`
+complement `S = A11 - A10 Z`. Each forward apply then costs ONE block-0 solve
+instead of the two that `pc_fieldsplit_schur_fact_type full` pays.
+
+## Why almost every test here counts something
+
+**A preconditioner that is wrong still converges to the right answer.** It
+changes no residual, so a test that compares states passes whether or not the
+cached path works, and the defect this project pays for is a cost with no error
+message: `tests/unit/test_gia_lowrank_block0.py` exists because exactly that
+cost 8 outer iterations where 3 were needed and printed nothing. So the tests
+below assert on exact algebraic identities (on the fixture whose block 0 is a
+direct LU, where the preconditioned operator must be the identity) and on
+counts of block-0 solves (on the fixture that runs the production route).
+
+Each test says in its docstring which wrong implementation it catches.
+
+The exact identities of the cached apply (the complement against an
+independent elimination, the forward and transpose applies against the
+operator, their adjoint pairing, the transpose margin) are rows of the
+`schur` and `schur-np2` entries of the `operators` case in `tests/gia`
+(driver `gia_operators.py`); `direct_params` and `ainvb_cache` are in
+`tests/gia/gia_models/schur_ainvb.py`, which that driver and this module
+share.
+The rebuild at a change of the time step and the single build at a fixed
+operator are the rebuild rows of the `forward` case, and the gradient
+through the cached path is the `sea-iterative-viscosity` entry of the
+`adjoint` case.
+
+## The two fixtures, and why each section uses the one it does
+
+- **`direct`**: the 2-D annulus under `selfgrav_dtn_schur_solver_parameters`,
+  whose block 0 is `preonly` + assembled LU. `M0 = A00^{-1}` is then exact and
+  linear, so `S` is exact, `P^{-1} A = I` holds to round-off, and the outer
+  FGMRES must converge in one iteration. This is where the algebra is pinned.
+  `n = 13` `Real` rows (the DtN multipliers of the multiplier representation);
+  the history is the DG family, a field of block 0.
+- **`iterative`**: the same annulus under
+  `selfgrav_dtn_iterative_solver_parameters(condensed=False,
+  block0="condensed", dtn_representation="lowrank")`, whose block 0 is
+  `gadopt.CondensedBlockPC`. That class counts its own eliminations, one per
+  block-0 application, which makes it the independent witness for every count
+  identity. `n = 2` `Real` rows (the core pressure and the rotation row
+  `m3`), the same structure as production's 4.
+
+Every solver here is `gadopt.gia_solver.SelfGravitatingGIASolver`, built in
+this file (`build_direct`, `build_coupled`).
+
+**A 2-D annulus, and the 24-cell sphere at the end, establish that the
+construction works, never that it helps.** Nothing here measures wall clock,
+sweeps or speed; every performance number comes from Gadi.
+"""
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+import gadopt  # noqa: F401  - before firedrake, as the drivers do
+import firedrake as fd
+from firedrake.petsc import PETSc
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import test_dtn_multiplier_dense_schur as td  # noqa: E402
+from gadopt import CompressibleInternalVariableApproximation  # noqa: E402
+from gadopt import CylindricalDtN, SphericalDtN  # noqa: E402
+from gadopt.gia_couplings import FluidCore, Rotation, SurfaceLoad  # noqa: E402
+from gadopt.gia_presets import (  # noqa: E402
+    OMEGA_SQ_EARTH,
+    selfgrav_dtn_iterative_solver_parameters,
+)
+from gadopt.gia_solver import SelfGravitatingGIASolver  # noqa: E402
+from gadopt.preconditioners import _RebuildRule, _SchurAinvBCache  # noqa: E402
+import gadopt.preconditioners  # noqa: E402
+from gia_models.schur_ainvb import (  # noqa: E402
+    ainvb_cache,
+    direct_params,
+)
+
+
+# ---------------------------------------------------------------------------
+# Numerical floors. Every one of them is measured on the equivalent EXACT arm
+# that exists today -- `fact_type full` with `gadopt.DtNMultiplierDenseSchurPC`
+# on a `preonly` block 1, which is algebraically the same preconditioner the
+# cached path must reproduce -- and then loosened by two orders.
+# ---------------------------------------------------------------------------
+
+#: Relative floor for `P^{-1} A x = x` and `P^{-T} A^T x = x` on the `direct`
+#: fixture. Dimensionless (a ratio of vector 2-norms on the mixed state).
+#: MEASURED on the exact arm: 1.5e-9 forward, 3.7e-9 transpose. The floor is
+#: NOT round-off of the 3 277-dof system: it is the accuracy of the MUMPS LU of
+#: block 0 against an operator whose rows span several orders of magnitude
+#: (the `Real` constraint rows carry `theta_psi`, the rotation rows `Omega_sq =
+#: 1.566e-3`). 1e-7 sits two orders above what is measured and nine orders
+#: below the 2.5 that today's delegating path gives on the same vector.
+IDENTITY_FLOOR = 1e-7
+
+#: Relative floor for two dense linear-algebra objects that must agree to
+#: round-off: the cached `S` against an independent elimination of the
+#: assembled Jacobian, and the adjoint identity `<P^{-1}a, b> = <a, P^{-T}b>`.
+#: MEASURED: the adjoint identity holds to 4e-15 on the exact arm, and
+#: `test_dtn_multiplier_dense_schur.PARITY_FLOOR` uses 1e-10 for the same
+#: elimination. Kept at 1e-10 for both, five orders above what is measured.
+PARITY_FLOOR = 1e-10
+
+#: How far apart the forward and the transpose apply must sit on one vector.
+#: This is the vacuity guard for the transpose test: if the operator were
+#: symmetric, a transpose apply that secretly ran the forward path would pass.
+#: MEASURED on the exact arm: 8.6e-4 relative. The gate is 1e-5, two orders
+#: below what is measured and ten orders above the 4e-15 round-off floor.
+TRANSPOSE_MARGIN = 1e-5
+
+#: How close the two `gia_rebuild` arms must land on one another.
+#: The rule chooses only how often the complement is rebuilt, and a
+#: preconditioner changes no residual, so both arms solve the same nonlinear
+#: system to the same SNES tolerance and differ only by where inside that
+#: tolerance each one stopped. Dimensionless, a ratio of 2-norms over the
+#: whole mixed state. MEASURED on the power-law arm of this file: 6.8e-9,
+#: with 3 Newton iterations, 1 build under `per_solve` and 3 under `always`.
+#: The floor is 1e-6, two orders above it, because the quantity is the scatter
+#: of two Newton solves and not a round-off identity.
+STATE_FLOOR = 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Fixtures and accessors
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def meshes():
+    """The annulus pair every GIA unit test uses, built once for this module.
+
+    The `.msh` file is cached in `/tmp` under the same name the other suites
+    use, so it is generated at most once across the whole test run.
+    """
+    return td.meshes.__wrapped__()
+
+
+def outer_pc(solver):
+    """The outer python PC of a `SelfGravitatingGIASolver`."""
+    return solver.solver.snes.ksp.pc
+
+
+def outer_iterations(solver):
+    """Outer FGMRES iterations of the last solve."""
+    return solver.solver.snes.ksp.getIterationNumber()
+
+
+def build_direct(meshes, params, dt=1.0):
+    """The coupled solver on the annulus under a `direct`-style dictionary.
+
+    Mirrors `test_dtn_multiplier_dense_schur._build_solver` -- same geometry,
+    same constants, same space (DG history, multiplier DtN representation,
+    rigid core) -- and differs only in taking the solver parameters as an
+    argument, because this file drives several arms of the same fixture.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      params: the solver-parameter dictionary.
+      dt: the time step, a float or a live `Constant`.
+
+    Returns:
+      `(solver, u, psi)`: the solver, and the displacement and potential
+      Functions that it writes after every solve.
+    """
+    parent, sub = meshes
+    Xm = fd.SpatialCoordinate(sub)
+    # The DtN rows only; the load and its mass sheet are the SurfaceLoad.
+    gravity_bcs = {
+        td.CURVE_OUTER: {"dtn": CylindricalDtN(td.TRUNCATION)},
+        td.CURVE_INNER: {"dtn": CylindricalDtN(td.TRUNCATION)},
+    }
+    approx = CompressibleInternalVariableApproximation(
+        bulk_modulus=1.0, density=1.0, shear_modulus=1.0, viscosity=1.0,
+        bulk_shear_ratio=100.0, g=td.G0, B_mu=td.B_MU,
+        self_gravity_number=td.LAMBDA)
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    # `sigma = SIGMA_HAT cos(2 theta)`: the traction `B_mu g sigma` and the
+    # mass sheet of the potential row, from one expression.
+    load = SurfaceLoad(
+        boundary=td.CURVE_RE,
+        sigma=td.SIGMA_HAT * fd.cos(2 * fd.atan2(Xm[1], Xm[0])),
+        g_surface=td.G0)
+    solver = SelfGravitatingGIASolver(
+        u, psi, approx, dt=dt, gravity_bcs=gravity_bcs,
+        bcs={td.CURVE_RC: {"un": 0.0}}, couplings=[load],
+        internal_variable_family="DG", dtn_representation="multiplier",
+        solver_parameters=params)
+    return solver, u, psi
+
+
+@pytest.fixture(scope="module")
+def direct(meshes):
+    """One solve of the exact arm, shared by every test of section A.
+
+    The solve and the reference elimination are the expensive part of this
+    section, so the seven tests below share one build.
+    """
+    solver, _, _ = build_direct(meshes, direct_params())
+    solver.solve()
+    return {"solver": solver, "Z": solver.solution_space,
+            "pc": outer_pc(solver),
+            "S_ref": td._reference_S(solver)}
+
+
+def monolithic_field_indices(Z):
+    """The block-0 and block-1 row indices of the mixed space, in field order.
+
+    Read from `Z.field_ises`, which is Firedrake's own authority on
+    where each sub-field lives in the monolithic row space and the very object
+    `DtNTwoBlockSchurPC.initialize` merges into its two index sets. Reading it
+    here rather than from the preconditioner is what makes the column test
+    below independent of the code under test.
+
+    Args:
+      Z: the mixed function space.
+
+    Returns:
+      `(i0, i1)`, the non-`Real` and `Real` global row indices.
+    """
+    reals = [i for i, V in enumerate(Z)
+             if V.ufl_element().family() == "Real"]
+    ises = Z.field_ises
+    block0 = [i for i in range(len(Z)) if i not in reals]
+    i0 = np.concatenate([ises[i].getIndices() for i in block0])
+    i1 = np.concatenate([ises[i].getIndices() for i in reals])
+    return i0, i1
+
+
+def identity_residual(pc, seed):
+    """`||P^{-1} A x - x|| / ||x||` for one pseudo-random `x`.
+
+    On a fixture whose block 0 is an exact LU this is the whole of the forward
+    apply in one number: with an exact `M0` and an exact `S` the `full`
+    factorisation is the operator's inverse, so the preconditioned operator is
+    the identity and this quantity is round-off.
+
+    Args:
+      pc: the outer PETSc `PC`.
+      seed: the seed of the random vector, so that two callers can use
+        different vectors and a failure is reproducible.
+
+    Returns:
+      The relative 2-norm above. Dimensionless.
+    """
+    A, _ = pc.getOperators()
+    rng = np.random.default_rng(seed)
+    x = A.createVecRight()
+    lo, hi = x.owner_range
+    x.array_w[:] = rng.standard_normal(hi - lo)
+    x.assemble()
+    b = A.createVecLeft()
+    A.mult(x, b)
+    y = A.createVecRight()
+    pc.apply(b, y)
+    y.axpy(-1.0, x)
+    relative = y.norm() / x.norm()
+    x.destroy()
+    b.destroy()
+    y.destroy()
+    return relative
+
+
+# ===========================================================================
+# A. The exact arm: the algebra, pinned to round-off
+# ===========================================================================
+@pytest.mark.longtest
+def test_the_cached_columns_solve_the_block_zero_system(direct):
+    """Column `k` of `Z` satisfies `A00 z_k = A01 e_k`, for every `k`.
+
+    Written as an identity on the MONOLITHIC operator so that it assumes
+    nothing about how block-0 degrees of freedom are ordered inside the
+    fieldsplit's index set. Embed `z_k` in the mixed vector with a zero `Real`
+    part: the block-0 part of `A` applied to it is `A00 z_k`. Embed the unit
+    `Real` vector `e_k`: the block-0 part of `A e_k` is `A01 e_k`. The two must
+    agree.
+
+    CATCHES: columns solved against the wrong right-hand side (for instance
+    `A10^T e_k` instead of `A01 e_k`); columns stored in the wrong order, which
+    would pair `z_k` with the wrong entry of the block-1 solution in step 7 of
+    the forward apply and is invisible to the `S` test above because `S` is
+    built from the same loop; a `Z` left at the values of an earlier operator.
+    FLOOR: `IDENTITY_FLOOR`, because one block-0 LU solve sits behind each
+    column and that is what the exact arm measures.
+    """
+    if fd.COMM_WORLD.size > 1:
+        pytest.skip("the index arithmetic below is written for one rank")
+    cache = ainvb_cache(direct["pc"])
+    A, _ = direct["pc"].getOperators()
+    i0, i1 = monolithic_field_indices(direct["Z"])
+    assert len(cache.Z) == len(i1), (
+        f"the cache holds {len(cache.Z)} columns for {len(i1)} Real rows")
+
+    work = A.createVecRight()
+    image = A.createVecLeft()
+    unit = A.createVecRight()
+    unit_image = A.createVecLeft()
+    scale = 0.0
+    errors = []
+    for k, column in enumerate(cache.Z):
+        # A00 z_k, read off the monolithic action on (z_k, 0).
+        work.set(0.0)
+        work.setValues(i0, column.array_r)
+        work.assemble()
+        A.mult(work, image)
+        # A01 e_k, read off the monolithic action on (0, e_k).
+        unit.set(0.0)
+        unit.setValues([i1[k]], [1.0])
+        unit.assemble()
+        A.mult(unit, unit_image)
+        reference = unit_image.array_r[i0]
+        scale = max(scale, float(np.linalg.norm(reference)))
+        errors.append(float(np.linalg.norm(image.array_r[i0] - reference)))
+
+    # Vacuity guard: if every A01 column were zero, every z_k would trivially
+    # be zero and the loop above would assert nothing.
+    assert scale > 0.0, "A01 is identically zero, so this test is vacuous"
+    assert max(errors) / scale < IDENTITY_FLOOR, (
+        f"||A00 z_k - A01 e_k|| / max_k ||A01 e_k|| = {max(errors)/scale:.3e}")
+
+
+@pytest.mark.longtest
+def test_a_rebuilt_cache_still_inverts_the_operator(meshes):
+    """The SECOND build is as good as the first: `P^{-1} A = I` after `dt`.
+
+    Three objects have to move together at a rebuild -- the `n` vectors of
+    `Z`, the array `S` and the LU factors of `S`. An implementation that
+    refreshes one and not another increments `build_count`, converges to the
+    right answer, and costs outer iterations for the rest of a march in which
+    every build after the first is a rebuild. Every other test of the
+    arithmetic in this section runs on a cache that was built exactly once, so
+    this is the only one that can see it.
+
+    The `dt` change is what makes the second build a different operator: the
+    effective bulk/shear ratio is `bulk_shear_ratio * (1 + dt/tau)`, so a new
+    time step is a new mechanics block, and the stored columns of the old one
+    describe an operator that no longer exists.
+
+    CATCHES: a `Z` list appended to instead of replaced; LU factors kept from
+    the previous array; a new `S` written into a factorisation that holds its
+    own copy; a rebuild that refreshes `S` and leaves `Z` alone, or the
+    reverse. All of them at once, because with an exact block-0 LU the
+    identity holds only if all three describe the same operator.
+
+    The `build_count` assertion is the vacuity guard. Without it a cache that
+    never rebuilt at all would be indistinguishable from one that rebuilt
+    wrongly, and a `dt` change that somehow left the operator alone would make
+    the test pass for no reason.
+
+    FLOOR: `IDENTITY_FLOOR`, the same number and the same reason as the test
+    above. `test_T4b_dt_change_rebuilds_and_matches_reference` in
+    `test_dtn_multiplier_dense_schur.py` is the precedent: the dense PC
+    carries this test for this reason.
+    """
+    dt = fd.Constant(1.0)
+    solver, _, _ = build_direct(meshes, direct_params(), dt=dt)
+    solver.solve()
+    # A live re-assignment, with the solver and its state untouched, which is
+    # what a march does between steps.
+    dt.assign(2.0)
+    solver.solve()
+
+    pc = outer_pc(solver)
+    cache = ainvb_cache(pc)
+    assert cache.build_count == 2, (
+        f"the time step changed and the cache built {cache.build_count} "
+        "time(s); the identity below would then say nothing about a rebuild")
+    relative = identity_residual(pc, seed=4)
+    assert relative < IDENTITY_FLOOR, (
+        f"after the rebuild, ||P^-1 A x - x|| / ||x|| = {relative:.3e}")
+
+
+@pytest.mark.longtest
+def test_a_capped_block_zero_solve_leaves_the_next_step_solvable(meshes):
+    """A block-0 solve that stops at its iteration cap must not fail the PC.
+
+    Block 0 is an inner solve of the preconditioner, so the preset gives it a
+    budget (`block0_max_it`, 200 in production) and expects it to be spent: the
+    campaign record measures the cap reached on 45 percent of the
+    mechanics-residual solves at dt = 100 yr. The outer FGMRES is flexible, so
+    an inexact block-0 solve costs outer iterations and nothing else.
+
+    CATCHES: a `_check_block0` that mirrors `KSPCheckSolve` without its
+    `KSP_DIVERGED_ITS` exclusion. PETSc's own check reads `reason < 0 && reason
+    != KSP_DIVERGED_ITS` (`src/ksp/ksp/interface/iterativ.c`); a check that
+    drops the second half calls `pc.setFailedReason(SUBPC_ERROR)` on a capped
+    solve, and the flag is STICKY, because `PCSetUp` never clears
+    `pc->failedreason` and `KSPSetUp` reads it
+    (`src/ksp/ksp/interface/itfunc.c`). The failure is therefore one step late
+    and unreadable: the step that hit the cap converges, and the NEXT step
+    raises `ConvergenceError` after zero nonlinear iterations with a message
+    that names nothing about block 0. Against the code before the exclusion
+    this test raises at step 1.
+
+    Block 0 is forced to its cap rather than allowed to reach it: one FGMRES
+    iteration against `rtol` 1e-30 caps every single block-0 solve, which is
+    the same converged reason (-3) the production route reaches at 200. The
+    `dt.assign` between the solves is what a march does, and it is also what
+    rebuilds the cache, so the build's own block-0 solves are capped too and
+    the check in `build` is exercised on the same path.
+
+    This test asserts on survival and on the flag, not on an identity: with
+    block 0 solved to one FGMRES iteration the preconditioner is poor, and the
+    only claim is that a poor preconditioner is not reported as a broken one.
+    """
+    dt = fd.Constant(1.0)
+    params = direct_params(**{"dtn_fieldsplit_0_ksp_type": "fgmres",
+                              "dtn_fieldsplit_0_ksp_max_it": 1,
+                              "dtn_fieldsplit_0_ksp_rtol": 1e-30})
+    solver, _, _ = build_direct(meshes, params, dt=dt)
+
+    for step, value in enumerate((1.0, 2.0, 3.0)):
+        dt.assign(value)
+        # A `ConvergenceError` here is the defect: Firedrake raises it when the
+        # outer KSP exits `DIVERGED_PC_FAILED`, which is what `KSPSetUp` does
+        # when it reads a failed reason left behind by an earlier step.
+        solver.solve()
+        pc = outer_pc(solver)
+        assert pc.getFailedReason() == PETSc.PC.FailedReason.NOERROR, (
+            f"step {step}: a capped block-0 solve left the outer PC flagged "
+            f"as failed ({pc.getFailedReason()}); the next step would die at "
+            "KSPSetUp with zero nonlinear iterations")
+
+    # The vacuity guard. Without it a block 0 that converged inside its one
+    # iteration would make every assertion above pass for the wrong reason.
+    cache = ainvb_cache(outer_pc(solver))
+    assert cache.ksp0.getConvergedReason() \
+        == PETSc.KSP.ConvergedReason.DIVERGED_MAX_IT, (
+        "block 0 was meant to stop at its cap on every solve, and its last "
+        f"converged reason is {cache.ksp0.getConvergedReason()}")
+
+
+# ===========================================================================
+# B. The production route in 2-D: counts of block-0 solves
+# ===========================================================================
+#: The outer tolerance of the production preset, tight so that the iteration
+#: counts compared below are counts of the same work and not of two different
+#: stopping points.
+OUTER_RTOL = 1e-10
+#: The block-0 tolerance of the production preset.
+BLOCK0_RTOL = 1e-4
+
+
+def preset(representation, **kwargs):
+    """The two-block iterative preset of the production configuration.
+
+    Block 0 is `gadopt.CondensedBlockPC` on the full (DG history) layout,
+    block 1 the dense complement; `kwargs` override any argument.
+
+    Args:
+      representation: the DtN representation, `"lowrank"` or `"multiplier"`.
+      kwargs: arguments of `selfgrav_dtn_iterative_solver_parameters`.
+
+    Returns:
+      The solver-parameter dictionary.
+    """
+    options = dict(condensed=False, block0="condensed",
+                   block0_rtol=BLOCK0_RTOL, outer_rtol=OUTER_RTOL,
+                   block0_max_it=200, snes_type="ksponly",
+                   multiplier_pc="gadopt.DtNMultiplierDenseSchurPC",
+                   dtn_representation=representation)
+    options.update(kwargs)
+    return selfgrav_dtn_iterative_solver_parameters(**options)
+
+
+def build_coupled(meshes, representation, *, truncation=3, fluid_core=True,
+                  rotation=True, solver_parameters=None, dt=1.0,
+                  approximation_kwargs=None, shear_modulus=None):
+    """One coupled solver on the annulus, DG history, in either representation.
+
+    The configuration of the production route in 2-D: a fluid core (one
+    `Real` row, the core pressure) and the rotational closure (one `Real`
+    row, `m3`), so `n = 2` on the low-rank representation. The material
+    parameters are `Constant`s, as a driver writes them.
+
+    The surface load is one `SurfaceLoad`,
+    `sigma = SIGMA_HAT (cos(2 theta) + 0.25)` with a fluid core and
+    `SIGMA_HAT cos(2 theta)` with a rigid one. The mean `0.25` gives the
+    fluid-core pressure a uniform load to carry. The solver takes a load once
+    for every use of it, so the mean enters the traction, the potential's
+    mass sheet, the rotation row and the 2-D monopole datum.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      representation: the DtN representation, `"lowrank"` or `"multiplier"`.
+      truncation: the degree of the cylindrical DtN expansion.
+      fluid_core: a `FluidCore` at the CMB, or the rigid core `un = 0`.
+      rotation: the rotational closure, `Rotation(C=..., Omega_sq=...)`.
+      solver_parameters: a dictionary or a preset name; `None` gives
+        `preset(representation)`.
+      dt: the initial time step, held in a `Constant` that a test can assign.
+      approximation_kwargs: extra arguments of the approximation, for example
+        a power law.
+      shear_modulus: the shear modulus, for example a `Real` control on the
+        mantle mesh; `None` gives `Constant(1.0)`.
+
+    Returns:
+      `(solver, u, psi)`: the solver, and the displacement and potential
+      Functions that it writes after every solve.
+    """
+    parent, sub = meshes
+    Xm = fd.SpatialCoordinate(sub)
+    gravity_bcs = {
+        td.CURVE_OUTER: {"dtn": CylindricalDtN(truncation)},
+        td.CURVE_INNER: {"dtn": CylindricalDtN(truncation)},
+    }
+    mean = fd.Constant(0.25) if fluid_core else fd.Constant(0.0)
+    couplings = [SurfaceLoad(
+        boundary=td.CURVE_RE,
+        sigma=td.SIGMA_HAT * (fd.cos(2 * fd.atan2(Xm[1], Xm[0])) + mean),
+        g_surface=td.G0)]
+    mechanics_bcs = {}
+    if fluid_core:
+        couplings.append(FluidCore(boundary=td.CURVE_RC, rho_core=2.0))
+    else:
+        mechanics_bcs[td.CURVE_RC] = {"un": 0.0}
+    if rotation:
+        # The polar moment `C = int r^2 dx` of the unit-density mantle.
+        dx_m = fd.Measure("dx", domain=sub,
+                          intersect_measures=(fd.Measure("dx", domain=parent),))
+        couplings.append(Rotation(C=fd.assemble(fd.dot(Xm, Xm) * dx_m),
+                                  Omega_sq=OMEGA_SQ_EARTH))
+
+    approx = CompressibleInternalVariableApproximation(
+        bulk_modulus=1.0, density=fd.Constant(1.0),
+        shear_modulus=(fd.Constant(1.0) if shear_modulus is None
+                       else shear_modulus),
+        viscosity=fd.Constant(1.0), g=fd.Constant(td.G0),
+        B_mu=fd.Constant(td.B_MU), self_gravity_number=fd.Constant(td.LAMBDA),
+        **(approximation_kwargs or {}))
+    u = fd.Function(fd.VectorFunctionSpace(sub, "CG", 2), name="displacement")
+    psi = fd.Function(fd.FunctionSpace(parent, "CG", 2), name="potential")
+    if solver_parameters is None:
+        solver_parameters = preset(representation)
+    solver = SelfGravitatingGIASolver(
+        u, psi, approx, dt=fd.Constant(dt), gravity_bcs=gravity_bcs,
+        bcs=mechanics_bcs, couplings=couplings,
+        internal_variable_family="DG", dtn_representation=representation,
+        solver_parameters=solver_parameters)
+    return solver, u, psi
+
+
+def block0_context(solver):
+    """The `gadopt.CondensedBlockPC` instance block 0 runs, after a solve."""
+    outer = solver.solver.snes.ksp.pc.getPythonContext()
+    block0, _ = outer.pc.getFieldSplitSchurGetSubKSP()
+    return block0.getPC().getPythonContext()
+
+
+def iterative_params(*, ainvb, representation="lowrank", **kwargs):
+    """The two-block iterative preset, in one of two arms.
+
+    - `ainvb=True`: block 1 is `preonly` + `none` and the cached path owns the
+      apply. This is the arm under test.
+    - `ainvb=False`: block 1 is `preonly` + `gadopt.DtNMultiplierDenseSchurPC`,
+      which is the SAME preconditioner algebraically -- `full` with the exact
+      complement on block 1 -- reached by the route that exists today. It is
+      the reference for the iteration-count and block-0-solve comparisons.
+
+    `dtn_fieldsplit_1_ksp_type` is forced to `preonly` in both arms, because a
+    Krylov method there would itself spend one block-0 solve per iteration and
+    the count model would no longer be readable. The converged-reason keys are
+    dropped: they make the log unreadable and nothing here parses it.
+
+    Args:
+      ainvb: which arm to build.
+      representation: the DtN representation, `"lowrank"` by default because
+        that is the production route and it gives a small `Real` block.
+      kwargs: passed through to the preset.
+
+    Returns:
+      The solver-parameter dictionary.
+    """
+    params = preset(
+        representation,
+        multiplier_pc=("none" if ainvb
+                       else "gadopt.DtNMultiplierDenseSchurPC"),
+        **kwargs)
+    for key in list(params):
+        if key.endswith("converged_reason"):
+            params.pop(key)
+    params["dtn_fieldsplit_1_ksp_type"] = "preonly"
+    params.pop("dtn_fieldsplit_1_ksp_rtol", None)
+    params.pop("dtn_fieldsplit_1_ksp_max_it", None)
+    # Both arms are `full`, named here rather than taken from the preset, whose
+    # default is `lower` off `ainvb`. The reference arm has to be `full`: it is
+    # the comparison of `test_the_outer_count_matches_the_full_factorisation_arm`
+    # and `lower` spends more outer iterations, so passing `ainvb` through to
+    # the preset is not the way to reach this. The cached arm has to be `full`
+    # as well, because `dtn_schur_ainvb` is set by hand below and
+    # `DtNTwoBlockSchurPC` refuses the cached apply under any other
+    # factorisation type.
+    params["dtn_pc_fieldsplit_schur_fact_type"] = "full"
+    if ainvb:
+        params["dtn_schur_ainvb"] = True
+    return params
+
+
+def block_zero_solves(solver):
+    """Block-0 applications so far, counted by `gadopt.CondensedBlockPC`.
+
+    `CondensedBlockPC.elimination_count` increments once per `apply`, and
+    block 0's KSP is `preonly`, so one block-0 solve is one increment. The
+    counter belongs to a different class from the one under test, which is
+    what makes it a witness rather than a restatement.
+    """
+    return block0_context(solver).elimination_count
+
+
+@pytest.fixture(scope="module")
+def two_arms(meshes):
+    """One solve of each arm on the iterative fixture, with their counts."""
+    out = {}
+    for name, ainvb in (("cached", True), ("reference", False)):
+        solver, _, _ = build_coupled(
+            meshes, "lowrank", solver_parameters=iterative_params(ainvb=ainvb))
+        solver.solve()
+        out[name] = {
+            "solver": solver,
+            "iterations": outer_iterations(solver),
+            "block0": block_zero_solves(solver),
+            "n": len(solver.real_indices),
+        }
+    return out
+
+
+@pytest.mark.longtest
+def test_the_apply_costs_one_block_zero_solve(two_arms):
+    """`block-0 solves = n + outer iterations`, and not `n + 2 x outer`.
+
+    This is the claim the whole design exists for. Both sides are read from
+    objects outside the class under test: `n` from the solver's `Real`
+    fields, the iteration count from the outer KSP, the block-0 count from
+    `CondensedBlockPC`. So a counter the new class keeps about itself cannot
+    make this pass.
+
+    The first assertion is the vacuity guard. It states the cost model of the
+    arm that exists today -- one build of `n` columns plus TWO block-0 solves
+    per outer iteration -- and it passes today. If it ever fails, the model
+    behind the second assertion has moved and the second assertion is
+    measuring something else.
+
+    CATCHES: the obvious implementation that keeps `S` but still runs the
+    second block-0 solve of `full`; a build that solves twice per column
+    (once for `S` through `MatMult_SchurComplement` and once for `Z`), which
+    the design's section 3.2 exists to avoid and which no state comparison can
+    see; an apply that rebuilds the cache.
+    MEASURED on the reference arm: `2 + 2*3 = 8` block-0 solves, for `n = 2`
+    and three outer iterations.
+    """
+    reference, cached = two_arms["reference"], two_arms["cached"]
+    n = reference["n"]
+    assert reference["block0"] == n + 2 * reference["iterations"], (
+        "the reference arm no longer costs one build plus two block-0 solves "
+        "per outer iteration, so the comparison below has lost its model")
+    assert cached["block0"] == cached["n"] + cached["iterations"], (
+        f"{cached['block0']} block-0 solves for {cached['iterations']} outer "
+        f"iterations and n = {cached['n']}")
+
+
+@pytest.mark.longtest
+class TestTheSolverReachesTheChoiceTheWidthRuleMakes:
+    """The solver's own call, which is where a wrong rule would cost solves.
+
+    `selfgrav_dtn_iterative_solver_parameters` never sees the width unless a
+    caller passes it, and `SelfGravitatingGIASolver` is the caller that does:
+    it passes `n_real=len(solver.real_indices)`. So the dictionary tests of
+    `test_dtn_multiplier_pc.py` cannot see what the solver chooses, and these
+    two can. Both run one solve and read the objects PETSc built.
+    """
+
+    def test_a_wide_real_block_keeps_the_delegating_path(self, meshes):
+        """About 76 `Real` rows in production, 35 here, so no complement.
+
+        A build costs `n` block-0 solves. At this width nobody has measured
+        that it amortises, so the preset must not choose either way of forming
+        the complement, and the cached apply must not be installed on the
+        outer PC at all.
+        """
+        solver, _, _ = build_coupled(
+            meshes, "multiplier", truncation=8, solver_parameters="iterative")
+        # The vacuity guard: this truncation must actually be above the limit
+        # the preset applies, or the test says nothing.
+        assert len(solver.real_indices) > 16, (
+            f"{len(solver.real_indices)} Real rows is not a wide block, so "
+            "this test no longer exercises the rule it is about")
+        assert "dtn_schur_ainvb" not in solver.solver_parameters
+        assert solver.solver_parameters[
+            "dtn_pc_fieldsplit_schur_fact_type"] == "lower"
+        solver.solve()
+        assert getattr(outer_pc(solver).getPythonContext(), "ainvb",
+                       None) is None
+
+    def test_a_narrow_real_block_reaches_the_cache_through_the_solver(
+            self, meshes):
+        """The production path: the solver's own call installs the cache.
+
+        The count identity is the same one `test_the_apply_costs_one_block_
+        zero_solve` states, read from objects outside the class under test:
+        `n` from the solver's `Real` fields, the iterations from the outer
+        KSP, the block-0
+        count from `gadopt.CondensedBlockPC`. One build, because this is one
+        solve at one operator.
+        """
+        solver, _, _ = build_coupled(
+            meshes, "lowrank", solver_parameters="iterative")
+        assert solver.solver_parameters["dtn_schur_ainvb"] is True
+        solver.solve()
+        cache = ainvb_cache(outer_pc(solver))
+        n = len(solver.real_indices)
+        assert cache.n == n
+        assert cache.build_count == 1
+        assert block_zero_solves(solver) == n + outer_iterations(solver), (
+            f"{block_zero_solves(solver)} block-0 solves for "
+            f"{outer_iterations(solver)} outer iterations and n = {n}")
+
+
+def test_the_tolerance_ladder_of_the_phase_3_spike_is_untouched():
+    """The tolerance ladder of the Phase-3 driver, call for call.
+
+    That driver sweeps `block0_rtol` down to 1e-2 and names
+    `multiplier_pc="none"` so that the preset refuses nothing and every rung
+    differs in the tolerance alone. A preset that chose the cached apply there
+    would form the exact complement from block-0 solves at 1e-2 without
+    raising and without a line in the log, and the ladder would stop measuring
+    the tolerance. Naming a block-1 preconditioner is what keeps the caller on
+    the path they asked for.
+    """
+    for condensed in (True, False):
+        for block0_rtol in (1e-2, 1e-3, 1e-4):
+            p = selfgrav_dtn_iterative_solver_parameters(
+                condensed=condensed, block0_rtol=block0_rtol,
+                outer_rtol=1e-6, snes_rtol=1e-4, multiplier_pc="none")
+            assert "dtn_schur_ainvb" not in p, (condensed, block0_rtol)
+            assert p["dtn_pc_fieldsplit_schur_fact_type"] == "lower", (
+                condensed, block0_rtol)
+            assert p["dtn_fieldsplit_1_pc_type"] == "none", (
+                condensed, block0_rtol)
+
+
+@pytest.mark.longtest
+def test_the_outer_count_matches_the_full_factorisation_arm(two_arms):
+    """The cached path keeps `full`'s convergence, not `lower`'s.
+
+    Saving a solve per iteration is worth nothing if the iteration count moves,
+    and the two arms are algebraically the same preconditioner, so their counts
+    must agree. One iteration of slack is allowed because the block-0 solve is
+    an FGMRES to a tolerance and therefore not exactly a linear operator, so
+    the two arms' `S` and `Z` differ slightly.
+
+    CATCHES: a cached `Z` that is stale relative to `S`, or an apply that drops
+    the `-Z s1` correction, both of which degrade the preconditioner to
+    something near `lower` and cost iterations while converging to the same
+    answer.
+    MEASURED on the reference arm: 3 outer iterations.
+    """
+    assert two_arms["cached"]["iterations"] <= (
+        two_arms["reference"]["iterations"] + 1)
+
+
+@pytest.fixture(scope="module")
+def marched(meshes):
+    """Three solves at one `dt`, then one more after `dt.assign`.
+
+    The three rebuild tests below share this one march, because each solve is
+    the expensive part and the three claims are about one sequence.
+    """
+    solver, _, _ = build_coupled(
+        meshes, "lowrank", solver_parameters=iterative_params(ainvb=True),
+        dt=1.0)
+
+    def builds():
+        """The cache's build count, or `None` when there is no cache.
+
+        The fixture must not assert: an assertion here turns all three tests
+        below into fixture errors, and a test that errors before its own
+        assertion has verified nothing.
+        """
+        cache = getattr(outer_pc(solver).getPythonContext(), "ainvb", None)
+        return None if cache is None else int(cache.build_count)
+
+    for _ in range(3):
+        solver.solve()
+    fixed_step_builds = builds()
+    block0_assemblies_before = block0_context(solver).assembly_count
+
+    solver.dt.assign(2.0)
+    solver.solve()
+    return {
+        "solver": solver,
+        "fixed_step_builds": fixed_step_builds,
+        "builds_after_dt_change": builds(),
+        "block0_assemblies_before": block0_assemblies_before,
+        "block0_assemblies_after": block0_context(solver).assembly_count,
+    }
+
+
+@pytest.mark.longtest
+def test_one_build_per_nonlinear_solve_on_a_power_law(meshes):
+    """With `exponent = 3` the cache is rebuilt once per solve, never per step.
+
+    A power law publishes `operator_version = None`, because no version number
+    can describe a Jacobian that moves with the state, and the rule falls back
+    to `gia_solve_index`. One build per Newton iteration would roughly triple
+    the block-0 work of a three-iteration step; a complement frozen at the
+    state each solve starts from costs outer iterations and changes no number.
+
+    CATCHES: a rule that rebuilds at every Newton iteration (build counter
+    tracks `CondensedBlockPC.assembly_count`); a rule that never rebuilds on a
+    power law, because `operator_version` is `None` and the integer branch was
+    the only one written.
+    """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    params["gia_rebuild"] = "per_solve"
+    solver, _, _ = build_coupled(
+        meshes, "lowrank", solver_parameters=params,
+        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
+    solver.solve()
+    # Vacuity guard: with one Newton iteration, per-iteration and per-solve
+    # rebuilding are the same rule and the test would prove nothing.
+    assert solver.solver.snes.getIterationNumber() >= 2, (
+        "the test is vacuous unless Newton took more than one iteration")
+    cache = ainvb_cache(outer_pc(solver))
+    assert cache.build_count == 1
+    solver.solve()
+    assert cache.build_count == 2
+    # Block 0 follows the same rule: one assembly per solve, not one per
+    # Newton iteration.
+    assert block0_context(solver).assembly_count == 2
+
+
+# ---------------------------------------------------------------------------
+# B2. The option `gia_rebuild` on the cached apply
+#
+# `_SchurAinvBCache` owns the complement on every route where the `Real` block
+# is narrow, which is the route the sea-level preset takes at 5 `Real` rows.
+# The option that chooses the rebuild rule has to reach it there, or a
+# campaign arm that writes the key measures the default and says nothing about
+# it. The rule itself is a COST decision and never a correctness one: the
+# complement is a preconditioner, so both values must land on the same state.
+# ---------------------------------------------------------------------------
+def power_law_arm(meshes, rebuild_rule):
+    """One power-law solve of the cached arm under a named rebuild rule.
+
+    A power law is what makes the two rules differ at all. It publishes
+    `operator_version = None`, so `per_solve` falls back to `gia_solve_index`
+    and builds once per nonlinear solve, while Newton takes several iterations
+    and so several `update` calls, which is what `always` counts.
+
+    The key is written at the TOP LEVEL of the solver parameters dictionary,
+    not under the preconditioner's own prefix, because that is how a driver
+    writes it and `_option_along_the_prefix_chain` is what has to find it
+    there. It is written in both arms, never left unset in one, so that
+    neither arm can read a key the other left in the global options database.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      rebuild_rule: `"per_solve"` or `"always"`.
+
+    Returns:
+      `(solver, state)` after one solve, `state` the mixed solution.
+    """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    params["gia_rebuild"] = rebuild_rule
+    solver, _, _ = build_coupled(
+        meshes, "lowrank", solver_parameters=params,
+        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
+    solver.solve()
+    return solver, solver.solution
+
+
+@pytest.fixture(scope="module")
+def rebuild_rule_arms(meshes):
+    """One power-law solve under each value of `gia_rebuild`."""
+    out = {}
+    for rule in ("per_solve", "always"):
+        solver, state = power_law_arm(meshes, rule)
+        out[rule] = {
+            "solver": solver,
+            "state": state.copy(deepcopy=True),
+            "builds": int(ainvb_cache(outer_pc(solver)).build_count),
+            "newton": solver.solver.snes.getIterationNumber(),
+        }
+    return out
+
+
+@pytest.mark.longtest
+def test_always_rebuilds_more_often_than_per_solve(rebuild_rule_arms):
+    """`always` builds the complement more than once in one nonlinear solve.
+
+    This is the whole point of the option on this class. `per_solve` freezes
+    the complement at the state the solve starts from; `always` rebuilds it at
+    every `update`, which is once per Newton iteration and per outer linear
+    solve, and that is what a moving coastline needs, where the sea-level
+    sheet follows the unknowns and sits in every block of the `Real` row and
+    column.
+
+    CATCHES the defect this test was written for: the option reaching
+    `DtNMultiplierDenseSchurPC` alone and being inert on the class the preset
+    actually puts on a narrow `Real` block, in which case both arms report the
+    same number of builds.
+    """
+    per_solve = rebuild_rule_arms["per_solve"]
+    always = rebuild_rule_arms["always"]
+    # Vacuity guard: with a single Newton iteration the two rules describe the
+    # same number of updates and the comparison would prove nothing.
+    assert always["newton"] >= 2, (
+        "the test is vacuous unless Newton took more than one iteration")
+    assert per_solve["builds"] == 1, (
+        f"per_solve built the complement {per_solve['builds']} times in one "
+        "nonlinear solve; the rule is one build per solve on a power law")
+    assert always["builds"] > per_solve["builds"], (
+        f"always built the complement {always['builds']} times and per_solve "
+        f"{per_solve['builds']}: the option is inert on this class")
+
+
+@pytest.mark.longtest
+def test_both_rebuild_rules_reach_the_same_state(rebuild_rule_arms):
+    """The rule is a cost decision, so the two arms converge to one state.
+
+    A complement rebuilt at every update and one frozen at the start of the
+    solve are two preconditioners of the same system. Neither changes a
+    residual, so the two arms must agree to the nonlinear tolerance.
+
+    CATCHES a rebuild under `always` that runs on the wrong operator -- one
+    that adopted the staleness markers of a build it did not perform, or that
+    rebuilt from stale sub-block handles -- which would show up as a solve
+    that converges somewhere else or not at all.
+    FLOOR: `STATE_FLOOR`, see its definition.
+    """
+    per_solve = rebuild_rule_arms["per_solve"]["state"]
+    always = rebuild_rule_arms["always"]["state"]
+    reference = np.concatenate(
+        [np.asarray(sub.dat.data_ro).ravel() for sub in per_solve.subfunctions])
+    measured = np.concatenate(
+        [np.asarray(sub.dat.data_ro).ravel() for sub in always.subfunctions])
+    scale = max(np.linalg.norm(reference), 1e-300)
+    relative = np.linalg.norm(measured - reference) / scale
+    assert relative < STATE_FLOOR, (
+        f"the two rebuild rules reached states {relative:.3e} apart relative")
+
+
+# ---------------------------------------------------------------------------
+# B3. The value `lagged` of `gia_rebuild`
+#
+# A moving coastline makes the Jacobian depend on the state, so `per_solve`
+# rebuilds the complement once per nonlinear solve, at one block-0 solve per
+# `Real` row. `lagged` delays that rebuild over several solves. The unit tests
+# drive `_RebuildRule` directly through a stub application context, which
+# pins the decision table exactly and costs nothing; the march below shows
+# the option reaches the cached apply the preset puts on a narrow `Real` block,
+# and that the lag changes the cost and not the answer.
+# ---------------------------------------------------------------------------
+class _StubContext:
+    """A stand-in for the solver's application context in `_RebuildRule`.
+
+    `_RebuildRule` reads the context only through `_solver_appctx(pc)`, so the
+    tests replace that one function and pass this object as the `pc`.
+    """
+
+    def __init__(self, **values):
+        self.values = dict(values)
+
+
+@pytest.fixture
+def stub_appctx(monkeypatch):
+    """Route `_solver_appctx` to the `values` of a `_StubContext`."""
+    monkeypatch.setattr(
+        gadopt.preconditioners, "_solver_appctx", lambda pc: pc.values)
+
+
+def _rebuild_sequence(rule, solves, linear_its=None):
+    """The solve indices at which `rule` rebuilds, over `solves` solves.
+
+    The context mimics a power law or a moving coastline: `operator_version`
+    is `None`, and `gia_solve_index` counts 1, 2, ... . Each solve asks
+    `moved` twice, as two Newton iterations do.
+
+    Args:
+      rule: a `_RebuildRule`.
+      solves: how many nonlinear solves to run after the first build.
+      linear_its: optional list, the outer iterations of each solve, which is
+        published as the previous solve's count at the next solve.
+
+    Returns:
+      The list of solve indices at which `moved` answered True.
+    """
+    pc = _StubContext(operator_version=None, gia_solve_index=1)
+    rule.record(pc)
+    rebuilt = []
+    for index in range(2, solves + 2):
+        pc.values["gia_solve_index"] = index
+        if linear_its is not None:
+            pc.values["gia_last_solve_linear_its"] = linear_its[index - 2]
+            pc.values["gia_last_solve_newton_its"] = 2
+        for _newton in range(2):
+            if rule.moved(pc):
+                rebuilt.append(index)
+    return rebuilt
+
+
+def test_lagged_with_every_one_is_per_solve(stub_appctx):
+    """The defaults of the lag reproduce `per_solve` exactly.
+
+    CATCHES: an off-by-one in the count of solves since the last build, which
+    would make `every = 1` skip every second solve.
+    """
+    assert _rebuild_sequence(_RebuildRule(), 5) == [2, 3, 4, 5, 6]
+    assert _rebuild_sequence(_RebuildRule(every=1), 5) == [2, 3, 4, 5, 6]
+
+
+def test_lagged_rebuilds_every_k_solves(stub_appctx):
+    """`every = 3` rebuilds at solves 4 and 7 after a build at solve 1.
+
+    Each solve asks twice, so the list also shows that the second Newton
+    iteration of a solve never rebuilds again.
+
+    CATCHES: a stored index updated on a solve that did not rebuild, which
+    would make the count restart at every solve and never reach `k`.
+    """
+    assert _rebuild_sequence(_RebuildRule(every=3), 7) == [4, 7]
+
+
+def test_lagged_rebuilds_early_when_the_outer_count_grows(stub_appctx):
+    """`max_outer` rebuilds as soon as the previous solve got expensive.
+
+    Outer iterations per Newton iteration (2 Newton iterations per solve):
+    3, 3, 5, 3, ... against `max_outer = 4`. The solve after the one with 10
+    outer iterations (5 per Newton iteration) rebuilds although `every = 100`
+    is far away.
+
+    CATCHES: a threshold compared with the total count instead of the count
+    per Newton iteration, or read from the current solve instead of the
+    previous one.
+    """
+    its = [6, 6, 10, 6, 6]
+    rule = _RebuildRule(every=100, max_outer=4.0)
+    # The counts published at solve index i are those of solve i - 1, so the
+    # 10 at position 2 is read at index 4.
+    assert _rebuild_sequence(rule, 5, linear_its=its) == [4]
+
+
+def test_the_integer_branch_is_never_lagged(stub_appctx):
+    """A changed `operator_version` rebuilds at once under any lag.
+
+    A new `dt` or a new viscosity field is a jump of the operator, not a
+    drift, so the lag must not hold a complement of the old operator.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=1, gia_solve_index=1)
+    rule.record(pc)
+    pc.values.update(operator_version=2, gia_solve_index=2)
+    assert rule.moved(pc)
+
+
+def test_a_time_step_change_ends_the_lag(stub_appctx):
+    """On the state-dependent branch a new `dt` rebuilds at the next solve.
+
+    The solver publishes `operator_version = None` there, so no version moves
+    when `dt` changes; the rule has to see the change itself.
+
+    CATCHES: a lag that keeps the complement of the old time step for up to
+    `every - 1` solves.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=None, gia_solve_index=1, dt=1.0)
+    rule.record(pc)
+    pc.values["gia_solve_index"] = 2
+    assert not rule.moved(pc)
+    pc.values.update(gia_solve_index=3, dt=2.0)
+    assert rule.moved(pc)
+    # The new step is recorded with the build, so the lag holds again.
+    pc.values["gia_solve_index"] = 4
+    assert not rule.moved(pc)
+
+
+def _rebuild_sequence_over(rule, indices):
+    """The solve indices at which `rule` rebuilds, over a given index order.
+
+    The first index is the build; every later one is asked twice, as two
+    Newton iterations do. The context is that of a state-dependent Jacobian
+    (`operator_version = None`).
+
+    Args:
+      rule: a `_RebuildRule`.
+      indices: the `gia_solve_index` of each solve, in the order solved.
+
+    Returns:
+      The list of solve indices at which `moved` answered True.
+    """
+    pc = _StubContext(operator_version=None, gia_solve_index=indices[0])
+    rule.record(pc)
+    rebuilt = []
+    for index in indices[1:]:
+        pc.values["gia_solve_index"] = index
+        for _newton in range(2):
+            if rule.moved(pc):
+                rebuilt.append(index)
+    return rebuilt
+
+
+def test_the_block_time_step_wins_over_the_live_one(stub_appctx):
+    """During a replay or an adjoint sweep `gia_dt` is the time step of the solve.
+
+    The live `dt` holds the last forward value; the solve block binds its
+    own time step as `gia_dt`. A change of `gia_dt` with the live `dt`
+    unchanged ends the lag.
+
+    CATCHES: a rule that reads the live `dt` and keeps the complement of the
+    other time step through the replay and the adjoint.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=None, gia_solve_index=1, dt=0.5,
+                      gia_dt=1.0)
+    rule.record(pc)
+    pc.values["gia_solve_index"] = 2
+    assert not rule.moved(pc)
+    pc.values.update(gia_solve_index=3, gia_dt=0.5)
+    assert rule.moved(pc)
+
+
+def test_the_integer_branch_sees_a_block_time_step_change(stub_appctx):
+    """With a fixed `operator_version` a new `gia_dt` still rebuilds.
+
+    A replay or an adjoint sweep does not move `operator_version` (it does
+    not assign the live coefficients), so on the integer branch the time
+    step of the solve block is what changes.
+
+    CATCHES: an integer branch that compares the version only and keeps the
+    complement of the other time step in a replay.
+    """
+    rule = _RebuildRule(every=100)
+    pc = _StubContext(operator_version=7, gia_solve_index=1, gia_dt=1.0)
+    rule.record(pc)
+    assert not rule.moved(pc)
+    pc.values.update(gia_solve_index=2, gia_dt=0.5)
+    assert rule.moved(pc)
+    pc.values["gia_solve_index"] = 3
+    assert not rule.moved(pc)
+
+
+def test_an_adjoint_sweep_rebuilds_as_the_index_falls(stub_appctx):
+    """The lag counts solves in either direction of the solve index.
+
+    An adjoint sweep solves the taped steps from the last to the first, and
+    each solve block binds the index of its forward solve
+    (`gadopt.gia_step_adjoint`), so the index falls by one per solve. The
+    rule must rebuild after `every` solves there too, and the next sweep, or
+    the next replay that starts again at index 1, must rebuild at its first
+    solve.
+
+    CATCHES: the signed difference `index - index at last build`, which is
+    negative on a backward sweep, so the lag never expires and the adjoint
+    keeps the preconditioner of its first solve for every step. With
+    `every = 1` that also breaks `per_solve`.
+    """
+    backward = list(range(10, 0, -1))
+    assert _rebuild_sequence_over(_RebuildRule(every=1), backward) == \
+        list(range(9, 0, -1))
+    assert _rebuild_sequence_over(_RebuildRule(every=4), backward) == [6, 2]
+    # Two sweeps back to back: the second starts 8 solves away from the last
+    # build at 2, so it rebuilds at once.
+    assert _rebuild_sequence_over(_RebuildRule(every=4), backward + backward) \
+        == [6, 2, 10, 6, 2]
+    # Two replays back to back: the second starts at index 1, 8 solves away
+    # from the last build at 9, so it rebuilds at the same solves as the
+    # first one.
+    forward = list(range(1, 11))
+    assert _rebuild_sequence_over(_RebuildRule(every=4), forward + forward) \
+        == [5, 9, 1, 5, 9]
+
+
+def lagged_march(meshes, rebuild_rule, solves, **lag):
+    """A power-law march of `solves` solves on the cached apply.
+
+    Args:
+      meshes: the `(parent, sub)` pair.
+      rebuild_rule: the value of `gia_rebuild`.
+      solves: the number of nonlinear solves.
+      lag: `gia_rebuild_every` and `gia_rebuild_max_outer`,
+        written at the top level of the solver parameters as a driver does.
+
+    Returns:
+      A dict with the final state, the build count of the `Real`-block
+      complement and the assembly count of the block-0 blocks.
+    """
+    params = iterative_params(ainvb=True, snes_type="newtonls")
+    if rebuild_rule is not None:
+        params["gia_rebuild"] = rebuild_rule
+    for key, value in lag.items():
+        params[f"gia_rebuild_{key}"] = value
+    solver, _, _ = build_coupled(
+        meshes, "lowrank", solver_parameters=params,
+        approximation_kwargs={"exponent": 3.0, "transition_stress": 1e-3})
+    for _ in range(solves):
+        solver.solve()
+    return {
+        "solver": solver,
+        "state": solver.solution.copy(deepcopy=True),
+        "builds": int(ainvb_cache(outer_pc(solver)).build_count),
+        "block0": int(block0_context(solver).assembly_count),
+    }
+
+
+@pytest.fixture(scope="module")
+def lagged_arms(meshes):
+    """Four power-law solves under three settings of `gia_rebuild`.
+
+    `per_solve`; `lagged` with `every = 2`; and no option at all, which is
+    `lagged` with `every = DEFAULT_REBUILD_EVERY` (5).
+    """
+    return {
+        "per_solve": lagged_march(meshes, "per_solve", 4),
+        "lagged": lagged_march(meshes, "lagged", 4, every=2),
+        "default": lagged_march(meshes, None, 4),
+    }
+
+
+@pytest.mark.longtest
+def test_lagged_reaches_the_cached_apply(lagged_arms):
+    """`lagged, every 2` builds half as often as `per_solve` over four solves.
+
+    `per_solve` builds at solves 1, 2, 3 and 4; `lagged` with `every = 2`
+    at solves 1 and 3.
+
+    CATCHES: the lag settings read by one class and not the other, in which
+    case the cached apply keeps rebuilding at every solve.
+    """
+    assert lagged_arms["per_solve"]["builds"] == 4
+    assert lagged_arms["lagged"]["builds"] == 2
+
+
+@pytest.mark.longtest
+def test_the_default_is_a_lag_of_five_solves(lagged_arms):
+    """With no option the complement is built once over four solves.
+
+    The default rule is `lagged` with `every = DEFAULT_REBUILD_EVERY = 5`, so
+    the build at the first solve serves solves 2 to 4.
+
+    CATCHES: a default left at `per_solve` (4 builds) or a default `every`
+    of 1.
+    """
+    assert gadopt.preconditioners.DEFAULT_REBUILD_EVERY == 5
+    assert lagged_arms["default"]["builds"] == 1
+
+
+@pytest.mark.longtest
+def test_block0_and_block1_rebuild_at_the_same_solves(lagged_arms):
+    """One rule: the block-0 blocks are reassembled exactly when the complement is.
+
+    `CondensedBlockPC` and the cached `Real`-block apply each build a
+    `_RebuildRule` from the same options and the same markers, so over a march
+    their counts agree under every setting. Both counts include the build at
+    set-up.
+
+    CATCHES: block 0 left on its own rule (it used to reassemble at every
+    Newton iteration on a state-dependent Jacobian, so its count would be the
+    number of Newton iterations, about twice the number of solves).
+    """
+    for name, arm in lagged_arms.items():
+        assert arm["block0"] == arm["builds"], (
+            f"{name}: block 0 assembled {arm['block0']} times, the complement "
+            f"was built {arm['builds']} times")
+
+
+@pytest.mark.longtest
+def test_lagged_reaches_the_same_state(lagged_arms):
+    """The lag changes the preconditioner only, so the states agree.
+
+    FLOOR: `STATE_FLOOR`, the scatter of two Newton solves, here accumulated
+    over four solves of a march.
+    """
+    reference = np.concatenate([
+        np.asarray(sub.dat.data_ro).ravel()
+        for sub in lagged_arms["per_solve"]["state"].subfunctions])
+    measured = np.concatenate([
+        np.asarray(sub.dat.data_ro).ravel()
+        for sub in lagged_arms["lagged"]["state"].subfunctions])
+    relative = (np.linalg.norm(measured - reference)
+                / max(np.linalg.norm(reference), 1e-300))
+    assert relative < STATE_FLOOR, (
+        f"per_solve and lagged reached states {relative:.3e} apart relative")
+
+
+@pytest.mark.longtest
+def test_the_solver_publishes_the_counts_of_the_last_solve(marched):
+    """After each solve the context carries that solve's own counts.
+
+    The `marched` fixture is Newtonian (`ksponly`), so one solve is one
+    linear solve and its outer count is the KSP's iteration number. The
+    fixture ran four solves, so a count that accumulated over solves would
+    be about four times too large.
+
+    CATCHES: a cumulative count, which would trip `max_outer` on every
+    solve after the first few and turn `lagged` into `per_solve`.
+    """
+    solver = marched["solver"]
+    appctx = solver.appctx
+    assert appctx["gia_last_solve_newton_its"] == 1
+    assert (appctx["gia_last_solve_linear_its"]
+            == solver.solver.snes.ksp.getIterationNumber())
+    assert appctx["gia_last_solve_linear_its"] > 0
+
+
+# ===========================================================================
+# C. What the configuration refuses, and how loudly
+# ===========================================================================
+# **Every refusal below is checked in a CHILD PROCESS, and that is not a style
+# choice.** Three ingredients together kill the interpreter with a
+# segmentation violation, printing nothing at all -- no traceback, no test
+# report, no failure line:
+#
+#   1. `PETSc.Sys.popErrorHandler()`, which `gadopt/__init__.py:75` calls at
+#      import time, so every test module in this repository has it;
+#   2. pytest's output capture, which is on by default;
+#   3. a Python exception raised inside a Firedrake python-PC callback.
+#
+# MEASURED in this worktree on 2026-09-19, by bisection on a three-line
+# `firedrake.PCBase` that raises `ValueError` from `initialize`, driven by
+# `firedrake.solve` on a `UnitSquareMesh` Poisson problem. With the
+# `popErrorHandler` line: exit 139, no output. Without that one line, and
+# with nothing else changed: `1 passed`, the exception arriving in Python as
+# `petsc4py.PETSc.Error`. With the line and `pytest -s`: `1 passed`. The
+# reproducer is transcribed in `NOTES/team/rotation-pc/12-TESTS-AINVB.md`.
+# Ingredient 1 is why a reproducer that imports only firedrake does not show
+# this, and why every test in this repository does have the condition.
+#
+# Two things follow. A refusal driven through `solver.solve()` inside pytest
+# would take the whole file down with no message, which is worse than no test.
+# And calling `initialize` a second time by hand is not a way round it: on a
+# PC that PETSc has already set up, `pc.getDM().createSubDM` raises inside its
+# own hook (MEASURED: `Unhandled Python Exception` at `DMCreateSubDM`), so the
+# second call fails for a reason that has nothing to do with the refusal.
+#
+# So each refusal runs as a script in a child process, where the exception is
+# an ordinary Python exception and the process survives it. The parent reads
+# the child's exit status and its stderr.
+#
+# What the parent asserts on is the stderr TEXT, not the exception type.
+# PETSc flattens a Python exception raised inside a python PC into
+# `PETSc.Error: error code 101` with no text, so `_loud` must
+# print the named cause before the exception is raised; that print is the only
+# thing a log reader can find.
+
+#: The child script. `check` selects which refusal to provoke. Written as a
+#: script rather than as a pytest test for the reason the section comment
+#: gives.
+REFUSAL_SCRIPT = """
+import sys
+sys.path.insert(0, {tests!r})
+sys.path.insert(0, {gia!r})
+import gadopt  # noqa
+import firedrake as fd
+import test_dtn_multiplier_dense_schur as td
+import test_dtn_schur_ainvb as suite
+
+check = sys.argv[1]
+meshes = td.meshes.__wrapped__()
+
+if check == "fact_type":
+    # `lower` asked for, `full` delivered: the arm would believe it measured
+    # a factorisation it did not run.
+    solver, _, _ = suite.build_direct(meshes, suite.direct_params(
+        **{{"dtn_pc_fieldsplit_schur_fact_type": "lower"}}))
+    call = solver.solve
+elif check == "block1_ksp":
+    # A Krylov method configured on a block that is never solved.
+    solver, _, _ = suite.build_direct(meshes, suite.direct_params(
+        **{{"dtn_fieldsplit_1_ksp_type": "gmres",
+            "dtn_fieldsplit_1_ksp_rtol": 1e-4,
+            "dtn_fieldsplit_1_ksp_max_it": 200}}))
+    call = solver.solve
+elif check == "transpose":
+    # The production route: block 0 is gadopt.CondensedBlockPC, which has no
+    # transpose application, so the transpose apply cannot run.
+    solver, _, _ = suite.build_coupled(
+        meshes, "lowrank", solver_parameters=suite.iterative_params(ainvb=True))
+    solver.solve()
+    pc = suite.outer_pc(solver)
+    A, _ = pc.getOperators()
+    x, y = A.createVecLeft(), A.createVecRight()
+    x.setRandom()
+    context = pc.getPythonContext()
+
+    def call():
+        context.applyTranspose(pc, x, y)
+else:
+    raise SystemExit("unknown check " + check)
+
+try:
+    call()
+except BaseException as exc:
+    print("EXCEPTION-TYPE", type(exc).__name__, file=sys.stderr, flush=True)
+    sys.exit(3)
+print("NO-EXCEPTION", file=sys.stderr, flush=True)
+sys.exit(0)
+"""
+
+
+def refusal_stderr(check):
+    """Provoke one refusal in a child process and return what it printed.
+
+    Args:
+      check: `"fact_type"`, `"block1_ksp"` or `"transpose"`.
+
+    Returns:
+      The child's stderr.
+
+    Raises:
+      AssertionError: if the child did not raise at all, or died from a
+        signal, or timed out.
+    """
+    # The child does not load `tests/unit/conftest.py`, so it gets both the
+    # directory of the unit tests and `tests/gia` (the `gia_models` helpers
+    # that the two imported test modules use) on its path explicitly.
+    here = Path(__file__).resolve().parent
+    script = REFUSAL_SCRIPT.format(tests=str(here),
+                                   gia=str(here.parent / "gia"))
+    finished = subprocess.run(
+        [sys.executable, "-c", script, check], capture_output=True, text=True,
+        cwd=str(Path(__file__).resolve().parents[2]), timeout=900)
+    assert finished.returncode == 3, (
+        f"the {check} configuration did not raise in the child process "
+        f"(exit status {finished.returncode}; a negative status is a signal)"
+        f"\n--- child stderr ---\n{finished.stderr[-3000:]}")
+    return finished.stderr
+
+
+def test_an_unknown_rebuild_rule_is_refused_by_name(capsys):
+    """A misspelled `gia_rebuild` value raises a NAMED `ValueError`.
+
+    The option decides how often the complement is rebuilt: `per_solve`, the
+    rule the class has always had, or `always`, which rebuilds at every
+    update. A wrong value that fell back to the default would make a campaign
+    arm report the cost of a rule it did not run, and nothing else in the log
+    would say so.
+
+    **No solve, and no child process.** The value is read as the FIRST action
+    of `_SchurAinvBCache.__init__`, before the constructor touches the
+    fieldsplit or spends a block-0 solve, so the refusal can be provoked with
+    a bare PETSc `PC` and the three arguments the check never reaches. This is
+    the pattern of `test_dtn_multiplier_dense_schur._pc_on_dense`: a refusal
+    raised inside a preconditioner callback during a solve takes the whole
+    pytest process down with a segmentation violation, for the reason the
+    section comment above gives, while this one is an ordinary Python
+    exception on an ordinary Python call.
+
+    CATCHES: a wrong value accepted and silently read as `per_solve`; a
+    refusal whose text never reaches the log; a check moved to after the
+    build, where it would cost `n` block-0 solves before refusing.
+    """
+    options = PETSc.Options()
+    # Written at the global prefix, which is the last link of the chain
+    # `_option_along_the_prefix_chain` searches, so the bare PC below finds it.
+    options["gia_rebuild"] = "per_step"
+    try:
+        pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
+        # Constructed without running `__init__`, so that the call below is the
+        # constructor itself and not a second entry point that could drift from
+        # it. `inner`, `is0` and `is1` are never reached.
+        cache = _SchurAinvBCache.__new__(_SchurAinvBCache)
+        with pytest.raises(ValueError, match="gia_rebuild"):
+            cache.__init__(pc, None, None, None)
+        assert "gia_rebuild" in capsys.readouterr().err, (
+            "the refusal never reached stderr, so a log reader would see only "
+            "the PETSc error code that replaces it")
+    finally:
+        del options["gia_rebuild"]
+
+
+@pytest.mark.parametrize("options, match", [
+    ({"gia_rebuild": "per_solve", "gia_rebuild_every": "3"},
+     "only applies with"),
+    ({"gia_rebuild": "lagged", "gia_rebuild_every": "0"},
+     "at least 1"),
+    ({"gia_rebuild": "lagged",
+      "gia_rebuild_max_outer": "-1"}, "0 \\(off\\) or positive"),
+])
+def test_a_wrong_lag_setting_is_refused_by_name(capsys, options, match):
+    """A lag setting with another rule, or out of range, is refused by name.
+
+    The same pattern as the test above: no solve, a bare PC, and the check is
+    the first action of `_SchurAinvBCache.__init__`.
+
+    CATCHES: `gia_rebuild_every` written with `per_solve` (the default is
+    `lagged`, so only an explicit other rule conflicts), which would run
+    `per_solve` under a label that says otherwise; `k = 0`, which would
+    rebuild on every `moved` call; a negative threshold.
+    """
+    petsc_options = PETSc.Options()
+    for key, value in options.items():
+        petsc_options[key] = value
+    try:
+        pc = PETSc.PC().create(comm=PETSc.COMM_SELF)
+        cache = _SchurAinvBCache.__new__(_SchurAinvBCache)
+        with pytest.raises(ValueError, match=match):
+            cache.__init__(pc, None, None, None)
+        assert "gia_rebuild" in capsys.readouterr().err
+    finally:
+        for key in options:
+            del petsc_options[key]
+
+
+@pytest.mark.longtest
+def test_a_partial_factorisation_is_refused():
+    """`fact_type lower` together with the option is refused, by name.
+
+    The cached apply IS the `full` factorisation with the second block-0 solve
+    replaced by the stored columns. An arm that sets `lower` and the option
+    together would believe it measured `lower` and would in fact measure
+    `full`, and both converge to the same answer, so nothing else would ever
+    say otherwise.
+
+    CATCHES: an implementation that reads the option and ignores the
+    factorisation type.
+    """
+    message = refusal_stderr("fact_type")
+    # `_loud` writes `[gadopt.preconditioners] <Type>: <message>`. Asserting
+    # that prefix as well as the option name is what stops PETSc's own
+    # `Option left: name:-...dtn_schur_ainvb` line at finalisation -- which
+    # appears whenever nobody reads the option -- from satisfying this test on
+    # an implementation that refused for some unrelated reason.
+    assert "gadopt.preconditioners" in message and (
+        "dtn_schur_ainvb" in message), (
+        "the refusal did not name the option on stderr through `_loud`, so a "
+        "real run would show PETSc error code 101 and nothing else"
+        f"\n{message[-3000:]}")
+
+
+@pytest.mark.longtest
+def test_a_configured_block_one_krylov_is_refused():
+    """A block-1 KSP that will never be solved is refused, by name.
+
+    Under the option block 1 is solved by the dense factors of the exact
+    complement and `dtn_fieldsplit_1_` is never entered. A `gmres` left on
+    that prefix means something specific in every other arm -- its
+    converged-reason lines are half of the B2 cost model -- and a
+    configuration that is written and silently unused is the class of defect
+    this project pays most for.
+
+    CATCHES: an implementation that leaves the idle block-1 KSP unchecked.
+    """
+    message = refusal_stderr("block1_ksp")
+    assert "gadopt.preconditioners" in message and (
+        "dtn_fieldsplit_1_ksp_type" in message), (
+        "the refusal did not name, through `_loud`, the option that fixes it"
+        f"\n{message[-3000:]}")
+
+
+@pytest.mark.longtest
+def test_the_transpose_is_refused_when_block_zero_has_no_transpose():
+    """On the production route the transpose apply is refused, by name.
+
+    `gadopt.CondensedBlockPC` has no transpose application by design, so
+    `ksp0.solveTranspose` on the production block 0 cannot run. An adjoint
+    solve does not come this way -- pyadjoint solves `adjoint(J)` with the
+    forward options and therefore reaches the forward `apply` -- so the
+    refusal costs nothing and names the one thing a caller needs to know:
+    which preconditioner lacks the transpose.
+
+    CATCHES: a transpose apply that lets the bare PETSc error out of two
+    levels down, where the log carries `KSPSolveTranspose` and
+    `PCApplyTranspose_FieldSplit_Schur` in a C traceback and nothing that
+    names a class the reader can act on.
+    """
+    message = refusal_stderr("transpose")
+    assert "gadopt.preconditioners" in message and (
+        "CondensedBlockPC" in message), (
+        "the refusal did not name, through `_loud`, the block-0 "
+        f"preconditioner that lacks a transpose solve\n{message[-3000:]}")
+
+
+def test_the_preset_refuses_a_block_one_preconditioner_with_the_cache():
+    """`ainvb=True` and `multiplier_pc` together are refused by the preset.
+
+    The cached path solves block 1 with its own factors of the exact
+    complement, so a preconditioner named for block 1 would be built,
+    configured and never applied.
+    """
+    with pytest.raises(ValueError):
+        selfgrav_dtn_iterative_solver_parameters(
+            condensed=False, block0="condensed",
+            multiplier_pc="gadopt.DtNMultiplierDenseSchurPC", ainvb=True)
+
+
+def test_the_preset_writes_the_cached_path_keys():
+    """`ainvb=True` writes the option and silences the block-1 Krylov solve.
+
+    Design section 2.2: the option, `preonly` and `none` on block 1, and NONE
+    of the three block-1 Krylov keys, because no block-1 Krylov solve runs and
+    a tolerance written for a solve that never happens is a lie in the log.
+    """
+    params = selfgrav_dtn_iterative_solver_parameters(
+        condensed=False, block0="condensed", ainvb=True)
+    assert params["dtn_schur_ainvb"] is True
+    assert params["dtn_pc_fieldsplit_schur_fact_type"] == "full"
+    assert params["dtn_fieldsplit_1_ksp_type"] == "preonly"
+    assert params["dtn_fieldsplit_1_pc_type"] == "none"
+    for dropped in ("dtn_fieldsplit_1_ksp_rtol",
+                    "dtn_fieldsplit_1_ksp_max_it",
+                    "dtn_fieldsplit_1_ksp_converged_reason"):
+        assert dropped not in params, (
+            f"{dropped} is written for a block-1 Krylov solve that never runs")
+
+
+def test_the_preset_default_is_the_dictionary_ainvb_true_writes():
+    """The preset chooses the cached apply where it forms the complement.
+
+    Two things are pinned. `ainvb=True` named by hand gives exactly the
+    dictionary the preset writes on its own, which is what makes jobs
+    179511971 and 179511972 - the two full Spada runs, which passed `--ainvb`
+    on the command line - a measurement of the default. And `ainvb=False`
+    names the delegating path, so the argument still has three meanings and
+    not two: choose, on, off.
+
+    The preset chooses it on the low-rank representation, where the `Real`
+    block is 4 rows and a build is 4 block-0 solves. On the multiplier
+    representation a build is about 76 and no arm measures it, so the width
+    rule keeps the preset off that path; `test_the_multiplier_representation_
+    is_kept_off_the_cached_apply` in `test_dtn_multiplier_pc.py` pins that.
+    """
+    for kwargs in ({"condensed": False, "block0": "condensed"},
+                   {"condensed": False, "dtn_representation": "lowrank"},
+                   {"condensed": False, "n_real": 4}):
+        default = selfgrav_dtn_iterative_solver_parameters(**kwargs)
+        named_on = selfgrav_dtn_iterative_solver_parameters(
+            ainvb=True, **kwargs)
+        assert default == named_on, kwargs
+        assert default["dtn_schur_ainvb"] is True, kwargs
+        named_off = selfgrav_dtn_iterative_solver_parameters(
+            ainvb=False, **kwargs)
+        assert "dtn_schur_ainvb" not in named_off, kwargs
+        assert named_off["dtn_pc_fieldsplit_schur_fact_type"] == "lower", kwargs
+
+
+# ===========================================================================
+# D. Three dimensions, 24 cells
+# ===========================================================================
+@pytest.mark.longtest
+class TestThreeDimensions:
+    """The 24-cell extruded cubed sphere, cached path against the reference arm.
+
+    The sphere has a fluid core and the rotational closure, so the `Real` block
+    carries the three rotation rows and the core pressure -- `n = 4`, the
+    production shape -- on extruded hexahedra. Both arms share one mesh,
+    because `fd.norm` on a difference of functions from two mesh objects
+    refuses with "Multiple domains found".
+
+    Nothing here is about speed. Every 3-D performance number comes from Gadi.
+    """
+
+    @pytest.fixture(scope="class")
+    def solved(self):
+        """Both arms solved once on one 24-cell sphere."""
+        base = fd.CubedSphereMesh(radius=1.0, refinement_level=1, degree=2)
+        mesh = fd.ExtrudedMesh(base, layers=2, layer_height=0.5,
+                               extrusion_type="radial")
+        mesh.cartesian = False
+        X = fd.SpatialCoordinate(mesh)
+        C = fd.assemble(fd.dot(X, X) * fd.dx(domain=mesh))
+        out = {}
+        for name, ainvb in (("cached", True), ("reference", False)):
+            # One mesh carries the displacement and the potential.
+            u = fd.Function(fd.VectorFunctionSpace(mesh, "CG", 2),
+                            name="displacement")
+            psi = fd.Function(fd.FunctionSpace(mesh, "CG", 2), name="potential")
+            approx = CompressibleInternalVariableApproximation(
+                bulk_modulus=1.0, density=fd.Constant(1.0),
+                shear_modulus=fd.Constant(1.0), viscosity=fd.Constant(1.0),
+                g=fd.Constant(td.G0), B_mu=fd.Constant(td.B_MU),
+                self_gravity_number=fd.Constant(td.LAMBDA))
+            # The traction on the surface carries no mass sheet: a plain
+            # `normal_stress`, which the solver accepts with a warning.
+            solver = SelfGravitatingGIASolver(
+                u, psi, approx, dt=fd.Constant(1.0),
+                gravity_bcs={"top": {"dtn": SphericalDtN(1)},
+                             "bottom": {"dtn": SphericalDtN(1)}},
+                bcs={"top": {"normal_stress": td.SIGMA_HAT * X[2]}},
+                couplings=[FluidCore(boundary="bottom", rho_core=2.0),
+                           Rotation(C=C, C_minus_A=0.1 * C,
+                                    Omega_sq=OMEGA_SQ_EARTH)],
+                internal_variable_family="DG",
+                solver_parameters=iterative_params(ainvb=ainvb),
+                dtn_representation="lowrank")
+            solver.solve()
+            out[name] = {"solver": solver, "u": u, "psi": psi,
+                         "iterations": outer_iterations(solver),
+                         "block0": block_zero_solves(solver),
+                         "n": len(solver.real_indices)}
+        return out
+
+    def test_the_construction_works_on_the_sphere(self, solved):
+        """The cached path reproduces the reference arm's state in 3-D.
+
+        The two arms are the same preconditioner reached two ways, so the two
+        states must agree to the outer tolerance. This test cannot see a wrong
+        preconditioner -- that is what the count test below is for -- but it
+        can see a build that fails on extruded hexahedra with a fluid core and
+        the rotational closure, which is the construction this section exists
+        to exercise.
+
+        FLOOR: 1e-8 relative, the bar the 3-D tests of the low-rank suite use;
+        the two arms differ only through the block-0 FGMRES tolerance.
+        """
+        reference, cached = solved["reference"], solved["cached"]
+        for arm in (reference, cached):
+            assert arm["solver"].solver.snes.getConvergedReason() > 0
+            assert arm["solver"].solver.snes.ksp.getConvergedReason() > 0
+        # The Real block is the four rows the design targets: three rotation
+        # rows and the core pressure.
+        assert cached["n"] == 4
+        # Vacuity guard, and the part of this test that can fail. Two arms of
+        # the same preconditioner must agree whether or not the cached path
+        # exists, so the state comparison below says nothing until the cache
+        # is known to have been built on this geometry.
+        cache = ainvb_cache(outer_pc(cached["solver"]))
+        assert cache.n == 4 and cache.build_count == 1
+        for field in ("u", "psi"):
+            a = cached[field]
+            b = reference[field]
+            scale = fd.norm(b)
+            assert scale > 0.0
+            assert fd.norm(a - b) < 1e-8 * scale
+
+    def test_the_apply_costs_one_block_zero_solve(self, solved):
+        """`n + outer iterations` block-0 solves on the sphere, as on the annulus.
+
+        The same identity as the 2-D test, on the geometry and the `Real`-block
+        shape the production run has. CATCHES the same wrong implementations,
+        and in addition one that only works when every `Real` row is a DtN
+        multiplier.
+        """
+        reference, cached = solved["reference"], solved["cached"]
+        assert reference["block0"] == (
+            reference["n"] + 2 * reference["iterations"]), (
+            "the reference arm's cost model has moved")
+        assert cached["block0"] == cached["n"] + cached["iterations"]
