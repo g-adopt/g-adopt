@@ -26,8 +26,8 @@ def check_node_partition(V, boundary_id):
     Returns:
       Tuple of InteriorBC nodes and DirichletBC nodes
     """
-    interior_nodes = InteriorBC(V, 0, boundary_id)._nodes
-    boundary_nodes = fd.DirichletBC(V, 0, boundary_id)._nodes
+    interior_nodes = InteriorBC(V, 0, boundary_id).nodes
+    boundary_nodes = fd.DirichletBC(V, 0, boundary_id).nodes
     # The node indices address rows of the data array, halo rows included.
     all_nodes = np.arange(fd.Function(V).dat.data_ro_with_halos.shape[0])
 

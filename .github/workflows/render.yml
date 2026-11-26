@@ -26,6 +26,7 @@ jobs:
     env:
       OMP_NUM_THREADS: 1
       GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
+      UV_EXCLUDE: .uv-exclude.txt
 
     steps:
       - name: Install Git LFS
@@ -54,13 +55,6 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v7
 
-      - name: Fetch gplates
-        uses: actions/checkout@v5
-        with:
-          repository: dsroberts/GPlates
-          path: ./gplates
-          ref: PyGPlates-1.0.0
-
       - name: Install dependencies
         run: |
           apt install -y xvfb gmsh gh unzip \
@@ -70,7 +64,7 @@ jobs:
               libgdal-dev libcgal-dev libproj-dev proj-bin zlib1g-dev
 
           uv venv --system-site-packages
-          uv pip install ./gplates
+          uv pip install 'pygplates @ git+https://github.com/dsroberts/GPlates.git@PyGPlates-1.0.0'
           uv pip install nbval nbconvert jupytext siphash24 .[demos,optimisation]
           uv cache clean animate
           uv pip install --no-build-isolation git+https://github.com/mesh-adaptation/animate
