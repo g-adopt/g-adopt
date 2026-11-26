@@ -1,0 +1,33 @@
+name: Rebase CI test branch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rebase-ci-test
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ci-test
+          fetch-depth: 0
+
+      - name: Rebase onto main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main ci-test
+          git reset --hard origin/ci-test
+          git rebase origin/main
+          git push --force-with-lease origin HEAD:refs/heads/ci-test
