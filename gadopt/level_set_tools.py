@@ -562,18 +562,18 @@ class LevelSetSolver(SolverConfigurationMixin):
         gradient_space = fd.VectorFunctionSpace(self.mesh, "CG", grad_space_degree)
         self.solution_grad = fd.Function(gradient_space, name=grad_name)
 
+        quad_degree = 2 * grad_space_degree + 1
+        dx = fd.dx(degree=quad_degree)
         if gradient_space.extruded:
-            ds = CombinedSurfaceMeasure(
-                domain=self.mesh, degree=2 * grad_space_degree + 1
-            )
+            ds = CombinedSurfaceMeasure(domain=self.mesh, degree=quad_degree)
         else:
-            ds = fd.ds
+            ds = fd.ds(degree=quad_degree)
 
         test = fd.TestFunction(gradient_space)
         trial = fd.TrialFunction(gradient_space)
 
-        bilinear_form = fd.inner(test, trial) * fd.dx
-        ibp_element = -self.solution * fd.div(test) * fd.dx
+        bilinear_form = fd.inner(test, trial) * dx
+        ibp_element = -self.solution * fd.div(test) * dx
         ibp_boundary = self.solution * fd.dot(test, fd.FacetNormal(self.mesh)) * ds
         linear_form = ibp_element + ibp_boundary
 

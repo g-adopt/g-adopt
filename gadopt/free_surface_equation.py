@@ -133,7 +133,7 @@ def free_surface_volume_multiplier(
     if mesh.extruded:
         ds_surf = CombinedSurfaceMeasure(mesh, quad_degree)(boundary_id)
     else:
-        ds_surf = fd.ds(boundary_id, domain=mesh)
+        ds_surf = fd.ds(boundary_id, degree=quad_degree, domain=mesh)
 
     n = free_surface_normal(deflection, fd.FacetNormal(mesh))
 
