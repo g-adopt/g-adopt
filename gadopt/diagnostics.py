@@ -254,9 +254,9 @@ class FunctionContext:
     @cached_property
     def boundary_ids(self):
         """The boundary IDs of the mesh associated with this instance"""
-        return tuple(self.mesh.facet_markers) + (
-            ("top", "bottom") if self.mesh.extruded else ()
-        )
+        return tuple(
+            int(marker) for marker in self.mesh.topology.exterior_facets.unique_markers
+        ) + (("top", "bottom") if self.mesh.extruded else ())
 
     @cache
     def check_boundary_id(self, boundary_id: Sequence[int | str] | int | str) -> None:
@@ -296,11 +296,9 @@ class FunctionContext:
             `FunctionContext` instance, for the boundary given by `boundary_id`
         """
         self.check_boundary_id(boundary_id)
-        nodes = self.function_space.boundary_nodes(boundary_id)
-        # Owned nodes are numbered before ghost nodes, so this comparison removes
-        # exactly the ghosts. The space already has a function, so this is a local query.
-        n_owned = self.function_space.nodes.owned.local_size
-        return nodes[nodes < n_owned]
+        bc = fd.DirichletBC(self.function_space, 0, boundary_id)
+        # Ghost nodes follow the owned ones, so this comparison removes exactly them
+        return [node for node in bc.nodes if node < self.function_space.dof_dset.size]
 
 
 class BaseDiagnostics:
@@ -735,7 +733,8 @@ class BaseDiagnostics:
     def rms(self, f: fd.Function) -> float:
         """Calculate the RMS of a function over the domain associated with it
 
-        For the purposes of this function, RMS is defined as L2norm/volume
+        For the purposes of this function, RMS is the L2 norm divided by the square
+        root of the volume
 
         Args:
             f: Function.
